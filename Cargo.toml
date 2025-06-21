@@ -11,3 +11,5 @@ rpc = { path = "crates/rpc" }
 
 jsonrpsee = "0.25.1"
 revm = "25.0.0"
+anyhow = "1"
+thiserror = "2"
