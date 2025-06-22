@@ -5,4 +5,7 @@ edition = { workspace = true }
 
 [dependencies]
 rpc = { workspace = true }
+jsonrpsee = { workspace = true, features = ["server"] }
 anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

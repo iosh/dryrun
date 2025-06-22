@@ -1,14 +1,17 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+use std::fmt::Result;
+
+use jsonrpsee::proc_macros::rpc;
+#[rpc(server)]
+pub trait Rpc {
+    #[method(name = "dry_run_emv_simulateTransaction")]
+    async fn dry_run_emv_simulate_transaction(&self) -> Result<String, jsonrpsee::core::Error>;
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub struct RpcServer {}
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+
+impl Rpc for RpcServer {
+    async fn dry_run_emv_simulate_transaction(&self) -> Result<String, jsonrpsee::core::Error> {
+        Ok("Transaction simulated".into())
     }
 }

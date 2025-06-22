@@ -4,5 +4,5 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-jsonrpsee = { workspace = true }
+jsonrpsee = { workspace = true , features = ["jsonrpsee-proc-macros"]}
 thiserror = { workspace = true }
