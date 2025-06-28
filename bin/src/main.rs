@@ -1,22 +1,11 @@
+use std::error::Error;
 
-use jsonrpsee::server::{Server};
+use jsonrpsee::server::Server;
+
 #[tokio::main]
-async fn main() {
-    let server = Server::builder().build("127.0.0.1:8080").await?;
-    let addr = server.local_addr()?;
+async fn main() -> Result<(), Box<dyn Error>> {
+    let subscriber = tracing_subscriber::FmtSubscriber::new();
 
-    let handle = server.start(rpc::RpcServer{});
-
-    tokio::select! {
-        _ = handle => {
-            println!("Server started at {}", addr);
-        }
-        _ = tokio::signal::ctrl_c() => {
-            println!("Received Ctrl+C, shutting down server...");
-        }
-        _ = server.stop() => {
-            println!("Server stopped");
-        }
-    }
-    Ok(addr)
+    tracing::subscriber::set_global_default(subscriber)?;
+    Ok(())
 }
