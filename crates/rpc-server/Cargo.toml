@@ -1,5 +1,5 @@
 [package]
-name = "rpc"
+name = "rpc-server"
 version = { workspace = true }
 edition = { workspace = true }
 

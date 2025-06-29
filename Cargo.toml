@@ -4,10 +4,10 @@ edition = "2024"
 
 [workspace]
 resolver = "3"
-members = ["bin", "crates/rpc"]
+members = ["bin", "crates/rpc-server"]
 
 [workspace.dependencies]
-rpc = { path = "crates/rpc" }
+rpc-server = { path = "crates/rpc-server" }
 
 jsonrpsee = "0.25.1"
 anyhow = "1"

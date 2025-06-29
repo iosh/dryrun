@@ -4,7 +4,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-rpc = { workspace = true }
+rpc-server = { workspace = true }
 jsonrpsee = { workspace = true, features = ["full"] }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
