@@ -1,7 +1,8 @@
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 
 use jsonrpsee::server::Server;
 use rpc_server::{RpcHandler, SimulationRpcServer};
+use simulation_core::SimulationService;
 use tracing::info;
 
 #[tokio::main]
@@ -14,7 +15,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let addr = server.local_addr()?;
 
-    let handle = server.start(RpcHandler::new().into_rpc());
+    let service = Arc::new(SimulationService::new());
+    let handle = server.start(RpcHandler::new(service).into_rpc());
 
     info!("RPC server started at {}", addr);
 
