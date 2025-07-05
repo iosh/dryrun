@@ -11,3 +11,4 @@ tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 simulation-core = { workspace = true }
+configs = { workspace = true }
