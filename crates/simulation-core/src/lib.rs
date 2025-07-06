@@ -1,8 +1,12 @@
+mod error;
 mod evm_simulator;
 use std::sync::Arc;
 
+use crate::error::SimulationResult;
 use configs::EvmConfig;
 use evm_simulator::EvmSimulator;
+use types::EvmSimulateOutput;
+
 pub struct SimulationService {
     evm_simulator: Arc<EvmSimulator>,
 }
@@ -17,7 +21,7 @@ impl SimulationService {
     pub async fn run_evm_simulation(
         &self,
         input: types::EvmSimulateInput,
-    ) -> Result<types::EvmSimulateOutput, String> {
+    ) -> SimulationResult<EvmSimulateOutput> {
         self.evm_simulator.simulate(input).await
     }
 }

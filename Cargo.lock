@@ -3873,11 +3873,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "763eb5867a109a85f8e47f548b9d88c9143c0e443ec056742052f059fa32f4f1"
 dependencies = [
  "alloy-eips",
+ "alloy-provider",
+ "alloy-transport",
  "revm-bytecode",
  "revm-database-interface",
  "revm-primitives",
  "revm-state",
  "serde",
+ "tokio",
 ]
 
 [[package]]
@@ -3890,6 +3893,7 @@ dependencies = [
  "revm-primitives",
  "revm-state",
  "serde",
+ "tokio",
 ]
 
 [[package]]
@@ -4638,6 +4642,7 @@ dependencies = [
  "alloy",
  "configs",
  "revm",
+ "thiserror 2.0.12",
  "types",
 ]
 

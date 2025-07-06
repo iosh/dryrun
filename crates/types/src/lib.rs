@@ -1,7 +1,7 @@
 use alloy::{
     primitives::{Address, B256, Bytes, Log, U256},
     rpc::types::{
-        Block, BlockId, BlockOverrides, TransactionRequest, state::StateOverride,
+        BlockId, BlockOverrides, TransactionRequest, state::StateOverride,
         trace::parity::ActionType,
     },
 };
@@ -37,14 +37,12 @@ pub struct EvmSimulateOutput {
     pub status: bool,
 
     pub gas_used: u64,
-    pub block_number: u64,
-    pub r#type: String,
+    pub block_number: U256,
 
     pub logs: Vec<Log>,
+    // pub trace: Vec<CallTraceItem>,
 
-    pub trace: Vec<CallTraceItem>,
-
-    pub state_changes: Vec<StateChange>,
+    // pub state_changes: Vec<StateChange>,
     // pub asset_changes: Vec<serde_json::Value>,
     // pub balance_changes: Vec<serde_json::Value>,
 }
@@ -52,7 +50,8 @@ pub struct EvmSimulateOutput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CallTraceItem {
-    pub r#type: ActionType,
+    #[serde(rename(serialize = "type"))]
+    pub action_type: ActionType,
     pub from: Address,
     pub to: Address,
     pub gas: u64,

@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
 use alloy::rpc::types::{BlockId, BlockOverrides, TransactionRequest, state::StateOverride};
-use jsonrpsee::{core::{async_trait, RpcResult}, types::ErrorObject};
+use jsonrpsee::{
+    core::{RpcResult, async_trait},
+    types::ErrorObject,
+};
 use simulation_core::SimulationService;
 use types::{EvmSimulateInput, EvmSimulateOutput};
 
