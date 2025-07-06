@@ -29,7 +29,7 @@ impl SimulationRpcServer for RpcHandler {
     async fn dryrun_evm_simulate_transaction(
         &self,
         transaction: TransactionRequest,
-        block_id: BlockId,
+        block_id: Option<BlockId>,
         state_overrides: Option<StateOverride>,
         block_overrides: Option<BlockOverrides>,
     ) -> RpcResult<EvmSimulateOutput> {

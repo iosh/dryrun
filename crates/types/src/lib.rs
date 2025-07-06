@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone)]
 pub struct EvmSimulateInput {
     pub transaction: TransactionRequest,
-    pub block_id: BlockId,
+    pub block_id: Option<BlockId>,
     pub state_overrides: Option<StateOverride>,
     pub block_overrides: Option<BlockOverrides>,
 }
@@ -18,7 +18,7 @@ pub struct EvmSimulateInput {
 impl EvmSimulateInput {
     pub fn new(
         transaction: TransactionRequest,
-        block_id: BlockId,
+        block_id: Option<BlockId>,
         state_overrides: Option<StateOverride>,
         block_overrides: Option<BlockOverrides>,
     ) -> Self {
@@ -66,7 +66,6 @@ pub struct CallTraceItem {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-
 pub struct StateChange {
     pub address: Address,
     #[serde(skip_serializing_if = "Option::is_none")]
