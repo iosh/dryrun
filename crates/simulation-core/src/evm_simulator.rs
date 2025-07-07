@@ -3,6 +3,7 @@ use alloy::{
     eips::{BlockId, BlockNumberOrTag},
     network::Ethereum,
     providers::{DynProvider, Provider, ProviderBuilder},
+    rpc::types::{Block, TransactionRequest},
 };
 use revm::{
     Context, ExecuteCommitEvm, MainBuilder, MainContext,
@@ -40,52 +41,15 @@ impl EvmSimulator {
             .ok_or(SimulationError::BlockNumberNotFound)?;
 
         // TODO add block overrides
-        let mut block_env = BlockEnv::default();
-
-        let blob_excess_gas_and_price = execution_block
-            .header
-            .excess_blob_gas
-            .map(|excess| BlobExcessGasAndPrice::new(excess, BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE));
-
-        block_env.number = U256::from(execution_block.number());
-        block_env.beneficiary = execution_block.header.beneficiary;
-        block_env.timestamp = U256::from(execution_block.header.timestamp);
-        block_env.gas_limit = execution_block.header.gas_limit;
-        block_env.basefee = execution_block.header.base_fee_per_gas.unwrap_or_default();
-        block_env.difficulty = execution_block.header.difficulty;
-        block_env.blob_excess_gas_and_price = blob_excess_gas_and_price;
+        let block_env = self.build_block_env(&execution_block);
 
         let db = self.create_database(&block_id).await?;
 
         let chain_id = self.provider.get_chain_id().await?;
         // TODO add account state overrides
-        let cfg_env: CfgEnv<SpecId> = CfgEnv::default().with_chain_id(chain_id);
+        let cfg_env = self.build_cfg_env(chain_id);
 
-        let tx = &input.transaction;
-        let mut tx_builder = TxEnv::builder()
-            .caller(tx.from.unwrap_or_default())
-            .value(tx.value.unwrap_or_default())
-            .data(tx.input.clone().data.unwrap_or_default())
-            .gas_limit(tx.gas.unwrap_or(eip7825::TX_GAS_LIMIT_CAP))
-            .gas_price(tx.gas_price.unwrap_or_default())
-            .nonce(tx.nonce.unwrap_or_default());
-
-        if let Some(to) = tx.to {
-            tx_builder = tx_builder.kind(to)
-        }
-
-        if let Some(max_fee_per_gas) = tx.max_fee_per_gas {
-            tx_builder = tx_builder
-                .max_fee_per_gas(max_fee_per_gas)
-                .gas_priority_fee(tx.max_priority_fee_per_gas);
-        } else {
-            let gas_price = tx.gas_price.unwrap_or(block_env.basefee as u128);
-            tx_builder = tx_builder.gas_price(gas_price);
-        }
-
-        let tx_env = tx_builder
-            .build()
-            .map_err(SimulationError::InvalidTransaction)?;
+        let tx_env = self.build_tx_env(&input.transaction, block_env.basefee as u128)?;
 
         let mut evm = Context::mainnet()
             .with_db(db)
@@ -108,6 +72,58 @@ impl EvmSimulator {
         };
 
         Ok(output)
+    }
+
+    fn build_tx_env(&self, tx: &TransactionRequest, base_fee: u128) -> SimulationResult<TxEnv> {
+        let mut tx_builder = TxEnv::builder()
+            .caller(tx.from.unwrap_or_default())
+            .value(tx.value.unwrap_or_default())
+            .data(tx.input.clone().data.unwrap_or_default())
+            .gas_limit(tx.gas.unwrap_or(eip7825::TX_GAS_LIMIT_CAP))
+            .gas_price(tx.gas_price.unwrap_or_default())
+            .nonce(tx.nonce.unwrap_or_default());
+
+        if let Some(to) = tx.to {
+            tx_builder = tx_builder.kind(to)
+        }
+
+        if let Some(max_fee_per_gas) = tx.max_fee_per_gas {
+            tx_builder = tx_builder
+                .max_fee_per_gas(max_fee_per_gas)
+                .gas_priority_fee(tx.max_priority_fee_per_gas);
+        } else {
+            let gas_price = tx.gas_price.unwrap_or(base_fee);
+            tx_builder = tx_builder.gas_price(gas_price);
+        }
+
+        let tx_env = tx_builder
+            .build()
+            .map_err(SimulationError::InvalidTransaction)?;
+
+        Ok(tx_env)
+    }
+
+    fn build_cfg_env(&self, chain_id: u64) -> CfgEnv {
+        CfgEnv::default().with_chain_id(chain_id)
+    }
+
+    fn build_block_env(&self, execution_block: &Block) -> BlockEnv {
+        let mut block_env = BlockEnv::default();
+
+        let blob_excess_gas_and_price = execution_block
+            .header
+            .excess_blob_gas
+            .map(|excess| BlobExcessGasAndPrice::new(excess, BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE));
+
+        block_env.number = U256::from(execution_block.number());
+        block_env.beneficiary = execution_block.header.beneficiary;
+        block_env.timestamp = U256::from(execution_block.header.timestamp);
+        block_env.gas_limit = execution_block.header.gas_limit;
+        block_env.basefee = execution_block.header.base_fee_per_gas.unwrap_or_default();
+        block_env.difficulty = execution_block.header.difficulty;
+        block_env.blob_excess_gas_and_price = blob_excess_gas_and_price;
+
+        block_env
     }
 
     async fn create_database(&self, block_id: &BlockId) -> SimulationResult<AlloyCacheDB> {
