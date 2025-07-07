@@ -11,7 +11,7 @@ use revm::{
     context_interface::block::BlobExcessGasAndPrice,
     database::{AlloyDB, CacheDB, WrapDatabaseAsync},
     interpreter::Host,
-    primitives::{U256, eip4844::BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE, eip7825, hardfork::SpecId},
+    primitives::{U256, eip4844::BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE, eip7825},
 };
 use types::{EvmSimulateInput, EvmSimulateOutput};
 
