@@ -1,3 +1,5 @@
+use std::hash::Hash;
+
 use crate::error::{SimulationError, SimulationResult};
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
@@ -41,7 +43,37 @@ impl EvmSimulator {
             .ok_or(SimulationError::BlockNumberNotFound)?;
 
         // TODO add block overrides
-        let block_env = self.build_block_env(&execution_block);
+        let mut block_env = self.build_block_env(&execution_block);
+
+        if let Some(block_overrides) = input.block_overrides {
+            if let Some(number) = block_overrides.number {
+                block_env.number = number;
+            }
+
+            if let Some(difficulty) = block_overrides.difficulty {
+                block_env.difficulty = difficulty;
+            }
+
+            if let Some(time) = block_overrides.time {
+                block_env.timestamp = U256::from(time);
+            }
+
+            if let Some(gas_limit) = block_overrides.gas_limit {
+                block_env.gas_limit = gas_limit;
+            }
+
+            if let Some(coinbase) = block_overrides.coinbase {
+                block_env.beneficiary = coinbase;
+            }
+
+            if let Some(random) = block_overrides.random {
+                block_env.prevrandao = Some(random);
+            }
+
+            if let Some(base_fee) = block_overrides.base_fee {
+                block_env.basefee = base_fee.to::<u64>();
+            }
+        }
 
         let db = self.create_database(&block_id).await?;
 
