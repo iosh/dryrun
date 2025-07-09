@@ -1,7 +1,6 @@
-use std::hash::Hash;
-
 use crate::error::{SimulationError, SimulationResult};
 use alloy::{
+    consensus::BlockHeader,
     eips::{BlockId, BlockNumberOrTag},
     network::Ethereum,
     providers::{DynProvider, Provider, ProviderBuilder},
@@ -44,36 +43,6 @@ impl EvmSimulator {
 
         // TODO add block overrides
         let mut block_env = self.build_block_env(&execution_block);
-
-        if let Some(block_overrides) = input.block_overrides {
-            if let Some(number) = block_overrides.number {
-                block_env.number = number;
-            }
-
-            if let Some(difficulty) = block_overrides.difficulty {
-                block_env.difficulty = difficulty;
-            }
-
-            if let Some(time) = block_overrides.time {
-                block_env.timestamp = U256::from(time);
-            }
-
-            if let Some(gas_limit) = block_overrides.gas_limit {
-                block_env.gas_limit = gas_limit;
-            }
-
-            if let Some(coinbase) = block_overrides.coinbase {
-                block_env.beneficiary = coinbase;
-            }
-
-            if let Some(random) = block_overrides.random {
-                block_env.prevrandao = Some(random);
-            }
-
-            if let Some(base_fee) = block_overrides.base_fee {
-                block_env.basefee = base_fee.to::<u64>();
-            }
-        }
 
         let db = self.create_database(&block_id).await?;
 
@@ -140,22 +109,23 @@ impl EvmSimulator {
     }
 
     fn build_block_env(&self, execution_block: &Block) -> BlockEnv {
-        let mut block_env = BlockEnv::default();
+        let block_number = execution_block.number();
 
         let blob_excess_gas_and_price = execution_block
             .header
             .excess_blob_gas
             .map(|excess| BlobExcessGasAndPrice::new(excess, BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE));
 
-        block_env.number = U256::from(execution_block.number());
-        block_env.beneficiary = execution_block.header.beneficiary;
-        block_env.timestamp = U256::from(execution_block.header.timestamp);
-        block_env.gas_limit = execution_block.header.gas_limit;
-        block_env.basefee = execution_block.header.base_fee_per_gas.unwrap_or_default();
-        block_env.difficulty = execution_block.header.difficulty;
-        block_env.blob_excess_gas_and_price = blob_excess_gas_and_price;
-
-        block_env
+        BlockEnv {
+            number: U256::from(block_number),
+            beneficiary: execution_block.header.beneficiary,
+            timestamp: U256::from(execution_block.header.timestamp),
+            difficulty: execution_block.header.difficulty(),
+            prevrandao: execution_block.header.mix_hash(),
+            gas_limit: execution_block.header.gas_limit,
+            basefee: execution_block.header.base_fee_per_gas.unwrap_or_default(),
+            blob_excess_gas_and_price,
+        }
     }
 
     async fn create_database(&self, block_id: &BlockId) -> SimulationResult<AlloyCacheDB> {
