@@ -4,11 +4,11 @@ use alloy::{
     eips::{BlockId, BlockNumberOrTag},
     network::Ethereum,
     providers::{DynProvider, Provider, ProviderBuilder},
-    rpc::types::{Block, TransactionRequest},
+    rpc::types::{Block, BlockOverrides, TransactionRequest},
 };
 use revm::{
-    Context, ExecuteCommitEvm, MainBuilder, MainContext,
-    context::{BlockEnv, CfgEnv, TxEnv, result::ExecutionResult},
+    Context, Database, ExecuteCommitEvm, MainBuilder, MainContext,
+    context::{BlockEnv, CfgEnv, TxEnv, block, result::ExecutionResult},
     context_interface::block::BlobExcessGasAndPrice,
     database::{AlloyDB, CacheDB, WrapDatabaseAsync},
     interpreter::Host,
@@ -41,10 +41,13 @@ impl EvmSimulator {
             .await?
             .ok_or(SimulationError::BlockNumberNotFound)?;
 
-        // TODO add block overrides
+        let mut db = self.create_database(&block_id).await?;
+
         let mut block_env = self.build_block_env(&execution_block);
 
-        let db = self.create_database(&block_id).await?;
+        if let Some(overrides) = input.block_overrides {
+            self.apply_block_overrides(&mut block_env, &mut db, overrides);
+        }
 
         let chain_id = self.provider.get_chain_id().await?;
         // TODO add account state overrides
@@ -125,6 +128,49 @@ impl EvmSimulator {
             gas_limit: execution_block.header.gas_limit,
             basefee: execution_block.header.base_fee_per_gas.unwrap_or_default(),
             blob_excess_gas_and_price,
+        }
+    }
+
+    fn apply_block_overrides(
+        &self,
+        block_env: &mut BlockEnv,
+        db: &mut AlloyCacheDB,
+        block_overrides: BlockOverrides,
+    ) {
+        if let Some(block_hashes) = block_overrides.block_hash {
+            db.cache.block_hashes.extend(
+                block_hashes
+                    .into_iter()
+                    .map(|(num, hash)| (U256::from(num), hash)),
+            );
+        }
+
+        if let Some(number) = block_overrides.number {
+            block_env.number = number.saturating_to();
+        }
+
+        if let Some(difficulty) = block_overrides.difficulty {
+            block_env.difficulty = difficulty;
+        }
+
+        if let Some(time) = block_overrides.time {
+            block_env.timestamp = U256::from(time);
+        }
+
+        if let Some(gas_limit) = block_overrides.gas_limit {
+            block_env.gas_limit = gas_limit;
+        }
+
+        if let Some(coinbase) = block_overrides.coinbase {
+            block_env.beneficiary = coinbase;
+        }
+
+        if let Some(random) = block_overrides.random {
+            block_env.prevrandao = Some(random);
+        }
+
+        if let Some(base_fee) = block_overrides.base_fee {
+            block_env.basefee = base_fee.saturating_to();
         }
     }
 
