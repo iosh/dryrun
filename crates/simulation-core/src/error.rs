@@ -1,7 +1,8 @@
 use alloy::transports::{RpcError, TransportErrorKind};
 use revm::{
+    bytecode::BytecodeDecodeError,
     context::{result::EVMError, tx::TxEnvBuildError},
-    database::DBTransportError,
+    database::DBTransportError, primitives::Address,
 };
 use thiserror::Error;
 
@@ -21,6 +22,12 @@ pub enum SimulationError {
 
     #[error("block number not found")]
     BlockNumberNotFound,
+
+    #[error("bytecode decode error: {0}")]
+    BytecodeDecodeError(#[from] BytecodeDecodeError),
+
+    #[error("state override error: {0}")]
+    BothStateAndStateDiff(Address)
 }
 
 pub type SimulationResult<T> = Result<T, SimulationError>;

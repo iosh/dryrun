@@ -4,15 +4,18 @@ use alloy::{
     eips::{BlockId, BlockNumberOrTag},
     network::Ethereum,
     providers::{DynProvider, Provider, ProviderBuilder},
-    rpc::types::{Block, BlockOverrides, TransactionRequest},
+    rpc::types::{Block, BlockOverrides, TransactionRequest, state::StateOverride},
 };
 use revm::{
-    Context, Database, ExecuteCommitEvm, MainBuilder, MainContext,
-    context::{BlockEnv, CfgEnv, TxEnv, block, result::ExecutionResult},
+    Context, Database, DatabaseCommit, ExecuteCommitEvm, MainBuilder, MainContext,
+    context::{BlockEnv, CfgEnv, TxEnv, result::ExecutionResult},
     context_interface::block::BlobExcessGasAndPrice,
     database::{AlloyDB, CacheDB, WrapDatabaseAsync},
     interpreter::Host,
-    primitives::{U256, eip4844::BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE, eip7825},
+    primitives::{
+        HashMap, U256, eip4844::BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE, eip7825, keccak256,
+    },
+    state::{Account, AccountStatus, Bytecode, EvmStorageSlot},
 };
 use types::{EvmSimulateInput, EvmSimulateOutput};
 
@@ -47,6 +50,10 @@ impl EvmSimulator {
 
         if let Some(overrides) = input.block_overrides {
             self.apply_block_overrides(&mut block_env, &mut db, overrides);
+        }
+
+        if let Some(state_overrides) = input.state_overrides {
+            self.apply_state_overrides(&mut db, state_overrides)?;
         }
 
         let chain_id = self.provider.get_chain_id().await?;
@@ -172,6 +179,73 @@ impl EvmSimulator {
         if let Some(base_fee) = block_overrides.base_fee {
             block_env.basefee = base_fee.saturating_to();
         }
+    }
+
+    fn apply_state_overrides(
+        &self,
+        db: &mut AlloyCacheDB,
+        state_overrides: StateOverride,
+    ) -> SimulationResult<()> {
+        for (account, account_override) in state_overrides {
+            let mut info = db.basic(account)?.unwrap_or_default();
+
+            if let Some(nonce) = account_override.nonce {
+                info.nonce = nonce;
+            }
+
+            if let Some(code) = account_override.code {
+                info.code_hash = keccak256(&code);
+                info.code = Some(Bytecode::new_raw_checked(code)?);
+            }
+
+            if let Some(balance) = account_override.balance {
+                info.balance = balance;
+            }
+
+            let mut acc = revm::state::Account {
+                info,
+                status: AccountStatus::Touched,
+                storage: Default::default(),
+                transaction_id: 0,
+            };
+
+            let storage_diff = match (account_override.state, account_override.state_diff) {
+                (Some(_), Some(_)) => {
+                    return Err(SimulationError::BothStateAndStateDiff(account));
+                }
+                (None, None) => None,
+
+                (Some(state), None) => {
+                    db.commit(HashMap::from_iter([(
+                        account,
+                        Account {
+                            status: AccountStatus::SelfDestructed | AccountStatus::Touched,
+                            ..Default::default()
+                        },
+                    )]));
+                    acc.mark_created();
+                    Some(state)
+                }
+                (None, Some(state)) => Some(state),
+            };
+
+            if let Some(state) = storage_diff {
+                for (slot, value) in state {
+                    acc.storage.insert(
+                        slot.into(),
+                        EvmStorageSlot {
+                            original_value: (!value).into(),
+                            present_value: value.into(),
+                            is_cold: false,
+                            transaction_id: 0,
+                        },
+                    );
+                }
+            }
+            db.commit(HashMap::from_iter([(account, acc)]));
+        }
+
+        Ok(())
     }
 
     async fn create_database(&self, block_id: &BlockId) -> SimulationResult<AlloyCacheDB> {
