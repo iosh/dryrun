@@ -7,17 +7,18 @@ use alloy::{
     rpc::types::{Block, BlockOverrides, TransactionRequest, state::StateOverride},
 };
 use revm::{
-    Context, Database, DatabaseCommit, ExecuteCommitEvm, MainBuilder, MainContext,
-    context::{BlockEnv, CfgEnv, TxEnv, result::ExecutionResult},
+    Context, Database, DatabaseCommit, DatabaseRef, ExecuteCommitEvm, ExecuteEvm, MainBuilder,
+    MainContext,
+    context::{BlockEnv, CfgEnv, ContextTr, TxEnv, result::ExecutionResult},
     context_interface::block::BlobExcessGasAndPrice,
     database::{AlloyDB, CacheDB, WrapDatabaseAsync},
     interpreter::Host,
     primitives::{
         HashMap, U256, eip4844::BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE, eip7825, keccak256,
     },
-    state::{Account, AccountStatus, Bytecode, EvmStorageSlot},
+    state::{Account, AccountStatus, Bytecode, EvmState, EvmStorageSlot},
 };
-use types::{EvmSimulateInput, EvmSimulateOutput};
+use types::{EvmSimulateInput, EvmSimulateOutput, StateChange, StorageChange, ValueChange};
 
 type AlloyCacheDB = CacheDB<WrapDatabaseAsync<AlloyDB<Ethereum, DynProvider>>>;
 
@@ -68,18 +69,24 @@ impl EvmSimulator {
             .with_block(block_env)
             .build_mainnet();
 
-        let result = evm.transact_commit(tx_env)?;
+        let result = evm.transact_one(tx_env)?;
+
+        let state = evm.finalize();
+        let state_changes = self.build_state_changes(&state, &mut evm.db_mut())?;
+
+        evm.commit(state);
 
         let (status, logs) = match result {
-            ExecutionResult::Success { ref logs, .. } => (true, logs),
-            _ => (false, &vec![]),
+            ExecutionResult::Success { ref logs, .. } => (true, logs.to_vec()),
+            _ => (false, vec![]),
         };
 
         let output = EvmSimulateOutput {
             status,
             gas_used: result.gas_used(),
             block_number: evm.block_number(),
-            logs: logs.to_vec(),
+            logs: logs,
+            state_changes: state_changes,
         };
 
         Ok(output)
@@ -93,7 +100,6 @@ impl EvmSimulator {
             .gas_limit(tx.gas.unwrap_or(eip7825::TX_GAS_LIMIT_CAP))
             .gas_price(tx.gas_price.unwrap_or_default())
             .nonce(tx.nonce.unwrap_or_default());
-
         if let Some(to) = tx.to {
             tx_builder = tx_builder.kind(to)
         }
@@ -246,6 +252,66 @@ impl EvmSimulator {
         }
 
         Ok(())
+    }
+
+    fn build_state_changes(
+        &self,
+        final_state: &EvmState,
+        db: &mut AlloyCacheDB,
+    ) -> SimulationResult<Vec<StateChange>> {
+        let mut changes = Vec::new();
+        for (address, new_account) in final_state {
+            if new_account.is_empty() {
+                continue;
+            }
+            let original_info = db.basic_ref(*address)?.unwrap_or_default();
+
+            let new_info = &new_account.info;
+
+            let nonce_change = if new_info.nonce != original_info.nonce {
+                Some(ValueChange {
+                    previous_value: original_info.nonce,
+                    new_value: new_info.nonce,
+                })
+            } else {
+                None
+            };
+
+            let balance_change = if original_info.balance != new_info.balance {
+                Some(ValueChange {
+                    previous_value: original_info.balance,
+                    new_value: new_info.balance,
+                })
+            } else {
+                None
+            };
+
+            let storage_changes: Vec<StorageChange> = new_account
+                .storage
+                .iter()
+                .filter_map(|(slot, new_storage_slot)| {
+                    if new_storage_slot.present_value != new_storage_slot.original_value {
+                        Some(StorageChange {
+                            slot: *slot,
+                            previous_value: new_storage_slot.original_value,
+                            new_value: new_storage_slot.present_value,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            if nonce_change.is_some() || balance_change.is_some() || !storage_changes.is_empty() {
+                changes.push(StateChange {
+                    address: *address,
+                    nonce: nonce_change,
+                    balance: balance_change,
+                    storage: storage_changes,
+                });
+            }
+        }
+        Ok(changes)
     }
 
     async fn create_database(&self, block_id: &BlockId) -> SimulationResult<AlloyCacheDB> {

@@ -41,8 +41,8 @@ pub struct EvmSimulateOutput {
 
     pub logs: Vec<Log>,
     // pub trace: Vec<CallTraceItem>,
-
-    // pub state_changes: Vec<StateChange>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub state_changes: Vec<StateChange>,
     // pub asset_changes: Vec<serde_json::Value>,
     // pub balance_changes: Vec<serde_json::Value>,
 }
@@ -79,9 +79,9 @@ pub struct StateChange {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StorageChange {
-    pub slot: B256,
-    pub previous_value: B256,
-    pub new_value: B256,
+    pub slot: U256,
+    pub previous_value: U256,
+    pub new_value: U256,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
