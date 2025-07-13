@@ -3,6 +3,7 @@ use alloy::{
     consensus::BlockHeader,
     eips::{BlockId, BlockNumberOrTag},
     network::Ethereum,
+    primitives::U64,
     providers::{DynProvider, Provider, ProviderBuilder},
     rpc::types::{Block, BlockOverrides, TransactionRequest, state::StateOverride},
 };
@@ -72,7 +73,7 @@ impl EvmSimulator {
         let result = evm.transact_one(tx_env)?;
 
         let state = evm.finalize();
-        let state_changes = self.build_state_changes(&state, &mut evm.db_mut())?;
+        let state_changes = self.build_state_changes(&state, evm.db_mut())?;
 
         evm.commit(state);
 
@@ -83,10 +84,10 @@ impl EvmSimulator {
 
         let output = EvmSimulateOutput {
             status,
-            gas_used: result.gas_used(),
+            gas_used: U64::from(result.gas_used()),
             block_number: evm.block_number(),
-            logs: logs,
-            state_changes: state_changes,
+            logs,
+            state_changes,
         };
 
         Ok(output)

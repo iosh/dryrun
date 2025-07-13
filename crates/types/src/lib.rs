@@ -1,8 +1,7 @@
 use alloy::{
-    primitives::{Address, B256, Bytes, Log, U256},
+    primitives::{Address, Bytes, Log, U256, U64},
     rpc::types::{
-        BlockId, BlockOverrides, TransactionRequest, state::StateOverride,
-        trace::parity::ActionType,
+        state::StateOverride, trace::parity::ActionType, BlockId, BlockOverrides, TransactionRequest
     },
 };
 use serde::{Deserialize, Serialize};
@@ -36,7 +35,7 @@ impl EvmSimulateInput {
 pub struct EvmSimulateOutput {
     pub status: bool,
 
-    pub gas_used: u64,
+    pub gas_used: U64,
     pub block_number: U256,
 
     pub logs: Vec<Log>,
@@ -54,8 +53,8 @@ pub struct CallTraceItem {
     pub action_type: ActionType,
     pub from: Address,
     pub to: Address,
-    pub gas: u64,
-    pub gas_used: u64,
+    pub gas: U64,
+    pub gas_used: U64,
     pub value: U256,
     pub input: Bytes,
 
