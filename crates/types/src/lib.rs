@@ -1,8 +1,6 @@
 use alloy::{
-    primitives::{Address, Bytes, Log, U256, U64},
-    rpc::types::{
-        state::StateOverride, trace::parity::ActionType, BlockId, BlockOverrides, TransactionRequest
-    },
+    primitives::{Address, Bytes, Log, U64, U256},
+    rpc::types::{BlockId, BlockOverrides, TransactionRequest, state::StateOverride},
 };
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +27,13 @@ impl EvmSimulateInput {
         }
     }
 }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum TraceActionType {
+    Call,
+    StaticCall,
+    DelegateCall,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,7 +44,7 @@ pub struct EvmSimulateOutput {
     pub block_number: U256,
 
     pub logs: Vec<Log>,
-    // pub trace: Vec<CallTraceItem>,
+    pub trace: Vec<CallTraceItem>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub state_changes: Vec<StateChange>,
     // pub asset_changes: Vec<serde_json::Value>,
@@ -50,7 +55,7 @@ pub struct EvmSimulateOutput {
 #[serde(rename_all = "camelCase")]
 pub struct CallTraceItem {
     #[serde(rename(serialize = "type"))]
-    pub action_type: ActionType,
+    pub action_type: TraceActionType,
     pub from: Address,
     pub to: Address,
     pub gas: U64,

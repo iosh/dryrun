@@ -1,4 +1,7 @@
-use crate::error::{SimulationError, SimulationResult};
+use crate::{
+    error::{SimulationError, SimulationResult},
+    inspector::TraceInspector,
+};
 use alloy::{
     consensus::BlockHeader,
     eips::{BlockId, BlockNumberOrTag},
@@ -8,16 +11,9 @@ use alloy::{
     rpc::types::{Block, BlockOverrides, TransactionRequest, state::StateOverride},
 };
 use revm::{
-    Context, Database, DatabaseCommit, DatabaseRef, ExecuteCommitEvm, ExecuteEvm, MainBuilder,
-    MainContext,
-    context::{BlockEnv, CfgEnv, ContextTr, TxEnv, result::ExecutionResult},
-    context_interface::block::BlobExcessGasAndPrice,
-    database::{AlloyDB, CacheDB, WrapDatabaseAsync},
-    interpreter::Host,
-    primitives::{
-        HashMap, U256, eip4844::BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE, eip7825, keccak256,
-    },
-    state::{Account, AccountStatus, Bytecode, EvmState, EvmStorageSlot},
+    context::{result::ExecutionResult, BlockEnv, CfgEnv, ContextTr, TxEnv}, context_interface::block::BlobExcessGasAndPrice, database::{AlloyDB, CacheDB, WrapDatabaseAsync}, interpreter::Host, primitives::{
+        eip4844::BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE, eip7825, keccak256, HashMap, U256
+    }, state::{Account, AccountStatus, Bytecode, EvmState, EvmStorageSlot}, Context, Database, DatabaseCommit, DatabaseRef, ExecuteCommitEvm, ExecuteEvm, InspectEvm, MainBuilder, MainContext
 };
 use types::{EvmSimulateInput, EvmSimulateOutput, StateChange, StorageChange, ValueChange};
 
@@ -64,18 +60,23 @@ impl EvmSimulator {
 
         let tx_env = self.build_tx_env(&input.transaction, block_env.basefee as u128)?;
 
+        let inspector = TraceInspector::new();
         let mut evm = Context::mainnet()
             .with_db(db)
             .with_cfg(cfg_env)
             .with_block(block_env)
-            .build_mainnet();
+            .build_mainnet_with_inspector(inspector);
 
-        let result = evm.transact_one(tx_env)?;
+            
+        let result = evm.inspect_one_tx(tx_env)?;
 
         let state = evm.finalize();
         let state_changes = self.build_state_changes(&state, evm.db_mut())?;
 
         evm.commit(state);
+
+        let block_number = evm.block_number();
+        let trace = evm.inspector.into_traces();
 
         let (status, logs) = match result {
             ExecutionResult::Success { ref logs, .. } => (true, logs.to_vec()),
@@ -85,9 +86,10 @@ impl EvmSimulator {
         let output = EvmSimulateOutput {
             status,
             gas_used: U64::from(result.gas_used()),
-            block_number: evm.block_number(),
+            block_number,
             logs,
             state_changes,
+            trace,
         };
 
         Ok(output)
