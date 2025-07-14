@@ -43,12 +43,40 @@ pub struct EvmSimulateOutput {
     pub gas_used: U64,
     pub block_number: U256,
 
-    pub logs: Vec<Log>,
+    pub logs: Vec<DecodeLog>,
     pub trace: Vec<CallTraceItem>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub state_changes: Vec<StateChange>,
     // pub asset_changes: Vec<serde_json::Value>,
     // pub balance_changes: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecodeLog {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anonymous: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input: Option<Vec<DecodeLogInput>>,
+
+    pub raw: Log,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecodeLogInput {
+    pub name: String,
+
+    #[serde(rename = "type")]
+    pub sol_type: String,
+
+    pub value: serde_json::Value,
+
+    pub indexed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,10 +90,25 @@ pub struct CallTraceItem {
     pub gas_used: U64,
     pub value: U256,
     pub input: Bytes,
-
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        rename = "decodeInput"
+    )]
+    pub decode_input: Option<Vec<CallTraceDecodedParam>>,
     pub output: Bytes,
     pub subtraces: usize,
     pub trace_address: Vec<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CallTraceDecodedParam {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub sol_type: String,
+    pub value: serde_json::Value,
+    pub indexed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

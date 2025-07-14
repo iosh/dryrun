@@ -1,6 +1,7 @@
 mod error;
 mod evm_simulator;
 mod inspector;
+mod abi;
 use std::sync::Arc;
 
 use crate::error::SimulationResult;
