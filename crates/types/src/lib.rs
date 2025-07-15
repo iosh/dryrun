@@ -74,7 +74,7 @@ pub struct DecodeLogInput {
     #[serde(rename = "type")]
     pub sol_type: String,
 
-    pub value: serde_json::Value,
+    pub value: String,
 
     pub indexed: bool,
 }

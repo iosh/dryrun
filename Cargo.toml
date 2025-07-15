@@ -4,7 +4,13 @@ edition = "2024"
 
 [workspace]
 resolver = "3"
-members = ["bin", "crates/simulation-core", "crates/rpc-server", "crates/types", "crates/configs"]
+members = [
+    "bin",
+    "crates/simulation-core",
+    "crates/rpc-server",
+    "crates/types",
+    "crates/configs",
+]
 
 [workspace.dependencies]
 rpc-server = { path = "crates/rpc-server" }
@@ -16,6 +22,9 @@ jsonrpsee = "0.25.1"
 anyhow = "1"
 thiserror = "2"
 
+futures = "0.3"
+dashmap = { version = "7.0.0-rc2" }
+reqwest = { version = "0.12", features = ["json"] }
 tokio = "1"
 tokio-test = "0.4"
 

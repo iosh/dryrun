@@ -4642,6 +4642,7 @@ dependencies = [
  "alloy",
  "configs",
  "revm",
+ "serde_json",
  "thiserror 2.0.12",
  "types",
 ]
