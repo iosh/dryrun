@@ -107,8 +107,7 @@ pub struct CallTraceDecodedParam {
     pub name: String,
     #[serde(rename = "type")]
     pub sol_type: String,
-    pub value: serde_json::Value,
-    pub indexed: bool,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

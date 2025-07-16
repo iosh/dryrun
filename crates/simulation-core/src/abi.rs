@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use alloy::{
     contract::Interface,
-    dyn_abi::EventExt,
+    dyn_abi::{DynSolValue, EventExt, JsonAbiExt},
     hex,
     json_abi::{Event, JsonAbi},
     primitives::{Function, Selector},
@@ -29,61 +29,125 @@ impl AbiDecoder {
         }
     }
 
-    pub fn decode_log(&self, raw_log: &Log) -> Option<(String, bool, Vec<DecodeLogInput>)> {
-        let log_data = raw_log.data();
-        if log_data.topics().is_empty() {
+    pub fn decode_input(&self, data: &[u8]) -> Option<(String, Vec<CallTraceDecodedParam>)> {
+        if data.len() < 4 {
             return None;
         }
 
-        let signature_topic = log_data.topics()[0];
+        let selector = Selector::from_slice(&data[..4]);
+        let function = self.abi.functions().find(|f| f.selector() == selector)?;
 
-        if let Some(event) = self.event_map.get(&signature_topic) {
-            if let Ok(decode_event) = event.decode_log(log_data) {
-                let params = event
-                    .inputs
-                    .iter()
-                    .zip(decode_event.indexed.iter().chain(decode_event.body.iter()))
-                    .map(|(param, token)| {
-                        let value = match token {
-                            alloy::dyn_abi::DynSolValue::Bytes(bytes) => {
-                                format!("0x{}", hex::encode(bytes))
-                            }
-                            alloy::dyn_abi::DynSolValue::FixedBytes(bytes, _) => {
-                                format!("0x{}", hex::encode(bytes))
-                            }
+        let decoded = function.abi_decode_input(&data[4..]).ok()?;
 
-                            alloy::dyn_abi::DynSolValue::Address(addr) => format!("0x{:x}", addr),
+        let params = function
+            .inputs
+            .iter()
+            .zip(decoded.iter())
+            .map(|(param, token)| CallTraceDecodedParam {
+                name: param.name.clone(),
+                sol_type: param.ty.clone(),
+                value: Self::format_sol_value(token),
+            })
+            .collect();
 
-                            alloy::dyn_abi::DynSolValue::Uint(num, _) => num.to_string(),
-                            alloy::dyn_abi::DynSolValue::Int(num, _) => num.to_string(),
+        Some((function.name.clone(), params))
+    }
 
-                            alloy::dyn_abi::DynSolValue::Bool(b) => b.to_string(),
+    pub fn decode_log(&self, raw_log: &Log) -> Option<(String, bool, Vec<DecodeLogInput>)> {
+        let log_data = raw_log.data();
 
-                            alloy::dyn_abi::DynSolValue::String(s) => s.clone(),
-
-                            alloy::dyn_abi::DynSolValue::Array(arr) => format!(
-                                "[{}]",
-                                arr.iter()
-                                    .map(|v| format!("{:?}", v))
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            ),
-
-                            _ => format!("{:?}", token),
-                        };
-
-                        DecodeLogInput {
-                            name: param.name.clone(),
-                            sol_type: param.ty.clone(),
-                            value,
-                            indexed: param.indexed,
-                        }
-                    })
-                    .collect();
-                return Some((event.name.clone(), event.anonymous, params));
-            }
+        let topics = log_data.topics();
+        if topics.is_empty() {
+            return None;
         }
 
-        None
+        let signature_topic = topics[0];
+        let event = self.event_map.get(&signature_topic)?;
+
+        let decode_event = event.decode_log(log_data).ok()?;
+
+        let params = event
+            .inputs
+            .iter()
+            .zip(decode_event.indexed.iter().chain(decode_event.body.iter()))
+            .map(|(param, token)| DecodeLogInput {
+                name: param.name.clone(),
+                sol_type: param.ty.clone(),
+                value: Self::format_sol_value(token),
+                indexed: param.indexed,
+            })
+            .collect();
+
+        Some((event.name.clone(), event.anonymous, params))
+    }
+
+    fn format_sol_value(value: &DynSolValue) -> String {
+        match value {
+            DynSolValue::Bytes(bytes) => format!("0x{}", hex::encode(bytes)),
+            DynSolValue::FixedBytes(bytes, _) => format!("0x{}", hex::encode(bytes)),
+            DynSolValue::Address(addr) => format!("0x{:x}", addr),
+            DynSolValue::Uint(num, _) => format!("0x{:x}", num),
+            DynSolValue::Int(num, _) => format!("0x{:x}", num),
+            DynSolValue::Bool(b) => b.to_string(),
+            DynSolValue::String(s) => s.clone(),
+            DynSolValue::Array(arr) => {
+                let elements: Vec<String> = arr.iter().map(Self::format_sol_value).collect();
+                format!("[{}]", elements.join(", "))
+            }
+            DynSolValue::Tuple(tuple) => {
+                let elements: Vec<String> = tuple.iter().map(Self::format_sol_value).collect();
+                format!("({})", elements.join(", "))
+            }
+            _ => format!("{:?}", value),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use alloy::json_abi::JsonAbi;
+
+    #[test]
+    fn test_decode_input() {
+        let abi_json = r#"[{
+          "name": "transfer",
+          "type": "function",
+          "inputs": [
+            {
+              "name": "_to",
+              "type": "address"
+            },
+            {
+              "name": "_value",
+              "type": "uint256"
+            }
+          ],
+          "outputs": [],
+          "payable": false,
+          "constant": false,
+          "stateMutability": "nonpayable"
+        }]"#;
+
+        let abi: JsonAbi = serde_json::from_str(abi_json).unwrap();
+
+        let decoder = AbiDecoder::new(abi);
+
+        let test_data = hex::decode("a9059cbb000000000000000000000000888888888888888888888888888888888888888800000000000000000000000000000000000000000000000000000000017d7840").unwrap();
+
+        let result = decoder.decode_input(&test_data).unwrap();
+
+        assert_eq!(result.0, "transfer");
+        assert_eq!(result.1.len(), 2);
+        assert_eq!(result.1[0].name, "_to");
+        assert_eq!(result.1[0].sol_type, "address");
+        assert_eq!(
+            result.1[0].value,
+            "0x8888888888888888888888888888888888888888"
+        );
+        assert_eq!(result.1[1].name, "_value");
+        assert_eq!(result.1[1].sol_type, "uint256");
+        assert_eq!(result.1[1].value, "0x17d7840");
     }
 }
