@@ -5,12 +5,9 @@ use alloy::{
     dyn_abi::{DynSolValue, EventExt, JsonAbiExt},
     hex,
     json_abi::{Event, JsonAbi},
-    primitives::{Function, Selector},
-    rlp::{Bytes, bytes},
-    rpc::types::Log,
-    sol_types::{SolValue, sol_data::FixedBytes},
+    primitives::Selector,
 };
-use revm::primitives::B256;
+use revm::primitives::{B256, LogData};
 use types::{CallTraceDecodedParam, DecodeLogInput};
 pub struct AbiDecoder {
     abi: JsonAbi,
@@ -53,10 +50,8 @@ impl AbiDecoder {
         Some((function.name.clone(), params))
     }
 
-    pub fn decode_log(&self, raw_log: &Log) -> Option<(String, bool, Vec<DecodeLogInput>)> {
-        let log_data = raw_log.data();
-
-        let topics = log_data.topics();
+    pub fn decode_log(&self, raw_log: &LogData) -> Option<(String, bool, Vec<DecodeLogInput>)> {
+        let topics = raw_log.topics();
         if topics.is_empty() {
             return None;
         }
@@ -64,7 +59,7 @@ impl AbiDecoder {
         let signature_topic = topics[0];
         let event = self.event_map.get(&signature_topic)?;
 
-        let decode_event = event.decode_log(log_data).ok()?;
+        let decode_event = event.decode_log(raw_log).ok()?;
 
         let params = event
             .inputs
@@ -108,6 +103,10 @@ mod tests {
 
     use super::*;
     use alloy::json_abi::JsonAbi;
+    use revm::{
+        context::result,
+        primitives::{FixedBytes, LogData},
+    };
 
     #[test]
     fn test_decode_input() {
@@ -149,5 +148,85 @@ mod tests {
         assert_eq!(result.1[1].name, "_value");
         assert_eq!(result.1[1].sol_type, "uint256");
         assert_eq!(result.1[1].value, "0x17d7840");
+    }
+
+    #[test]
+    fn test_decode_log() {
+        let abi_json = r#"[{
+          "name": "Transfer",
+          "type": "event",
+          "inputs": [
+            {
+              "name": "from",
+              "type": "address",
+              "indexed": true
+            },
+            {
+              "name": "to",
+              "type": "address",
+              "indexed": true
+            },
+            {
+              "name": "value",
+              "type": "uint256"
+            }
+          ],
+          "anonymous": false
+        }]"#;
+
+        let abi: JsonAbi = serde_json::from_str(abi_json).unwrap();
+        let decoder = AbiDecoder::new(abi);
+
+        let log_data = LogData::new(
+            vec![
+                B256::from_slice(
+                    &hex::decode(
+                        "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef",
+                    )
+                    .unwrap(),
+                ),
+                B256::from_slice(
+                    &hex::decode(
+                        "0x0000000000000000000000008888888888888888888888888888888888888888",
+                    )
+                    .unwrap(),
+                ),
+                B256::from_slice(
+                    &hex::decode(
+                        "0x000000000000000000000000b22499ac3b9fb4206d0eb620d1387c1d78a0d61d",
+                    )
+                    .unwrap(),
+                ),
+            ],
+            hex::decode("0x00000000000000000000000000000000000000000000000000000000017d7840")
+                .unwrap()
+                .into(),
+        )
+        .unwrap();
+
+        let result = decoder.decode_log(&log_data).unwrap();
+        println!("{:?}", result);
+        assert_eq!(result.0, "Transfer");
+        assert!(!result.1);
+
+        assert_eq!(result.2.len(), 3);
+        assert_eq!(result.2[0].name, "from");
+        assert_eq!(result.2[0].sol_type, "address");
+        assert_eq!(
+            result.2[0].value,
+            "0x8888888888888888888888888888888888888888"
+        );
+        assert!(result.2[0].indexed);
+        assert_eq!(result.2[1].name, "to");
+        assert_eq!(result.2[1].sol_type, "address");
+        assert_eq!(
+            result.2[1].value,
+            "0xb22499ac3b9fb4206d0eb620d1387c1d78a0d61d"
+        );
+        assert!(result.2[1].indexed);
+        assert_eq!(result.2[2].name, "value");
+        assert_eq!(result.2[2].sol_type, "uint256");
+        assert_eq!(result.2[2].value, "0x17d7840");
+        assert!(!result.2[2].indexed);
     }
 }
