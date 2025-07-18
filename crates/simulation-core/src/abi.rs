@@ -103,10 +103,7 @@ mod tests {
 
     use super::*;
     use alloy::json_abi::JsonAbi;
-    use revm::{
-        context::result,
-        primitives::{FixedBytes, LogData},
-    };
+    use revm::primitives::LogData;
 
     #[test]
     fn test_decode_input() {
@@ -145,6 +142,7 @@ mod tests {
             result.1[0].value,
             "0x8888888888888888888888888888888888888888"
         );
+
         assert_eq!(result.1[1].name, "_value");
         assert_eq!(result.1[1].sol_type, "uint256");
         assert_eq!(result.1[1].value, "0x17d7840");
@@ -216,6 +214,7 @@ mod tests {
             result.2[0].value,
             "0x8888888888888888888888888888888888888888"
         );
+
         assert!(result.2[0].indexed);
         assert_eq!(result.2[1].name, "to");
         assert_eq!(result.2[1].sol_type, "address");
@@ -223,6 +222,7 @@ mod tests {
             result.2[1].value,
             "0xb22499ac3b9fb4206d0eb620d1387c1d78a0d61d"
         );
+
         assert!(result.2[1].indexed);
         assert_eq!(result.2[2].name, "value");
         assert_eq!(result.2[2].sol_type, "uint256");
