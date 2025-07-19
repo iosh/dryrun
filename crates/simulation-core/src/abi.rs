@@ -7,6 +7,7 @@ use alloy::{
     primitives::Selector,
     transports::http::reqwest,
 };
+use futures::lock::Mutex;
 use revm::primitives::{Address, B256, LogData};
 use serde::Deserialize;
 use types::{CallTraceDecodedParam, DecodeLogInput};
@@ -104,23 +105,25 @@ impl AbiDecoder {
 }
 
 pub struct AbiManager {
-    cache: HashMap<(Address, u64), Option<Arc<JsonAbi>>>,
+    cache: Arc<Mutex<HashMap<(Address, u64), Option<Arc<AbiDecoder>>>>>,
     client: reqwest::Client,
 }
 
 impl AbiManager {
     pub fn new() -> Self {
         Self {
-            cache: HashMap::new(),
+            cache: Arc::new(Mutex::new(HashMap::new())),
             client: reqwest::Client::new(),
         }
     }
 
-    pub async fn get_abi(&mut self, address: Address, chain_id: u64) -> Option<Arc<JsonAbi>> {
+    pub async fn get_decoder(&self, address: Address, chain_id: u64) -> Option<Arc<AbiDecoder>> {
         let cache_key = (address, chain_id);
-
-        if let Some(cached_abi) = self.cache.get(&cache_key) {
-            return cached_abi.clone();
+        {
+            let cache = self.cache.lock().await;
+            if let Some(cached_decoder) = cache.get(&cache_key) {
+                return cached_decoder.clone();
+            }
         }
 
         let url = format!(
@@ -147,9 +150,12 @@ impl AbiManager {
             .map_err(|e| eprintln!("JSON parse error: {}", e))
             .ok()?;
 
-        let abi = Arc::new(sourcify_response.abi);
-        self.cache.insert(cache_key, Some(abi.clone()));
-        Some(abi)
+        let abi_decoder = Arc::new(AbiDecoder::new(sourcify_response.abi));
+        {
+            let mut cache = self.cache.lock().await;
+            cache.insert(cache_key, Some(abi_decoder.clone()));
+        }
+        Some(abi_decoder)
     }
 }
 
@@ -288,10 +294,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_abi_manager() {
-        let mut manager = AbiManager::new();
+        let manager = AbiManager::new();
         let contract_address = address!("0x2738d13E81e30bC615766A0410e7cF199FD59A83");
         let chain_id = 11155111;
-        let abi = manager.get_abi(contract_address, chain_id).await;
+        let abi = manager.get_decoder(contract_address, chain_id).await;
 
         assert!(abi.is_some());
     }

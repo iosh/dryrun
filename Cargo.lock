@@ -4641,6 +4641,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "configs",
+ "futures",
  "revm",
  "serde",
  "serde_json",

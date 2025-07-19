@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use crate::{
+    abi::AbiManager,
     error::{SimulationError, SimulationResult},
     inspector::TraceInspector,
 };
@@ -11,16 +14,26 @@ use alloy::{
     rpc::types::{Block, BlockOverrides, TransactionRequest, state::StateOverride},
 };
 use revm::{
-    context::{result::ExecutionResult, BlockEnv, CfgEnv, ContextTr, TxEnv}, context_interface::block::BlobExcessGasAndPrice, database::{AlloyDB, CacheDB, WrapDatabaseAsync}, interpreter::Host, primitives::{
-        eip4844::BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE, eip7825, keccak256, HashMap, U256
-    }, state::{Account, AccountStatus, Bytecode, EvmState, EvmStorageSlot}, Context, Database, DatabaseCommit, DatabaseRef, ExecuteCommitEvm, ExecuteEvm, InspectEvm, MainBuilder, MainContext
+    Context, Database, DatabaseCommit, DatabaseRef, ExecuteCommitEvm, ExecuteEvm, InspectEvm,
+    MainBuilder, MainContext,
+    context::{BlockEnv, CfgEnv, ContextTr, TxEnv, result::ExecutionResult},
+    context_interface::block::BlobExcessGasAndPrice,
+    database::{AlloyDB, CacheDB, WrapDatabaseAsync},
+    interpreter::Host,
+    primitives::{
+        HashMap, U256, eip4844::BLOB_BASE_FEE_UPDATE_FRACTION_PRAGUE, eip7825, keccak256,
+    },
+    state::{Account, AccountStatus, Bytecode, EvmState, EvmStorageSlot},
 };
-use types::{EvmSimulateInput, EvmSimulateOutput, StateChange, StorageChange, ValueChange};
+use types::{
+    DecodeLog, EvmSimulateInput, EvmSimulateOutput, StateChange, StorageChange, ValueChange,
+};
 
 type AlloyCacheDB = CacheDB<WrapDatabaseAsync<AlloyDB<Ethereum, DynProvider>>>;
 
 pub struct EvmSimulator {
     provider: DynProvider,
+    abi_manager: Arc<AbiManager>,
 }
 
 impl EvmSimulator {
@@ -28,7 +41,10 @@ impl EvmSimulator {
         let provider: DynProvider = ProviderBuilder::new()
             .connect_http(rpc_url.parse().unwrap())
             .erased();
-        EvmSimulator { provider }
+        EvmSimulator {
+            provider,
+            abi_manager: Arc::new(AbiManager::new()),
+        }
     }
 
     pub async fn simulate(&self, input: EvmSimulateInput) -> SimulationResult<EvmSimulateOutput> {
@@ -67,7 +83,6 @@ impl EvmSimulator {
             .with_block(block_env)
             .build_mainnet_with_inspector(inspector);
 
-            
         let result = evm.inspect_one_tx(tx_env)?;
 
         let state = evm.finalize();
@@ -83,11 +98,39 @@ impl EvmSimulator {
             _ => (false, vec![]),
         };
 
+        let log_decode_futures = logs.iter().map(|raw_log| async {
+            let mut decoded_log = DecodeLog {
+                name: None,
+                anonymous: None,
+                input: None,
+                raw: raw_log.clone(),
+            };
+
+            if let Some(decoder) = self
+                .abi_manager
+                .get_decoder(raw_log.address, chain_id)
+                .await
+            {
+                if let Some((name, anonymous, inputs)) = decoder.decode_log(raw_log) {
+                    decoded_log.name = Some(name);
+                    decoded_log.anonymous = Some(anonymous);
+                    decoded_log.input = Some(inputs);
+                }
+            }
+
+            decoded_log
+        });
+
+        let decode_logs: Vec<DecodeLog> = futures::future::join_all(log_decode_futures)
+            .await
+            .into_iter()
+            .collect();
+
         let output = EvmSimulateOutput {
             status,
             gas_used: U64::from(result.gas_used()),
             block_number,
-            logs,
+            logs: decode_logs,
             state_changes,
             trace,
         };
