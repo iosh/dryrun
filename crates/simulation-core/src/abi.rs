@@ -11,7 +11,6 @@ use revm::primitives::{B256, LogData};
 use types::{CallTraceDecodedParam, DecodeLogInput};
 pub struct AbiDecoder {
     abi: JsonAbi,
-    interface: Interface,
     event_map: HashMap<B256, Event>,
 }
 
@@ -21,7 +20,6 @@ impl AbiDecoder {
 
         Self {
             abi: abi.clone(),
-            interface: Interface::new(abi),
             event_map,
         }
     }
