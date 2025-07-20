@@ -102,7 +102,7 @@ impl EvmSimulator {
             let mut decoded_log = DecodeLog {
                 name: None,
                 anonymous: None,
-                input: None,
+                inputs: None,
                 raw: raw_log.clone(),
             };
             if let Some(decoder) = self
@@ -113,7 +113,7 @@ impl EvmSimulator {
                 if let Some((name, anonymous, inputs)) = decoder.decode_log(&raw_log.data) {
                     decoded_log.name = Some(name);
                     decoded_log.anonymous = Some(anonymous);
-                    decoded_log.input = Some(inputs);
+                    decoded_log.inputs = Some(inputs);
                 }
             }
             decoded_log
@@ -325,8 +325,8 @@ impl EvmSimulator {
 
             let nonce_change = if new_info.nonce != original_info.nonce {
                 Some(ValueChange {
-                    previous_value: original_info.nonce,
-                    new_value: new_info.nonce,
+                    previous_value: U64::from(original_info.nonce),
+                    new_value: U64::from(new_info.nonce),
                 })
             } else {
                 None

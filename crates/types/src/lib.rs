@@ -61,7 +61,7 @@ pub struct DecodeLog {
     pub anonymous: Option<bool>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub input: Option<Vec<DecodeLogInput>>,
+    pub inputs: Option<Vec<DecodeLogInput>>,
 
     pub raw: Log,
 }
@@ -115,7 +115,7 @@ pub struct CallTraceDecodedParam {
 pub struct StateChange {
     pub address: Address,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub nonce: Option<ValueChange<u64>>,
+    pub nonce: Option<ValueChange<U64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub balance: Option<ValueChange<U256>>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]

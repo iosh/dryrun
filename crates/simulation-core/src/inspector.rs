@@ -21,10 +21,7 @@ pub struct TraceInspector {
 
 impl TraceInspector {
     pub fn new() -> Self {
-        Self {
-            call_stack: Vec::new(),
-            traces: Vec::new(),
-        }
+        Self::default()
     }
 
     pub fn into_traces(mut self) -> Vec<CallTraceItem> {
@@ -36,7 +33,10 @@ impl TraceInspector {
 
 impl Default for TraceInspector {
     fn default() -> Self {
-        Self::new()
+        Self {
+            call_stack: Vec::new(),
+            traces: Vec::new(),
+        }
     }
 }
 
