@@ -13,7 +13,7 @@ struct CallStackFrame {
     children_count: usize,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct TraceInspector {
     call_stack: Vec<CallStackFrame>,
     traces: Vec<CallTraceItem>,
@@ -31,6 +31,12 @@ impl TraceInspector {
         self.traces
             .sort_by(|a, b| a.trace_address.cmp(&b.trace_address));
         self.traces
+    }
+}
+
+impl Default for TraceInspector {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

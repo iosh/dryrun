@@ -72,66 +72,62 @@ impl EvmSimulator {
         }
 
         let chain_id = self.provider.get_chain_id().await?;
-        // TODO add account state overrides
         let cfg_env = self.build_cfg_env(chain_id);
 
         let tx_env = self.build_tx_env(&input.transaction, block_env.basefee as u128)?;
 
-        let inspector = TraceInspector::new();
-        let mut evm = Context::mainnet()
-            .with_db(db)
-            .with_cfg(cfg_env)
-            .with_block(block_env)
-            .build_mainnet_with_inspector(inspector);
+        let (status, gas_used, block_number, logs_to_decode, traces_to_decode, state_changes) = {
+            let inspector = TraceInspector::new();
+            let mut evm = Context::mainnet()
+                .with_db(db)
+                .with_cfg(cfg_env)
+                .with_block(block_env)
+                .build_mainnet_with_inspector(inspector);
 
-        let result = evm.inspect_one_tx(tx_env)?;
+            let result = evm.inspect_one_tx(tx_env)?;
+            let (status, logs) = match result {
+                ExecutionResult::Success { ref logs, .. } => (true, logs.to_vec()),
+                _ => (false, vec![]),
+            };
+            let gas_used = U64::from(result.gas_used());
+            let block_number = evm.block_number();
+            let state = evm.finalize();
+            let changes = self.build_state_changes(&state, evm.db_mut())?;
+            let traces = evm.inspector.into_traces();
 
-        let state = evm.finalize();
-        let state_changes = self.build_state_changes(&state, evm.db_mut())?;
-
-        evm.commit(state);
-
-        let block_number = evm.block_number();
-        let trace = evm.inspector.into_traces();
-
-        let (status, logs) = match result {
-            ExecutionResult::Success { ref logs, .. } => (true, logs.to_vec()),
-            _ => (false, vec![]),
+            (status, gas_used, block_number, logs, traces, changes)
         };
 
-        let log_decode_futures = logs.iter().map(|raw_log| async {
+        let log_decode_futures = logs_to_decode.iter().map(|raw_log| async move {
             let mut decoded_log = DecodeLog {
                 name: None,
                 anonymous: None,
                 input: None,
                 raw: raw_log.clone(),
             };
-
             if let Some(decoder) = self
                 .abi_manager
                 .get_decoder(raw_log.address, chain_id)
                 .await
             {
-                if let Some((name, anonymous, inputs)) = decoder.decode_log(raw_log) {
+                if let Some((name, anonymous, inputs)) = decoder.decode_log(&raw_log.data) {
                     decoded_log.name = Some(name);
                     decoded_log.anonymous = Some(anonymous);
                     decoded_log.input = Some(inputs);
                 }
             }
-
             decoded_log
         });
-
-        let trace_decode_futures = trace.iter().map(|trace_item| async {
-            let mut decode_trace = trace_item.clone();
-            if let Some(decoder) = self.abi_manager.get_decoder(trace_item.to, chain_id).await {
-                if let Some(input) = decoder.decode_input(&trace_item.input) {
-                    decode_trace.decode_input = Some(input.1);
+        let trace_decode_futures = traces_to_decode
+            .into_iter()
+            .map(|mut trace_item| async move {
+                if let Some(decoder) = self.abi_manager.get_decoder(trace_item.to, chain_id).await {
+                    if let Some((_, decoded_input)) = decoder.decode_input(&trace_item.input) {
+                        trace_item.decode_input = Some(decoded_input);
+                    }
                 }
-            }
-
-            decode_trace
-        });
+                trace_item
+            });
 
         let (decode_logs, decoded_traces) = futures::future::join(
             futures::future::join_all(log_decode_futures),
@@ -141,7 +137,7 @@ impl EvmSimulator {
 
         let output = EvmSimulateOutput {
             status,
-            gas_used: U64::from(result.gas_used()),
+            gas_used,
             block_number,
             logs: decode_logs,
             state_changes,
