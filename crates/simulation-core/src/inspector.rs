@@ -69,6 +69,7 @@ where
             gas_used: U64::ZERO,
             output: Bytes::new(),
             subtraces: 0,
+            decode_input: None,
         };
 
         self.call_stack.push(CallStackFrame {

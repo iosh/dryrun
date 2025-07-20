@@ -26,7 +26,8 @@ use revm::{
     state::{Account, AccountStatus, Bytecode, EvmState, EvmStorageSlot},
 };
 use types::{
-    DecodeLog, EvmSimulateInput, EvmSimulateOutput, StateChange, StorageChange, ValueChange,
+    CallTraceItem, DecodeLog, EvmSimulateInput, EvmSimulateOutput, StateChange, StorageChange,
+    ValueChange,
 };
 
 type AlloyCacheDB = CacheDB<WrapDatabaseAsync<AlloyDB<Ethereum, DynProvider>>>;
@@ -121,10 +122,22 @@ impl EvmSimulator {
             decoded_log
         });
 
-        let decode_logs: Vec<DecodeLog> = futures::future::join_all(log_decode_futures)
-            .await
-            .into_iter()
-            .collect();
+        let trace_decode_futures = trace.iter().map(|trace_item| async {
+            let mut decode_trace = trace_item.clone();
+            if let Some(decoder) = self.abi_manager.get_decoder(trace_item.to, chain_id).await {
+                if let Some(input) = decoder.decode_input(&trace_item.input) {
+                    decode_trace.decode_input = Some(input.1);
+                }
+            }
+
+            decode_trace
+        });
+
+        let (decode_logs, decoded_traces) = futures::future::join(
+            futures::future::join_all(log_decode_futures),
+            futures::future::join_all(trace_decode_futures),
+        )
+        .await;
 
         let output = EvmSimulateOutput {
             status,
@@ -132,7 +145,7 @@ impl EvmSimulator {
             block_number,
             logs: decode_logs,
             state_changes,
-            trace,
+            trace: decoded_traces,
         };
 
         Ok(output)
