@@ -6,6 +6,7 @@ use jsonrpsee::{
     types::ErrorObject,
 };
 use simulation_core::SimulationService;
+use tracing::instrument;
 use types::{EvmSimulateInput, EvmSimulateOutput};
 
 use crate::rpc::SimulationRpcServer;
@@ -26,6 +27,16 @@ impl SimulationRpcServer for RpcHandler {
         Ok("OK".to_string())
     }
 
+    #[instrument(
+        name = "dryrun_evm_simulate_transaction",
+        skip(self, transaction, state_overrides, block_overrides),
+        fields(
+            tx_from = ?transaction.from,
+            tx_to = ?transaction.to,
+            tx_value = ?transaction.value,
+            block_id = ?block_id,
+        )
+    )]
     async fn dryrun_evm_simulate_transaction(
         &self,
         transaction: TransactionRequest,
@@ -40,7 +51,7 @@ impl SimulationRpcServer for RpcHandler {
         match result {
             Ok(output) => Ok(output),
             Err(err) => {
-                tracing::error!("Simulation failed: {}", err);
+                tracing::error!(error = ?err, "Simulation failed");
                 Err(ErrorObject::owned(
                     -32000,
                     "Simulation failed",

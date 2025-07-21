@@ -14,8 +14,8 @@ use alloy::{
     rpc::types::{Block, BlockOverrides, TransactionRequest, state::StateOverride},
 };
 use revm::{
-    Context, Database, DatabaseCommit, DatabaseRef, ExecuteCommitEvm, ExecuteEvm, InspectEvm,
-    MainBuilder, MainContext,
+    Context, Database, DatabaseCommit, DatabaseRef, ExecuteEvm, InspectEvm, MainBuilder,
+    MainContext,
     context::{BlockEnv, CfgEnv, ContextTr, TxEnv, result::ExecutionResult},
     context_interface::block::BlobExcessGasAndPrice,
     database::{AlloyDB, CacheDB, WrapDatabaseAsync},
@@ -25,9 +25,9 @@ use revm::{
     },
     state::{Account, AccountStatus, Bytecode, EvmState, EvmStorageSlot},
 };
+use tracing::instrument;
 use types::{
-    CallTraceItem, DecodeLog, EvmSimulateInput, EvmSimulateOutput, StateChange, StorageChange,
-    ValueChange,
+    DecodeLog, EvmSimulateInput, EvmSimulateOutput, StateChange, StorageChange, ValueChange,
 };
 
 type AlloyCacheDB = CacheDB<WrapDatabaseAsync<AlloyDB<Ethereum, DynProvider>>>;

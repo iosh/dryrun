@@ -2,13 +2,26 @@ use std::env;
 
 use config::{Config, Environment, File};
 use serde::Deserialize;
-
 #[derive(Debug, Deserialize)]
 pub struct AppConfig {
     pub server: ServerConfig,
     pub evm: EvmConfig,
+    pub tracing: TracingConfig,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct TracingConfig {
+    pub level: String,
+    pub format: LogFormat,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LogFormat {
+    #[default]
+    Pretty,
+    Json,
+}
 #[derive(Debug, Deserialize)]
 pub struct ServerConfig {
     pub host: String,
