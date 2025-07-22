@@ -5,6 +5,7 @@ use jsonrpsee::server::Server;
 use rpc_server::{RpcHandler, SimulationRpcServer};
 use simulation_core::SimulationService;
 use tracing::info;
+use tracing_subscriber::fmt::format::FmtSpan;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -26,10 +27,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     match configs.tracing.format {
         configs::LogFormat::Pretty => {
-            subscriber_builder.pretty().init();
+            subscriber_builder
+                .with_span_events(FmtSpan::CLOSE)
+                .pretty()
+                .init();
         }
         configs::LogFormat::Json => {
-            subscriber_builder.json().init();
+            subscriber_builder
+                .with_span_events(FmtSpan::CLOSE)
+                .json()
+                .init();
         }
     }
 

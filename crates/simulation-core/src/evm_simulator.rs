@@ -25,7 +25,7 @@ use revm::{
     },
     state::{Account, AccountStatus, Bytecode, EvmState, EvmStorageSlot},
 };
-use tracing::instrument;
+use tracing::{Instrument, instrument};
 use types::{
     DecodeLog, EvmSimulateInput, EvmSimulateOutput, StateChange, StorageChange, ValueChange,
 };
@@ -48,6 +48,7 @@ impl EvmSimulator {
         }
     }
 
+    #[instrument(name = "evm:simulate", skip(self, input))]
     pub async fn simulate(&self, input: EvmSimulateInput) -> SimulationResult<EvmSimulateOutput> {
         let block_id = input
             .block_id
@@ -77,6 +78,8 @@ impl EvmSimulator {
         let tx_env = self.build_tx_env(&input.transaction, block_env.basefee as u128)?;
 
         let (status, gas_used, block_number, logs_to_decode, traces_to_decode, state_changes) = {
+            let _evm_exec_span = tracing::info_span!("evm:execute_transaction").entered();
+
             let inspector = TraceInspector::new();
             let mut evm = Context::mainnet()
                 .with_db(db)
@@ -133,6 +136,7 @@ impl EvmSimulator {
             futures::future::join_all(log_decode_futures),
             futures::future::join_all(trace_decode_futures),
         )
+        .instrument(tracing::info_span!("evm:decode_results"))
         .await;
 
         let output = EvmSimulateOutput {
@@ -147,6 +151,7 @@ impl EvmSimulator {
         Ok(output)
     }
 
+    #[instrument(name = "evm:build_tx_env", skip(self, tx))]
     fn build_tx_env(&self, tx: &TransactionRequest, base_fee: u128) -> SimulationResult<TxEnv> {
         let mut tx_builder = TxEnv::builder()
             .caller(tx.from.unwrap_or_default())
@@ -175,10 +180,12 @@ impl EvmSimulator {
         Ok(tx_env)
     }
 
+    #[instrument(name = "evm:build_cfg_env", skip(self))]
     fn build_cfg_env(&self, chain_id: u64) -> CfgEnv {
         CfgEnv::default().with_chain_id(chain_id)
     }
 
+    #[instrument(name = "evm:build_block_env", skip(self, execution_block))]
     fn build_block_env(&self, execution_block: &Block) -> BlockEnv {
         let block_number = execution_block.number();
 
@@ -199,6 +206,10 @@ impl EvmSimulator {
         }
     }
 
+    #[instrument(
+        name = "evm:apply_block_overrides",
+        skip(self, block_env, db, block_overrides)
+    )]
     fn apply_block_overrides(
         &self,
         block_env: &mut BlockEnv,
@@ -242,6 +253,7 @@ impl EvmSimulator {
         }
     }
 
+    #[instrument(name = "evm:apply_state_overrides", skip(self, db, state_overrides))]
     fn apply_state_overrides(
         &self,
         db: &mut AlloyCacheDB,
@@ -309,6 +321,7 @@ impl EvmSimulator {
         Ok(())
     }
 
+    #[instrument(name = "evm:build_state_changes", skip(self, final_state, db))]
     fn build_state_changes(
         &self,
         final_state: &EvmState,
@@ -369,6 +382,7 @@ impl EvmSimulator {
         Ok(changes)
     }
 
+    #[instrument(name = "evm:create_database", skip(self, block_id))]
     async fn create_database(&self, block_id: &BlockId) -> SimulationResult<AlloyCacheDB> {
         let alloy_db =
             WrapDatabaseAsync::new(AlloyDB::new(self.provider.clone(), *block_id)).unwrap();
