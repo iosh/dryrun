@@ -2,11 +2,15 @@ use std::{error::Error, sync::Arc};
 
 use configs::AppConfig;
 use jsonrpsee::server::Server;
+use metrics_exporter_prometheus::PrometheusBuilder;
 use rpc_server::{RpcHandler, SimulationRpcServer};
 use simulation_core::SimulationService;
 use tracing::info;
 use tracing_subscriber::fmt::format::FmtSpan;
 
+use crate::metrics::start_metrics_server;
+
+mod metrics;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let configs = AppConfig::new()?;
@@ -38,6 +42,23 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .json()
                 .init();
         }
+    }
+
+    if configs.metrics.enabled {
+        let builder = PrometheusBuilder::new();
+        let prometheus_handle = builder
+            .install_recorder()
+            .expect("Failed to install Prometheus recorder");
+
+        let metrics_addr: std::net::SocketAddr = configs
+            .metrics
+            .listen_address
+            .parse()
+            .map_err(|e| format!("Invalid metrics address: {}", e))?;
+
+        let _metrics_handle = start_metrics_server(metrics_addr, prometheus_handle)
+            .await
+            .map_err(|e| format!("Failed to start metrics server: {}", e))?;
     }
 
     let server = Server::builder()

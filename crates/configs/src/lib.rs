@@ -7,6 +7,7 @@ pub struct AppConfig {
     pub server: ServerConfig,
     pub evm: EvmConfig,
     pub tracing: TracingConfig,
+    pub metrics: MetricsConfig,
 }
 
 #[derive(Debug, Deserialize)]
@@ -31,6 +32,12 @@ pub struct ServerConfig {
 #[derive(Debug, Deserialize)]
 pub struct EvmConfig {
     pub rpc_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MetricsConfig {
+    pub enabled: bool,
+    pub listen_address: String,
 }
 
 impl AppConfig {

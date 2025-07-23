@@ -39,3 +39,7 @@ tracing-subscriber = "0.3"
 prometheus = "0.14.0"
 
 config = "0.15"
+
+metrics = "0.24"
+metrics-exporter-prometheus = "0.17"
+axum = "0.8"
