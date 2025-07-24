@@ -13,6 +13,7 @@ use alloy::{
     providers::{DynProvider, Provider, ProviderBuilder},
     rpc::types::{Block, BlockOverrides, TransactionRequest, state::StateOverride},
 };
+use metrics::histogram;
 use revm::{
     Context, Database, DatabaseCommit, DatabaseRef, ExecuteEvm, InspectEvm, MainBuilder,
     MainContext,
@@ -25,6 +26,7 @@ use revm::{
     },
     state::{Account, AccountStatus, Bytecode, EvmState, EvmStorageSlot},
 };
+use tokio::time::Instant;
 use tracing::{Instrument, instrument};
 use types::{
     DecodeLog, EvmSimulateInput, EvmSimulateOutput, StateChange, StorageChange, ValueChange,
@@ -50,15 +52,20 @@ impl EvmSimulator {
 
     #[instrument(name = "evm:simulate", skip(self, input))]
     pub async fn simulate(&self, input: EvmSimulateInput) -> SimulationResult<EvmSimulateOutput> {
+        let total_start = Instant::now();
+
         let block_id = input
             .block_id
             .unwrap_or(BlockId::Number(BlockNumberOrTag::Latest));
 
+        let get_block_start = Instant::now();
         let execution_block = self
             .provider
             .get_block(block_id)
             .await?
             .ok_or(SimulationError::BlockNumberNotFound)?;
+        histogram!("evm_external_rpc_duration_seconds", "method" => "get_block")
+            .record(get_block_start.elapsed().as_secs_f64());
 
         let mut db = self.create_database(&block_id).await?;
 
@@ -77,6 +84,7 @@ impl EvmSimulator {
 
         let tx_env = self.build_tx_env(&input.transaction, block_env.basefee as u128)?;
 
+        let evm_exec_start = Instant::now();
         let (status, gas_used, block_number, logs_to_decode, traces_to_decode, state_changes) = {
             let _evm_exec_span = tracing::info_span!("evm:execute_transaction").entered();
 
@@ -100,7 +108,10 @@ impl EvmSimulator {
 
             (status, gas_used, block_number, logs, traces, changes)
         };
+        histogram!("evm_simulation_step_duration_seconds", "step" => "evm_execution")
+            .record(evm_exec_start.elapsed().as_secs_f64());
 
+        let decode_start = Instant::now();
         let log_decode_futures = logs_to_decode.iter().map(|raw_log| async move {
             let mut decoded_log = DecodeLog {
                 name: None,
@@ -139,6 +150,9 @@ impl EvmSimulator {
         .instrument(tracing::info_span!("evm:decode_results"))
         .await;
 
+        histogram!("evm_simulation_step_duration_seconds", "step" => "decoding")
+            .record(decode_start.elapsed().as_secs_f64());
+
         let output = EvmSimulateOutput {
             status,
             gas_used,
@@ -147,6 +161,9 @@ impl EvmSimulator {
             state_changes,
             trace: decoded_traces,
         };
+
+        histogram!("evm_simulation_total_duration_seconds")
+            .record(total_start.elapsed().as_secs_f64());
 
         Ok(output)
     }

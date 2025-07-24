@@ -15,3 +15,4 @@ prometheus = { workspace = true }
 alloy = { workspace = true }
 types = { workspace = true }
 simulation-core = { workspace = true }
+metrics = { workspace = true }
