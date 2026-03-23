@@ -5,12 +5,11 @@ edition = { workspace = true }
 
 [dependencies]
 rpc-server = { workspace = true }
-jsonrpsee = { workspace = true, features = ["full"] }
-anyhow = { workspace = true }
+jsonrpsee = { workspace = true, features = ["server"] }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["json"] }
-metrics-exporter-prometheus= { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
 config = { workspace = true }

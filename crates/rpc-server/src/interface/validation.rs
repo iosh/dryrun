@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use alloy::primitives::{Address, B256};
+use alloy_primitives::{Address, B256};
 
 use crate::errors::ValidationError;
 
