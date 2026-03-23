@@ -1,5 +1,8 @@
-mod rpc;
+mod errors;
 mod handlers;
+mod interface;
+mod rpc;
 
 pub use handlers::RpcHandler;
-pub use rpc::SimulationRpcServer;
+pub use interface::{EvmSimulateTransactionRequest, EvmSimulateTransactionResponse};
+pub use rpc::DryrunRpcServer;

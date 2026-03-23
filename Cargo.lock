@@ -1904,11 +1904,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
- "configs",
+ "config",
  "jsonrpsee",
  "metrics-exporter-prometheus",
  "rpc-server",
- "simulation-core",
+ "serde",
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.19",
@@ -4412,11 +4412,9 @@ dependencies = [
  "prometheus",
  "serde",
  "serde_json",
- "simulation-core",
  "thiserror 2.0.12",
  "tracing",
  "tracing-subscriber 0.3.19",
- "types",
 ]
 
 [[package]]

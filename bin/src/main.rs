@@ -1,27 +1,27 @@
-use std::{error::Error, sync::Arc};
+use std::error::Error;
 
-use configs::AppConfig;
 use jsonrpsee::server::Server;
 use metrics_exporter_prometheus::PrometheusBuilder;
-use rpc_server::{RpcHandler, SimulationRpcServer};
-use simulation_core::SimulationService;
+use rpc_server::{DryrunRpcServer, RpcHandler};
 use tracing::info;
 use tracing_subscriber::fmt::format::FmtSpan;
 
+use crate::app_config::{AppConfig, LogFormat};
 use crate::metrics::start_metrics_server;
 
+mod app_config;
 mod metrics;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let configs = AppConfig::new()?;
+    let app_config = AppConfig::load()?;
 
-    let level = configs
+    let level = app_config
         .tracing
         .level
         .parse()
         .map_err(|_| {
-            eprintln!("Invalid tracing level: {}", configs.tracing.level);
-            configs.tracing.level.clone()
+            eprintln!("Invalid tracing level: {}", app_config.tracing.level);
+            app_config.tracing.level.clone()
         })
         .unwrap_or(tracing::Level::INFO);
 
@@ -29,14 +29,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .with_max_level(level)
         .with_target(true);
 
-    match configs.tracing.format {
-        configs::LogFormat::Pretty => {
+    match app_config.tracing.format {
+        LogFormat::Pretty => {
             subscriber_builder
                 .with_span_events(FmtSpan::CLOSE)
                 .pretty()
                 .init();
         }
-        configs::LogFormat::Json => {
+        LogFormat::Json => {
             subscriber_builder
                 .with_span_events(FmtSpan::CLOSE)
                 .json()
@@ -44,13 +44,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    if configs.metrics.enabled {
+    if app_config.metrics.enabled {
         let builder = PrometheusBuilder::new();
         let prometheus_handle = builder
             .install_recorder()
             .expect("Failed to install Prometheus recorder");
 
-        let metrics_addr: std::net::SocketAddr = configs
+        let metrics_addr: std::net::SocketAddr = app_config
             .metrics
             .listen_address
             .parse()
@@ -62,13 +62,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let server = Server::builder()
-        .build(format!("{}:{}", configs.server.host, configs.server.port))
+        .build(format!(
+            "{}:{}",
+            app_config.server.host, app_config.server.port
+        ))
         .await?;
 
     let addr = server.local_addr()?;
 
-    let service = Arc::new(SimulationService::new(configs.evm));
-    let handle = server.start(RpcHandler::new(service).into_rpc());
+    let rpc_handler = RpcHandler::new(app_config.ethereum.rpc_url);
+    let handle = server.start(rpc_handler.into_rpc());
 
     info!("RPC server started at {}", addr);
 
