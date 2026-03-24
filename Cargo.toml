@@ -24,6 +24,8 @@ reqwest = { version = "0.12", features = ["json"] }
 tokio = "1"
 
 alloy = { version = "1", features = ["full"] }
+alloy-chains = "0.2"
+alloy-hardforks = "0.4"
 alloy-primitives = "1"
 revm = "36"
 

@@ -4,5 +4,9 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+alloy = { workspace = true }
+alloy-chains = { workspace = true }
+alloy-hardforks = { workspace = true }
 alloy-primitives = { workspace = true }
+revm = { workspace = true, features = ["alloydb"] }
 thiserror = { workspace = true }
