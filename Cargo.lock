@@ -724,10 +724,12 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "config",
+ "evm-engine",
  "jsonrpsee",
  "metrics-exporter-prometheus",
  "rpc-server",
  "serde",
+ "simulation-service",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -844,6 +846,14 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "evm-engine"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "thiserror",
 ]
 
 [[package]]
@@ -2104,6 +2114,8 @@ dependencies = [
  "jsonrpsee",
  "serde",
  "serde_json",
+ "simulation-service",
+ "thiserror",
  "tracing",
 ]
 
@@ -2503,6 +2515,15 @@ checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
  "digest 0.10.7",
  "rand_core 0.6.4",
+]
+
+[[package]]
+name = "simulation-service"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "evm-engine",
+ "thiserror",
 ]
 
 [[package]]

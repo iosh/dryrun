@@ -1,0 +1,9 @@
+[package]
+name = "simulation-service"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+alloy-primitives = { workspace = true }
+evm-engine = { workspace = true }
+thiserror = { workspace = true }

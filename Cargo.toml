@@ -6,11 +6,15 @@ edition = "2024"
 resolver = "3"
 members = [
     "bin",
+    "crates/evm-engine",
     "crates/rpc-server",
+    "crates/simulation-service",
 ]
 
 [workspace.dependencies]
+evm-engine = { path = "crates/evm-engine" }
 rpc-server = { path = "crates/rpc-server" }
+simulation-service = { path = "crates/simulation-service" }
 
 jsonrpsee = "0.26"
 thiserror = "2"

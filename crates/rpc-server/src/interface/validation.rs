@@ -4,24 +4,10 @@ use alloy_primitives::{Address, B256};
 
 use crate::errors::ValidationError;
 
-use super::{AccessListItem, BlockRef, EvmSimulateTransactionRequest, SimulationOptions, Transaction};
-
-impl EvmSimulateTransactionRequest {
-    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
-        if let Some(block) = &self.block {
-            block.validate()?;
-        }
-
-        if let Some(options) = &self.options {
-            options.validate()?;
-        }
-
-        self.transaction.validate()
-    }
-}
+use super::{AccessListItem, BlockRef, SimulationOptions, Transaction};
 
 impl BlockRef {
-    fn validate(&self) -> Result<(), ValidationError> {
+    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
         let provided = usize::from(self.tag.is_some())
             + usize::from(self.number.is_some())
             + usize::from(self.hash.is_some());
@@ -34,7 +20,7 @@ impl BlockRef {
         if let Some(tag) = &self.tag {
             if tag != "latest" {
                 return Err(ValidationError::invalid_params(
-                    "`block.tag` only supports `latest` in v0",
+                    "`block.tag` only supports `latest`",
                 ));
             }
         }
@@ -52,16 +38,16 @@ impl BlockRef {
 }
 
 impl SimulationOptions {
-    fn validate(&self) -> Result<(), ValidationError> {
+    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
         if self.include_trace.unwrap_or(false) {
             return Err(ValidationError::not_supported(
-                "`options.includeTrace` is not supported in v0",
+                "`options.includeTrace` is not supported",
             ));
         }
 
         if self.include_state_changes.unwrap_or(false) {
             return Err(ValidationError::not_supported(
-                "`options.includeStateChanges` is not supported in v0",
+                "`options.includeStateChanges` is not supported",
             ));
         }
 
@@ -70,12 +56,12 @@ impl SimulationOptions {
 }
 
 impl Transaction {
-    fn validate(&self) -> Result<(), ValidationError> {
+    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
         match self.tx_type.as_str() {
             "0x0" | "0x1" | "0x2" => {}
             _ => {
                 return Err(ValidationError::not_supported(
-                    "`transaction.type` only supports `0x0`, `0x1`, and `0x2` in v0",
+                    "`transaction.type` only supports `0x0`, `0x1`, and `0x2`",
                 ));
             }
         }
@@ -86,7 +72,7 @@ impl Transaction {
             || self.authorization_list.is_some()
         {
             return Err(ValidationError::not_supported(
-                "blob or authorization fields are not supported in v0",
+                "blob and authorization fields are not supported",
             ));
         }
 
@@ -149,7 +135,7 @@ impl Transaction {
 }
 
 impl AccessListItem {
-    fn validate(&self, index: usize) -> Result<(), ValidationError> {
+    pub(crate) fn validate(&self, index: usize) -> Result<(), ValidationError> {
         validate_address(
             &self.address,
             &format!("transaction.accessList[{index}].address"),
@@ -165,9 +151,9 @@ impl AccessListItem {
 }
 
 fn validate_address(value: &str, field: &str) -> Result<(), ValidationError> {
-    Address::from_str(value).map(|_| ()).map_err(|_| {
-        ValidationError::invalid_params(format!("`{field}` must be a valid address"))
-    })
+    Address::from_str(value)
+        .map(|_| ())
+        .map_err(|_| ValidationError::invalid_params(format!("`{field}` must be a valid address")))
 }
 
 fn validate_b256(value: &str, field: &str) -> Result<(), ValidationError> {

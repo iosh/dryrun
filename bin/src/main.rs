@@ -1,8 +1,11 @@
 use std::error::Error;
+use std::sync::Arc;
 
+use evm_engine::EvmEngine;
 use jsonrpsee::server::Server;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use rpc_server::{DryrunRpcServer, RpcHandler};
+use simulation_service::SimulationService;
 use tracing::info;
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -70,7 +73,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let addr = server.local_addr()?;
 
-    let rpc_handler = RpcHandler::new(app_config.ethereum.rpc_url);
+    let evm_engine = Arc::new(EvmEngine::new(app_config.ethereum.rpc_url));
+    let simulation_service = Arc::new(SimulationService::new(evm_engine));
+    let rpc_handler = RpcHandler::new(simulation_service);
     let handle = server.start(rpc_handler.into_rpc());
 
     info!("RPC server started at {}", addr);

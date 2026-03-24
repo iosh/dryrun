@@ -1,19 +1,23 @@
+use std::sync::Arc;
+
 use jsonrpsee::core::{RpcResult, async_trait};
+use jsonrpsee::types::ErrorObjectOwned;
+use simulation_service::{SimulationService, SimulationServiceError};
 use tracing::instrument;
 
 use crate::{
+    errors::{internal_error, not_ready},
     interface::{EvmSimulateTransactionRequest, EvmSimulateTransactionResponse},
-    errors::{ValidationError, not_ready},
     rpc::DryrunRpcServer,
 };
 
 pub struct RpcHandler {
-    ethereum_rpc_url: String,
+    simulation_service: Arc<SimulationService>,
 }
 
 impl RpcHandler {
-    pub fn new(ethereum_rpc_url: String) -> Self {
-        Self { ethereum_rpc_url }
+    pub fn new(simulation_service: Arc<SimulationService>) -> Self {
+        Self { simulation_service }
     }
 }
 
@@ -28,13 +32,21 @@ impl DryrunRpcServer for RpcHandler {
         &self,
         request: EvmSimulateTransactionRequest,
     ) -> RpcResult<EvmSimulateTransactionResponse> {
-        request
-            .validate()
-            .map_err(ValidationError::into_error_object)?;
+        let input: simulation_service::SimulateEvmTransactionInput =
+            request.try_into().map_err(ErrorObjectOwned::from)?;
+        let output = self
+            .simulation_service
+            .simulate_evm_transaction(input)
+            .await
+            .map_err(map_service_error)?;
 
-        Err(not_ready(format!(
-            "v0 execution path is not wired yet for provider {}",
-            self.ethereum_rpc_url
-        )))
+        Ok(output.into())
+    }
+}
+
+fn map_service_error(error: SimulationServiceError) -> ErrorObjectOwned {
+    match error {
+        SimulationServiceError::NotReady(details) => not_ready(details),
+        SimulationServiceError::Internal(details) => internal_error(details),
     }
 }

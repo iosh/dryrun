@@ -4,7 +4,9 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+evm-engine = { workspace = true }
 rpc-server = { workspace = true }
+simulation-service = { workspace = true }
 jsonrpsee = { workspace = true, features = ["server"] }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }

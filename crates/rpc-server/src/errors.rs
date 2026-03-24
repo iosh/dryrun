@@ -1,9 +1,16 @@
-use jsonrpsee::types::{ErrorObjectOwned, error::INVALID_PARAMS_CODE};
+use jsonrpsee::types::{
+    ErrorObjectOwned,
+    error::{INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
+};
 use serde::Serialize;
+use thiserror::Error;
 
-#[derive(Debug)]
-pub(crate) enum ValidationError {
+#[derive(Debug, Error)]
+pub enum ValidationError {
+    #[error("{0}")]
     InvalidParams(String),
+
+    #[error("{0}")]
     NotSupported(String),
 }
 
@@ -22,10 +29,12 @@ impl ValidationError {
     pub(crate) fn not_supported(details: impl Into<String>) -> Self {
         Self::NotSupported(details.into())
     }
+}
 
-    pub(crate) fn into_error_object(self) -> ErrorObjectOwned {
-        match self {
-            Self::InvalidParams(details) => ErrorObjectOwned::owned(
+impl From<ValidationError> for ErrorObjectOwned {
+    fn from(error: ValidationError) -> Self {
+        match error {
+            ValidationError::InvalidParams(details) => ErrorObjectOwned::owned(
                 INVALID_PARAMS_CODE,
                 "Invalid params",
                 Some(ErrorData {
@@ -33,7 +42,7 @@ impl ValidationError {
                     details,
                 }),
             ),
-            Self::NotSupported(details) => ErrorObjectOwned::owned(
+            ValidationError::NotSupported(details) => ErrorObjectOwned::owned(
                 -32004,
                 "Not supported",
                 Some(ErrorData {
@@ -51,6 +60,17 @@ pub(crate) fn not_ready(details: impl Into<String>) -> ErrorObjectOwned {
         "Method not ready",
         Some(ErrorData {
             kind: "not_ready",
+            details: details.into(),
+        }),
+    )
+}
+
+pub(crate) fn internal_error(details: impl Into<String>) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(
+        INTERNAL_ERROR_CODE,
+        "Internal error",
+        Some(ErrorData {
+            kind: "internal_error",
             details: details.into(),
         }),
     )
