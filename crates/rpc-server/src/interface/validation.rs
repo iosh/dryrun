@@ -92,6 +92,12 @@ impl Transaction {
             for (idx, entry) in access_list.iter().enumerate() {
                 entry.validate(idx)?;
             }
+
+            if self.tx_type == "0x0" && !access_list.is_empty() {
+                return Err(ValidationError::invalid_params(
+                    "`transaction.accessList` is not allowed for type `0x0`",
+                ));
+            }
         }
 
         let has_gas_price = self.gas_price.is_some();

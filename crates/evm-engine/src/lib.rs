@@ -8,7 +8,7 @@ pub use types::{
     EvmExecutionOutput, EvmExecutionStatus, EvmTransaction, EvmTransactionType, SimulatedBlock,
 };
 
-use execution::simulate_latest_dynamic_fee;
+use execution::simulate_execution;
 
 #[derive(Debug, Clone)]
 pub struct EvmEngine {
@@ -27,26 +27,20 @@ impl EvmEngine {
         ensure_supported_block_ref(&input.block)?;
         ensure_supported_transaction_type(input.transaction.tx_type)?;
 
-        simulate_latest_dynamic_fee(&self.rpc_url, input).await
+        simulate_execution(&self.rpc_url, input).await
     }
 }
 
 fn ensure_supported_block_ref(block: &BlockRef) -> Result<(), EvmEngineError> {
     match block {
-        BlockRef::Latest => Ok(()),
-        BlockRef::Number(_) => Err(EvmEngineError::not_ready("block.number is not implemented")),
-        BlockRef::Hash(_) => Err(EvmEngineError::not_ready("block.hash is not implemented")),
+        BlockRef::Latest | BlockRef::Number(_) | BlockRef::Hash(_) => Ok(()),
     }
 }
 
 fn ensure_supported_transaction_type(tx_type: EvmTransactionType) -> Result<(), EvmEngineError> {
     match tx_type {
-        EvmTransactionType::DynamicFee => Ok(()),
-        EvmTransactionType::Legacy => Err(EvmEngineError::not_ready(
-            "transaction.type=0x0 is not implemented",
-        )),
-        EvmTransactionType::AccessList => Err(EvmEngineError::not_ready(
-            "transaction.type=0x1 is not implemented",
-        )),
+        EvmTransactionType::Legacy
+        | EvmTransactionType::AccessList
+        | EvmTransactionType::DynamicFee => Ok(()),
     }
 }
