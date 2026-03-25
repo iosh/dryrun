@@ -27,3 +27,4 @@ target/
 
 development.toml
 production.toml
+local.toml
