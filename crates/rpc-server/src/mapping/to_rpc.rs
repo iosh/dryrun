@@ -1,6 +1,6 @@
 use crate::interface as rpc;
 
-use super::primitives::format_u64_quantity;
+use super::primitives::{format_u64_quantity, format_u256_quantity};
 
 impl From<simulation_service::SimulateEvmTransactionOutput>
     for rpc::EvmSimulateTransactionResponse
@@ -15,6 +15,7 @@ impl From<simulation_service::SimulateEvmTransactionOutput>
             output: format!("{:#x}", output.output),
             failure: output.failure.map(Into::into),
             logs: output.logs.into_iter().map(Into::into).collect(),
+            asset_changes: output.asset_changes.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -62,11 +63,51 @@ impl From<simulation_service::RawLog> for rpc::RawLog {
     }
 }
 
+impl From<simulation_service::AssetType> for rpc::AssetType {
+    fn from(asset_type: simulation_service::AssetType) -> Self {
+        match asset_type {
+            simulation_service::AssetType::Native => Self::Native,
+            simulation_service::AssetType::Erc20 => Self::Erc20,
+        }
+    }
+}
+
+impl From<simulation_service::AssetChangeType> for rpc::AssetChangeType {
+    fn from(change_type: simulation_service::AssetChangeType) -> Self {
+        match change_type {
+            simulation_service::AssetChangeType::Transfer => Self::Transfer,
+        }
+    }
+}
+
+impl From<simulation_service::AssetChangeAsset> for rpc::AssetChangeAsset {
+    fn from(asset: simulation_service::AssetChangeAsset) -> Self {
+        Self {
+            token_address: format!("{:#x}", asset.token_address),
+            symbol: asset.symbol,
+            decimals: asset.decimals,
+        }
+    }
+}
+
+impl From<simulation_service::AssetChange> for rpc::AssetChange {
+    fn from(asset_change: simulation_service::AssetChange) -> Self {
+        Self {
+            asset_type: asset_change.asset_type.into(),
+            change_type: asset_change.change_type.into(),
+            from: format!("{:#x}", asset_change.from),
+            to: format!("{:#x}", asset_change.to),
+            amount: format_u256_quantity(asset_change.amount),
+            asset: asset_change.asset.map(Into::into),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
 
-    use alloy_primitives::{Address, B256, Bytes};
+    use alloy_primitives::{Address, B256, Bytes, U256};
 
     use crate::interface as rpc;
 
@@ -98,6 +139,15 @@ mod tests {
                 ],
                 data: Bytes::from_str("0xdeadbeef").expect("bytes"),
             }],
+            asset_changes: vec![simulation_service::AssetChange {
+                asset_type: simulation_service::AssetType::Native,
+                change_type: simulation_service::AssetChangeType::Transfer,
+                from: Address::from_str("0x1111111111111111111111111111111111111111")
+                    .expect("from"),
+                to: Address::from_str("0x2222222222222222222222222222222222222222").expect("to"),
+                amount: U256::from(0xde0b6b3a7640000_u64),
+                asset: None,
+            }],
         };
 
         let response: rpc::EvmSimulateTransactionResponse = output.into();
@@ -106,6 +156,8 @@ mod tests {
         assert_eq!(response.gas_used, "0x5208");
         assert_eq!(response.logs.len(), 1);
         assert_eq!(response.logs[0].log_index, "0x0");
+        assert_eq!(response.asset_changes.len(), 1);
+        assert_eq!(response.asset_changes[0].amount, "0xde0b6b3a7640000");
         assert_eq!(response.output, "0x0102");
     }
 }

@@ -69,6 +69,34 @@ pub struct EvmExecutionLog {
     pub data: Bytes,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssetType {
+    Native,
+    Erc20,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssetChangeType {
+    Transfer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetChangeAsset {
+    pub token_address: Address,
+    pub symbol: Option<String>,
+    pub decimals: Option<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssetChange {
+    pub asset_type: AssetType,
+    pub change_type: AssetChangeType,
+    pub from: Address,
+    pub to: Address,
+    pub amount: U256,
+    pub asset: Option<AssetChangeAsset>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmExecutionOutput {
     pub chain_id: u64,
@@ -79,4 +107,5 @@ pub struct EvmExecutionOutput {
     pub output: Bytes,
     pub failure: Option<EvmExecutionFailure>,
     pub logs: Vec<EvmExecutionLog>,
+    pub asset_changes: Vec<AssetChange>,
 }

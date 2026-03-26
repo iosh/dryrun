@@ -7,9 +7,10 @@ use evm_engine::{EvmEngine, EvmExecutionInput, EvmExecutionOutput};
 
 pub use error::SimulationServiceError;
 pub use types::{
-    AccessListItem, BlockRef, EvmTransaction, EvmTransactionType, RawLog,
-    SimulateEvmTransactionInput, SimulateEvmTransactionOutput, SimulatedBlock, SimulationFailure,
-    SimulationOptions, SimulationStatus,
+    AccessListItem, AssetChange, AssetChangeAsset, AssetChangeType, AssetType, BlockRef,
+    EvmTransaction, EvmTransactionType, RawLog, SimulateEvmTransactionInput,
+    SimulateEvmTransactionOutput, SimulatedBlock, SimulationFailure, SimulationOptions,
+    SimulationStatus,
 };
 
 #[derive(Debug, Clone)]
@@ -43,6 +44,7 @@ impl SimulationService {
         Ok(SimulateEvmTransactionOutput::from_engine_output(
             output,
             include_logs,
+            options.include_asset_changes,
         ))
     }
 }
@@ -138,8 +140,52 @@ impl From<evm_engine::EvmExecutionLog> for RawLog {
     }
 }
 
+impl From<evm_engine::AssetType> for AssetType {
+    fn from(asset_type: evm_engine::AssetType) -> Self {
+        match asset_type {
+            evm_engine::AssetType::Native => Self::Native,
+            evm_engine::AssetType::Erc20 => Self::Erc20,
+        }
+    }
+}
+
+impl From<evm_engine::AssetChangeType> for AssetChangeType {
+    fn from(change_type: evm_engine::AssetChangeType) -> Self {
+        match change_type {
+            evm_engine::AssetChangeType::Transfer => Self::Transfer,
+        }
+    }
+}
+
+impl From<evm_engine::AssetChangeAsset> for AssetChangeAsset {
+    fn from(asset: evm_engine::AssetChangeAsset) -> Self {
+        Self {
+            token_address: asset.token_address,
+            symbol: asset.symbol,
+            decimals: asset.decimals,
+        }
+    }
+}
+
+impl From<evm_engine::AssetChange> for AssetChange {
+    fn from(asset_change: evm_engine::AssetChange) -> Self {
+        Self {
+            asset_type: asset_change.asset_type.into(),
+            change_type: asset_change.change_type.into(),
+            from: asset_change.from,
+            to: asset_change.to,
+            amount: asset_change.amount,
+            asset: asset_change.asset.map(Into::into),
+        }
+    }
+}
+
 impl SimulateEvmTransactionOutput {
-    fn from_engine_output(output: EvmExecutionOutput, include_logs: bool) -> Self {
+    fn from_engine_output(
+        output: EvmExecutionOutput,
+        include_logs: bool,
+        include_asset_changes: bool,
+    ) -> Self {
         let EvmExecutionOutput {
             chain_id,
             block,
@@ -149,6 +195,7 @@ impl SimulateEvmTransactionOutput {
             output,
             failure,
             logs,
+            asset_changes,
         } = output;
 
         Self {
@@ -164,6 +211,69 @@ impl SimulateEvmTransactionOutput {
             } else {
                 Vec::new()
             },
+            asset_changes: if include_asset_changes {
+                asset_changes.into_iter().map(Into::into).collect()
+            } else {
+                Vec::new()
+            },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use alloy_primitives::{Address, B256, Bytes, U256};
+
+    use super::*;
+
+    #[test]
+    fn engine_output_maps_into_service_output_with_include_flags() {
+        let output = EvmExecutionOutput {
+            chain_id: 1,
+            block: evm_engine::SimulatedBlock {
+                number: 0x1234,
+                hash: B256::from_str(
+                    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                )
+                .expect("hash"),
+            },
+            status: evm_engine::EvmExecutionStatus::Success,
+            gas_used: 0x5208,
+            gas_limit: 0x5300,
+            output: Bytes::from_str("0x0102").expect("bytes"),
+            failure: None,
+            logs: vec![evm_engine::EvmExecutionLog {
+                log_index: 0,
+                address: Address::from_str("0x1111111111111111111111111111111111111111")
+                    .expect("address"),
+                topics: vec![
+                    B256::from_str(
+                        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    )
+                    .expect("topic"),
+                ],
+                data: Bytes::from_str("0xdeadbeef").expect("bytes"),
+            }],
+            asset_changes: vec![evm_engine::AssetChange {
+                asset_type: evm_engine::AssetType::Native,
+                change_type: evm_engine::AssetChangeType::Transfer,
+                from: Address::from_str("0x1111111111111111111111111111111111111111")
+                    .expect("from"),
+                to: Address::from_str("0x2222222222222222222222222222222222222222").expect("to"),
+                amount: U256::from(0x1234_u64),
+                asset: None,
+            }],
+        };
+
+        let included = SimulateEvmTransactionOutput::from_engine_output(output.clone(), true, true);
+        assert_eq!(included.logs.len(), 1);
+        assert_eq!(included.asset_changes.len(), 1);
+        assert_eq!(included.asset_changes[0].amount, U256::from(0x1234_u64));
+
+        let excluded = SimulateEvmTransactionOutput::from_engine_output(output, false, false);
+        assert!(excluded.logs.is_empty());
+        assert!(excluded.asset_changes.is_empty());
     }
 }

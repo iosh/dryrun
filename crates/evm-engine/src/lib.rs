@@ -1,11 +1,13 @@
+mod asset_changes;
 mod error;
 mod execution;
 mod types;
 
 pub use error::EvmEngineError;
 pub use types::{
-    AccessListItem, BlockRef, EvmExecutionFailure, EvmExecutionInput, EvmExecutionLog,
-    EvmExecutionOutput, EvmExecutionStatus, EvmTransaction, EvmTransactionType, SimulatedBlock,
+    AccessListItem, AssetChange, AssetChangeAsset, AssetChangeType, AssetType, BlockRef,
+    EvmExecutionFailure, EvmExecutionInput, EvmExecutionLog, EvmExecutionOutput,
+    EvmExecutionStatus, EvmTransaction, EvmTransactionType, SimulatedBlock,
 };
 
 use execution::simulate_execution;

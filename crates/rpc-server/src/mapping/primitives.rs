@@ -51,6 +51,10 @@ pub(super) fn format_u64_quantity(value: u64) -> String {
     format!("0x{value:x}")
 }
 
+pub(super) fn format_u256_quantity(value: U256) -> String {
+    format!("{value:#x}")
+}
+
 fn strip_hex_prefix<'a>(value: &'a str, field: &str) -> Result<&'a str, ValidationError> {
     value.strip_prefix("0x").ok_or_else(|| {
         ValidationError::invalid_params(format!("`{field}` must be a 0x-prefixed hex quantity"))

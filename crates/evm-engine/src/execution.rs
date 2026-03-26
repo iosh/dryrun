@@ -1,7 +1,7 @@
 use crate::{
     AccessListItem, BlockRef, EvmEngineError, EvmExecutionFailure, EvmExecutionInput,
     EvmExecutionLog, EvmExecutionOutput, EvmExecutionStatus, EvmTransaction, EvmTransactionType,
-    SimulatedBlock,
+    SimulatedBlock, asset_changes::extract_asset_changes,
 };
 use alloy::{
     consensus::BlockHeader,
@@ -347,16 +347,21 @@ fn map_execution_result(
     match result {
         ExecutionResult::Success {
             gas, logs, output, ..
-        } => EvmExecutionOutput {
-            chain_id: transaction.chain_id,
-            block: simulated_block(resolved_block),
-            status: EvmExecutionStatus::Success,
-            gas_used: gas.used(),
-            gas_limit: gas.limit(),
-            output: output.into_data(),
-            failure: None,
-            logs: map_execution_logs(logs),
-        },
+        } => {
+            let status = EvmExecutionStatus::Success;
+
+            EvmExecutionOutput {
+                chain_id: transaction.chain_id,
+                block: simulated_block(resolved_block),
+                status,
+                gas_used: gas.used(),
+                gas_limit: gas.limit(),
+                output: output.into_data(),
+                failure: None,
+                logs: map_execution_logs(logs),
+                asset_changes: extract_asset_changes(status, transaction),
+            }
+        }
         ExecutionResult::Revert { gas, output, .. } => build_failed_output(
             resolved_block,
             transaction,
@@ -397,6 +402,7 @@ fn build_failed_output(
         output,
         failure: Some(failure),
         logs: Vec::new(),
+        asset_changes: Vec::new(),
     }
 }
 

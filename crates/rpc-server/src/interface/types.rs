@@ -85,6 +85,8 @@ pub struct EvmSimulateTransactionResponse {
     pub failure: Option<SimulationFailure>,
     #[serde(default)]
     pub logs: Vec<RawLog>,
+    #[serde(default)]
+    pub asset_changes: Vec<AssetChange>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -117,4 +119,39 @@ pub struct RawLog {
     pub address: String,
     pub topics: Vec<String>,
     pub data: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum AssetType {
+    Native,
+    Erc20,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum AssetChangeType {
+    Transfer,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetChangeAsset {
+    pub token_address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decimals: Option<u8>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AssetChange {
+    pub asset_type: AssetType,
+    pub change_type: AssetChangeType,
+    pub from: String,
+    pub to: String,
+    pub amount: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset: Option<AssetChangeAsset>,
 }
