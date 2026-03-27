@@ -1,7 +1,8 @@
 use crate::{
     AccessListItem, BlockRef, EvmEngineError, EvmExecutionFailure, EvmExecutionInput,
     EvmExecutionLog, EvmExecutionOutput, EvmExecutionStatus, EvmTransaction, EvmTransactionType,
-    SimulatedBlock, asset_changes::extract_asset_changes,
+    SimulatedBlock,
+    asset_changes::{Erc20Metadata, extract_asset_changes, fill_erc20_metadata},
 };
 use alloy::{
     consensus::BlockHeader,
@@ -9,12 +10,14 @@ use alloy::{
     network::Ethereum,
     providers::{DynProvider, Provider, ProviderBuilder},
     rpc::types::Block,
+    sol,
+    sol_types::SolCall,
 };
 use alloy_chains::Chain;
 use alloy_hardforks::EthereumHardfork;
-use alloy_primitives::{Bytes, Log, U256};
+use alloy_primitives::{Address, Bytes, Log, U256};
 use revm::{
-    Context, ExecuteEvm, MainBuilder, MainContext,
+    Context, ExecuteCommitEvm, ExecuteEvm, MainBuilder, MainContext, MainnetEvm,
     context::{BlockEnv, CfgEnv, TxEnv},
     context_interface::{
         block::BlobExcessGasAndPrice,
@@ -24,10 +27,21 @@ use revm::{
         },
     },
     database::{AlloyDB, CacheDB, WrapDatabaseAsync},
+    handler::EvmTr,
     primitives::{TxKind, hardfork::SpecId},
 };
 
 type AlloyCacheDb = CacheDB<WrapDatabaseAsync<AlloyDB<Ethereum, DynProvider>>>;
+type MainnetAlloyEvm = MainnetEvm<Context<BlockEnv, TxEnv, CfgEnv, AlloyCacheDb>>;
+
+const ERC20_METADATA_GAS_LIMIT: u64 = 100_000;
+
+sol! {
+    contract IERC20Metadata {
+        function symbol() external view returns (string);
+        function decimals() external view returns (uint8);
+    }
+}
 
 #[derive(Debug, Clone)]
 struct ResolvedExecutionBlock {
@@ -313,9 +327,10 @@ fn execute_transaction(
         .modify_block_chained(|block| *block = block_env)
         .build_mainnet();
 
-    match evm.transact(tx_env) {
-        Ok(result_and_state) => Ok(map_execution_result(
-            result_and_state.result,
+    match evm.transact_commit(tx_env) {
+        Ok(result) => Ok(map_execution_result(
+            &mut evm,
+            result,
             resolved_block,
             transaction,
         )),
@@ -340,6 +355,7 @@ fn execute_transaction(
 }
 
 fn map_execution_result(
+    evm: &mut MainnetAlloyEvm,
     result: ExecutionResult<HaltReason>,
     resolved_block: &ResolvedExecutionBlock,
     transaction: &EvmTransaction,
@@ -350,7 +366,12 @@ fn map_execution_result(
         } => {
             let status = EvmExecutionStatus::Success;
             let logs = map_execution_logs(logs);
-            let asset_changes = extract_asset_changes(status, transaction, &logs);
+            let mut asset_changes = extract_asset_changes(status, transaction, &logs);
+
+            configure_metadata_call_context(evm);
+            fill_erc20_metadata(&mut asset_changes, |token_address| {
+                load_erc20_metadata(evm, transaction, token_address)
+            });
 
             EvmExecutionOutput {
                 chain_id: transaction.chain_id,
@@ -384,6 +405,89 @@ fn map_execution_result(
             Bytes::new(),
             map_halt_failure(reason),
         ),
+    }
+}
+
+fn configure_metadata_call_context(evm: &mut MainnetAlloyEvm) {
+    evm.ctx_mut().cfg.disable_base_fee = true;
+    evm.ctx_mut().cfg.disable_balance_check = true;
+    evm.ctx_mut().cfg.disable_fee_charge = true;
+}
+
+fn load_erc20_metadata(
+    evm: &mut MainnetAlloyEvm,
+    transaction: &EvmTransaction,
+    token_address: Address,
+) -> Erc20Metadata {
+    Erc20Metadata {
+        symbol: call_erc20_symbol(evm, transaction, token_address),
+        decimals: call_erc20_decimals(evm, transaction, token_address),
+    }
+}
+
+fn call_erc20_symbol(
+    evm: &mut MainnetAlloyEvm,
+    transaction: &EvmTransaction,
+    token_address: Address,
+) -> Option<String> {
+    let output = transact_metadata_call(
+        evm,
+        create_metadata_call_tx_env(
+            transaction,
+            token_address,
+            IERC20Metadata::symbolCall {}.abi_encode().into(),
+        ),
+    )?;
+
+    IERC20Metadata::symbolCall::abi_decode_returns(output.as_ref()).ok()
+}
+
+fn call_erc20_decimals(
+    evm: &mut MainnetAlloyEvm,
+    transaction: &EvmTransaction,
+    token_address: Address,
+) -> Option<u8> {
+    let output = transact_metadata_call(
+        evm,
+        create_metadata_call_tx_env(
+            transaction,
+            token_address,
+            IERC20Metadata::decimalsCall {}.abi_encode().into(),
+        ),
+    )?;
+
+    IERC20Metadata::decimalsCall::abi_decode_returns(output.as_ref()).ok()
+}
+
+fn create_metadata_call_tx_env(
+    transaction: &EvmTransaction,
+    token_address: Address,
+    data: Bytes,
+) -> TxEnv {
+    TxEnv {
+        tx_type: TransactionType::Legacy as u8,
+        caller: transaction.from,
+        gas_limit: ERC20_METADATA_GAS_LIMIT,
+        gas_price: 0,
+        kind: TxKind::Call(token_address),
+        value: U256::ZERO,
+        data,
+        nonce: transaction.nonce.saturating_add(1),
+        chain_id: Some(transaction.chain_id),
+        access_list: RevmAccessList::default(),
+        gas_priority_fee: None,
+        blob_hashes: Vec::new(),
+        max_fee_per_blob_gas: 0,
+        authorization_list: Vec::new(),
+    }
+}
+
+fn transact_metadata_call(evm: &mut MainnetAlloyEvm, tx_env: TxEnv) -> Option<Bytes> {
+    let result = evm.transact(tx_env).ok()?.result;
+
+    match result {
+        ExecutionResult::Success { output, .. } => Some(output.into_data()),
+        ExecutionResult::Revert { .. } | ExecutionResult::Halt { .. } => None,
     }
 }
 

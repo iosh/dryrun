@@ -1,9 +1,40 @@
+use std::collections::HashMap;
+
 use alloy_primitives::{Address, B256, U256, keccak256};
 
 use crate::{
     AssetChange, AssetChangeAsset, AssetChangeType, AssetType, EvmExecutionLog, EvmExecutionStatus,
     EvmTransaction,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Erc20Metadata {
+    pub symbol: Option<String>,
+    pub decimals: Option<u8>,
+}
+
+pub(crate) fn fill_erc20_metadata<F>(asset_changes: &mut [AssetChange], mut load_metadata: F)
+where
+    F: FnMut(Address) -> Erc20Metadata,
+{
+    let mut metadata_by_token = HashMap::<Address, Erc20Metadata>::new();
+    for asset_change in asset_changes {
+        if !matches!(asset_change.asset_type, AssetType::Erc20) {
+            continue;
+        }
+
+        let Some(asset) = asset_change.asset.as_mut() else {
+            continue;
+        };
+
+        let metadata = metadata_by_token
+            .entry(asset.token_address)
+            .or_insert_with(|| load_metadata(asset.token_address));
+
+        asset.symbol = metadata.symbol.clone();
+        asset.decimals = metadata.decimals;
+    }
+}
 
 fn erc20_transfer_topic0() -> B256 {
     keccak256("Transfer(address,address,uint256)".as_bytes())
@@ -102,11 +133,11 @@ mod tests {
     use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 
     use crate::{
-        AccessListItem, AssetChangeType, AssetType, EvmExecutionLog, EvmExecutionStatus,
-        EvmTransaction, EvmTransactionType,
+        AccessListItem, AssetChange, AssetChangeAsset, AssetChangeType, AssetType, EvmExecutionLog,
+        EvmExecutionStatus, EvmTransaction, EvmTransactionType,
     };
 
-    use super::extract_asset_changes;
+    use super::{Erc20Metadata, extract_asset_changes, fill_erc20_metadata};
 
     fn sample_transaction(value: U256, to: Option<Address>) -> EvmTransaction {
         EvmTransaction {
@@ -311,5 +342,70 @@ mod tests {
             extract_asset_changes(EvmExecutionStatus::Success, &transaction, &[log]);
 
         assert!(asset_changes.is_empty());
+    }
+
+    #[test]
+    fn fills_erc20_metadata_once_per_token() {
+        let token = Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").expect("token");
+        let from = Address::from_str("0x3333333333333333333333333333333333333333").expect("from");
+        let to = Address::from_str("0x4444444444444444444444444444444444444444").expect("to");
+
+        let mut asset_changes = vec![
+            AssetChange {
+                asset_type: AssetType::Native,
+                change_type: AssetChangeType::Transfer,
+                from,
+                to,
+                amount: U256::from(1_u64),
+                asset: None,
+            },
+            AssetChange {
+                asset_type: AssetType::Erc20,
+                change_type: AssetChangeType::Transfer,
+                from,
+                to,
+                amount: U256::from(2_u64),
+                asset: Some(AssetChangeAsset {
+                    token_address: token,
+                    symbol: None,
+                    decimals: None,
+                }),
+            },
+            AssetChange {
+                asset_type: AssetType::Erc20,
+                change_type: AssetChangeType::Transfer,
+                from: to,
+                to: from,
+                amount: U256::from(3_u64),
+                asset: Some(AssetChangeAsset {
+                    token_address: token,
+                    symbol: None,
+                    decimals: None,
+                }),
+            },
+        ];
+
+        let mut load_count = 0;
+
+        fill_erc20_metadata(&mut asset_changes, |address| {
+            assert_eq!(address, token);
+            load_count += 1;
+
+            Erc20Metadata {
+                symbol: Some("USDC".to_string()),
+                decimals: Some(6),
+            }
+        });
+
+        assert_eq!(load_count, 1);
+        assert_eq!(asset_changes[0].asset, None);
+
+        let first_erc20 = asset_changes[1].asset.as_ref().expect("first erc20 asset");
+        assert_eq!(first_erc20.symbol.as_deref(), Some("USDC"));
+        assert_eq!(first_erc20.decimals, Some(6));
+
+        let second_erc20 = asset_changes[2].asset.as_ref().expect("second erc20 asset");
+        assert_eq!(second_erc20.symbol.as_deref(), Some("USDC"));
+        assert_eq!(second_erc20.decimals, Some(6));
     }
 }

@@ -8,5 +8,10 @@ alloy = { workspace = true }
 alloy-chains = { workspace = true }
 alloy-hardforks = { workspace = true }
 alloy-primitives = { workspace = true }
-revm = { workspace = true, features = ["alloydb"] }
+revm = { workspace = true, features = [
+    "alloydb",
+    "optional_balance_check",
+    "optional_fee_charge",
+    "optional_no_base_fee",
+] }
 thiserror = { workspace = true }
