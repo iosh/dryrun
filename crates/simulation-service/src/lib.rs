@@ -257,13 +257,18 @@ mod tests {
                 data: Bytes::from_str("0xdeadbeef").expect("bytes"),
             }],
             asset_changes: vec![evm_engine::AssetChange {
-                asset_type: evm_engine::AssetType::Native,
+                asset_type: evm_engine::AssetType::Erc20,
                 change_type: evm_engine::AssetChangeType::Transfer,
                 from: Address::from_str("0x1111111111111111111111111111111111111111")
                     .expect("from"),
                 to: Address::from_str("0x2222222222222222222222222222222222222222").expect("to"),
                 amount: U256::from(0x1234_u64),
-                asset: None,
+                asset: Some(evm_engine::AssetChangeAsset {
+                    token_address: Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
+                        .expect("token"),
+                    symbol: Some("USDC".to_string()),
+                    decimals: Some(6),
+                }),
             }],
         };
 
@@ -271,6 +276,12 @@ mod tests {
         assert_eq!(included.logs.len(), 1);
         assert_eq!(included.asset_changes.len(), 1);
         assert_eq!(included.asset_changes[0].amount, U256::from(0x1234_u64));
+        let asset = included.asset_changes[0]
+            .asset
+            .as_ref()
+            .expect("erc20 asset");
+        assert_eq!(asset.symbol.as_deref(), Some("USDC"));
+        assert_eq!(asset.decimals, Some(6));
 
         let excluded = SimulateEvmTransactionOutput::from_engine_output(output, false, false);
         assert!(excluded.logs.is_empty());

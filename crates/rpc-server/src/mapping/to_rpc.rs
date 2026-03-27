@@ -140,13 +140,18 @@ mod tests {
                 data: Bytes::from_str("0xdeadbeef").expect("bytes"),
             }],
             asset_changes: vec![simulation_service::AssetChange {
-                asset_type: simulation_service::AssetType::Native,
+                asset_type: simulation_service::AssetType::Erc20,
                 change_type: simulation_service::AssetChangeType::Transfer,
                 from: Address::from_str("0x1111111111111111111111111111111111111111")
                     .expect("from"),
                 to: Address::from_str("0x2222222222222222222222222222222222222222").expect("to"),
                 amount: U256::from(0xde0b6b3a7640000_u64),
-                asset: None,
+                asset: Some(simulation_service::AssetChangeAsset {
+                    token_address: Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
+                        .expect("token"),
+                    symbol: Some("USDC".to_string()),
+                    decimals: Some(6),
+                }),
             }],
         };
 
@@ -159,5 +164,15 @@ mod tests {
         assert_eq!(response.asset_changes.len(), 1);
         assert_eq!(response.asset_changes[0].amount, "0xde0b6b3a7640000");
         assert_eq!(response.output, "0x0102");
+        let asset = response.asset_changes[0]
+            .asset
+            .as_ref()
+            .expect("erc20 asset");
+        assert_eq!(
+            asset.token_address,
+            "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+        );
+        assert_eq!(asset.symbol.as_deref(), Some("USDC"));
+        assert_eq!(asset.decimals, Some(6));
     }
 }
