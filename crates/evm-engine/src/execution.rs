@@ -349,6 +349,8 @@ fn map_execution_result(
             gas, logs, output, ..
         } => {
             let status = EvmExecutionStatus::Success;
+            let logs = map_execution_logs(logs);
+            let asset_changes = extract_asset_changes(status, transaction, &logs);
 
             EvmExecutionOutput {
                 chain_id: transaction.chain_id,
@@ -358,8 +360,8 @@ fn map_execution_result(
                 gas_limit: gas.limit(),
                 output: output.into_data(),
                 failure: None,
-                logs: map_execution_logs(logs),
-                asset_changes: extract_asset_changes(status, transaction),
+                logs,
+                asset_changes,
             }
         }
         ExecutionResult::Revert { gas, output, .. } => build_failed_output(
