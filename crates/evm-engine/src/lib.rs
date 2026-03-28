@@ -3,6 +3,7 @@ mod error;
 mod execution;
 mod trace;
 mod types;
+
 pub use error::EvmEngineError;
 use execution::simulate_execution;
 pub use types::{
@@ -35,7 +36,8 @@ impl EvmEngine {
 
 fn ensure_supported_block_ref(block: &BlockRef) -> Result<(), EvmEngineError> {
     match block {
-        BlockRef::Latest | BlockRef::Number(_) | BlockRef::Hash(_) => Ok(()),
+        BlockRef::Latest | BlockRef::Number(_) => Ok(()),
+        BlockRef::Hash(_) => Err(EvmEngineError::not_ready("block.hash is not supported yet")),
     }
 }
 

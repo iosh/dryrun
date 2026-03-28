@@ -21,23 +21,6 @@ pub struct AccessListItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SimulationOptions {
-    pub include_logs: bool,
-    pub include_asset_changes: bool,
-    pub include_trace: bool,
-}
-
-impl Default for SimulationOptions {
-    fn default() -> Self {
-        Self {
-            include_logs: true,
-            include_asset_changes: true,
-            include_trace: false,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmTransaction {
     pub tx_type: EvmTransactionType,
     pub chain_id: u64,
@@ -57,7 +40,6 @@ pub struct EvmTransaction {
 pub struct SimulateEvmTransactionInput {
     pub block: BlockRef,
     pub transaction: EvmTransaction,
-    pub options: SimulationOptions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

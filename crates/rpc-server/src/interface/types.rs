@@ -6,8 +6,6 @@ pub struct EvmSimulateTransactionRequest {
     #[serde(default)]
     pub block: Option<BlockRef>,
     pub transaction: Transaction,
-    #[serde(default)]
-    pub options: Option<SimulationOptions>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -19,19 +17,6 @@ pub struct BlockRef {
     pub number: Option<String>,
     #[serde(default)]
     pub hash: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SimulationOptions {
-    #[serde(default)]
-    pub include_logs: Option<bool>,
-    #[serde(default)]
-    pub include_asset_changes: Option<bool>,
-    #[serde(default)]
-    pub include_trace: Option<bool>,
-    #[serde(default)]
-    pub include_state_changes: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

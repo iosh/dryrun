@@ -13,11 +13,7 @@ impl TryFrom<rpc::EvmSimulateTransactionRequest>
     type Error = ValidationError;
 
     fn try_from(request: rpc::EvmSimulateTransactionRequest) -> Result<Self, Self::Error> {
-        let rpc::EvmSimulateTransactionRequest {
-            block,
-            transaction,
-            options,
-        } = request;
+        let rpc::EvmSimulateTransactionRequest { block, transaction } = request;
 
         Ok(Self {
             block: block
@@ -25,10 +21,6 @@ impl TryFrom<rpc::EvmSimulateTransactionRequest>
                 .transpose()?
                 .unwrap_or(simulation_service::BlockRef::Latest),
             transaction: transaction.try_into()?,
-            options: options
-                .map(TryInto::try_into)
-                .transpose()?
-                .unwrap_or_default(),
         })
     }
 }
@@ -100,20 +92,6 @@ impl TryFrom<rpc::Transaction> for simulation_service::EvmTransaction {
     }
 }
 
-impl TryFrom<rpc::SimulationOptions> for simulation_service::SimulationOptions {
-    type Error = ValidationError;
-
-    fn try_from(options: rpc::SimulationOptions) -> Result<Self, Self::Error> {
-        options.validate()?;
-
-        Ok(Self {
-            include_logs: options.include_logs.unwrap_or(true),
-            include_asset_changes: options.include_asset_changes.unwrap_or(true),
-            include_trace: options.include_trace.unwrap_or(false),
-        })
-    }
-}
-
 fn convert_access_list_item(
     item: rpc::AccessListItem,
     index: usize,
@@ -169,12 +147,6 @@ mod tests {
                 sidecar: None,
                 authorization_list: None,
             },
-            options: Some(rpc::SimulationOptions {
-                include_logs: Some(false),
-                include_asset_changes: Some(true),
-                include_trace: Some(false),
-                include_state_changes: Some(false),
-            }),
         };
 
         let input: simulation_service::SimulateEvmTransactionInput =
@@ -182,7 +154,5 @@ mod tests {
         assert!(matches!(input.block, simulation_service::BlockRef::Latest));
         assert_eq!(input.transaction.chain_id, 1);
         assert_eq!(input.transaction.gas_limit, 0x5208);
-        assert!(!input.options.include_logs);
-        assert!(!input.options.include_trace);
     }
 }

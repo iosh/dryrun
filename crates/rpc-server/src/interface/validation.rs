@@ -4,7 +4,7 @@ use alloy_primitives::{Address, B256};
 
 use crate::errors::ValidationError;
 
-use super::{AccessListItem, BlockRef, SimulationOptions, Transaction};
+use super::{AccessListItem, BlockRef, Transaction};
 
 impl BlockRef {
     pub(crate) fn validate(&self) -> Result<(), ValidationError> {
@@ -31,18 +31,6 @@ impl BlockRef {
 
         if let Some(hash) = &self.hash {
             validate_b256(hash, "block.hash")?;
-        }
-
-        Ok(())
-    }
-}
-
-impl SimulationOptions {
-    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
-        if self.include_state_changes.unwrap_or(false) {
-            return Err(ValidationError::not_supported(
-                "`options.includeStateChanges` is not supported",
-            ));
         }
 
         Ok(())

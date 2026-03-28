@@ -58,7 +58,7 @@ pub(crate) async fn simulate_execution(
     let EvmExecutionInput { block, transaction } = input;
     let provider = build_provider(rpc_url)?;
     let resolved_block = resolve_execution_block(&provider, &block).await?;
-    let db = create_database(&provider, resolved_block.state_block_id)?;
+    let db = create_database(&provider, &resolved_block)?;
     let spec_id = resolve_spec_id(&resolved_block)?;
     let cfg_env = create_cfg_env(resolved_block.chain_id, spec_id);
     let block_env = create_block_env(&resolved_block, spec_id)?;
@@ -110,16 +110,8 @@ async fn resolve_execution_block(
 
             (block, block_id)
         }
-        BlockRef::Hash(hash) => {
-            let block = load_block(
-                provider,
-                BlockId::from(*hash),
-                format!("block hash {hash} was not returned by provider"),
-            )
-            .await?;
-            let block_number = block.number();
-
-            (block, block_number_id(block_number))
+        BlockRef::Hash(_) => {
+            return Err(EvmEngineError::not_ready("block.hash is not supported yet"));
         }
     };
 
@@ -148,14 +140,17 @@ fn block_number_id(number: u64) -> BlockId {
 
 fn create_database(
     provider: &DynProvider,
-    block_id: BlockId,
+    resolved_block: &ResolvedExecutionBlock,
 ) -> Result<AlloyCacheDb, EvmEngineError> {
-    let alloy_db =
-        WrapDatabaseAsync::new(AlloyDB::new(provider.clone(), block_id)).ok_or_else(|| {
-            EvmEngineError::internal(
-                "failed to create async database wrapper from current tokio runtime",
-            )
-        })?;
+    let alloy_db = WrapDatabaseAsync::new(AlloyDB::new(
+        provider.clone(),
+        resolved_block.state_block_id,
+    ))
+    .ok_or_else(|| {
+        EvmEngineError::internal(
+            "failed to create async database wrapper from current tokio runtime",
+        )
+    })?;
 
     Ok(CacheDB::new(alloy_db))
 }
@@ -361,8 +356,8 @@ fn execute_transaction(
     }
 }
 
-fn map_execution_result(
-    evm: &mut MainnetAlloyEvm<TraceInspector>,
+fn map_execution_result<INSP>(
+    evm: &mut MainnetAlloyEvm<INSP>,
     result: ExecutionResult<HaltReason>,
     trace: Vec<TraceItem>,
     resolved_block: &ResolvedExecutionBlock,

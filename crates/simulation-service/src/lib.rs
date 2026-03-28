@@ -9,8 +9,8 @@ pub use error::SimulationServiceError;
 pub use types::{
     AccessListItem, AssetChange, AssetChangeAsset, AssetChangeType, AssetType, BlockRef,
     EvmTransaction, EvmTransactionType, RawLog, SimulateEvmTransactionInput,
-    SimulateEvmTransactionOutput, SimulatedBlock, SimulationFailure, SimulationOptions,
-    SimulationStatus, TraceItem, TraceStatus, TraceType,
+    SimulateEvmTransactionOutput, SimulatedBlock, SimulationFailure, SimulationStatus, TraceItem,
+    TraceStatus, TraceType,
 };
 
 #[derive(Debug, Clone)]
@@ -27,14 +27,7 @@ impl SimulationService {
         &self,
         input: SimulateEvmTransactionInput,
     ) -> Result<SimulateEvmTransactionOutput, SimulationServiceError> {
-        let SimulateEvmTransactionInput {
-            block,
-            transaction,
-            options,
-        } = input;
-        let include_logs = options.include_logs;
-        let include_asset_changes = options.include_asset_changes;
-        let include_trace = options.include_trace;
+        let SimulateEvmTransactionInput { block, transaction } = input;
         let output = self
             .evm_engine
             .simulate(EvmExecutionInput {
@@ -43,12 +36,7 @@ impl SimulationService {
             })
             .await?;
 
-        Ok(SimulateEvmTransactionOutput::from_engine_output(
-            output,
-            include_logs,
-            include_asset_changes,
-            include_trace,
-        ))
+        Ok(SimulateEvmTransactionOutput::from_engine_output(output))
     }
 }
 
@@ -225,12 +213,7 @@ impl From<evm_engine::TraceItem> for TraceItem {
 }
 
 impl SimulateEvmTransactionOutput {
-    fn from_engine_output(
-        output: EvmExecutionOutput,
-        include_logs: bool,
-        include_asset_changes: bool,
-        include_trace: bool,
-    ) -> Self {
+    fn from_engine_output(output: EvmExecutionOutput) -> Self {
         let EvmExecutionOutput {
             chain_id,
             block,
@@ -252,21 +235,9 @@ impl SimulateEvmTransactionOutput {
             gas_limit,
             output,
             failure: failure.map(Into::into),
-            logs: if include_logs {
-                logs.into_iter().map(Into::into).collect()
-            } else {
-                Vec::new()
-            },
-            asset_changes: if include_asset_changes {
-                asset_changes.into_iter().map(Into::into).collect()
-            } else {
-                Vec::new()
-            },
-            trace: if include_trace {
-                trace.into_iter().map(Into::into).collect()
-            } else {
-                Vec::new()
-            },
+            logs: logs.into_iter().map(Into::into).collect(),
+            asset_changes: asset_changes.into_iter().map(Into::into).collect(),
+            trace: trace.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -280,7 +251,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn engine_output_maps_into_service_output_with_include_flags() {
+    fn engine_output_maps_into_service_output() {
         let output = EvmExecutionOutput {
             chain_id: 1,
             block: evm_engine::SimulatedBlock {
@@ -342,32 +313,26 @@ mod tests {
             }],
         };
 
-        let included =
-            SimulateEvmTransactionOutput::from_engine_output(output.clone(), true, true, true);
-        assert_eq!(included.logs.len(), 1);
-        assert_eq!(included.asset_changes.len(), 1);
-        assert_eq!(included.trace.len(), 1);
-        assert_eq!(included.asset_changes[0].amount, U256::from(0x1234_u64));
-        let asset = included.asset_changes[0]
+        let mapped = SimulateEvmTransactionOutput::from_engine_output(output);
+        assert_eq!(mapped.logs.len(), 1);
+        assert_eq!(mapped.asset_changes.len(), 1);
+        assert_eq!(mapped.trace.len(), 1);
+        assert_eq!(mapped.asset_changes[0].amount, U256::from(0x1234_u64));
+        let asset = mapped.asset_changes[0]
             .asset
             .as_ref()
             .expect("erc20 asset");
         assert_eq!(asset.symbol.as_deref(), Some("USDC"));
         assert_eq!(asset.decimals, Some(6));
         assert_eq!(
-            included.trace[0].code_address,
+            mapped.trace[0].code_address,
             Some(
                 Address::from_str("0x3333333333333333333333333333333333333333")
                     .expect("code address"),
             )
         );
-        assert_eq!(included.trace[0].status, TraceStatus::Success);
-        assert_eq!(included.trace[0].trace_address, vec![0]);
-
-        let excluded =
-            SimulateEvmTransactionOutput::from_engine_output(output, false, false, false);
-        assert!(excluded.logs.is_empty());
-        assert!(excluded.asset_changes.is_empty());
-        assert!(excluded.trace.is_empty());
+        assert_eq!(mapped.trace[0].status, TraceStatus::Success);
+        assert_eq!(mapped.trace[0].trace_address, vec![0]);
     }
+
 }
