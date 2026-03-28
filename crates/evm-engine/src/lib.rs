@@ -1,16 +1,15 @@
 mod asset_changes;
 mod error;
 mod execution;
+mod trace;
 mod types;
-
 pub use error::EvmEngineError;
+use execution::simulate_execution;
 pub use types::{
     AccessListItem, AssetChange, AssetChangeAsset, AssetChangeType, AssetType, BlockRef,
     EvmExecutionFailure, EvmExecutionInput, EvmExecutionLog, EvmExecutionOutput,
-    EvmExecutionStatus, EvmTransaction, EvmTransactionType, SimulatedBlock,
+    EvmExecutionStatus, EvmTransaction, EvmTransactionType, SimulatedBlock, TraceItem, TraceType,
 };
-
-use execution::simulate_execution;
 
 #[derive(Debug, Clone)]
 pub struct EvmEngine {

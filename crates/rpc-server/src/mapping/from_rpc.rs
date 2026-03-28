@@ -109,6 +109,7 @@ impl TryFrom<rpc::SimulationOptions> for simulation_service::SimulationOptions {
         Ok(Self {
             include_logs: options.include_logs.unwrap_or(true),
             include_asset_changes: options.include_asset_changes.unwrap_or(true),
+            include_trace: options.include_trace.unwrap_or(false),
         })
     }
 }
@@ -182,5 +183,6 @@ mod tests {
         assert_eq!(input.transaction.chain_id, 1);
         assert_eq!(input.transaction.gas_limit, 0x5208);
         assert!(!input.options.include_logs);
+        assert!(!input.options.include_trace);
     }
 }

@@ -16,6 +16,7 @@ impl From<simulation_service::SimulateEvmTransactionOutput>
             failure: output.failure.map(Into::into),
             logs: output.logs.into_iter().map(Into::into).collect(),
             asset_changes: output.asset_changes.into_iter().map(Into::into).collect(),
+            trace: output.trace.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -103,6 +104,40 @@ impl From<simulation_service::AssetChange> for rpc::AssetChange {
     }
 }
 
+impl From<simulation_service::TraceType> for rpc::TraceType {
+    fn from(trace_type: simulation_service::TraceType) -> Self {
+        match trace_type {
+            simulation_service::TraceType::Call => Self::Call,
+            simulation_service::TraceType::CallCode => Self::CallCode,
+            simulation_service::TraceType::DelegateCall => Self::DelegateCall,
+            simulation_service::TraceType::StaticCall => Self::StaticCall,
+            simulation_service::TraceType::Create => Self::Create,
+            simulation_service::TraceType::Create2 => Self::Create2,
+        }
+    }
+}
+
+impl From<simulation_service::TraceItem> for rpc::TraceItem {
+    fn from(trace: simulation_service::TraceItem) -> Self {
+        Self {
+            trace_type: trace.trace_type.into(),
+            from: format!("{:#x}", trace.from),
+            to: trace.to.map(|address| format!("{:#x}", address)),
+            code_address: trace.code_address.map(|address| format!("{:#x}", address)),
+            value: format_u256_quantity(trace.value),
+            input: format!("{:#x}", trace.input),
+            output: format!("{:#x}", trace.output),
+            gas: format_u64_quantity(trace.gas),
+            gas_used: format_u64_quantity(trace.gas_used),
+            trace_address: trace
+                .trace_address
+                .into_iter()
+                .map(format_u64_quantity)
+                .collect(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -153,6 +188,24 @@ mod tests {
                     decimals: Some(6),
                 }),
             }],
+            trace: vec![simulation_service::TraceItem {
+                trace_type: simulation_service::TraceType::Call,
+                from: Address::from_str("0x1111111111111111111111111111111111111111")
+                    .expect("from"),
+                to: Some(
+                    Address::from_str("0x2222222222222222222222222222222222222222").expect("to"),
+                ),
+                code_address: Some(
+                    Address::from_str("0x3333333333333333333333333333333333333333")
+                        .expect("code address"),
+                ),
+                value: U256::from(0x1234_u64),
+                input: Bytes::from_str("0x1234").expect("bytes"),
+                output: Bytes::from_str("0xabcd").expect("bytes"),
+                gas: 50_000,
+                gas_used: 21_000,
+                trace_address: vec![0],
+            }],
         };
 
         let response: rpc::EvmSimulateTransactionResponse = output.into();
@@ -174,5 +227,13 @@ mod tests {
         );
         assert_eq!(asset.symbol.as_deref(), Some("USDC"));
         assert_eq!(asset.decimals, Some(6));
+        assert_eq!(response.trace.len(), 1);
+        assert_eq!(
+            response.trace[0].code_address.as_deref(),
+            Some("0x3333333333333333333333333333333333333333")
+        );
+        assert_eq!(response.trace[0].gas, "0xc350");
+        assert_eq!(response.trace[0].gas_used, "0x5208");
+        assert_eq!(response.trace[0].trace_address, vec!["0x0"]);
     }
 }

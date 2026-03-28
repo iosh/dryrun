@@ -87,6 +87,8 @@ pub struct EvmSimulateTransactionResponse {
     pub logs: Vec<RawLog>,
     #[serde(default)]
     pub asset_changes: Vec<AssetChange>,
+    #[serde(default)]
+    pub trace: Vec<TraceItem>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -154,4 +156,32 @@ pub struct AssetChange {
     pub amount: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub asset: Option<AssetChangeAsset>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum TraceType {
+    Call,
+    CallCode,
+    DelegateCall,
+    StaticCall,
+    Create,
+    Create2,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceItem {
+    pub trace_type: TraceType,
+    pub from: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_address: Option<String>,
+    pub value: String,
+    pub input: String,
+    pub output: String,
+    pub gas: String,
+    pub gas_used: String,
+    pub trace_address: Vec<String>,
 }

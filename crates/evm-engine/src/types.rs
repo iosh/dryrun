@@ -97,6 +97,30 @@ pub struct AssetChange {
     pub asset: Option<AssetChangeAsset>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraceType {
+    Call,
+    CallCode,
+    DelegateCall,
+    StaticCall,
+    Create,
+    Create2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraceItem {
+    pub trace_type: TraceType,
+    pub from: Address,
+    pub to: Option<Address>,
+    pub code_address: Option<Address>,
+    pub value: U256,
+    pub input: Bytes,
+    pub output: Bytes,
+    pub gas: u64,
+    pub gas_used: u64,
+    pub trace_address: Vec<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmExecutionOutput {
     pub chain_id: u64,
@@ -108,4 +132,5 @@ pub struct EvmExecutionOutput {
     pub failure: Option<EvmExecutionFailure>,
     pub logs: Vec<EvmExecutionLog>,
     pub asset_changes: Vec<AssetChange>,
+    pub trace: Vec<TraceItem>,
 }

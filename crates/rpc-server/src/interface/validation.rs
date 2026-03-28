@@ -39,12 +39,6 @@ impl BlockRef {
 
 impl SimulationOptions {
     pub(crate) fn validate(&self) -> Result<(), ValidationError> {
-        if self.include_trace.unwrap_or(false) {
-            return Err(ValidationError::not_supported(
-                "`options.includeTrace` is not supported",
-            ));
-        }
-
         if self.include_state_changes.unwrap_or(false) {
             return Err(ValidationError::not_supported(
                 "`options.includeStateChanges` is not supported",

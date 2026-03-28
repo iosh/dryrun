@@ -10,7 +10,7 @@ pub use types::{
     AccessListItem, AssetChange, AssetChangeAsset, AssetChangeType, AssetType, BlockRef,
     EvmTransaction, EvmTransactionType, RawLog, SimulateEvmTransactionInput,
     SimulateEvmTransactionOutput, SimulatedBlock, SimulationFailure, SimulationOptions,
-    SimulationStatus,
+    SimulationStatus, TraceItem, TraceType,
 };
 
 #[derive(Debug, Clone)]
@@ -33,6 +33,8 @@ impl SimulationService {
             options,
         } = input;
         let include_logs = options.include_logs;
+        let include_asset_changes = options.include_asset_changes;
+        let include_trace = options.include_trace;
         let output = self
             .evm_engine
             .simulate(EvmExecutionInput {
@@ -44,7 +46,8 @@ impl SimulationService {
         Ok(SimulateEvmTransactionOutput::from_engine_output(
             output,
             include_logs,
-            options.include_asset_changes,
+            include_asset_changes,
+            include_trace,
         ))
     }
 }
@@ -180,11 +183,42 @@ impl From<evm_engine::AssetChange> for AssetChange {
     }
 }
 
+impl From<evm_engine::TraceType> for TraceType {
+    fn from(trace_type: evm_engine::TraceType) -> Self {
+        match trace_type {
+            evm_engine::TraceType::Call => Self::Call,
+            evm_engine::TraceType::CallCode => Self::CallCode,
+            evm_engine::TraceType::DelegateCall => Self::DelegateCall,
+            evm_engine::TraceType::StaticCall => Self::StaticCall,
+            evm_engine::TraceType::Create => Self::Create,
+            evm_engine::TraceType::Create2 => Self::Create2,
+        }
+    }
+}
+
+impl From<evm_engine::TraceItem> for TraceItem {
+    fn from(trace: evm_engine::TraceItem) -> Self {
+        Self {
+            trace_type: trace.trace_type.into(),
+            from: trace.from,
+            to: trace.to,
+            code_address: trace.code_address,
+            value: trace.value,
+            input: trace.input,
+            output: trace.output,
+            gas: trace.gas,
+            gas_used: trace.gas_used,
+            trace_address: trace.trace_address,
+        }
+    }
+}
+
 impl SimulateEvmTransactionOutput {
     fn from_engine_output(
         output: EvmExecutionOutput,
         include_logs: bool,
         include_asset_changes: bool,
+        include_trace: bool,
     ) -> Self {
         let EvmExecutionOutput {
             chain_id,
@@ -196,6 +230,7 @@ impl SimulateEvmTransactionOutput {
             failure,
             logs,
             asset_changes,
+            trace,
         } = output;
 
         Self {
@@ -213,6 +248,11 @@ impl SimulateEvmTransactionOutput {
             },
             asset_changes: if include_asset_changes {
                 asset_changes.into_iter().map(Into::into).collect()
+            } else {
+                Vec::new()
+            },
+            trace: if include_trace {
+                trace.into_iter().map(Into::into).collect()
             } else {
                 Vec::new()
             },
@@ -270,11 +310,31 @@ mod tests {
                     decimals: Some(6),
                 }),
             }],
+            trace: vec![evm_engine::TraceItem {
+                trace_type: evm_engine::TraceType::Call,
+                from: Address::from_str("0x1111111111111111111111111111111111111111")
+                    .expect("from"),
+                to: Some(
+                    Address::from_str("0x2222222222222222222222222222222222222222").expect("to"),
+                ),
+                code_address: Some(
+                    Address::from_str("0x3333333333333333333333333333333333333333")
+                        .expect("code address"),
+                ),
+                value: U256::from(0x1234_u64),
+                input: Bytes::from_str("0x1234").expect("bytes"),
+                output: Bytes::from_str("0xabcd").expect("bytes"),
+                gas: 50_000,
+                gas_used: 21_000,
+                trace_address: vec![0],
+            }],
         };
 
-        let included = SimulateEvmTransactionOutput::from_engine_output(output.clone(), true, true);
+        let included =
+            SimulateEvmTransactionOutput::from_engine_output(output.clone(), true, true, true);
         assert_eq!(included.logs.len(), 1);
         assert_eq!(included.asset_changes.len(), 1);
+        assert_eq!(included.trace.len(), 1);
         assert_eq!(included.asset_changes[0].amount, U256::from(0x1234_u64));
         let asset = included.asset_changes[0]
             .asset
@@ -282,9 +342,19 @@ mod tests {
             .expect("erc20 asset");
         assert_eq!(asset.symbol.as_deref(), Some("USDC"));
         assert_eq!(asset.decimals, Some(6));
+        assert_eq!(
+            included.trace[0].code_address,
+            Some(
+                Address::from_str("0x3333333333333333333333333333333333333333")
+                    .expect("code address"),
+            )
+        );
+        assert_eq!(included.trace[0].trace_address, vec![0]);
 
-        let excluded = SimulateEvmTransactionOutput::from_engine_output(output, false, false);
+        let excluded =
+            SimulateEvmTransactionOutput::from_engine_output(output, false, false, false);
         assert!(excluded.logs.is_empty());
         assert!(excluded.asset_changes.is_empty());
+        assert!(excluded.trace.is_empty());
     }
 }

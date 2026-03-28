@@ -1,8 +1,9 @@
 use crate::{
     AccessListItem, BlockRef, EvmEngineError, EvmExecutionFailure, EvmExecutionInput,
     EvmExecutionLog, EvmExecutionOutput, EvmExecutionStatus, EvmTransaction, EvmTransactionType,
-    SimulatedBlock,
+    SimulatedBlock, TraceItem,
     asset_changes::{Erc20Metadata, extract_asset_changes, fill_erc20_metadata},
+    trace::TraceInspector,
 };
 use alloy::{
     consensus::BlockHeader,
@@ -17,7 +18,7 @@ use alloy_chains::Chain;
 use alloy_hardforks::EthereumHardfork;
 use alloy_primitives::{Address, Bytes, Log, U256};
 use revm::{
-    Context, ExecuteCommitEvm, ExecuteEvm, MainBuilder, MainContext, MainnetEvm,
+    Context, ExecuteEvm, InspectCommitEvm, MainBuilder, MainContext, MainnetEvm,
     context::{BlockEnv, CfgEnv, TxEnv},
     context_interface::{
         block::BlobExcessGasAndPrice,
@@ -32,7 +33,7 @@ use revm::{
 };
 
 type AlloyCacheDb = CacheDB<WrapDatabaseAsync<AlloyDB<Ethereum, DynProvider>>>;
-type MainnetAlloyEvm = MainnetEvm<Context<BlockEnv, TxEnv, CfgEnv, AlloyCacheDb>>;
+type MainnetAlloyEvm<INSP = ()> = MainnetEvm<Context<BlockEnv, TxEnv, CfgEnv, AlloyCacheDb>, INSP>;
 
 const ERC20_METADATA_GAS_LIMIT: u64 = 100_000;
 
@@ -325,15 +326,20 @@ fn execute_transaction(
         .with_db(db)
         .modify_cfg_chained(|cfg| *cfg = cfg_env)
         .modify_block_chained(|block| *block = block_env)
-        .build_mainnet();
+        .build_mainnet_with_inspector(TraceInspector::new());
 
-    match evm.transact_commit(tx_env) {
-        Ok(result) => Ok(map_execution_result(
-            &mut evm,
-            result,
-            resolved_block,
-            transaction,
-        )),
+    match evm.inspect_tx_commit(tx_env) {
+        Ok(result) => {
+            let trace = std::mem::take(&mut evm.inspector).into_traces();
+
+            Ok(map_execution_result(
+                &mut evm,
+                result,
+                trace,
+                resolved_block,
+                transaction,
+            ))
+        }
         Err(EVMError::Transaction(error)) => Ok(build_failed_output(
             resolved_block,
             transaction,
@@ -341,6 +347,7 @@ fn execute_transaction(
             transaction.gas_limit,
             Bytes::new(),
             map_invalid_transaction_failure(error),
+            Vec::new(),
         )),
         Err(EVMError::Header(error)) => Err(EvmEngineError::internal(format!(
             "revm header validation failed: {error}"
@@ -355,8 +362,9 @@ fn execute_transaction(
 }
 
 fn map_execution_result(
-    evm: &mut MainnetAlloyEvm,
+    evm: &mut MainnetAlloyEvm<TraceInspector>,
     result: ExecutionResult<HaltReason>,
+    trace: Vec<TraceItem>,
     resolved_block: &ResolvedExecutionBlock,
     transaction: &EvmTransaction,
 ) -> EvmExecutionOutput {
@@ -383,6 +391,7 @@ fn map_execution_result(
                 failure: None,
                 logs,
                 asset_changes,
+                trace,
             }
         }
         ExecutionResult::Revert { gas, output, .. } => build_failed_output(
@@ -396,6 +405,7 @@ fn map_execution_result(
                 message: "execution reverted".to_string(),
                 reason: None,
             },
+            trace,
         ),
         ExecutionResult::Halt { reason, gas, .. } => build_failed_output(
             resolved_block,
@@ -404,18 +414,19 @@ fn map_execution_result(
             gas.limit(),
             Bytes::new(),
             map_halt_failure(reason),
+            trace,
         ),
     }
 }
 
-fn configure_metadata_call_context(evm: &mut MainnetAlloyEvm) {
+fn configure_metadata_call_context<INSP>(evm: &mut MainnetAlloyEvm<INSP>) {
     evm.ctx_mut().cfg.disable_base_fee = true;
     evm.ctx_mut().cfg.disable_balance_check = true;
     evm.ctx_mut().cfg.disable_fee_charge = true;
 }
 
-fn load_erc20_metadata(
-    evm: &mut MainnetAlloyEvm,
+fn load_erc20_metadata<INSP>(
+    evm: &mut MainnetAlloyEvm<INSP>,
     transaction: &EvmTransaction,
     token_address: Address,
 ) -> Erc20Metadata {
@@ -425,8 +436,8 @@ fn load_erc20_metadata(
     }
 }
 
-fn call_erc20_symbol(
-    evm: &mut MainnetAlloyEvm,
+fn call_erc20_symbol<INSP>(
+    evm: &mut MainnetAlloyEvm<INSP>,
     transaction: &EvmTransaction,
     token_address: Address,
 ) -> Option<String> {
@@ -442,8 +453,8 @@ fn call_erc20_symbol(
     IERC20Metadata::symbolCall::abi_decode_returns(output.as_ref()).ok()
 }
 
-fn call_erc20_decimals(
-    evm: &mut MainnetAlloyEvm,
+fn call_erc20_decimals<INSP>(
+    evm: &mut MainnetAlloyEvm<INSP>,
     transaction: &EvmTransaction,
     token_address: Address,
 ) -> Option<u8> {
@@ -482,7 +493,7 @@ fn create_metadata_call_tx_env(
     }
 }
 
-fn transact_metadata_call(evm: &mut MainnetAlloyEvm, tx_env: TxEnv) -> Option<Bytes> {
+fn transact_metadata_call<INSP>(evm: &mut MainnetAlloyEvm<INSP>, tx_env: TxEnv) -> Option<Bytes> {
     let result = evm.transact(tx_env).ok()?.result;
 
     match result {
@@ -498,6 +509,7 @@ fn build_failed_output(
     gas_limit: u64,
     output: Bytes,
     failure: EvmExecutionFailure,
+    trace: Vec<TraceItem>,
 ) -> EvmExecutionOutput {
     EvmExecutionOutput {
         chain_id: transaction.chain_id,
@@ -509,6 +521,7 @@ fn build_failed_output(
         failure: Some(failure),
         logs: Vec::new(),
         asset_changes: Vec::new(),
+        trace,
     }
 }
 
