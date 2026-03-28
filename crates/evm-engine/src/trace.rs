@@ -1,10 +1,12 @@
-use crate::{TraceItem, TraceType};
+use crate::{TraceItem, TraceStatus, TraceType};
 use alloy_primitives::{Bytes, U256};
 use revm::{
     Inspector,
     context::ContextTr,
     context_interface::CreateScheme,
-    interpreter::{CallInputs, CallOutcome, CreateInputs, CreateOutcome, InterpreterTypes},
+    interpreter::{
+        CallInputs, CallOutcome, CreateInputs, CreateOutcome, InstructionResult, InterpreterTypes,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -64,8 +66,7 @@ where
 
     fn call_end(&mut self, _context: &mut CTX, _inputs: &CallInputs, outcome: &mut CallOutcome) {
         if let Some(mut frame) = self.call_stack.pop() {
-            frame.trace.gas_used = outcome.gas().spent();
-            frame.trace.output = outcome.output().clone();
+            finalize_call_trace(&mut frame.trace, outcome);
             self.traces.push(frame.trace);
         }
     }
@@ -88,9 +89,7 @@ where
         outcome: &mut CreateOutcome,
     ) {
         if let Some(mut frame) = self.call_stack.pop() {
-            frame.trace.to = outcome.address;
-            frame.trace.gas_used = outcome.gas().spent();
-            frame.trace.output = outcome.output().clone();
+            finalize_create_trace(&mut frame.trace, outcome);
             self.traces.push(frame.trace);
         }
     }
@@ -115,6 +114,7 @@ fn map_create_scheme_to_trace_type(scheme: CreateScheme) -> TraceType {
 fn build_call_trace(inputs: &CallInputs, input: Bytes, trace_address: Vec<u64>) -> TraceItem {
     TraceItem {
         trace_type: map_call_scheme_to_trace_type(inputs.scheme),
+        status: TraceStatus::Success,
         from: inputs.caller,
         to: Some(inputs.target_address),
         code_address: Some(inputs.bytecode_address),
@@ -130,6 +130,7 @@ fn build_call_trace(inputs: &CallInputs, input: Bytes, trace_address: Vec<u64>) 
 fn build_create_trace(inputs: &CreateInputs, trace_address: Vec<u64>) -> TraceItem {
     TraceItem {
         trace_type: map_create_scheme_to_trace_type(inputs.scheme()),
+        status: TraceStatus::Success,
         from: inputs.caller(),
         to: None,
         code_address: None,
@@ -139,6 +140,29 @@ fn build_create_trace(inputs: &CreateInputs, trace_address: Vec<u64>) -> TraceIt
         gas: inputs.gas_limit(),
         gas_used: 0,
         trace_address,
+    }
+}
+
+fn finalize_call_trace(trace: &mut TraceItem, outcome: &CallOutcome) {
+    trace.status = map_instruction_result_to_trace_status(outcome.instruction_result());
+    trace.gas_used = outcome.gas().spent();
+    trace.output = outcome.output().clone();
+}
+
+fn finalize_create_trace(trace: &mut TraceItem, outcome: &CreateOutcome) {
+    trace.status = map_instruction_result_to_trace_status(outcome.instruction_result());
+    trace.to = outcome.address;
+    trace.gas_used = outcome.gas().spent();
+    trace.output = outcome.output().clone();
+}
+
+fn map_instruction_result_to_trace_status(result: &InstructionResult) -> TraceStatus {
+    if result.is_ok() {
+        TraceStatus::Success
+    } else if result.is_revert() {
+        TraceStatus::Revert
+    } else {
+        TraceStatus::Halt
     }
 }
 
@@ -152,7 +176,7 @@ mod tests {
     use alloy_primitives::{Address, B256};
     use revm::{
         bytecode::Bytecode,
-        interpreter::{CallInput, CallScheme, CallValue},
+        interpreter::{CallInput, CallScheme, CallValue, InstructionResult},
     };
 
     fn address(value: &str) -> Address {
@@ -256,5 +280,21 @@ mod tests {
         assert_eq!(trace.code_address, None);
         assert_eq!(trace.value, U256::from(11_u64));
         assert_eq!(trace.trace_address, vec![2]);
+    }
+
+    #[test]
+    fn instruction_result_maps_into_trace_status_categories() {
+        assert_eq!(
+            map_instruction_result_to_trace_status(&InstructionResult::Return),
+            TraceStatus::Success
+        );
+        assert_eq!(
+            map_instruction_result_to_trace_status(&InstructionResult::Revert),
+            TraceStatus::Revert
+        );
+        assert_eq!(
+            map_instruction_result_to_trace_status(&InstructionResult::OutOfGas),
+            TraceStatus::Halt
+        );
     }
 }

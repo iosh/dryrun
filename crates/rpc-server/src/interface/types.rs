@@ -170,9 +170,18 @@ pub enum TraceType {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum TraceStatus {
+    Success,
+    Revert,
+    Halt,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TraceItem {
     pub trace_type: TraceType,
+    pub status: TraceStatus,
     pub from: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub to: Option<String>,

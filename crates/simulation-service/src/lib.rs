@@ -10,7 +10,7 @@ pub use types::{
     AccessListItem, AssetChange, AssetChangeAsset, AssetChangeType, AssetType, BlockRef,
     EvmTransaction, EvmTransactionType, RawLog, SimulateEvmTransactionInput,
     SimulateEvmTransactionOutput, SimulatedBlock, SimulationFailure, SimulationOptions,
-    SimulationStatus, TraceItem, TraceType,
+    SimulationStatus, TraceItem, TraceStatus, TraceType,
 };
 
 #[derive(Debug, Clone)]
@@ -196,10 +196,21 @@ impl From<evm_engine::TraceType> for TraceType {
     }
 }
 
+impl From<evm_engine::TraceStatus> for TraceStatus {
+    fn from(status: evm_engine::TraceStatus) -> Self {
+        match status {
+            evm_engine::TraceStatus::Success => Self::Success,
+            evm_engine::TraceStatus::Revert => Self::Revert,
+            evm_engine::TraceStatus::Halt => Self::Halt,
+        }
+    }
+}
+
 impl From<evm_engine::TraceItem> for TraceItem {
     fn from(trace: evm_engine::TraceItem) -> Self {
         Self {
             trace_type: trace.trace_type.into(),
+            status: trace.status.into(),
             from: trace.from,
             to: trace.to,
             code_address: trace.code_address,
@@ -312,6 +323,7 @@ mod tests {
             }],
             trace: vec![evm_engine::TraceItem {
                 trace_type: evm_engine::TraceType::Call,
+                status: evm_engine::TraceStatus::Success,
                 from: Address::from_str("0x1111111111111111111111111111111111111111")
                     .expect("from"),
                 to: Some(
@@ -349,6 +361,7 @@ mod tests {
                     .expect("code address"),
             )
         );
+        assert_eq!(included.trace[0].status, TraceStatus::Success);
         assert_eq!(included.trace[0].trace_address, vec![0]);
 
         let excluded =

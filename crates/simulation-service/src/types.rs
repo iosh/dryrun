@@ -125,9 +125,17 @@ pub enum TraceType {
     Create2,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TraceStatus {
+    Success,
+    Revert,
+    Halt,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TraceItem {
     pub trace_type: TraceType,
+    pub status: TraceStatus,
     pub from: Address,
     pub to: Option<Address>,
     pub code_address: Option<Address>,

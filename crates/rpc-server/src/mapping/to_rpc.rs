@@ -117,10 +117,21 @@ impl From<simulation_service::TraceType> for rpc::TraceType {
     }
 }
 
+impl From<simulation_service::TraceStatus> for rpc::TraceStatus {
+    fn from(status: simulation_service::TraceStatus) -> Self {
+        match status {
+            simulation_service::TraceStatus::Success => Self::Success,
+            simulation_service::TraceStatus::Revert => Self::Revert,
+            simulation_service::TraceStatus::Halt => Self::Halt,
+        }
+    }
+}
+
 impl From<simulation_service::TraceItem> for rpc::TraceItem {
     fn from(trace: simulation_service::TraceItem) -> Self {
         Self {
             trace_type: trace.trace_type.into(),
+            status: trace.status.into(),
             from: format!("{:#x}", trace.from),
             to: trace.to.map(|address| format!("{:#x}", address)),
             code_address: trace.code_address.map(|address| format!("{:#x}", address)),
@@ -190,6 +201,7 @@ mod tests {
             }],
             trace: vec![simulation_service::TraceItem {
                 trace_type: simulation_service::TraceType::Call,
+                status: simulation_service::TraceStatus::Success,
                 from: Address::from_str("0x1111111111111111111111111111111111111111")
                     .expect("from"),
                 to: Some(
@@ -232,6 +244,10 @@ mod tests {
             response.trace[0].code_address.as_deref(),
             Some("0x3333333333333333333333333333333333333333")
         );
+        assert!(matches!(
+            response.trace[0].status,
+            rpc::TraceStatus::Success
+        ));
         assert_eq!(response.trace[0].gas, "0xc350");
         assert_eq!(response.trace[0].gas_used, "0x5208");
         assert_eq!(response.trace[0].trace_address, vec!["0x0"]);

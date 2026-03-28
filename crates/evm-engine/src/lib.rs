@@ -8,7 +8,8 @@ use execution::simulate_execution;
 pub use types::{
     AccessListItem, AssetChange, AssetChangeAsset, AssetChangeType, AssetType, BlockRef,
     EvmExecutionFailure, EvmExecutionInput, EvmExecutionLog, EvmExecutionOutput,
-    EvmExecutionStatus, EvmTransaction, EvmTransactionType, SimulatedBlock, TraceItem, TraceType,
+    EvmExecutionStatus, EvmTransaction, EvmTransactionType, SimulatedBlock, TraceItem, TraceStatus,
+    TraceType,
 };
 
 #[derive(Debug, Clone)]
