@@ -599,18 +599,50 @@ fn map_rpc_error(error: impl std::fmt::Display) -> EvmEngineError {
 }
 
 fn resolve_spec_id(resolved_block: &ResolvedExecutionBlock) -> Result<SpecId, EvmEngineError> {
-    let chain = Chain::from_id(resolved_block.chain_id);
-    let timestamp = resolved_block.block.header.timestamp;
+    validate_supported_chain_id(resolved_block.chain_id)?;
 
-    let hardfork =
-        EthereumHardfork::from_chain_and_timestamp(chain, timestamp).ok_or_else(|| {
-            EvmEngineError::not_ready(format!(
-                "hardfork resolution is not implemented for chain_id={}",
-                resolved_block.chain_id
-            ))
-        })?;
+    let block_number = resolved_block.block.number();
+    let timestamp = resolved_block.block.header.timestamp;
+    let hardfork = resolve_mainnet_hardfork(block_number, timestamp);
 
     map_hardfork_to_spec_id(hardfork)
+}
+
+fn validate_supported_chain_id(chain_id: u64) -> Result<(), EvmEngineError> {
+    if chain_id == Chain::mainnet().id() {
+        return Ok(());
+    }
+
+    Err(EvmEngineError::not_ready(format!(
+        "only Ethereum mainnet is supported now, got chain_id={chain_id}"
+    )))
+}
+
+fn resolve_mainnet_hardfork(block_number: u64, timestamp: u64) -> EthereumHardfork {
+    for hardfork in [
+        EthereumHardfork::Amsterdam,
+        EthereumHardfork::Bpo5,
+        EthereumHardfork::Bpo4,
+        EthereumHardfork::Bpo3,
+        EthereumHardfork::Bpo2,
+        EthereumHardfork::Bpo1,
+        EthereumHardfork::Osaka,
+        EthereumHardfork::Prague,
+        EthereumHardfork::Cancun,
+        EthereumHardfork::Shanghai,
+    ] {
+        if is_mainnet_timestamp_fork_active(hardfork, timestamp) {
+            return hardfork;
+        }
+    }
+
+    EthereumHardfork::from_mainnet_block_number(block_number)
+}
+
+fn is_mainnet_timestamp_fork_active(hardfork: EthereumHardfork, timestamp: u64) -> bool {
+    hardfork
+        .activation_timestamp(Chain::mainnet())
+        .is_some_and(|activation_timestamp| timestamp >= activation_timestamp)
 }
 
 fn map_hardfork_to_spec_id(hardfork: EthereumHardfork) -> Result<SpecId, EvmEngineError> {
@@ -648,4 +680,70 @@ fn map_hardfork_to_spec_id(hardfork: EthereumHardfork) -> Result<SpecId, EvmEngi
     };
 
     Ok(spec_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_spec_id_respects_block_based_activation() {
+        let chain = Chain::mainnet();
+        let london_block = EthereumHardfork::London
+            .activation_block(chain)
+            .expect("mainnet london block should exist");
+        let london_timestamp = EthereumHardfork::London
+            .activation_timestamp(chain)
+            .expect("mainnet london timestamp should exist");
+
+        let resolved_block =
+            test_resolved_block(chain.id(), london_block.saturating_sub(1), london_timestamp);
+
+        let spec_id = resolve_spec_id(&resolved_block).expect("spec id should resolve");
+
+        assert_eq!(spec_id, SpecId::BERLIN);
+    }
+
+    #[test]
+    fn resolve_spec_id_respects_timestamp_based_activation() {
+        let chain = Chain::mainnet();
+        let shanghai_timestamp = EthereumHardfork::Shanghai
+            .activation_timestamp(chain)
+            .expect("mainnet shanghai timestamp should exist");
+
+        let resolved_block = test_resolved_block(
+            chain.id(),
+            EthereumHardfork::Paris
+                .activation_block(chain)
+                .expect("mainnet paris block should exist"),
+            shanghai_timestamp,
+        );
+
+        let spec_id = resolve_spec_id(&resolved_block).expect("spec id should resolve");
+
+        assert_eq!(spec_id, SpecId::SHANGHAI);
+    }
+
+    #[test]
+    fn resolve_spec_id_rejects_non_mainnet_chain() {
+        let error = resolve_spec_id(&test_resolved_block(11155111, 1, 1)).unwrap_err();
+
+        assert!(matches!(
+            error,
+            EvmEngineError::NotReady(message)
+                if message.contains("only Ethereum mainnet is supported now")
+        ));
+    }
+
+    fn test_resolved_block(chain_id: u64, number: u64, timestamp: u64) -> ResolvedExecutionBlock {
+        let mut block: Block = Block::default();
+        block.header.inner.number = number;
+        block.header.inner.timestamp = timestamp;
+
+        ResolvedExecutionBlock {
+            chain_id,
+            state_block_id: block_number_id(number),
+            block,
+        }
+    }
 }
