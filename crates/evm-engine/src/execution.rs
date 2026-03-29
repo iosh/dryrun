@@ -3,6 +3,7 @@ use crate::{
     EvmExecutionLog, EvmExecutionOutput, EvmExecutionStatus, EvmTransaction, EvmTransactionType,
     SimulatedBlock, TraceItem,
     asset_changes::{Erc20Metadata, extract_asset_changes, fill_erc20_metadata},
+    frames::ExecutionFrame,
     trace::{TraceInspector, trace_items_from_frames},
 };
 use alloy::{
@@ -326,11 +327,12 @@ fn execute_transaction(
     match evm.inspect_tx_commit(tx_env) {
         Ok(result) => {
             let frames = std::mem::take(&mut evm.inspector).into_frames();
-            let trace = trace_items_from_frames(frames);
+            let trace = trace_items_from_frames(frames.clone());
 
             Ok(map_execution_result(
                 &mut evm,
                 result,
+                frames,
                 trace,
                 resolved_block,
                 transaction,
@@ -360,6 +362,7 @@ fn execute_transaction(
 fn map_execution_result<INSP>(
     evm: &mut MainnetAlloyEvm<INSP>,
     result: ExecutionResult<HaltReason>,
+    frames: Vec<ExecutionFrame>,
     trace: Vec<TraceItem>,
     resolved_block: &ResolvedExecutionBlock,
     transaction: &EvmTransaction,
@@ -370,7 +373,7 @@ fn map_execution_result<INSP>(
         } => {
             let status = EvmExecutionStatus::Success;
             let logs = map_execution_logs(logs);
-            let mut asset_changes = extract_asset_changes(status, transaction, &logs);
+            let mut asset_changes = extract_asset_changes(status, &logs, &frames);
 
             configure_metadata_call_context(evm);
             fill_erc20_metadata(&mut asset_changes, |token_address| {
