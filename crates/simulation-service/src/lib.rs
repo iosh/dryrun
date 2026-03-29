@@ -318,10 +318,7 @@ mod tests {
         assert_eq!(mapped.asset_changes.len(), 1);
         assert_eq!(mapped.trace.len(), 1);
         assert_eq!(mapped.asset_changes[0].amount, U256::from(0x1234_u64));
-        let asset = mapped.asset_changes[0]
-            .asset
-            .as_ref()
-            .expect("erc20 asset");
+        let asset = mapped.asset_changes[0].asset.as_ref().expect("erc20 asset");
         assert_eq!(asset.symbol.as_deref(), Some("USDC"));
         assert_eq!(asset.decimals, Some(6));
         assert_eq!(
@@ -334,5 +331,4 @@ mod tests {
         assert_eq!(mapped.trace[0].status, TraceStatus::Success);
         assert_eq!(mapped.trace[0].trace_address, vec![0]);
     }
-
 }

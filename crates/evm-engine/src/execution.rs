@@ -3,7 +3,7 @@ use crate::{
     EvmExecutionLog, EvmExecutionOutput, EvmExecutionStatus, EvmTransaction, EvmTransactionType,
     SimulatedBlock, TraceItem,
     asset_changes::{Erc20Metadata, extract_asset_changes, fill_erc20_metadata},
-    trace::TraceInspector,
+    trace::{TraceInspector, trace_items_from_frames},
 };
 use alloy::{
     consensus::BlockHeader,
@@ -325,7 +325,8 @@ fn execute_transaction(
 
     match evm.inspect_tx_commit(tx_env) {
         Ok(result) => {
-            let trace = std::mem::take(&mut evm.inspector).into_traces();
+            let frames = std::mem::take(&mut evm.inspector).into_frames();
+            let trace = trace_items_from_frames(frames);
 
             Ok(map_execution_result(
                 &mut evm,

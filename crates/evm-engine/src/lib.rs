@@ -1,6 +1,7 @@
 mod asset_changes;
 mod error;
 mod execution;
+mod frames;
 mod trace;
 mod types;
 
