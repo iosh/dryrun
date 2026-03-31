@@ -11,6 +11,7 @@ alloy-primitives = { workspace = true }
 revm = { workspace = true, features = [
     "alloydb",
     "optional_balance_check",
+    "optional_eip3607",
     "optional_fee_charge",
     "optional_no_base_fee",
 ] }

@@ -4,17 +4,20 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum SimulationServiceError {
     #[error("{0}")]
-    NotReady(String),
+    NotSupported(String),
 
-    #[error("{0}")]
-    Internal(String),
+    #[error("{details}")]
+    Internal {
+        subkind: &'static str,
+        details: String,
+    },
 }
 
 impl From<EvmEngineError> for SimulationServiceError {
     fn from(error: EvmEngineError) -> Self {
         match error {
-            EvmEngineError::NotReady(details) => Self::NotReady(details),
-            EvmEngineError::Internal(details) => Self::Internal(details),
+            EvmEngineError::NotSupported(details) => Self::NotSupported(details),
+            EvmEngineError::Internal { subkind, details } => Self::Internal { subkind, details },
         }
     }
 }

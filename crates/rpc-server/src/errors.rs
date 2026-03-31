@@ -17,7 +17,8 @@ pub enum ValidationError {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 struct ErrorData {
-    kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    subkind: Option<&'static str>,
     details: String,
 }
 
@@ -38,7 +39,7 @@ impl From<ValidationError> for ErrorObjectOwned {
                 INVALID_PARAMS_CODE,
                 "Invalid params",
                 Some(ErrorData {
-                    kind: "invalid_params",
+                    subkind: None,
                     details,
                 }),
             ),
@@ -46,7 +47,7 @@ impl From<ValidationError> for ErrorObjectOwned {
                 -32004,
                 "Not supported",
                 Some(ErrorData {
-                    kind: "not_supported",
+                    subkind: None,
                     details,
                 }),
             ),
@@ -54,23 +55,26 @@ impl From<ValidationError> for ErrorObjectOwned {
     }
 }
 
-pub(crate) fn not_ready(details: impl Into<String>) -> ErrorObjectOwned {
+pub(crate) fn internal_error(
+    subkind: Option<&'static str>,
+    details: impl Into<String>,
+) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(
-        -32010,
-        "Method not ready",
+        INTERNAL_ERROR_CODE,
+        "Internal error",
         Some(ErrorData {
-            kind: "not_ready",
+            subkind,
             details: details.into(),
         }),
     )
 }
 
-pub(crate) fn internal_error(details: impl Into<String>) -> ErrorObjectOwned {
+pub(crate) fn not_supported(details: impl Into<String>) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(
-        INTERNAL_ERROR_CODE,
-        "Internal error",
+        -32004,
+        "Not supported",
         Some(ErrorData {
-            kind: "internal_error",
+            subkind: None,
             details: details.into(),
         }),
     )

@@ -6,11 +6,14 @@ use simulation_service::{SimulationService, SimulationServiceError};
 use tracing::instrument;
 
 use crate::{
-    errors::{internal_error, not_ready},
-    interface::{EvmSimulateTransactionRequest, EvmSimulateTransactionResponse},
+    errors::{internal_error, not_supported},
+    interface::{
+        BlockRef, EvmSimulateTransactionRequest, EvmSimulateTransactionResponse, Transaction,
+    },
     rpc::DryrunRpcServer,
 };
 
+#[derive(Clone)]
 pub struct RpcHandler {
     simulation_service: Arc<SimulationService>,
 }
@@ -19,19 +22,17 @@ impl RpcHandler {
     pub fn new(simulation_service: Arc<SimulationService>) -> Self {
         Self { simulation_service }
     }
-}
 
-#[async_trait]
-impl DryrunRpcServer for RpcHandler {
-    async fn health(&self) -> RpcResult<String> {
-        Ok("OK".to_string())
-    }
-
-    #[instrument(name = "dryrun_evm_simulateTransaction", skip(self, request))]
-    async fn dryrun_evm_simulate_transaction(
+    #[instrument(
+        name = "dryrun_evm_simulateTransaction",
+        skip(self, transaction, block)
+    )]
+    async fn handle_simulate_transaction(
         &self,
-        request: EvmSimulateTransactionRequest,
+        transaction: Transaction,
+        block: Option<BlockRef>,
     ) -> RpcResult<EvmSimulateTransactionResponse> {
+        let request = EvmSimulateTransactionRequest::new(transaction, block);
         let input: simulation_service::SimulateEvmTransactionInput =
             request.try_into().map_err(ErrorObjectOwned::from)?;
         let output = self
@@ -44,9 +45,26 @@ impl DryrunRpcServer for RpcHandler {
     }
 }
 
+#[async_trait]
+impl DryrunRpcServer for RpcHandler {
+    async fn health(&self) -> RpcResult<String> {
+        Ok("OK".to_string())
+    }
+
+    async fn dryrun_evm_simulate_transaction(
+        &self,
+        transaction: Transaction,
+        block: Option<BlockRef>,
+    ) -> RpcResult<EvmSimulateTransactionResponse> {
+        self.handle_simulate_transaction(transaction, block).await
+    }
+}
+
 fn map_service_error(error: SimulationServiceError) -> ErrorObjectOwned {
     match error {
-        SimulationServiceError::NotReady(details) => not_ready(details),
-        SimulationServiceError::Internal(details) => internal_error(details),
+        SimulationServiceError::NotSupported(details) => not_supported(details),
+        SimulationServiceError::Internal { subkind, details } => {
+            internal_error(Some(subkind), details)
+        }
     }
 }

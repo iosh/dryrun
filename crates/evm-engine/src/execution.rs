@@ -59,11 +59,12 @@ pub(crate) async fn simulate_execution(
     let EvmExecutionInput { block, transaction } = input;
     let provider = build_provider(rpc_url)?;
     let resolved_block = resolve_execution_block(&provider, &block).await?;
+    validate_requested_chain_id(transaction.requested_chain_id, resolved_block.chain_id)?;
     let db = create_database(&provider, &resolved_block)?;
     let spec_id = resolve_spec_id(&resolved_block)?;
     let cfg_env = create_cfg_env(resolved_block.chain_id, spec_id);
     let block_env = create_block_env(&resolved_block, spec_id)?;
-    let tx_env = create_tx_env(&transaction)?;
+    let tx_env = create_tx_env(&transaction, resolved_block.chain_id)?;
 
     execute_transaction(
         db,
@@ -112,7 +113,9 @@ async fn resolve_execution_block(
             (block, block_id)
         }
         BlockRef::Hash(_) => {
-            return Err(EvmEngineError::not_ready("block.hash is not supported yet"));
+            return Err(EvmEngineError::not_supported(
+                "block.hash is not supported yet",
+            ));
         }
     };
 
@@ -132,7 +135,7 @@ async fn load_block(
         .get_block(block_id)
         .await
         .map_err(map_rpc_error)?
-        .ok_or_else(|| EvmEngineError::internal(missing_message))
+        .ok_or_else(|| EvmEngineError::block_not_found(missing_message))
 }
 
 fn block_number_id(number: u64) -> BlockId {
@@ -157,7 +160,9 @@ fn create_database(
 }
 
 fn create_cfg_env(chain_id: u64, spec_id: SpecId) -> CfgEnv {
-    CfgEnv::new_with_spec(spec_id).with_chain_id(chain_id)
+    let mut cfg = CfgEnv::new_with_spec(spec_id).with_chain_id(chain_id);
+    configure_call_like_cfg(&mut cfg);
+    cfg
 }
 
 fn create_block_env(
@@ -214,59 +219,64 @@ fn create_block_env(
     })
 }
 
-fn create_tx_env(transaction: &EvmTransaction) -> Result<TxEnv, EvmEngineError> {
+fn create_tx_env(
+    transaction: &EvmTransaction,
+    execution_chain_id: u64,
+) -> Result<TxEnv, EvmEngineError> {
     match transaction.tx_type {
-        EvmTransactionType::Legacy => create_legacy_tx_env(transaction),
-        EvmTransactionType::AccessList => create_access_list_tx_env(transaction),
-        EvmTransactionType::DynamicFee => create_dynamic_fee_tx_env(transaction),
+        EvmTransactionType::Legacy => create_legacy_tx_env(transaction, execution_chain_id),
+        EvmTransactionType::AccessList => {
+            create_access_list_tx_env(transaction, execution_chain_id)
+        }
+        EvmTransactionType::DynamicFee => {
+            create_dynamic_fee_tx_env(transaction, execution_chain_id)
+        }
     }
 }
 
-fn create_legacy_tx_env(transaction: &EvmTransaction) -> Result<TxEnv, EvmEngineError> {
+fn create_legacy_tx_env(
+    transaction: &EvmTransaction,
+    execution_chain_id: u64,
+) -> Result<TxEnv, EvmEngineError> {
     if !transaction.access_list.is_empty() {
         return Err(EvmEngineError::internal(
             "legacy transaction must not include access_list",
         ));
     }
 
-    let gas_price = transaction
-        .gas_price
-        .ok_or_else(|| EvmEngineError::internal("legacy transaction requires gas_price"))?;
-
     Ok(base_tx_env(
         transaction,
+        execution_chain_id,
         TransactionType::Legacy,
-        gas_price,
+        transaction.gas_price.unwrap_or(0),
         RevmAccessList::default(),
         None,
     ))
 }
 
-fn create_access_list_tx_env(transaction: &EvmTransaction) -> Result<TxEnv, EvmEngineError> {
-    let gas_price = transaction
-        .gas_price
-        .ok_or_else(|| EvmEngineError::internal("access-list transaction requires gas_price"))?;
-
+fn create_access_list_tx_env(
+    transaction: &EvmTransaction,
+    execution_chain_id: u64,
+) -> Result<TxEnv, EvmEngineError> {
     Ok(base_tx_env(
         transaction,
+        execution_chain_id,
         TransactionType::Eip2930,
-        gas_price,
+        transaction.gas_price.unwrap_or(0),
         map_access_list(&transaction.access_list),
         None,
     ))
 }
 
-fn create_dynamic_fee_tx_env(transaction: &EvmTransaction) -> Result<TxEnv, EvmEngineError> {
-    let max_fee_per_gas = transaction.max_fee_per_gas.ok_or_else(|| {
-        EvmEngineError::internal("dynamic-fee transaction requires max_fee_per_gas")
-    })?;
-
-    let max_priority_fee_per_gas = transaction.max_priority_fee_per_gas.ok_or_else(|| {
-        EvmEngineError::internal("dynamic-fee transaction requires max_priority_fee_per_gas")
-    })?;
+fn create_dynamic_fee_tx_env(
+    transaction: &EvmTransaction,
+    execution_chain_id: u64,
+) -> Result<TxEnv, EvmEngineError> {
+    let (max_fee_per_gas, max_priority_fee_per_gas) = resolve_dynamic_fee_values(transaction);
 
     Ok(base_tx_env(
         transaction,
+        execution_chain_id,
         TransactionType::Eip1559,
         max_fee_per_gas,
         map_access_list(&transaction.access_list),
@@ -276,6 +286,7 @@ fn create_dynamic_fee_tx_env(transaction: &EvmTransaction) -> Result<TxEnv, EvmE
 
 fn base_tx_env(
     transaction: &EvmTransaction,
+    execution_chain_id: u64,
     tx_type: TransactionType,
     gas_price: u128,
     access_list: RevmAccessList,
@@ -289,13 +300,29 @@ fn base_tx_env(
         kind: TxKind::from(transaction.to),
         value: transaction.value,
         data: transaction.data.clone(),
-        nonce: transaction.nonce,
-        chain_id: Some(transaction.chain_id),
+        nonce: transaction.nonce.unwrap_or(0),
+        chain_id: Some(execution_chain_id),
         access_list,
         gas_priority_fee,
         blob_hashes: Vec::new(),
         max_fee_per_blob_gas: 0,
         authorization_list: Vec::new(),
+    }
+}
+
+fn resolve_dynamic_fee_values(transaction: &EvmTransaction) -> (u128, u128) {
+    match (
+        transaction.max_fee_per_gas,
+        transaction.max_priority_fee_per_gas,
+    ) {
+        (Some(max_fee_per_gas), Some(max_priority_fee_per_gas)) => {
+            (max_fee_per_gas, max_priority_fee_per_gas)
+        }
+        (Some(max_fee_per_gas), None) => (max_fee_per_gas, 0),
+        (None, Some(max_priority_fee_per_gas)) => {
+            (max_priority_fee_per_gas, max_priority_fee_per_gas)
+        }
+        (None, None) => (0, 0),
     }
 }
 
@@ -340,7 +367,6 @@ fn execute_transaction(
         }
         Err(EVMError::Transaction(error)) => Ok(build_failed_output(
             resolved_block,
-            transaction,
             0,
             transaction.gas_limit,
             Bytes::new(),
@@ -377,11 +403,11 @@ fn map_execution_result<INSP>(
 
             configure_metadata_call_context(evm);
             fill_erc20_metadata(&mut asset_changes, |token_address| {
-                load_erc20_metadata(evm, transaction, token_address)
+                load_erc20_metadata(evm, transaction, resolved_block.chain_id, token_address)
             });
 
             EvmExecutionOutput {
-                chain_id: transaction.chain_id,
+                chain_id: resolved_block.chain_id,
                 block: simulated_block(resolved_block),
                 status,
                 gas_used: gas.used(),
@@ -395,7 +421,6 @@ fn map_execution_result<INSP>(
         }
         ExecutionResult::Revert { gas, output, .. } => build_failed_output(
             resolved_block,
-            transaction,
             gas.used(),
             gas.limit(),
             output,
@@ -408,7 +433,6 @@ fn map_execution_result<INSP>(
         ),
         ExecutionResult::Halt { reason, gas, .. } => build_failed_output(
             resolved_block,
-            transaction,
             gas.used(),
             gas.limit(),
             Bytes::new(),
@@ -418,32 +442,41 @@ fn map_execution_result<INSP>(
     }
 }
 
+fn configure_call_like_cfg(cfg: &mut CfgEnv) {
+    cfg.disable_nonce_check = true;
+    cfg.disable_balance_check = true;
+    cfg.disable_eip3607 = true;
+    cfg.disable_base_fee = true;
+    cfg.disable_fee_charge = true;
+}
+
 fn configure_metadata_call_context<INSP>(evm: &mut MainnetAlloyEvm<INSP>) {
-    evm.ctx_mut().cfg.disable_base_fee = true;
-    evm.ctx_mut().cfg.disable_balance_check = true;
-    evm.ctx_mut().cfg.disable_fee_charge = true;
+    configure_call_like_cfg(&mut evm.ctx_mut().cfg);
 }
 
 fn load_erc20_metadata<INSP>(
     evm: &mut MainnetAlloyEvm<INSP>,
     transaction: &EvmTransaction,
+    execution_chain_id: u64,
     token_address: Address,
 ) -> Erc20Metadata {
     Erc20Metadata {
-        symbol: call_erc20_symbol(evm, transaction, token_address),
-        decimals: call_erc20_decimals(evm, transaction, token_address),
+        symbol: call_erc20_symbol(evm, transaction, execution_chain_id, token_address),
+        decimals: call_erc20_decimals(evm, transaction, execution_chain_id, token_address),
     }
 }
 
 fn call_erc20_symbol<INSP>(
     evm: &mut MainnetAlloyEvm<INSP>,
     transaction: &EvmTransaction,
+    execution_chain_id: u64,
     token_address: Address,
 ) -> Option<String> {
     let output = transact_metadata_call(
         evm,
         create_metadata_call_tx_env(
             transaction,
+            execution_chain_id,
             token_address,
             IERC20Metadata::symbolCall {}.abi_encode().into(),
         ),
@@ -455,12 +488,14 @@ fn call_erc20_symbol<INSP>(
 fn call_erc20_decimals<INSP>(
     evm: &mut MainnetAlloyEvm<INSP>,
     transaction: &EvmTransaction,
+    execution_chain_id: u64,
     token_address: Address,
 ) -> Option<u8> {
     let output = transact_metadata_call(
         evm,
         create_metadata_call_tx_env(
             transaction,
+            execution_chain_id,
             token_address,
             IERC20Metadata::decimalsCall {}.abi_encode().into(),
         ),
@@ -471,6 +506,7 @@ fn call_erc20_decimals<INSP>(
 
 fn create_metadata_call_tx_env(
     transaction: &EvmTransaction,
+    execution_chain_id: u64,
     token_address: Address,
     data: Bytes,
 ) -> TxEnv {
@@ -482,8 +518,8 @@ fn create_metadata_call_tx_env(
         kind: TxKind::Call(token_address),
         value: U256::ZERO,
         data,
-        nonce: transaction.nonce.saturating_add(1),
-        chain_id: Some(transaction.chain_id),
+        nonce: transaction.nonce.unwrap_or(0).saturating_add(1),
+        chain_id: Some(execution_chain_id),
         access_list: RevmAccessList::default(),
         gas_priority_fee: None,
         blob_hashes: Vec::new(),
@@ -503,7 +539,6 @@ fn transact_metadata_call<INSP>(evm: &mut MainnetAlloyEvm<INSP>, tx_env: TxEnv) 
 
 fn build_failed_output(
     resolved_block: &ResolvedExecutionBlock,
-    transaction: &EvmTransaction,
     gas_used: u64,
     gas_limit: u64,
     output: Bytes,
@@ -511,7 +546,7 @@ fn build_failed_output(
     trace: Vec<TraceItem>,
 ) -> EvmExecutionOutput {
     EvmExecutionOutput {
-        chain_id: transaction.chain_id,
+        chain_id: resolved_block.chain_id,
         block: simulated_block(resolved_block),
         status: EvmExecutionStatus::Failed,
         gas_used,
@@ -594,7 +629,21 @@ fn map_halt_failure(reason: HaltReason) -> EvmExecutionFailure {
 }
 
 fn map_rpc_error(error: impl std::fmt::Display) -> EvmEngineError {
-    EvmEngineError::internal(format!("rpc request failed: {error}"))
+    EvmEngineError::rpc_error(format!("rpc request failed: {error}"))
+}
+
+fn validate_requested_chain_id(
+    requested_chain_id: Option<u64>,
+    actual_chain_id: u64,
+) -> Result<(), EvmEngineError> {
+    if requested_chain_id.is_none_or(|chain_id| chain_id == actual_chain_id) {
+        return Ok(());
+    }
+
+    Err(EvmEngineError::not_supported(format!(
+        "transaction.chainId does not match the execution chain: requested={}, actual={actual_chain_id}",
+        requested_chain_id.expect("checked to be present above")
+    )))
 }
 
 fn resolve_spec_id(resolved_block: &ResolvedExecutionBlock) -> Result<SpecId, EvmEngineError> {
@@ -612,7 +661,7 @@ fn validate_supported_chain_id(chain_id: u64) -> Result<(), EvmEngineError> {
         return Ok(());
     }
 
-    Err(EvmEngineError::not_ready(format!(
+    Err(EvmEngineError::not_supported(format!(
         "only Ethereum mainnet is supported now, got chain_id={chain_id}"
     )))
 }
@@ -729,9 +778,61 @@ mod tests {
 
         assert!(matches!(
             error,
-            EvmEngineError::NotReady(message)
+            EvmEngineError::NotSupported(message)
                 if message.contains("only Ethereum mainnet is supported now")
         ));
+    }
+
+    #[test]
+    fn create_legacy_tx_env_defaults_call_like_send_fields() {
+        let transaction = EvmTransaction {
+            tx_type: EvmTransactionType::Legacy,
+            requested_chain_id: None,
+            from: Address::ZERO,
+            to: Some(Address::repeat_byte(0x11)),
+            nonce: None,
+            gas_limit: 21_000,
+            value: U256::ZERO,
+            data: Bytes::new(),
+            access_list: Vec::new(),
+            gas_price: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+        };
+
+        let tx_env = create_tx_env(&transaction, Chain::mainnet().id()).expect("tx env");
+
+        assert_eq!(tx_env.gas_price, 0);
+        assert_eq!(tx_env.nonce, 0);
+        assert_eq!(tx_env.chain_id, Some(Chain::mainnet().id()));
+    }
+
+    #[test]
+    fn create_dynamic_fee_tx_env_materializes_missing_fee_fields() {
+        let mut transaction = EvmTransaction {
+            tx_type: EvmTransactionType::DynamicFee,
+            requested_chain_id: None,
+            from: Address::ZERO,
+            to: Some(Address::repeat_byte(0x22)),
+            nonce: None,
+            gas_limit: 21_000,
+            value: U256::ZERO,
+            data: Bytes::new(),
+            access_list: Vec::new(),
+            gas_price: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+        };
+
+        let tx_env = create_tx_env(&transaction, Chain::mainnet().id()).expect("tx env");
+        assert_eq!(tx_env.gas_price, 0);
+        assert_eq!(tx_env.gas_priority_fee, Some(0));
+
+        transaction.max_priority_fee_per_gas = Some(7);
+
+        let tx_env = create_tx_env(&transaction, Chain::mainnet().id()).expect("tx env");
+        assert_eq!(tx_env.gas_price, 7);
+        assert_eq!(tx_env.gas_priority_fee, Some(7));
     }
 
     fn test_resolved_block(chain_id: u64, number: u64, timestamp: u64) -> ResolvedExecutionBlock {

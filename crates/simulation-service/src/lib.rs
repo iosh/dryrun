@@ -73,7 +73,7 @@ impl From<EvmTransaction> for evm_engine::EvmTransaction {
     fn from(transaction: EvmTransaction) -> Self {
         Self {
             tx_type: transaction.tx_type.into(),
-            chain_id: transaction.chain_id,
+            requested_chain_id: transaction.requested_chain_id,
             from: transaction.from,
             to: transaction.to,
             nonce: transaction.nonce,

@@ -38,7 +38,9 @@ impl EvmEngine {
 fn ensure_supported_block_ref(block: &BlockRef) -> Result<(), EvmEngineError> {
     match block {
         BlockRef::Latest | BlockRef::Number(_) => Ok(()),
-        BlockRef::Hash(_) => Err(EvmEngineError::not_ready("block.hash is not supported yet")),
+        BlockRef::Hash(_) => Err(EvmEngineError::not_supported(
+            "block.hash is not supported yet",
+        )),
     }
 }
 

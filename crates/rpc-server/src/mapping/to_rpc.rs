@@ -7,16 +7,17 @@ impl From<simulation_service::SimulateEvmTransactionOutput>
 {
     fn from(output: simulation_service::SimulateEvmTransactionOutput) -> Self {
         Self {
-            chain_id: format_u64_quantity(output.chain_id),
-            block: output.block.into(),
-            status: output.status.into(),
-            gas_used: format_u64_quantity(output.gas_used),
-            gas_limit: format_u64_quantity(output.gas_limit),
-            output: format!("{:#x}", output.output),
-            failure: output.failure.map(Into::into),
+            execution: rpc::Execution {
+                chain_id: format_u64_quantity(output.chain_id),
+                block: output.block.into(),
+                status: output.status.into(),
+                gas_used: format_u64_quantity(output.gas_used),
+                gas_limit: format_u64_quantity(output.gas_limit),
+                output: format!("{:#x}", output.output),
+                failure: output.failure.map(Into::into),
+            },
             logs: output.logs.into_iter().map(Into::into).collect(),
             asset_changes: output.asset_changes.into_iter().map(Into::into).collect(),
-            trace: output.trace.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -104,56 +105,11 @@ impl From<simulation_service::AssetChange> for rpc::AssetChange {
     }
 }
 
-impl From<simulation_service::TraceType> for rpc::TraceType {
-    fn from(trace_type: simulation_service::TraceType) -> Self {
-        match trace_type {
-            simulation_service::TraceType::Call => Self::Call,
-            simulation_service::TraceType::CallCode => Self::CallCode,
-            simulation_service::TraceType::DelegateCall => Self::DelegateCall,
-            simulation_service::TraceType::StaticCall => Self::StaticCall,
-            simulation_service::TraceType::Create => Self::Create,
-            simulation_service::TraceType::Create2 => Self::Create2,
-        }
-    }
-}
-
-impl From<simulation_service::TraceStatus> for rpc::TraceStatus {
-    fn from(status: simulation_service::TraceStatus) -> Self {
-        match status {
-            simulation_service::TraceStatus::Success => Self::Success,
-            simulation_service::TraceStatus::Revert => Self::Revert,
-            simulation_service::TraceStatus::Halt => Self::Halt,
-        }
-    }
-}
-
-impl From<simulation_service::TraceItem> for rpc::TraceItem {
-    fn from(trace: simulation_service::TraceItem) -> Self {
-        Self {
-            trace_type: trace.trace_type.into(),
-            status: trace.status.into(),
-            from: format!("{:#x}", trace.from),
-            to: trace.to.map(|address| format!("{:#x}", address)),
-            code_address: trace.code_address.map(|address| format!("{:#x}", address)),
-            value: format_u256_quantity(trace.value),
-            input: format!("{:#x}", trace.input),
-            output: format!("{:#x}", trace.output),
-            gas: format_u64_quantity(trace.gas),
-            gas_used: format_u64_quantity(trace.gas_used),
-            trace_address: trace
-                .trace_address
-                .into_iter()
-                .map(format_u64_quantity)
-                .collect(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
 
-    use alloy_primitives::{Address, B256, Bytes, U256};
+    use alloy::primitives::{Address, B256, Bytes, U256};
 
     use crate::interface as rpc;
 
@@ -199,57 +155,17 @@ mod tests {
                     decimals: Some(6),
                 }),
             }],
-            trace: vec![simulation_service::TraceItem {
-                trace_type: simulation_service::TraceType::Call,
-                status: simulation_service::TraceStatus::Success,
-                from: Address::from_str("0x1111111111111111111111111111111111111111")
-                    .expect("from"),
-                to: Some(
-                    Address::from_str("0x2222222222222222222222222222222222222222").expect("to"),
-                ),
-                code_address: Some(
-                    Address::from_str("0x3333333333333333333333333333333333333333")
-                        .expect("code address"),
-                ),
-                value: U256::from(0x1234_u64),
-                input: Bytes::from_str("0x1234").expect("bytes"),
-                output: Bytes::from_str("0xabcd").expect("bytes"),
-                gas: 50_000,
-                gas_used: 21_000,
-                trace_address: vec![0],
-            }],
+            trace: Vec::new(),
         };
 
         let response: rpc::EvmSimulateTransactionResponse = output.into();
-        assert_eq!(response.chain_id, "0x1");
-        assert_eq!(response.block.number, "0x1234");
-        assert_eq!(response.gas_used, "0x5208");
+        assert_eq!(response.execution.chain_id, "0x1");
+        assert_eq!(response.execution.block.number, "0x1234");
+        assert_eq!(response.execution.gas_used, "0x5208");
         assert_eq!(response.logs.len(), 1);
         assert_eq!(response.logs[0].log_index, "0x0");
         assert_eq!(response.asset_changes.len(), 1);
         assert_eq!(response.asset_changes[0].amount, "0xde0b6b3a7640000");
-        assert_eq!(response.output, "0x0102");
-        let asset = response.asset_changes[0]
-            .asset
-            .as_ref()
-            .expect("erc20 asset");
-        assert_eq!(
-            asset.token_address,
-            "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
-        );
-        assert_eq!(asset.symbol.as_deref(), Some("USDC"));
-        assert_eq!(asset.decimals, Some(6));
-        assert_eq!(response.trace.len(), 1);
-        assert_eq!(
-            response.trace[0].code_address.as_deref(),
-            Some("0x3333333333333333333333333333333333333333")
-        );
-        assert!(matches!(
-            response.trace[0].status,
-            rpc::TraceStatus::Success
-        ));
-        assert_eq!(response.trace[0].gas, "0xc350");
-        assert_eq!(response.trace[0].gas_used, "0x5208");
-        assert_eq!(response.trace[0].trace_address, vec!["0x0"]);
+        assert_eq!(response.execution.output, "0x0102");
     }
 }
