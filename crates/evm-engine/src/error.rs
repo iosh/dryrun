@@ -13,6 +13,13 @@ pub enum EvmEngineError {
 }
 
 impl EvmEngineError {
+    pub fn config_error(details: impl Into<String>) -> Self {
+        Self::Internal {
+            subkind: "config_error",
+            details: details.into(),
+        }
+    }
+
     pub fn not_supported(details: impl Into<String>) -> Self {
         Self::NotSupported(details.into())
     }
@@ -34,6 +41,34 @@ impl EvmEngineError {
     pub fn rpc_error(details: impl Into<String>) -> Self {
         Self::Internal {
             subkind: "rpc_error",
+            details: details.into(),
+        }
+    }
+
+    pub fn runtime_error(details: impl Into<String>) -> Self {
+        Self::Internal {
+            subkind: "runtime_error",
+            details: details.into(),
+        }
+    }
+
+    pub fn block_context_error(details: impl Into<String>) -> Self {
+        Self::Internal {
+            subkind: "block_context_error",
+            details: details.into(),
+        }
+    }
+
+    pub fn state_access_error(details: impl Into<String>) -> Self {
+        Self::Internal {
+            subkind: "state_access_error",
+            details: details.into(),
+        }
+    }
+
+    pub fn engine_execution_error(details: impl Into<String>) -> Self {
+        Self::Internal {
+            subkind: "engine_execution_error",
             details: details.into(),
         }
     }
