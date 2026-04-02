@@ -85,8 +85,6 @@ pub struct AccessListItem {
 pub struct EvmSimulateTransactionResponse {
     pub execution: Execution,
     #[serde(default)]
-    pub logs: Vec<RawLog>,
-    #[serde(default)]
     pub asset_changes: Vec<AssetChange>,
 }
 
@@ -123,15 +121,6 @@ pub struct SimulationFailure {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct RawLog {
-    pub log_index: String,
-    pub address: String,
-    pub topics: Vec<String>,
-    pub data: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

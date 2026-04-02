@@ -1,11 +1,11 @@
 use crate::{
     AccessListItem, BlockRef, EvmEngineError, EvmExecutionFailure, EvmExecutionInput,
-    EvmExecutionLog, EvmExecutionOutput, EvmExecutionStatus, EvmTransaction, EvmTransactionType,
-    SimulatedBlock, TraceItem,
+    EvmExecutionOutput, EvmExecutionStatus, EvmTransaction, EvmTransactionType, SimulatedBlock,
+    artifacts::{ExecutionArtifacts, RawExecutionLog},
     asset_changes::{Erc20Metadata, extract_asset_changes, fill_erc20_metadata},
     chain_spec::resolve_execution_spec_id,
     frames::ExecutionFrame,
-    trace::{TraceInspector, trace_items_from_frames},
+    trace::TraceInspector,
 };
 use alloy::{
     consensus::BlockHeader,
@@ -388,77 +388,96 @@ fn execute_transaction(
         .modify_block_chained(|block| *block = block_env)
         .build_mainnet_with_inspector(TraceInspector::new());
 
-    match evm.inspect_tx_commit(tx_env) {
+    let artifacts = match evm.inspect_tx_commit(tx_env) {
         Ok(result) => {
             let frames = std::mem::take(&mut evm.inspector).into_frames();
-            let trace = trace_items_from_frames(frames.clone());
-
-            Ok(map_execution_result(
-                &mut evm,
-                result,
-                frames,
-                trace,
-                resolved_block,
-                transaction,
-            ))
+            build_execution_artifacts(result, frames, resolved_block)
         }
-        Err(EVMError::Transaction(error)) => Ok(build_invalid_transaction_output(
-            resolved_block,
-            transaction,
-            error,
-        )),
-        Err(EVMError::Header(error)) => Err(EvmEngineError::block_context_error(format!(
-            "engine header validation failed: {error}"
-        ))),
-        Err(EVMError::Database(error)) => Err(EvmEngineError::state_access_error(format!(
-            "state access failed during execution: {error}"
-        ))),
-        Err(EVMError::Custom(error)) => Err(EvmEngineError::engine_execution_error(format!(
-            "engine execution failed: {error}"
-        ))),
-    }
+        Err(EVMError::Transaction(error)) => {
+            build_invalid_transaction_artifacts(resolved_block, transaction, error)
+        }
+        Err(EVMError::Header(error)) => {
+            return Err(EvmEngineError::block_context_error(format!(
+                "engine header validation failed: {error}"
+            )));
+        }
+        Err(EVMError::Database(error)) => {
+            return Err(EvmEngineError::state_access_error(format!(
+                "state access failed during execution: {error}"
+            )));
+        }
+        Err(EVMError::Custom(error)) => {
+            return Err(EvmEngineError::engine_execution_error(format!(
+                "engine execution failed: {error}"
+            )));
+        }
+    };
+
+    Ok(build_preview_output(&mut evm, artifacts, transaction))
 }
 
-fn map_execution_result<INSP>(
-    evm: &mut MainnetAlloyEvm<INSP>,
+fn build_execution_artifacts(
     result: ExecutionResult<HaltReason>,
     frames: Vec<ExecutionFrame>,
-    trace: Vec<TraceItem>,
     resolved_block: &ResolvedExecutionBlock,
-    transaction: &EvmTransaction,
-) -> EvmExecutionOutput {
+) -> ExecutionArtifacts {
     match result {
         ExecutionResult::Success {
             gas, logs, output, ..
-        } => {
-            let status = EvmExecutionStatus::Success;
-            let logs = map_execution_logs(logs);
-            let mut asset_changes = extract_asset_changes(status, &logs, &frames);
-
-            configure_metadata_call_context(evm);
-            fill_erc20_metadata(&mut asset_changes, |token_address| {
-                load_erc20_metadata(evm, transaction, resolved_block.chain_id, token_address)
-            });
-
-            EvmExecutionOutput {
-                chain_id: resolved_block.chain_id,
-                block: simulated_block(resolved_block),
-                status,
-                gas_used: gas.used(),
-                gas_limit: gas.limit(),
-                output: output.into_data(),
-                failure: None,
-                logs,
-                asset_changes,
-                trace,
-            }
-        }
+        } => ExecutionArtifacts {
+            chain_id: resolved_block.chain_id,
+            block: simulated_block(resolved_block),
+            status: EvmExecutionStatus::Success,
+            gas_used: gas.used(),
+            gas_limit: gas.limit(),
+            output: output.into_data(),
+            failure: None,
+            logs: map_execution_logs(logs),
+            frames,
+        },
         ExecutionResult::Revert { gas, output, .. } => {
-            build_revert_output(resolved_block, gas.used(), gas.limit(), output, trace)
+            build_revert_artifacts(resolved_block, gas.used(), gas.limit(), output, frames)
         }
         ExecutionResult::Halt { reason, gas, .. } => {
-            build_halt_output(resolved_block, gas.used(), gas.limit(), reason, trace)
+            build_halt_artifacts(resolved_block, gas.used(), gas.limit(), reason, frames)
         }
+    }
+}
+
+fn build_preview_output<INSP>(
+    evm: &mut MainnetAlloyEvm<INSP>,
+    artifacts: ExecutionArtifacts,
+    transaction: &EvmTransaction,
+) -> EvmExecutionOutput {
+    let mut asset_changes = extract_asset_changes(&artifacts);
+
+    if matches!(artifacts.status, EvmExecutionStatus::Success) {
+        configure_metadata_call_context(evm);
+        fill_erc20_metadata(&mut asset_changes, |token_address| {
+            load_erc20_metadata(evm, transaction, artifacts.chain_id, token_address)
+        });
+    }
+
+    let ExecutionArtifacts {
+        chain_id,
+        block,
+        status,
+        gas_used,
+        gas_limit,
+        output,
+        failure,
+        ..
+    } = artifacts;
+
+    EvmExecutionOutput {
+        chain_id,
+        block,
+        status,
+        gas_used,
+        gas_limit,
+        output,
+        failure,
+        asset_changes,
     }
 }
 
@@ -557,12 +576,12 @@ fn transact_metadata_call<INSP>(evm: &mut MainnetAlloyEvm<INSP>, tx_env: TxEnv) 
     }
 }
 
-fn build_invalid_transaction_output(
+fn build_invalid_transaction_artifacts(
     resolved_block: &ResolvedExecutionBlock,
     transaction: &EvmTransaction,
     error: InvalidTransaction,
-) -> EvmExecutionOutput {
-    build_failed_output(
+) -> ExecutionArtifacts {
+    build_failed_artifacts(
         resolved_block,
         0,
         transaction.gas_limit,
@@ -572,49 +591,49 @@ fn build_invalid_transaction_output(
     )
 }
 
-fn build_revert_output(
+fn build_revert_artifacts(
     resolved_block: &ResolvedExecutionBlock,
     gas_used: u64,
     gas_limit: u64,
     output: Bytes,
-    trace: Vec<TraceItem>,
-) -> EvmExecutionOutput {
-    build_failed_output(
+    frames: Vec<ExecutionFrame>,
+) -> ExecutionArtifacts {
+    build_failed_artifacts(
         resolved_block,
         gas_used,
         gas_limit,
         output,
         build_revert_failure(),
-        trace,
+        frames,
     )
 }
 
-fn build_halt_output(
+fn build_halt_artifacts(
     resolved_block: &ResolvedExecutionBlock,
     gas_used: u64,
     gas_limit: u64,
     reason: HaltReason,
-    trace: Vec<TraceItem>,
-) -> EvmExecutionOutput {
-    build_failed_output(
+    frames: Vec<ExecutionFrame>,
+) -> ExecutionArtifacts {
+    build_failed_artifacts(
         resolved_block,
         gas_used,
         gas_limit,
         Bytes::new(),
         build_halt_failure(reason),
-        trace,
+        frames,
     )
 }
 
-fn build_failed_output(
+fn build_failed_artifacts(
     resolved_block: &ResolvedExecutionBlock,
     gas_used: u64,
     gas_limit: u64,
     output: Bytes,
     failure: EvmExecutionFailure,
-    trace: Vec<TraceItem>,
-) -> EvmExecutionOutput {
-    EvmExecutionOutput {
+    frames: Vec<ExecutionFrame>,
+) -> ExecutionArtifacts {
+    ExecutionArtifacts {
         chain_id: resolved_block.chain_id,
         block: simulated_block(resolved_block),
         status: EvmExecutionStatus::Failed,
@@ -623,8 +642,7 @@ fn build_failed_output(
         output,
         failure: Some(failure),
         logs: Vec::new(),
-        asset_changes: Vec::new(),
-        trace,
+        frames,
     }
 }
 
@@ -635,10 +653,10 @@ fn simulated_block(resolved_block: &ResolvedExecutionBlock) -> SimulatedBlock {
     }
 }
 
-fn map_execution_logs(logs: Vec<Log>) -> Vec<EvmExecutionLog> {
+fn map_execution_logs(logs: Vec<Log>) -> Vec<RawExecutionLog> {
     logs.into_iter()
         .enumerate()
-        .map(|(index, log)| EvmExecutionLog {
+        .map(|(index, log)| RawExecutionLog {
             log_index: index as u64,
             address: log.address,
             topics: log.data.topics().to_vec(),

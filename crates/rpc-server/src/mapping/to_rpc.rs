@@ -16,7 +16,6 @@ impl From<simulation_service::SimulateEvmTransactionOutput>
                 output: format!("{:#x}", output.output),
                 failure: output.failure.map(Into::into),
             },
-            logs: output.logs.into_iter().map(Into::into).collect(),
             asset_changes: output.asset_changes.into_iter().map(Into::into).collect(),
         }
     }
@@ -46,21 +45,6 @@ impl From<simulation_service::SimulationFailure> for rpc::SimulationFailure {
             code: failure.code,
             message: failure.message,
             reason: failure.reason,
-        }
-    }
-}
-
-impl From<simulation_service::RawLog> for rpc::RawLog {
-    fn from(log: simulation_service::RawLog) -> Self {
-        Self {
-            log_index: format_u64_quantity(log.log_index),
-            address: format!("{:#x}", log.address),
-            topics: log
-                .topics
-                .into_iter()
-                .map(|topic| format!("{:#x}", topic))
-                .collect(),
-            data: format!("{:#x}", log.data),
         }
     }
 }
@@ -129,18 +113,6 @@ mod tests {
             gas_limit: 0x5300,
             output: Bytes::from_str("0x0102").expect("bytes"),
             failure: None,
-            logs: vec![simulation_service::RawLog {
-                log_index: 0,
-                address: Address::from_str("0x1111111111111111111111111111111111111111")
-                    .expect("address"),
-                topics: vec![
-                    B256::from_str(
-                        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                    )
-                    .expect("topic"),
-                ],
-                data: Bytes::from_str("0xdeadbeef").expect("bytes"),
-            }],
             asset_changes: vec![simulation_service::AssetChange {
                 asset_type: simulation_service::AssetType::Erc20,
                 change_type: simulation_service::AssetChangeType::Transfer,
@@ -155,15 +127,12 @@ mod tests {
                     decimals: Some(6),
                 }),
             }],
-            trace: Vec::new(),
         };
 
         let response: rpc::EvmSimulateTransactionResponse = output.into();
         assert_eq!(response.execution.chain_id, "0x1");
         assert_eq!(response.execution.block.number, "0x1234");
         assert_eq!(response.execution.gas_used, "0x5208");
-        assert_eq!(response.logs.len(), 1);
-        assert_eq!(response.logs[0].log_index, "0x0");
         assert_eq!(response.asset_changes.len(), 1);
         assert_eq!(response.asset_changes[0].amount, "0xde0b6b3a7640000");
         assert_eq!(response.execution.output, "0x0102");

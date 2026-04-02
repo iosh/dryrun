@@ -8,9 +8,8 @@ use evm_engine::{EvmEngine, EvmExecutionInput, EvmExecutionOutput};
 pub use error::SimulationServiceError;
 pub use types::{
     AccessListItem, AssetChange, AssetChangeAsset, AssetChangeType, AssetType, BlockRef,
-    EvmTransaction, EvmTransactionType, RawLog, SimulateEvmTransactionInput,
-    SimulateEvmTransactionOutput, SimulatedBlock, SimulationFailure, SimulationStatus, TraceItem,
-    TraceStatus, TraceType,
+    EvmTransaction, EvmTransactionType, SimulateEvmTransactionInput, SimulateEvmTransactionOutput,
+    SimulatedBlock, SimulationFailure, SimulationStatus,
 };
 
 #[derive(Debug, Clone)]
@@ -120,17 +119,6 @@ impl From<evm_engine::EvmExecutionFailure> for SimulationFailure {
     }
 }
 
-impl From<evm_engine::EvmExecutionLog> for RawLog {
-    fn from(log: evm_engine::EvmExecutionLog) -> Self {
-        Self {
-            log_index: log.log_index,
-            address: log.address,
-            topics: log.topics,
-            data: log.data,
-        }
-    }
-}
-
 impl From<evm_engine::AssetType> for AssetType {
     fn from(asset_type: evm_engine::AssetType) -> Self {
         match asset_type {
@@ -171,47 +159,6 @@ impl From<evm_engine::AssetChange> for AssetChange {
     }
 }
 
-impl From<evm_engine::TraceType> for TraceType {
-    fn from(trace_type: evm_engine::TraceType) -> Self {
-        match trace_type {
-            evm_engine::TraceType::Call => Self::Call,
-            evm_engine::TraceType::CallCode => Self::CallCode,
-            evm_engine::TraceType::DelegateCall => Self::DelegateCall,
-            evm_engine::TraceType::StaticCall => Self::StaticCall,
-            evm_engine::TraceType::Create => Self::Create,
-            evm_engine::TraceType::Create2 => Self::Create2,
-        }
-    }
-}
-
-impl From<evm_engine::TraceStatus> for TraceStatus {
-    fn from(status: evm_engine::TraceStatus) -> Self {
-        match status {
-            evm_engine::TraceStatus::Success => Self::Success,
-            evm_engine::TraceStatus::Revert => Self::Revert,
-            evm_engine::TraceStatus::Halt => Self::Halt,
-        }
-    }
-}
-
-impl From<evm_engine::TraceItem> for TraceItem {
-    fn from(trace: evm_engine::TraceItem) -> Self {
-        Self {
-            trace_type: trace.trace_type.into(),
-            status: trace.status.into(),
-            from: trace.from,
-            to: trace.to,
-            code_address: trace.code_address,
-            value: trace.value,
-            input: trace.input,
-            output: trace.output,
-            gas: trace.gas,
-            gas_used: trace.gas_used,
-            trace_address: trace.trace_address,
-        }
-    }
-}
-
 impl SimulateEvmTransactionOutput {
     fn from_engine_output(output: EvmExecutionOutput) -> Self {
         let EvmExecutionOutput {
@@ -222,9 +169,7 @@ impl SimulateEvmTransactionOutput {
             gas_limit,
             output,
             failure,
-            logs,
             asset_changes,
-            trace,
         } = output;
 
         Self {
@@ -235,9 +180,7 @@ impl SimulateEvmTransactionOutput {
             gas_limit,
             output,
             failure: failure.map(Into::into),
-            logs: logs.into_iter().map(Into::into).collect(),
             asset_changes: asset_changes.into_iter().map(Into::into).collect(),
-            trace: trace.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -266,18 +209,6 @@ mod tests {
             gas_limit: 0x5300,
             output: Bytes::from_str("0x0102").expect("bytes"),
             failure: None,
-            logs: vec![evm_engine::EvmExecutionLog {
-                log_index: 0,
-                address: Address::from_str("0x1111111111111111111111111111111111111111")
-                    .expect("address"),
-                topics: vec![
-                    B256::from_str(
-                        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                    )
-                    .expect("topic"),
-                ],
-                data: Bytes::from_str("0xdeadbeef").expect("bytes"),
-            }],
             asset_changes: vec![evm_engine::AssetChange {
                 asset_type: evm_engine::AssetType::Erc20,
                 change_type: evm_engine::AssetChangeType::Transfer,
@@ -292,43 +223,13 @@ mod tests {
                     decimals: Some(6),
                 }),
             }],
-            trace: vec![evm_engine::TraceItem {
-                trace_type: evm_engine::TraceType::Call,
-                status: evm_engine::TraceStatus::Success,
-                from: Address::from_str("0x1111111111111111111111111111111111111111")
-                    .expect("from"),
-                to: Some(
-                    Address::from_str("0x2222222222222222222222222222222222222222").expect("to"),
-                ),
-                code_address: Some(
-                    Address::from_str("0x3333333333333333333333333333333333333333")
-                        .expect("code address"),
-                ),
-                value: U256::from(0x1234_u64),
-                input: Bytes::from_str("0x1234").expect("bytes"),
-                output: Bytes::from_str("0xabcd").expect("bytes"),
-                gas: 50_000,
-                gas_used: 21_000,
-                trace_address: vec![0],
-            }],
         };
 
         let mapped = SimulateEvmTransactionOutput::from_engine_output(output);
-        assert_eq!(mapped.logs.len(), 1);
         assert_eq!(mapped.asset_changes.len(), 1);
-        assert_eq!(mapped.trace.len(), 1);
         assert_eq!(mapped.asset_changes[0].amount, U256::from(0x1234_u64));
         let asset = mapped.asset_changes[0].asset.as_ref().expect("erc20 asset");
         assert_eq!(asset.symbol.as_deref(), Some("USDC"));
         assert_eq!(asset.decimals, Some(6));
-        assert_eq!(
-            mapped.trace[0].code_address,
-            Some(
-                Address::from_str("0x3333333333333333333333333333333333333333")
-                    .expect("code address"),
-            )
-        );
-        assert_eq!(mapped.trace[0].status, TraceStatus::Success);
-        assert_eq!(mapped.trace[0].trace_address, vec![0]);
     }
 }

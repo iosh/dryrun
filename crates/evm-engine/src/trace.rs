@@ -1,6 +1,5 @@
-use crate::{
-    TraceItem, TraceStatus, TraceType,
-    frames::{ExecutionFrame, ExecutionFrameStatus, ExecutionFrameType, sort_execution_frames},
+use crate::frames::{
+    ExecutionFrame, ExecutionFrameStatus, ExecutionFrameType, sort_execution_frames,
 };
 use alloy_primitives::{Bytes, U256};
 use revm::{
@@ -11,6 +10,41 @@ use revm::{
         CallInputs, CallOutcome, CreateInputs, CreateOutcome, InstructionResult, InterpreterTypes,
     },
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum TraceType {
+    Call,
+    CallCode,
+    DelegateCall,
+    StaticCall,
+    Create,
+    Create2,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum TraceStatus {
+    Success,
+    Revert,
+    Halt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) struct TraceItem {
+    pub(crate) trace_type: TraceType,
+    pub(crate) status: TraceStatus,
+    pub(crate) from: alloy_primitives::Address,
+    pub(crate) to: Option<alloy_primitives::Address>,
+    pub(crate) code_address: Option<alloy_primitives::Address>,
+    pub(crate) value: U256,
+    pub(crate) input: Bytes,
+    pub(crate) output: Bytes,
+    pub(crate) gas: u64,
+    pub(crate) gas_used: u64,
+    pub(crate) trace_address: Vec<u64>,
+}
 
 #[derive(Debug, Clone)]
 struct TraceStackFrame {
@@ -46,6 +80,7 @@ impl TraceInspector {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn trace_items_from_frames(mut frames: Vec<ExecutionFrame>) -> Vec<TraceItem> {
     sort_execution_frames(&mut frames);
 

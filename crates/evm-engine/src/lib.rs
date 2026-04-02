@@ -1,3 +1,4 @@
+mod artifacts;
 mod asset_changes;
 mod chain_spec;
 mod error;
@@ -10,9 +11,8 @@ pub use error::EvmEngineError;
 use execution::simulate_execution;
 pub use types::{
     AccessListItem, AssetChange, AssetChangeAsset, AssetChangeType, AssetType, BlockRef,
-    EvmExecutionFailure, EvmExecutionInput, EvmExecutionLog, EvmExecutionOutput,
-    EvmExecutionStatus, EvmTransaction, EvmTransactionType, SimulatedBlock, TraceItem, TraceStatus,
-    TraceType,
+    EvmExecutionFailure, EvmExecutionInput, EvmExecutionOutput, EvmExecutionStatus, EvmTransaction,
+    EvmTransactionType, SimulatedBlock,
 };
 
 #[derive(Debug, Clone)]

@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use alloy_primitives::{Address, B256, U256, keccak256};
 
 use crate::{
-    AssetChange, AssetChangeAsset, AssetChangeType, AssetType, EvmExecutionLog, EvmExecutionStatus,
+    AssetChange, AssetChangeAsset, AssetChangeType, AssetType,
+    artifacts::{ExecutionArtifacts, RawExecutionLog},
     frames::{ExecutionFrame, ExecutionFrameStatus, ExecutionFrameType},
 };
 
@@ -44,18 +45,14 @@ fn is_zero_padded_address_topic(topic: &B256) -> bool {
     topic.as_slice()[..12].iter().all(|&byte| byte == 0)
 }
 
-pub(crate) fn extract_asset_changes(
-    status: EvmExecutionStatus,
-    logs: &[EvmExecutionLog],
-    frames: &[ExecutionFrame],
-) -> Vec<AssetChange> {
-    if !matches!(status, EvmExecutionStatus::Success) {
+pub(crate) fn extract_asset_changes(artifacts: &ExecutionArtifacts) -> Vec<AssetChange> {
+    if !matches!(artifacts.status, crate::EvmExecutionStatus::Success) {
         return Vec::new();
     }
 
-    let mut asset_changes = extract_native_asset_changes_from_frames(frames);
+    let mut asset_changes = extract_native_asset_changes_from_frames(&artifacts.frames);
 
-    for log in logs {
+    for log in &artifacts.logs {
         if let Some(asset_change) = extract_erc20_transfer_from_log(log) {
             asset_changes.push(asset_change);
         }
@@ -113,7 +110,7 @@ fn extract_native_transfer_from_frame(frame: &ExecutionFrame) -> Option<AssetCha
         asset: None,
     })
 }
-fn extract_erc20_transfer_from_log(log: &EvmExecutionLog) -> Option<AssetChange> {
+fn extract_erc20_transfer_from_log(log: &RawExecutionLog) -> Option<AssetChange> {
     if log.topics.len() != 3 {
         return None;
     }
@@ -159,8 +156,9 @@ mod tests {
     use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 
     use crate::{
-        AssetChange, AssetChangeAsset, AssetChangeType, AssetType, EvmExecutionLog,
-        EvmExecutionStatus,
+        AssetChange, AssetChangeAsset, AssetChangeType, AssetType, EvmExecutionStatus,
+        SimulatedBlock,
+        artifacts::{ExecutionArtifacts, RawExecutionLog},
         frames::{ExecutionFrame, ExecutionFrameStatus, ExecutionFrameType},
     };
 
@@ -193,8 +191,29 @@ mod tests {
         keccak256("Transfer(address,address,uint256)".as_bytes())
     }
 
-    fn erc20_transfer_log(from: Address, to: Address, amount: U256) -> EvmExecutionLog {
-        EvmExecutionLog {
+    fn sample_execution_artifacts(
+        status: EvmExecutionStatus,
+        logs: Vec<RawExecutionLog>,
+        frames: Vec<ExecutionFrame>,
+    ) -> ExecutionArtifacts {
+        ExecutionArtifacts {
+            chain_id: 1,
+            block: SimulatedBlock {
+                number: 1,
+                hash: B256::ZERO,
+            },
+            status,
+            gas_used: 21_000,
+            gas_limit: 50_000,
+            output: Bytes::new(),
+            failure: None,
+            logs,
+            frames,
+        }
+    }
+
+    fn erc20_transfer_log(from: Address, to: Address, amount: U256) -> RawExecutionLog {
+        RawExecutionLog {
             log_index: 0,
             address: Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
                 .expect("token address"),
@@ -218,7 +237,11 @@ mod tests {
             Vec::new(),
         )];
 
-        let asset_changes = extract_asset_changes(EvmExecutionStatus::Success, &[], &frames);
+        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+            EvmExecutionStatus::Success,
+            Vec::new(),
+            frames,
+        ));
 
         assert_eq!(asset_changes.len(), 1);
         assert_eq!(asset_changes[0].asset_type, AssetType::Native);
@@ -240,7 +263,11 @@ mod tests {
             Vec::new(),
         )];
 
-        let asset_changes = extract_asset_changes(EvmExecutionStatus::Failed, &[], &frames);
+        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+            EvmExecutionStatus::Failed,
+            Vec::new(),
+            frames,
+        ));
 
         assert!(asset_changes.is_empty());
     }
@@ -260,7 +287,11 @@ mod tests {
             Vec::new(),
         )];
 
-        let asset_changes = extract_asset_changes(EvmExecutionStatus::Success, &[], &frames);
+        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+            EvmExecutionStatus::Success,
+            Vec::new(),
+            frames,
+        ));
 
         assert!(asset_changes.is_empty());
     }
@@ -280,7 +311,11 @@ mod tests {
             Vec::new(),
         )];
 
-        let asset_changes = extract_asset_changes(EvmExecutionStatus::Success, &[], &frames);
+        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+            EvmExecutionStatus::Success,
+            Vec::new(),
+            frames,
+        ));
 
         assert_eq!(asset_changes.len(), 1);
         assert_eq!(asset_changes[0].asset_type, AssetType::Native);
@@ -295,7 +330,11 @@ mod tests {
         let to = Address::from_str("0x4444444444444444444444444444444444444444").expect("to");
         let log = erc20_transfer_log(from, to, U256::from(0x99_u64));
 
-        let asset_changes = extract_asset_changes(EvmExecutionStatus::Success, &[log], &[]);
+        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+            EvmExecutionStatus::Success,
+            vec![log],
+            Vec::new(),
+        ));
 
         assert_eq!(asset_changes.len(), 1);
         assert_eq!(asset_changes[0].asset_type, AssetType::Erc20);
@@ -318,7 +357,7 @@ mod tests {
         let from = Address::from_str("0x3333333333333333333333333333333333333333").expect("from");
         let to = Address::from_str("0x4444444444444444444444444444444444444444").expect("to");
 
-        let log = EvmExecutionLog {
+        let log = RawExecutionLog {
             log_index: 0,
             address: Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
                 .expect("token address"),
@@ -330,7 +369,11 @@ mod tests {
             data: Bytes::copy_from_slice(&U256::from(1_u64).to_be_bytes::<32>()),
         };
 
-        let asset_changes = extract_asset_changes(EvmExecutionStatus::Success, &[log], &[]);
+        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+            EvmExecutionStatus::Success,
+            vec![log],
+            Vec::new(),
+        ));
 
         assert!(asset_changes.is_empty());
     }
@@ -339,7 +382,7 @@ mod tests {
     fn ignores_log_when_topics_len_is_not_three() {
         let from = Address::from_str("0x3333333333333333333333333333333333333333").expect("from");
 
-        let log = EvmExecutionLog {
+        let log = RawExecutionLog {
             log_index: 0,
             address: Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
                 .expect("token address"),
@@ -347,7 +390,11 @@ mod tests {
             data: Bytes::copy_from_slice(&U256::from(1_u64).to_be_bytes::<32>()),
         };
 
-        let asset_changes = extract_asset_changes(EvmExecutionStatus::Success, &[log], &[]);
+        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+            EvmExecutionStatus::Success,
+            vec![log],
+            Vec::new(),
+        ));
 
         assert!(asset_changes.is_empty());
     }
@@ -357,7 +404,7 @@ mod tests {
         let from = Address::from_str("0x3333333333333333333333333333333333333333").expect("from");
         let to = Address::from_str("0x4444444444444444444444444444444444444444").expect("to");
 
-        let log = EvmExecutionLog {
+        let log = RawExecutionLog {
             log_index: 0,
             address: Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
                 .expect("token address"),
@@ -365,7 +412,11 @@ mod tests {
             data: Bytes::from_static(&[0x12, 0x34]),
         };
 
-        let asset_changes = extract_asset_changes(EvmExecutionStatus::Success, &[log], &[]);
+        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+            EvmExecutionStatus::Success,
+            vec![log],
+            Vec::new(),
+        ));
 
         assert!(asset_changes.is_empty());
     }
@@ -378,7 +429,11 @@ mod tests {
         let mut log = erc20_transfer_log(from, to, U256::from(0x99_u64));
         log.topics[1].as_mut_slice()[0] = 0x01;
 
-        let asset_changes = extract_asset_changes(EvmExecutionStatus::Success, &[log], &[]);
+        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+            EvmExecutionStatus::Success,
+            vec![log],
+            Vec::new(),
+        ));
 
         assert!(asset_changes.is_empty());
     }
@@ -420,7 +475,11 @@ mod tests {
             ),
         ];
 
-        let asset_changes = extract_asset_changes(EvmExecutionStatus::Success, &[], &frames);
+        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+            EvmExecutionStatus::Success,
+            Vec::new(),
+            frames,
+        ));
 
         assert_eq!(asset_changes.len(), 3);
         assert_eq!(asset_changes[0].from, root_from);
@@ -481,7 +540,11 @@ mod tests {
             ),
         ];
 
-        let asset_changes = extract_asset_changes(EvmExecutionStatus::Success, &[], &frames);
+        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+            EvmExecutionStatus::Success,
+            Vec::new(),
+            frames,
+        ));
 
         assert_eq!(asset_changes.len(), 1);
         assert_eq!(asset_changes[0].from, root_to);
@@ -520,7 +583,11 @@ mod tests {
             ),
         ];
 
-        let asset_changes = extract_asset_changes(EvmExecutionStatus::Success, &[], &frames);
+        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+            EvmExecutionStatus::Success,
+            Vec::new(),
+            frames,
+        ));
 
         assert!(asset_changes.is_empty());
     }
