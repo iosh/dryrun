@@ -11,8 +11,8 @@ pub use error::EvmEngineError;
 use execution::simulate_execution;
 pub use types::{
     AccessListItem, AssetChange, AssetChangeAsset, AssetChangeType, AssetType, BlockRef,
-    EvmExecutionFailure, EvmExecutionInput, EvmExecutionOutput, EvmExecutionStatus, EvmTransaction,
-    EvmTransactionType, SimulatedBlock,
+    EvmExecution, EvmExecutionFailure, EvmExecutionInput, EvmExecutionStatus, EvmSimulation,
+    EvmTransaction, EvmTransactionType, SimulatedBlock,
 };
 
 #[derive(Debug, Clone)]
@@ -28,7 +28,7 @@ impl EvmEngine {
     pub async fn simulate(
         &self,
         input: EvmExecutionInput,
-    ) -> Result<EvmExecutionOutput, EvmEngineError> {
+    ) -> Result<EvmSimulation, EvmEngineError> {
         ensure_supported_block_ref(&input.block)?;
         ensure_supported_transaction_type(input.transaction.tx_type)?;
 

@@ -16,53 +16,49 @@ impl TryFrom<rpc::EvmSimulateTransactionRequest>
 
         Ok(Self {
             block: block
-                .map(|value| value.try_into())
+                .map(map_block_ref)
                 .transpose()?
                 .unwrap_or(simulation_service::BlockRef::Latest),
-            transaction: transaction.try_into()?,
+            transaction: map_transaction(transaction)?,
         })
     }
 }
 
-impl TryFrom<rpc::BlockRef> for simulation_service::BlockRef {
-    type Error = ValidationError;
+fn map_block_ref(block: rpc::BlockRef) -> Result<simulation_service::BlockRef, ValidationError> {
+    block.validate()?;
 
-    fn try_from(block: rpc::BlockRef) -> Result<Self, Self::Error> {
-        block.validate()?;
-
-        match block.0.as_str() {
-            "latest" => Ok(Self::Latest),
-            value => Ok(Self::Number(parse_u64_quantity(value, "block")?)),
-        }
+    match block.0.as_str() {
+        "latest" => Ok(simulation_service::BlockRef::Latest),
+        value => Ok(simulation_service::BlockRef::Number(parse_u64_quantity(
+            value, "block",
+        )?)),
     }
 }
 
-impl TryFrom<rpc::Transaction> for simulation_service::EvmTransaction {
-    type Error = ValidationError;
+fn map_transaction(
+    transaction: rpc::Transaction,
+) -> Result<simulation_service::EvmTransaction, ValidationError> {
+    transaction.validate()?;
 
-    fn try_from(transaction: rpc::Transaction) -> Result<Self, Self::Error> {
-        transaction.validate()?;
-
-        Ok(Self {
-            tx_type: infer_transaction_type(&transaction),
-            requested_chain_id: transaction.chain_id,
-            from: transaction.from,
-            to: transaction.to,
-            nonce: transaction.nonce,
-            gas_limit: transaction.gas,
-            value: transaction.value.unwrap_or(U256::ZERO),
-            data: transaction.data.unwrap_or_else(Bytes::new),
-            access_list: transaction
-                .access_list
-                .unwrap_or_default()
-                .into_iter()
-                .map(convert_access_list_item)
-                .collect(),
-            gas_price: transaction.gas_price,
-            max_fee_per_gas: transaction.max_fee_per_gas,
-            max_priority_fee_per_gas: transaction.max_priority_fee_per_gas,
-        })
-    }
+    Ok(simulation_service::EvmTransaction {
+        tx_type: infer_transaction_type(&transaction),
+        requested_chain_id: transaction.chain_id,
+        from: transaction.from,
+        to: transaction.to,
+        nonce: transaction.nonce,
+        gas_limit: transaction.gas,
+        value: transaction.value.unwrap_or(U256::ZERO),
+        data: transaction.data.unwrap_or_else(Bytes::new),
+        access_list: transaction
+            .access_list
+            .unwrap_or_default()
+            .into_iter()
+            .map(convert_access_list_item)
+            .collect(),
+        gas_price: transaction.gas_price,
+        max_fee_per_gas: transaction.max_fee_per_gas,
+        max_priority_fee_per_gas: transaction.max_priority_fee_per_gas,
+    })
 }
 
 fn infer_transaction_type(

@@ -90,7 +90,7 @@ pub struct AssetChange {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvmExecutionOutput {
+pub struct EvmExecution {
     pub chain_id: u64,
     pub block: SimulatedBlock,
     pub status: EvmExecutionStatus,
@@ -98,5 +98,31 @@ pub struct EvmExecutionOutput {
     pub gas_limit: u64,
     pub output: Bytes,
     pub failure: Option<EvmExecutionFailure>,
-    pub asset_changes: Vec<AssetChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvmSimulation {
+    execution: EvmExecution,
+    asset_changes: Vec<AssetChange>,
+}
+
+impl EvmSimulation {
+    pub fn new(execution: EvmExecution, asset_changes: Vec<AssetChange>) -> Self {
+        Self {
+            execution,
+            asset_changes,
+        }
+    }
+
+    pub fn execution(&self) -> &EvmExecution {
+        &self.execution
+    }
+
+    pub fn asset_changes(&self) -> &[AssetChange] {
+        &self.asset_changes
+    }
+
+    pub fn into_parts(self) -> (EvmExecution, Vec<AssetChange>) {
+        (self.execution, self.asset_changes)
+    }
 }

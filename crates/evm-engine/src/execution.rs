@@ -1,6 +1,6 @@
 use crate::{
-    AccessListItem, BlockRef, EvmEngineError, EvmExecutionFailure, EvmExecutionInput,
-    EvmExecutionOutput, EvmExecutionStatus, EvmTransaction, EvmTransactionType, SimulatedBlock,
+    AccessListItem, BlockRef, EvmEngineError, EvmExecution, EvmExecutionFailure, EvmExecutionInput,
+    EvmExecutionStatus, EvmSimulation, EvmTransaction, EvmTransactionType, SimulatedBlock,
     artifacts::{ExecutionArtifacts, RawExecutionLog},
     asset_changes::{Erc20Metadata, extract_asset_changes, fill_erc20_metadata},
     chain_spec::resolve_execution_spec_id,
@@ -14,7 +14,7 @@ use alloy::{
     providers::{DynProvider, Provider, ProviderBuilder},
     rpc::types::Block,
     sol,
-    sol_types::SolCall,
+    sol_types::{Panic, Revert, SolCall, SolError},
 };
 use alloy_primitives::{Address, Bytes, Log, U256};
 use revm::{
@@ -54,7 +54,7 @@ struct ResolvedExecutionBlock {
 pub(crate) async fn simulate_execution(
     rpc_url: &str,
     input: EvmExecutionInput,
-) -> Result<EvmExecutionOutput, EvmEngineError> {
+) -> Result<EvmSimulation, EvmEngineError> {
     let EvmExecutionInput { block, transaction } = input;
     let provider = build_provider(rpc_url)?;
     let resolved_block = resolve_execution_block(&provider, &block).await?;
@@ -381,7 +381,7 @@ fn execute_transaction(
     tx_env: TxEnv,
     resolved_block: &ResolvedExecutionBlock,
     transaction: &EvmTransaction,
-) -> Result<EvmExecutionOutput, EvmEngineError> {
+) -> Result<EvmSimulation, EvmEngineError> {
     let mut evm = Context::mainnet()
         .with_db(db)
         .modify_cfg_chained(|cfg| *cfg = cfg_env)
@@ -413,7 +413,7 @@ fn execute_transaction(
         }
     };
 
-    Ok(build_preview_output(&mut evm, artifacts, transaction))
+    Ok(build_simulation(&mut evm, artifacts, transaction))
 }
 
 fn build_execution_artifacts(
@@ -444,11 +444,11 @@ fn build_execution_artifacts(
     }
 }
 
-fn build_preview_output<INSP>(
+fn build_simulation<INSP>(
     evm: &mut MainnetAlloyEvm<INSP>,
     artifacts: ExecutionArtifacts,
     transaction: &EvmTransaction,
-) -> EvmExecutionOutput {
+) -> EvmSimulation {
     let mut asset_changes = extract_asset_changes(&artifacts);
 
     if matches!(artifacts.status, EvmExecutionStatus::Success) {
@@ -469,16 +469,18 @@ fn build_preview_output<INSP>(
         ..
     } = artifacts;
 
-    EvmExecutionOutput {
-        chain_id,
-        block,
-        status,
-        gas_used,
-        gas_limit,
-        output,
-        failure,
+    EvmSimulation::new(
+        EvmExecution {
+            chain_id,
+            block,
+            status,
+            gas_used,
+            gas_limit,
+            output,
+            failure,
+        },
         asset_changes,
-    }
+    )
 }
 
 fn configure_relaxed_call_cfg(cfg: &mut CfgEnv) {
@@ -598,14 +600,9 @@ fn build_revert_artifacts(
     output: Bytes,
     frames: Vec<ExecutionFrame>,
 ) -> ExecutionArtifacts {
-    build_failed_artifacts(
-        resolved_block,
-        gas_used,
-        gas_limit,
-        output,
-        build_revert_failure(),
-        frames,
-    )
+    let failure = build_revert_failure(&output);
+
+    build_failed_artifacts(resolved_block, gas_used, gas_limit, output, failure, frames)
 }
 
 fn build_halt_artifacts(
@@ -684,12 +681,21 @@ fn build_invalid_transaction_failure(error: InvalidTransaction) -> EvmExecutionF
     }
 }
 
-fn build_revert_failure() -> EvmExecutionFailure {
+fn build_revert_failure(output: &Bytes) -> EvmExecutionFailure {
     EvmExecutionFailure {
         code: "REVERT".to_string(),
         message: "execution reverted".to_string(),
-        reason: None,
+        reason: decode_revert_reason(output),
     }
+}
+
+fn decode_revert_reason(output: &Bytes) -> Option<String> {
+    Revert::abi_decode(output.as_ref())
+        .map(|revert| revert.reason().to_string())
+        .or_else(|_| {
+            Panic::abi_decode(output.as_ref()).map(|panic| panic.as_geth_str().into_owned())
+        })
+        .ok()
 }
 
 fn build_halt_failure(reason: HaltReason) -> EvmExecutionFailure {
@@ -743,6 +749,7 @@ fn validate_requested_chain_id(
 
 #[cfg(test)]
 mod tests {
+    use alloy::sol_types::{Panic, Revert, SolError};
     use alloy_chains::Chain;
 
     use super::*;
@@ -797,5 +804,33 @@ mod tests {
         let tx_env = create_tx_env(&transaction, Chain::mainnet().id()).expect("tx env");
         assert_eq!(tx_env.gas_price, 7);
         assert_eq!(tx_env.gas_priority_fee, Some(7));
+    }
+
+    #[test]
+    fn decode_revert_reason_extracts_standard_error_string() {
+        let output = Bytes::from(Revert::from("dry run reverted").abi_encode());
+
+        assert_eq!(
+            decode_revert_reason(&output),
+            Some("dry run reverted".to_string())
+        );
+    }
+
+    #[test]
+    fn decode_revert_reason_extracts_solidity_panic() {
+        let output = Bytes::from(Panic::from(0x11_u64).abi_encode());
+
+        assert_eq!(
+            decode_revert_reason(&output),
+            Some("arithmetic underflow or overflow".to_string())
+        );
+    }
+
+    #[test]
+    fn build_revert_failure_keeps_reason_empty_for_unknown_payload() {
+        let failure = build_revert_failure(&Bytes::from_static(b"\x12\x34\x56\x78"));
+
+        assert_eq!(failure.code, "REVERT");
+        assert_eq!(failure.reason, None);
     }
 }
