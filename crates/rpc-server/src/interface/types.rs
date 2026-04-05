@@ -5,25 +5,12 @@ use alloy::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EvmSimulateTransactionRequest {
     pub transaction: Transaction,
     pub block: Option<BlockRef>,
     pub options: Option<SimulateTransactionOptions>,
-}
-
-impl EvmSimulateTransactionRequest {
-    pub(crate) fn new(
-        transaction: Transaction,
-        block: Option<BlockRef>,
-        options: Option<SimulateTransactionOptions>,
-    ) -> Self {
-        Self {
-            transaction,
-            block,
-            options,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

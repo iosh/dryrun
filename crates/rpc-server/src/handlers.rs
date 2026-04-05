@@ -34,7 +34,11 @@ impl RpcHandler {
         block: Option<BlockRef>,
         options: Option<SimulateTransactionOptions>,
     ) -> RpcResult<EvmSimulateTransactionResponse> {
-        let request = EvmSimulateTransactionRequest::new(transaction, block, options);
+        let request = EvmSimulateTransactionRequest {
+            transaction,
+            block,
+            options,
+        };
         let input: simulation_service::SimulateEvmTransactionInput =
             request.try_into().map_err(ErrorObjectOwned::from)?;
         let output = self
