@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use alloy_primitives::{Address, B256, U256, keccak256};
 
 use crate::{
-    AssetChange, AssetChangeAsset, AssetChangeType, AssetType,
+    Asset, Change, TransferChange,
     artifacts::{ExecutionArtifacts, RawExecutionLog},
     frames::{ExecutionFrame, ExecutionFrameStatus, ExecutionFrameType},
 };
@@ -14,26 +14,44 @@ pub(crate) struct Erc20Metadata {
     pub decimals: Option<u8>,
 }
 
-pub(crate) fn fill_erc20_metadata<F>(asset_changes: &mut [AssetChange], mut load_metadata: F)
+pub(crate) fn fill_erc20_metadata<F>(changes: &mut [Change], mut load_metadata: F)
 where
     F: FnMut(Address) -> Erc20Metadata,
 {
     let mut metadata_by_token = HashMap::<Address, Erc20Metadata>::new();
-    for asset_change in asset_changes {
-        if !matches!(asset_change.asset_type, AssetType::Erc20) {
-            continue;
-        }
 
-        let Some(asset) = asset_change.asset.as_mut() else {
+    for change in changes {
+        let Some(asset) = asset_mut(change) else {
             continue;
         };
 
-        let metadata = metadata_by_token
-            .entry(asset.token_address)
-            .or_insert_with(|| load_metadata(asset.token_address));
+        let Asset::Erc20 {
+            contract_address,
+            symbol,
+            decimals,
+            ..
+        } = asset
+        else {
+            continue;
+        };
 
-        asset.symbol = metadata.symbol.clone();
-        asset.decimals = metadata.decimals;
+        let token_address = *contract_address;
+        let metadata = metadata_by_token
+            .entry(token_address)
+            .or_insert_with(|| load_metadata(token_address));
+
+        *symbol = metadata.symbol.clone();
+        *decimals = metadata.decimals;
+    }
+}
+
+fn asset_mut(change: &mut Change) -> Option<&mut Asset> {
+    match change {
+        Change::Transfer(change) => Some(&mut change.asset),
+        Change::Mint(change) => Some(&mut change.asset),
+        Change::Burn(change) => Some(&mut change.asset),
+        Change::Approval(change) => Some(&mut change.asset),
+        Change::ApprovalForAll(_) => None,
     }
 }
 
@@ -45,28 +63,28 @@ fn is_zero_padded_address_topic(topic: &B256) -> bool {
     topic.as_slice()[..12].iter().all(|&byte| byte == 0)
 }
 
-pub(crate) fn extract_asset_changes(artifacts: &ExecutionArtifacts) -> Vec<AssetChange> {
+pub(crate) fn extract_asset_changes(artifacts: &ExecutionArtifacts) -> Vec<Change> {
     if !matches!(artifacts.status, crate::EvmExecutionStatus::Success) {
         return Vec::new();
     }
 
-    let mut asset_changes = extract_native_asset_changes_from_frames(&artifacts.frames);
+    let mut changes = extract_native_asset_changes_from_frames(&artifacts.frames);
 
     for log in &artifacts.logs {
-        if let Some(asset_change) = extract_erc20_transfer_from_log(log) {
-            asset_changes.push(asset_change);
+        if let Some(change) = extract_erc20_transfer_from_log(log) {
+            changes.push(change);
         }
     }
 
-    asset_changes
+    changes
 }
 
-fn extract_native_asset_changes_from_frames(frames: &[ExecutionFrame]) -> Vec<AssetChange> {
+fn extract_native_asset_changes_from_frames(frames: &[ExecutionFrame]) -> Vec<Change> {
     let mut sorted_frames = frames.iter().collect::<Vec<_>>();
     sorted_frames.sort_by(|left, right| left.trace_address.cmp(&right.trace_address));
 
     let mut committed_stack = Vec::<bool>::new();
-    let mut asset_changes = Vec::new();
+    let mut changes = Vec::new();
 
     for frame in sorted_frames {
         committed_stack.truncate(frame.trace_address.len());
@@ -76,18 +94,18 @@ fn extract_native_asset_changes_from_frames(frames: &[ExecutionFrame]) -> Vec<As
             parent_committed && matches!(frame.status, ExecutionFrameStatus::Success);
 
         if frame_committed {
-            if let Some(asset_change) = extract_native_transfer_from_frame(frame) {
-                asset_changes.push(asset_change);
+            if let Some(change) = extract_native_transfer_from_frame(frame) {
+                changes.push(change);
             }
         }
 
         committed_stack.push(frame_committed);
     }
 
-    asset_changes
+    changes
 }
 
-fn extract_native_transfer_from_frame(frame: &ExecutionFrame) -> Option<AssetChange> {
+fn extract_native_transfer_from_frame(frame: &ExecutionFrame) -> Option<Change> {
     if frame.value.is_zero() {
         return None;
     }
@@ -101,16 +119,18 @@ fn extract_native_transfer_from_frame(frame: &ExecutionFrame) -> Option<AssetCha
 
     let to = frame.to?;
 
-    Some(AssetChange {
-        asset_type: AssetType::Native,
-        change_type: AssetChangeType::Transfer,
+    Some(Change::Transfer(TransferChange {
+        asset: Asset::Native {
+            symbol: None,
+            decimals: None,
+        },
         from: frame.from,
         to,
-        amount: frame.value,
-        asset: None,
-    })
+        amount: Some(frame.value),
+    }))
 }
-fn extract_erc20_transfer_from_log(log: &RawExecutionLog) -> Option<AssetChange> {
+
+fn extract_erc20_transfer_from_log(log: &RawExecutionLog) -> Option<Change> {
     if log.topics.len() != 3 {
         return None;
     }
@@ -135,18 +155,17 @@ fn extract_erc20_transfer_from_log(log: &RawExecutionLog) -> Option<AssetChange>
     let to = Address::from_word(log.topics[2]);
     let amount = U256::from_be_slice(log.data.as_ref());
 
-    Some(AssetChange {
-        asset_type: AssetType::Erc20,
-        change_type: AssetChangeType::Transfer,
-        from,
-        to,
-        amount,
-        asset: Some(AssetChangeAsset {
-            token_address: log.address,
+    Some(Change::Transfer(TransferChange {
+        asset: Asset::Erc20 {
+            contract_address: log.address,
             symbol: None,
             decimals: None,
-        }),
-    })
+            name: None,
+        },
+        from,
+        to,
+        amount: Some(amount),
+    }))
 }
 
 #[cfg(test)]
@@ -156,8 +175,7 @@ mod tests {
     use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 
     use crate::{
-        AssetChange, AssetChangeAsset, AssetChangeType, AssetType, EvmExecutionStatus,
-        SimulatedBlock,
+        Asset, Change, EvmExecutionStatus, SimulatedBlock, TransferChange,
         artifacts::{ExecutionArtifacts, RawExecutionLog},
         frames::{ExecutionFrame, ExecutionFrameStatus, ExecutionFrameType},
     };
@@ -184,6 +202,13 @@ mod tests {
             gas: 21_000,
             gas_used: 21_000,
             trace_address,
+        }
+    }
+
+    fn transfer(change: &Change) -> &TransferChange {
+        match change {
+            Change::Transfer(change) => change,
+            other => panic!("expected transfer change, got {other:?}"),
         }
     }
 
@@ -237,19 +262,19 @@ mod tests {
             Vec::new(),
         )];
 
-        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+        let changes = extract_asset_changes(&sample_execution_artifacts(
             EvmExecutionStatus::Success,
             Vec::new(),
             frames,
         ));
 
-        assert_eq!(asset_changes.len(), 1);
-        assert_eq!(asset_changes[0].asset_type, AssetType::Native);
-        assert_eq!(asset_changes[0].change_type, AssetChangeType::Transfer);
-        assert_eq!(asset_changes[0].from, from);
-        assert_eq!(asset_changes[0].to, to);
-        assert_eq!(asset_changes[0].amount, U256::from(0x1234_u64));
-        assert_eq!(asset_changes[0].asset, None);
+        assert_eq!(changes.len(), 1);
+
+        let transfer = transfer(&changes[0]);
+        assert!(matches!(transfer.asset, Asset::Native { .. }));
+        assert_eq!(transfer.from, from);
+        assert_eq!(transfer.to, to);
+        assert_eq!(transfer.amount, Some(U256::from(0x1234_u64)));
     }
 
     #[test]
@@ -263,13 +288,13 @@ mod tests {
             Vec::new(),
         )];
 
-        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+        let changes = extract_asset_changes(&sample_execution_artifacts(
             EvmExecutionStatus::Failed,
             Vec::new(),
             frames,
         ));
 
-        assert!(asset_changes.is_empty());
+        assert!(changes.is_empty());
     }
 
     #[test]
@@ -287,13 +312,13 @@ mod tests {
             Vec::new(),
         )];
 
-        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+        let changes = extract_asset_changes(&sample_execution_artifacts(
             EvmExecutionStatus::Success,
             Vec::new(),
             frames,
         ));
 
-        assert!(asset_changes.is_empty());
+        assert!(changes.is_empty());
     }
 
     #[test]
@@ -311,45 +336,49 @@ mod tests {
             Vec::new(),
         )];
 
-        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+        let changes = extract_asset_changes(&sample_execution_artifacts(
             EvmExecutionStatus::Success,
             Vec::new(),
             frames,
         ));
 
-        assert_eq!(asset_changes.len(), 1);
-        assert_eq!(asset_changes[0].asset_type, AssetType::Native);
-        assert_eq!(asset_changes[0].from, from);
-        assert_eq!(asset_changes[0].to, created);
-        assert_eq!(asset_changes[0].amount, U256::from(1_u64));
+        assert_eq!(changes.len(), 1);
+
+        let transfer = transfer(&changes[0]);
+        assert!(matches!(transfer.asset, Asset::Native { .. }));
+        assert_eq!(transfer.from, from);
+        assert_eq!(transfer.to, created);
+        assert_eq!(transfer.amount, Some(U256::from(1_u64)));
     }
 
     #[test]
     fn extracts_erc20_transfer_from_standard_log() {
         let from = Address::from_str("0x3333333333333333333333333333333333333333").expect("from");
         let to = Address::from_str("0x4444444444444444444444444444444444444444").expect("to");
+        let token = Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").expect("token");
         let log = erc20_transfer_log(from, to, U256::from(0x99_u64));
 
-        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+        let changes = extract_asset_changes(&sample_execution_artifacts(
             EvmExecutionStatus::Success,
             vec![log],
             Vec::new(),
         ));
 
-        assert_eq!(asset_changes.len(), 1);
-        assert_eq!(asset_changes[0].asset_type, AssetType::Erc20);
-        assert_eq!(asset_changes[0].change_type, AssetChangeType::Transfer);
-        assert_eq!(asset_changes[0].from, from);
-        assert_eq!(asset_changes[0].to, to);
-        assert_eq!(asset_changes[0].amount, U256::from(0x99_u64));
-        assert_eq!(
-            asset_changes[0]
-                .asset
-                .as_ref()
-                .expect("erc20 asset")
-                .token_address,
-            Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").expect("token")
-        );
+        assert_eq!(changes.len(), 1);
+
+        let transfer = transfer(&changes[0]);
+        assert_eq!(transfer.from, from);
+        assert_eq!(transfer.to, to);
+        assert_eq!(transfer.amount, Some(U256::from(0x99_u64)));
+        assert!(matches!(
+            transfer.asset,
+            Asset::Erc20 {
+                contract_address,
+                symbol: None,
+                decimals: None,
+                name: None,
+            } if contract_address == token
+        ));
     }
 
     #[test]
@@ -369,13 +398,13 @@ mod tests {
             data: Bytes::copy_from_slice(&U256::from(1_u64).to_be_bytes::<32>()),
         };
 
-        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+        let changes = extract_asset_changes(&sample_execution_artifacts(
             EvmExecutionStatus::Success,
             vec![log],
             Vec::new(),
         ));
 
-        assert!(asset_changes.is_empty());
+        assert!(changes.is_empty());
     }
 
     #[test]
@@ -390,13 +419,13 @@ mod tests {
             data: Bytes::copy_from_slice(&U256::from(1_u64).to_be_bytes::<32>()),
         };
 
-        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+        let changes = extract_asset_changes(&sample_execution_artifacts(
             EvmExecutionStatus::Success,
             vec![log],
             Vec::new(),
         ));
 
-        assert!(asset_changes.is_empty());
+        assert!(changes.is_empty());
     }
 
     #[test]
@@ -412,13 +441,13 @@ mod tests {
             data: Bytes::from_static(&[0x12, 0x34]),
         };
 
-        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+        let changes = extract_asset_changes(&sample_execution_artifacts(
             EvmExecutionStatus::Success,
             vec![log],
             Vec::new(),
         ));
 
-        assert!(asset_changes.is_empty());
+        assert!(changes.is_empty());
     }
 
     #[test]
@@ -429,13 +458,13 @@ mod tests {
         let mut log = erc20_transfer_log(from, to, U256::from(0x99_u64));
         log.topics[1].as_mut_slice()[0] = 0x01;
 
-        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+        let changes = extract_asset_changes(&sample_execution_artifacts(
             EvmExecutionStatus::Success,
             vec![log],
             Vec::new(),
         ));
 
-        assert!(asset_changes.is_empty());
+        assert!(changes.is_empty());
     }
 
     #[test]
@@ -475,22 +504,28 @@ mod tests {
             ),
         ];
 
-        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+        let changes = extract_asset_changes(&sample_execution_artifacts(
             EvmExecutionStatus::Success,
             Vec::new(),
             frames,
         ));
 
-        assert_eq!(asset_changes.len(), 3);
-        assert_eq!(asset_changes[0].from, root_from);
-        assert_eq!(asset_changes[0].to, root_to);
-        assert_eq!(asset_changes[0].amount, U256::from(1_u64));
-        assert_eq!(asset_changes[1].from, root_to);
-        assert_eq!(asset_changes[1].to, inner_to);
-        assert_eq!(asset_changes[1].amount, U256::from(2_u64));
-        assert_eq!(asset_changes[2].from, inner_to);
-        assert_eq!(asset_changes[2].to, created);
-        assert_eq!(asset_changes[2].amount, U256::from(3_u64));
+        assert_eq!(changes.len(), 3);
+
+        let first = transfer(&changes[0]);
+        assert_eq!(first.from, root_from);
+        assert_eq!(first.to, root_to);
+        assert_eq!(first.amount, Some(U256::from(1_u64)));
+
+        let second = transfer(&changes[1]);
+        assert_eq!(second.from, root_to);
+        assert_eq!(second.to, inner_to);
+        assert_eq!(second.amount, Some(U256::from(2_u64)));
+
+        let third = transfer(&changes[2]);
+        assert_eq!(third.from, inner_to);
+        assert_eq!(third.to, created);
+        assert_eq!(third.amount, Some(U256::from(3_u64)));
     }
 
     #[test]
@@ -540,16 +575,18 @@ mod tests {
             ),
         ];
 
-        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+        let changes = extract_asset_changes(&sample_execution_artifacts(
             EvmExecutionStatus::Success,
             Vec::new(),
             frames,
         ));
 
-        assert_eq!(asset_changes.len(), 1);
-        assert_eq!(asset_changes[0].from, root_to);
-        assert_eq!(asset_changes[0].to, committed_sibling_to);
-        assert_eq!(asset_changes[0].amount, U256::from(4_u64));
+        assert_eq!(changes.len(), 1);
+
+        let transfer = transfer(&changes[0]);
+        assert_eq!(transfer.from, root_to);
+        assert_eq!(transfer.to, committed_sibling_to);
+        assert_eq!(transfer.amount, Some(U256::from(4_u64)));
     }
 
     #[test]
@@ -583,13 +620,13 @@ mod tests {
             ),
         ];
 
-        let asset_changes = extract_asset_changes(&sample_execution_artifacts(
+        let changes = extract_asset_changes(&sample_execution_artifacts(
             EvmExecutionStatus::Success,
             Vec::new(),
             frames,
         ));
 
-        assert!(asset_changes.is_empty());
+        assert!(changes.is_empty());
     }
 
     #[test]
@@ -598,44 +635,43 @@ mod tests {
         let from = Address::from_str("0x3333333333333333333333333333333333333333").expect("from");
         let to = Address::from_str("0x4444444444444444444444444444444444444444").expect("to");
 
-        let mut asset_changes = vec![
-            AssetChange {
-                asset_type: AssetType::Native,
-                change_type: AssetChangeType::Transfer,
-                from,
-                to,
-                amount: U256::from(1_u64),
-                asset: None,
-            },
-            AssetChange {
-                asset_type: AssetType::Erc20,
-                change_type: AssetChangeType::Transfer,
-                from,
-                to,
-                amount: U256::from(2_u64),
-                asset: Some(AssetChangeAsset {
-                    token_address: token,
+        let mut changes = vec![
+            Change::Transfer(TransferChange {
+                asset: Asset::Native {
                     symbol: None,
                     decimals: None,
-                }),
-            },
-            AssetChange {
-                asset_type: AssetType::Erc20,
-                change_type: AssetChangeType::Transfer,
+                },
+                from,
+                to,
+                amount: Some(U256::from(1_u64)),
+            }),
+            Change::Transfer(TransferChange {
+                asset: Asset::Erc20 {
+                    contract_address: token,
+                    symbol: None,
+                    decimals: None,
+                    name: None,
+                },
+                from,
+                to,
+                amount: Some(U256::from(2_u64)),
+            }),
+            Change::Transfer(TransferChange {
+                asset: Asset::Erc20 {
+                    contract_address: token,
+                    symbol: None,
+                    decimals: None,
+                    name: None,
+                },
                 from: to,
                 to: from,
-                amount: U256::from(3_u64),
-                asset: Some(AssetChangeAsset {
-                    token_address: token,
-                    symbol: None,
-                    decimals: None,
-                }),
-            },
+                amount: Some(U256::from(3_u64)),
+            }),
         ];
 
         let mut load_count = 0;
 
-        fill_erc20_metadata(&mut asset_changes, |address| {
+        fill_erc20_metadata(&mut changes, |address| {
             assert_eq!(address, token);
             load_count += 1;
 
@@ -646,14 +682,34 @@ mod tests {
         });
 
         assert_eq!(load_count, 1);
-        assert_eq!(asset_changes[0].asset, None);
+        assert!(matches!(
+            transfer(&changes[0]).asset,
+            Asset::Native {
+                symbol: None,
+                decimals: None,
+            }
+        ));
 
-        let first_erc20 = asset_changes[1].asset.as_ref().expect("first erc20 asset");
-        assert_eq!(first_erc20.symbol.as_deref(), Some("USDC"));
-        assert_eq!(first_erc20.decimals, Some(6));
+        let first_erc20 = transfer(&changes[1]);
+        assert!(matches!(
+            first_erc20.asset,
+            Asset::Erc20 {
+                contract_address,
+                symbol: Some(ref symbol),
+                decimals: Some(6),
+                name: None,
+            } if contract_address == token && symbol == "USDC"
+        ));
 
-        let second_erc20 = asset_changes[2].asset.as_ref().expect("second erc20 asset");
-        assert_eq!(second_erc20.symbol.as_deref(), Some("USDC"));
-        assert_eq!(second_erc20.decimals, Some(6));
+        let second_erc20 = transfer(&changes[2]);
+        assert!(matches!(
+            second_erc20.asset,
+            Asset::Erc20 {
+                contract_address,
+                symbol: Some(ref symbol),
+                decimals: Some(6),
+                name: None,
+            } if contract_address == token && symbol == "USDC"
+        ));
     }
 }

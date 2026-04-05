@@ -1,6 +1,8 @@
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 
-use crate::interface::{BlockRef, EvmSimulateTransactionResponse, Transaction};
+use crate::interface::{
+    BlockRef, EvmSimulateTransactionResponse, SimulateTransactionOptions, Transaction,
+};
 
 #[rpc(server)]
 pub trait DryrunRpc {
@@ -12,5 +14,6 @@ pub trait DryrunRpc {
         &self,
         transaction: Transaction,
         block: Option<BlockRef>,
+        options: Option<SimulateTransactionOptions>,
     ) -> RpcResult<EvmSimulateTransactionResponse>;
 }

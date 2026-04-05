@@ -3,22 +3,54 @@ use alloy::{
     serde::quantity,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmSimulateTransactionRequest {
     pub transaction: Transaction,
     pub block: Option<BlockRef>,
+    pub options: Option<SimulateTransactionOptions>,
 }
 
 impl EvmSimulateTransactionRequest {
-    pub(crate) fn new(transaction: Transaction, block: Option<BlockRef>) -> Self {
-        Self { transaction, block }
+    pub(crate) fn new(
+        transaction: Transaction,
+        block: Option<BlockRef>,
+        options: Option<SimulateTransactionOptions>,
+    ) -> Self {
+        Self {
+            transaction,
+            block,
+            options,
+        }
     }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(transparent)]
-pub struct BlockRef(pub String);
+#[serde(untagged)]
+pub enum BlockRef {
+    Tag(String),
+    Hash(BlockHashRef),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BlockHashRef {
+    pub block_hash: B256,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SimulateTransactionOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_overrides: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_overrides: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<Value>,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -85,7 +117,7 @@ pub struct AccessListItem {
 pub struct EvmSimulateTransactionResponse {
     pub execution: Execution,
     #[serde(default)]
-    pub asset_changes: Vec<AssetChange>,
+    pub changes: Vec<Change>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -97,7 +129,8 @@ pub struct Execution {
     pub gas_used: String,
     pub gas_limit: String,
     pub output: String,
-    pub failure: Option<SimulationFailure>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<ExecutionError>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -116,7 +149,7 @@ pub enum SimulationStatus {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct SimulationFailure {
+pub struct ExecutionError {
     pub code: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,36 +157,113 @@ pub struct SimulationFailure {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "UPPERCASE")]
-pub enum AssetType {
-    Native,
-    Erc20,
+#[serde(
+    tag = "kind",
+    rename_all = "SCREAMING_SNAKE_CASE",
+    rename_all_fields = "camelCase"
+)]
+pub enum Change {
+    Transfer {
+        asset: Asset,
+        from: String,
+        to: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        amount: Option<String>,
+    },
+    Mint {
+        asset: Asset,
+        to: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        amount: Option<String>,
+    },
+    Burn {
+        asset: Asset,
+        from: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        amount: Option<String>,
+    },
+    Approval {
+        asset: Asset,
+        owner: String,
+        spender: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        amount: Option<String>,
+    },
+    ApprovalForAll {
+        collection: Collection,
+        owner: String,
+        operator: String,
+        approved: bool,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "UPPERCASE")]
-pub enum AssetChangeType {
-    Transfer,
+#[serde(
+    tag = "type",
+    rename_all = "SCREAMING_SNAKE_CASE",
+    rename_all_fields = "camelCase"
+)]
+pub enum Asset {
+    Native {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        symbol: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        decimals: Option<u8>,
+    },
+    Erc20 {
+        contract_address: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        symbol: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        decimals: Option<u8>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    Erc721 {
+        contract_address: String,
+        token_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        collection_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        symbol: Option<String>,
+    },
+    Erc1155 {
+        contract_address: String,
+        token_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        collection_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        symbol: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct AssetChangeAsset {
-    pub token_address: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub symbol: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub decimals: Option<u8>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct AssetChange {
-    pub asset_type: AssetType,
-    pub change_type: AssetChangeType,
-    pub from: String,
-    pub to: String,
-    pub amount: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub asset: Option<AssetChangeAsset>,
+#[serde(
+    tag = "type",
+    rename_all = "SCREAMING_SNAKE_CASE",
+    rename_all_fields = "camelCase"
+)]
+pub enum Collection {
+    Erc721 {
+        contract_address: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        collection_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        symbol: Option<String>,
+    },
+    Erc1155 {
+        contract_address: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        collection_name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        symbol: Option<String>,
+    },
 }

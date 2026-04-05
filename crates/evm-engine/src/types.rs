@@ -61,32 +61,95 @@ pub struct EvmExecutionFailure {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AssetType {
-    Native,
-    Erc20,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AssetChangeType {
-    Transfer,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Asset {
+    Native {
+        symbol: Option<String>,
+        decimals: Option<u8>,
+    },
+    Erc20 {
+        contract_address: Address,
+        symbol: Option<String>,
+        decimals: Option<u8>,
+        name: Option<String>,
+    },
+    Erc721 {
+        contract_address: Address,
+        token_id: U256,
+        collection_name: Option<String>,
+        name: Option<String>,
+        symbol: Option<String>,
+    },
+    Erc1155 {
+        contract_address: Address,
+        token_id: U256,
+        collection_name: Option<String>,
+        name: Option<String>,
+        symbol: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AssetChangeAsset {
-    pub token_address: Address,
-    pub symbol: Option<String>,
-    pub decimals: Option<u8>,
+pub enum Collection {
+    Erc721 {
+        contract_address: Address,
+        collection_name: Option<String>,
+        name: Option<String>,
+        symbol: Option<String>,
+    },
+    Erc1155 {
+        contract_address: Address,
+        collection_name: Option<String>,
+        name: Option<String>,
+        symbol: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AssetChange {
-    pub asset_type: AssetType,
-    pub change_type: AssetChangeType,
+pub struct TransferChange {
+    pub asset: Asset,
     pub from: Address,
     pub to: Address,
-    pub amount: U256,
-    pub asset: Option<AssetChangeAsset>,
+    pub amount: Option<U256>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MintChange {
+    pub asset: Asset,
+    pub to: Address,
+    pub amount: Option<U256>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BurnChange {
+    pub asset: Asset,
+    pub from: Address,
+    pub amount: Option<U256>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalChange {
+    pub asset: Asset,
+    pub owner: Address,
+    pub spender: Address,
+    pub amount: Option<U256>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalForAllChange {
+    pub collection: Collection,
+    pub owner: Address,
+    pub operator: Address,
+    pub approved: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Change {
+    Transfer(TransferChange),
+    Mint(MintChange),
+    Burn(BurnChange),
+    Approval(ApprovalChange),
+    ApprovalForAll(ApprovalForAllChange),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,26 +166,23 @@ pub struct EvmExecution {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmSimulation {
     execution: EvmExecution,
-    asset_changes: Vec<AssetChange>,
+    changes: Vec<Change>,
 }
 
 impl EvmSimulation {
-    pub fn new(execution: EvmExecution, asset_changes: Vec<AssetChange>) -> Self {
-        Self {
-            execution,
-            asset_changes,
-        }
+    pub fn new(execution: EvmExecution, changes: Vec<Change>) -> Self {
+        Self { execution, changes }
     }
 
     pub fn execution(&self) -> &EvmExecution {
         &self.execution
     }
 
-    pub fn asset_changes(&self) -> &[AssetChange] {
-        &self.asset_changes
+    pub fn changes(&self) -> &[Change] {
+        &self.changes
     }
 
-    pub fn into_parts(self) -> (EvmExecution, Vec<AssetChange>) {
-        (self.execution, self.asset_changes)
+    pub fn into_parts(self) -> (EvmExecution, Vec<Change>) {
+        (self.execution, self.changes)
     }
 }

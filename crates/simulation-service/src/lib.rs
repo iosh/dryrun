@@ -7,9 +7,10 @@ use evm_engine::{EvmEngine, EvmExecution, EvmExecutionInput, EvmSimulation};
 
 pub use error::SimulationServiceError;
 pub use types::{
-    AccessListItem, AssetChange, AssetChangeAsset, AssetChangeType, AssetType, BlockRef,
-    EvmTransaction, EvmTransactionType, SimulateEvmTransactionInput, SimulateEvmTransactionOutput,
-    SimulatedBlock, SimulationFailure, SimulationStatus,
+    AccessListItem, ApprovalChange, ApprovalForAllChange, Asset, BlockRef, BurnChange, Change,
+    Collection, EvmTransaction, EvmTransactionType, MintChange, SimulateEvmTransactionInput,
+    SimulateEvmTransactionOutput, SimulatedBlock, SimulationError, SimulationStatus,
+    TransferChange,
 };
 
 #[derive(Debug, Clone)]
@@ -48,9 +49,9 @@ impl SimulateEvmTransactionOutput {
                 gas_used,
                 gas_limit,
                 output,
-                failure,
+                failure: error,
             },
-            asset_changes,
+            changes,
         ) = simulation.into_parts();
 
         Self {
@@ -60,8 +61,8 @@ impl SimulateEvmTransactionOutput {
             gas_used,
             gas_limit,
             output,
-            failure,
-            asset_changes,
+            error,
+            changes,
         }
     }
 }
@@ -93,27 +94,40 @@ mod tests {
                 output: Bytes::from_str("0x0102").expect("bytes"),
                 failure: None,
             },
-            vec![evm_engine::AssetChange {
-                asset_type: evm_engine::AssetType::Erc20,
-                change_type: evm_engine::AssetChangeType::Transfer,
+            vec![evm_engine::Change::Transfer(evm_engine::TransferChange {
+                asset: evm_engine::Asset::Erc20 {
+                    contract_address: Address::from_str(
+                        "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                    )
+                    .expect("token"),
+                    symbol: Some("USDC".to_string()),
+                    decimals: Some(6),
+                    name: None,
+                },
                 from: Address::from_str("0x1111111111111111111111111111111111111111")
                     .expect("from"),
                 to: Address::from_str("0x2222222222222222222222222222222222222222").expect("to"),
-                amount: U256::from(0x1234_u64),
-                asset: Some(evm_engine::AssetChangeAsset {
-                    token_address: Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
-                        .expect("token"),
-                    symbol: Some("USDC".to_string()),
-                    decimals: Some(6),
-                }),
-            }],
+                amount: Some(U256::from(0x1234_u64)),
+            })],
         );
 
         let mapped = SimulateEvmTransactionOutput::from_engine_simulation(simulation);
-        assert_eq!(mapped.asset_changes.len(), 1);
-        assert_eq!(mapped.asset_changes[0].amount, U256::from(0x1234_u64));
-        let asset = mapped.asset_changes[0].asset.as_ref().expect("erc20 asset");
-        assert_eq!(asset.symbol.as_deref(), Some("USDC"));
-        assert_eq!(asset.decimals, Some(6));
+        assert_eq!(mapped.changes.len(), 1);
+
+        let Change::Transfer(change) = &mapped.changes[0] else {
+            panic!("expected transfer change");
+        };
+
+        assert_eq!(change.amount, Some(U256::from(0x1234_u64)));
+
+        let Asset::Erc20 {
+            symbol, decimals, ..
+        } = &change.asset
+        else {
+            panic!("expected erc20 asset");
+        };
+
+        assert_eq!(symbol.as_deref(), Some("USDC"));
+        assert_eq!(*decimals, Some(6));
     }
 }

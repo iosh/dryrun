@@ -1,9 +1,9 @@
 use alloy_primitives::Bytes;
 
 pub use evm_engine::{
-    AccessListItem, AssetChange, AssetChangeAsset, AssetChangeType, AssetType, BlockRef,
-    EvmExecutionFailure as SimulationFailure, EvmExecutionStatus as SimulationStatus,
-    EvmTransaction, EvmTransactionType, SimulatedBlock,
+    AccessListItem, ApprovalChange, ApprovalForAllChange, Asset, BlockRef, BurnChange, Change,
+    Collection, EvmExecutionFailure as SimulationError, EvmExecutionStatus as SimulationStatus,
+    EvmTransaction, EvmTransactionType, MintChange, SimulatedBlock, TransferChange,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +20,6 @@ pub struct SimulateEvmTransactionOutput {
     pub gas_used: u64,
     pub gas_limit: u64,
     pub output: Bytes,
-    pub failure: Option<SimulationFailure>,
-    pub asset_changes: Vec<AssetChange>,
+    pub error: Option<SimulationError>,
+    pub changes: Vec<Change>,
 }

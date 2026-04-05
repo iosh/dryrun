@@ -14,9 +14,9 @@ impl From<simulation_service::SimulateEvmTransactionOutput>
                 gas_used: format_u64_quantity(output.gas_used),
                 gas_limit: format_u64_quantity(output.gas_limit),
                 output: format!("{:#x}", output.output),
-                failure: output.failure.map(Into::into),
+                error: output.error.map(Into::into),
             },
-            asset_changes: output.asset_changes.into_iter().map(Into::into).collect(),
+            changes: output.changes.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -39,52 +39,123 @@ impl From<simulation_service::SimulationStatus> for rpc::SimulationStatus {
     }
 }
 
-impl From<simulation_service::SimulationFailure> for rpc::SimulationFailure {
-    fn from(failure: simulation_service::SimulationFailure) -> Self {
+impl From<simulation_service::SimulationError> for rpc::ExecutionError {
+    fn from(error: simulation_service::SimulationError) -> Self {
         Self {
-            code: failure.code,
-            message: failure.message,
-            reason: failure.reason,
+            code: error.code,
+            message: error.message,
+            reason: error.reason,
         }
     }
 }
 
-impl From<simulation_service::AssetType> for rpc::AssetType {
-    fn from(asset_type: simulation_service::AssetType) -> Self {
-        match asset_type {
-            simulation_service::AssetType::Native => Self::Native,
-            simulation_service::AssetType::Erc20 => Self::Erc20,
+impl From<simulation_service::Collection> for rpc::Collection {
+    fn from(collection: simulation_service::Collection) -> Self {
+        match collection {
+            simulation_service::Collection::Erc721 {
+                contract_address,
+                collection_name,
+                name,
+                symbol,
+            } => Self::Erc721 {
+                contract_address: format!("{:#x}", contract_address),
+                collection_name,
+                name,
+                symbol,
+            },
+            simulation_service::Collection::Erc1155 {
+                contract_address,
+                collection_name,
+                name,
+                symbol,
+            } => Self::Erc1155 {
+                contract_address: format!("{:#x}", contract_address),
+                collection_name,
+                name,
+                symbol,
+            },
         }
     }
 }
 
-impl From<simulation_service::AssetChangeType> for rpc::AssetChangeType {
-    fn from(change_type: simulation_service::AssetChangeType) -> Self {
-        match change_type {
-            simulation_service::AssetChangeType::Transfer => Self::Transfer,
+impl From<simulation_service::Asset> for rpc::Asset {
+    fn from(asset: simulation_service::Asset) -> Self {
+        match asset {
+            simulation_service::Asset::Native { symbol, decimals } => {
+                Self::Native { symbol, decimals }
+            }
+            simulation_service::Asset::Erc20 {
+                contract_address,
+                symbol,
+                decimals,
+                name,
+            } => Self::Erc20 {
+                contract_address: format!("{:#x}", contract_address),
+                symbol,
+                decimals,
+                name,
+            },
+            simulation_service::Asset::Erc721 {
+                contract_address,
+                token_id,
+                collection_name,
+                name,
+                symbol,
+            } => Self::Erc721 {
+                contract_address: format!("{:#x}", contract_address),
+                token_id: format_u256_quantity(token_id),
+                collection_name,
+                name,
+                symbol,
+            },
+            simulation_service::Asset::Erc1155 {
+                contract_address,
+                token_id,
+                collection_name,
+                name,
+                symbol,
+            } => Self::Erc1155 {
+                contract_address: format!("{:#x}", contract_address),
+                token_id: format_u256_quantity(token_id),
+                collection_name,
+                name,
+                symbol,
+            },
         }
     }
 }
 
-impl From<simulation_service::AssetChangeAsset> for rpc::AssetChangeAsset {
-    fn from(asset: simulation_service::AssetChangeAsset) -> Self {
-        Self {
-            token_address: format!("{:#x}", asset.token_address),
-            symbol: asset.symbol,
-            decimals: asset.decimals,
-        }
-    }
-}
-
-impl From<simulation_service::AssetChange> for rpc::AssetChange {
-    fn from(asset_change: simulation_service::AssetChange) -> Self {
-        Self {
-            asset_type: asset_change.asset_type.into(),
-            change_type: asset_change.change_type.into(),
-            from: format!("{:#x}", asset_change.from),
-            to: format!("{:#x}", asset_change.to),
-            amount: format_u256_quantity(asset_change.amount),
-            asset: asset_change.asset.map(Into::into),
+impl From<simulation_service::Change> for rpc::Change {
+    fn from(change: simulation_service::Change) -> Self {
+        match change {
+            simulation_service::Change::Transfer(change) => Self::Transfer {
+                asset: change.asset.into(),
+                from: format!("{:#x}", change.from),
+                to: format!("{:#x}", change.to),
+                amount: change.amount.map(format_u256_quantity),
+            },
+            simulation_service::Change::Mint(change) => Self::Mint {
+                asset: change.asset.into(),
+                to: format!("{:#x}", change.to),
+                amount: change.amount.map(format_u256_quantity),
+            },
+            simulation_service::Change::Burn(change) => Self::Burn {
+                asset: change.asset.into(),
+                from: format!("{:#x}", change.from),
+                amount: change.amount.map(format_u256_quantity),
+            },
+            simulation_service::Change::Approval(change) => Self::Approval {
+                asset: change.asset.into(),
+                owner: format!("{:#x}", change.owner),
+                spender: format!("{:#x}", change.spender),
+                amount: change.amount.map(format_u256_quantity),
+            },
+            simulation_service::Change::ApprovalForAll(change) => Self::ApprovalForAll {
+                collection: change.collection.into(),
+                owner: format!("{:#x}", change.owner),
+                operator: format!("{:#x}", change.operator),
+                approved: change.approved,
+            },
         }
     }
 }
@@ -112,29 +183,80 @@ mod tests {
             gas_used: 0x5208,
             gas_limit: 0x5300,
             output: Bytes::from_str("0x0102").expect("bytes"),
-            failure: None,
-            asset_changes: vec![simulation_service::AssetChange {
-                asset_type: simulation_service::AssetType::Erc20,
-                change_type: simulation_service::AssetChangeType::Transfer,
-                from: Address::from_str("0x1111111111111111111111111111111111111111")
-                    .expect("from"),
-                to: Address::from_str("0x2222222222222222222222222222222222222222").expect("to"),
-                amount: U256::from(0xde0b6b3a7640000_u64),
-                asset: Some(simulation_service::AssetChangeAsset {
-                    token_address: Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
+            error: None,
+            changes: vec![simulation_service::Change::Transfer(
+                simulation_service::TransferChange {
+                    asset: simulation_service::Asset::Erc20 {
+                        contract_address: Address::from_str(
+                            "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+                        )
                         .expect("token"),
-                    symbol: Some("USDC".to_string()),
-                    decimals: Some(6),
-                }),
-            }],
+                        symbol: Some("USDC".to_string()),
+                        decimals: Some(6),
+                        name: None,
+                    },
+                    from: Address::from_str("0x1111111111111111111111111111111111111111")
+                        .expect("from"),
+                    to: Address::from_str("0x2222222222222222222222222222222222222222")
+                        .expect("to"),
+                    amount: Some(U256::from(0xde0b6b3a7640000_u64)),
+                },
+            )],
         };
 
         let response: rpc::EvmSimulateTransactionResponse = output.into();
         assert_eq!(response.execution.chain_id, "0x1");
         assert_eq!(response.execution.block.number, "0x1234");
         assert_eq!(response.execution.gas_used, "0x5208");
-        assert_eq!(response.asset_changes.len(), 1);
-        assert_eq!(response.asset_changes[0].amount, "0xde0b6b3a7640000");
         assert_eq!(response.execution.output, "0x0102");
+        assert_eq!(response.changes.len(), 1);
+
+        let rpc::Change::Transfer { asset, amount, .. } = &response.changes[0] else {
+            panic!("expected transfer change");
+        };
+
+        assert_eq!(amount.as_deref(), Some("0xde0b6b3a7640000"));
+
+        let rpc::Asset::Erc20 {
+            symbol, decimals, ..
+        } = asset
+        else {
+            panic!("expected erc20 asset");
+        };
+
+        assert_eq!(symbol.as_deref(), Some("USDC"));
+        assert_eq!(*decimals, Some(6));
+    }
+
+    #[test]
+    fn failed_service_output_maps_error_into_execution() {
+        let output = simulation_service::SimulateEvmTransactionOutput {
+            chain_id: 1,
+            block: simulation_service::SimulatedBlock {
+                number: 0x1234,
+                hash: B256::from_str(
+                    "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                )
+                .expect("hash"),
+            },
+            status: simulation_service::SimulationStatus::Failed,
+            gas_used: 0x5208,
+            gas_limit: 0x5300,
+            output: Bytes::new(),
+            error: Some(simulation_service::SimulationError {
+                code: "REVERT".to_string(),
+                message: "execution reverted".to_string(),
+                reason: Some("insufficient output".to_string()),
+            }),
+            changes: Vec::new(),
+        };
+
+        let response: rpc::EvmSimulateTransactionResponse = output.into();
+        assert_eq!(response.execution.status, rpc::SimulationStatus::Failed);
+
+        let error = response.execution.error.expect("expected execution error");
+        assert_eq!(error.code, "REVERT");
+        assert_eq!(error.message, "execution reverted");
+        assert_eq!(error.reason.as_deref(), Some("insufficient output"));
     }
 }

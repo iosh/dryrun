@@ -8,7 +8,8 @@ use tracing::instrument;
 use crate::{
     errors::{internal_error, not_supported},
     interface::{
-        BlockRef, EvmSimulateTransactionRequest, EvmSimulateTransactionResponse, Transaction,
+        BlockRef, EvmSimulateTransactionRequest, EvmSimulateTransactionResponse,
+        SimulateTransactionOptions, Transaction,
     },
     rpc::DryrunRpcServer,
 };
@@ -25,14 +26,15 @@ impl RpcHandler {
 
     #[instrument(
         name = "dryrun_evm_simulateTransaction",
-        skip(self, transaction, block)
+        skip(self, transaction, block, options)
     )]
     async fn handle_simulate_transaction(
         &self,
         transaction: Transaction,
         block: Option<BlockRef>,
+        options: Option<SimulateTransactionOptions>,
     ) -> RpcResult<EvmSimulateTransactionResponse> {
-        let request = EvmSimulateTransactionRequest::new(transaction, block);
+        let request = EvmSimulateTransactionRequest::new(transaction, block, options);
         let input: simulation_service::SimulateEvmTransactionInput =
             request.try_into().map_err(ErrorObjectOwned::from)?;
         let output = self
@@ -55,8 +57,10 @@ impl DryrunRpcServer for RpcHandler {
         &self,
         transaction: Transaction,
         block: Option<BlockRef>,
+        options: Option<SimulateTransactionOptions>,
     ) -> RpcResult<EvmSimulateTransactionResponse> {
-        self.handle_simulate_transaction(transaction, block).await
+        self.handle_simulate_transaction(transaction, block, options)
+            .await
     }
 }
 

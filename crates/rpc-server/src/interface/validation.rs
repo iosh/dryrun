@@ -4,20 +4,55 @@ use alloy::primitives::B256;
 
 use crate::errors::ValidationError;
 
-use super::{AccessListItem, BlockRef, Transaction};
+use super::{
+    AccessListItem, BlockRef, EvmSimulateTransactionRequest, SimulateTransactionOptions,
+    Transaction,
+};
+
+impl EvmSimulateTransactionRequest {
+    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
+        self.transaction.validate()?;
+
+        if let Some(block) = &self.block {
+            block.validate()?;
+        }
+
+        if let Some(options) = &self.options {
+            options.validate()?;
+        }
+
+        Ok(())
+    }
+}
 
 impl BlockRef {
     pub(crate) fn validate(&self) -> Result<(), ValidationError> {
-        match self.0.as_str() {
-            "latest" => Ok(()),
-            "pending" | "safe" | "finalized" => Err(ValidationError::not_supported(
-                "`block` only supports `latest` or a hex block number",
+        match self {
+            Self::Tag(value) => match value.as_str() {
+                "latest" => Ok(()),
+                "pending" | "safe" | "finalized" => Err(ValidationError::not_supported(
+                    "`block` only supports `latest` or a hex block number",
+                )),
+                value if B256::from_str(value).is_ok() => Err(ValidationError::not_supported(
+                    "`block` does not support block hash selectors",
+                )),
+                value => validate_hex_quantity(value, "block"),
+            },
+            Self::Hash(_) => Err(ValidationError::not_supported(
+                "`block.blockHash` is not supported yet",
             )),
-            value if B256::from_str(value).is_ok() => Err(ValidationError::not_supported(
-                "`block` does not support block hash selectors",
-            )),
-            value => validate_hex_quantity(value, "block"),
         }
+    }
+}
+
+impl SimulateTransactionOptions {
+    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
+        validate_reserved_option("stateOverrides", self.state_overrides.as_ref())?;
+        validate_reserved_option("blockOverrides", self.block_overrides.as_ref())?;
+        validate_reserved_option("include", self.include.as_ref())?;
+        validate_reserved_option("mode", self.mode.as_ref())?;
+
+        Ok(())
     }
 }
 
@@ -99,6 +134,19 @@ impl AccessListItem {
     pub(crate) fn validate(&self, _index: usize) -> Result<(), ValidationError> {
         Ok(())
     }
+}
+
+fn validate_reserved_option(
+    field: &str,
+    value: Option<&serde_json::Value>,
+) -> Result<(), ValidationError> {
+    if value.is_some() {
+        return Err(ValidationError::not_supported(format!(
+            "`options.{field}` is reserved and not supported yet"
+        )));
+    }
+
+    Ok(())
 }
 
 fn validate_hex_quantity(value: &str, field: &str) -> Result<(), ValidationError> {

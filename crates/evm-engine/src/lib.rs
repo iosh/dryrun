@@ -10,9 +10,9 @@ mod types;
 pub use error::EvmEngineError;
 use execution::simulate_execution;
 pub use types::{
-    AccessListItem, AssetChange, AssetChangeAsset, AssetChangeType, AssetType, BlockRef,
-    EvmExecution, EvmExecutionFailure, EvmExecutionInput, EvmExecutionStatus, EvmSimulation,
-    EvmTransaction, EvmTransactionType, SimulatedBlock,
+    AccessListItem, ApprovalChange, ApprovalForAllChange, Asset, BlockRef, BurnChange, Change,
+    Collection, EvmExecution, EvmExecutionFailure, EvmExecutionInput, EvmExecutionStatus,
+    EvmSimulation, EvmTransaction, EvmTransactionType, MintChange, SimulatedBlock, TransferChange,
 };
 
 #[derive(Debug, Clone)]
