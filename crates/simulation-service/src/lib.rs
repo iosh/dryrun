@@ -3,14 +3,14 @@ mod types;
 
 use std::sync::Arc;
 
-use evm_engine::{EvmEngine, EvmExecution, EvmExecutionInput, EvmSimulation};
+use evm_engine::{EvmEngine, EvmExecutionInput, EvmSimulation};
 
 pub use error::SimulationServiceError;
 pub use types::{
     AccessListItem, ApprovalChange, ApprovalForAllChange, Asset, BlockRef, BurnChange, Change,
-    Collection, EvmTransaction, EvmTransactionType, MintChange, SimulateEvmTransactionInput,
-    SimulateEvmTransactionOutput, SimulatedBlock, SimulationError, SimulationStatus,
-    TransferChange,
+    Collection, EvmTransaction, EvmTransactionType, ExecutionFailure, ExecutionStatus, MintChange,
+    SimulateEvmTransactionInput, SimulateEvmTransactionOutput, SimulatedBlock,
+    SimulationExecution, TransferChange,
 };
 
 #[derive(Debug, Clone)]
@@ -27,42 +27,256 @@ impl SimulationService {
         &self,
         input: SimulateEvmTransactionInput,
     ) -> Result<SimulateEvmTransactionOutput, SimulationServiceError> {
-        let SimulateEvmTransactionInput { block, transaction } = input;
-        let simulation = self
-            .evm_engine
-            .simulate(EvmExecutionInput { block, transaction })
-            .await?;
-
-        Ok(SimulateEvmTransactionOutput::from_engine_simulation(
-            simulation,
-        ))
+        let simulation = self.evm_engine.simulate(input.into()).await?;
+        Ok(simulation.into())
     }
 }
 
-impl SimulateEvmTransactionOutput {
-    fn from_engine_simulation(simulation: EvmSimulation) -> Self {
-        let (
-            EvmExecution {
-                chain_id,
-                block,
-                status,
-                gas_used,
-                gas_limit,
-                output,
-                failure: error,
-            },
-            changes,
-        ) = simulation.into_parts();
+impl From<SimulateEvmTransactionInput> for EvmExecutionInput {
+    fn from(input: SimulateEvmTransactionInput) -> Self {
+        Self {
+            block: input.block.into(),
+            transaction: input.transaction.into(),
+        }
+    }
+}
+
+impl From<BlockRef> for evm_engine::BlockRef {
+    fn from(block: BlockRef) -> Self {
+        match block {
+            BlockRef::Latest => Self::Latest,
+            BlockRef::Number(number) => Self::Number(number),
+            BlockRef::Hash(hash) => Self::Hash(hash),
+        }
+    }
+}
+
+impl From<AccessListItem> for evm_engine::AccessListItem {
+    fn from(item: AccessListItem) -> Self {
+        Self {
+            address: item.address,
+            storage_keys: item.storage_keys,
+        }
+    }
+}
+
+impl From<EvmTransactionType> for evm_engine::EvmTransactionType {
+    fn from(tx_type: EvmTransactionType) -> Self {
+        match tx_type {
+            EvmTransactionType::Legacy => Self::Legacy,
+            EvmTransactionType::AccessList => Self::AccessList,
+            EvmTransactionType::DynamicFee => Self::DynamicFee,
+        }
+    }
+}
+
+impl From<EvmTransaction> for evm_engine::EvmTransaction {
+    fn from(transaction: EvmTransaction) -> Self {
+        Self {
+            tx_type: transaction.tx_type.into(),
+            requested_chain_id: transaction.requested_chain_id,
+            from: transaction.from,
+            to: transaction.to,
+            nonce: transaction.nonce,
+            gas_limit: transaction.gas_limit,
+            value: transaction.value,
+            data: transaction.data,
+            access_list: transaction.access_list.into_iter().map(Into::into).collect(),
+            gas_price: transaction.gas_price,
+            max_fee_per_gas: transaction.max_fee_per_gas,
+            max_priority_fee_per_gas: transaction.max_priority_fee_per_gas,
+        }
+    }
+}
+
+impl From<EvmSimulation> for SimulateEvmTransactionOutput {
+    fn from(simulation: EvmSimulation) -> Self {
+        let (execution, changes) = simulation.into_parts();
 
         Self {
-            chain_id,
-            block,
-            status,
-            gas_used,
-            gas_limit,
-            output,
-            error,
-            changes,
+            execution: execution.into(),
+            changes: changes.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<evm_engine::EvmExecutionStatus> for ExecutionStatus {
+    fn from(status: evm_engine::EvmExecutionStatus) -> Self {
+        match status {
+            evm_engine::EvmExecutionStatus::Success => Self::Success,
+            evm_engine::EvmExecutionStatus::Failed => Self::Failed,
+        }
+    }
+}
+
+impl From<evm_engine::SimulatedBlock> for SimulatedBlock {
+    fn from(block: evm_engine::SimulatedBlock) -> Self {
+        Self {
+            number: block.number,
+            hash: block.hash,
+        }
+    }
+}
+
+impl From<evm_engine::EvmExecutionFailure> for ExecutionFailure {
+    fn from(failure: evm_engine::EvmExecutionFailure) -> Self {
+        Self {
+            code: failure.code,
+            message: failure.message,
+            reason: failure.reason,
+        }
+    }
+}
+
+impl From<evm_engine::EvmExecution> for SimulationExecution {
+    fn from(execution: evm_engine::EvmExecution) -> Self {
+        Self {
+            chain_id: execution.chain_id,
+            block: execution.block.into(),
+            status: execution.status.into(),
+            gas_used: execution.gas_used,
+            gas_limit: execution.gas_limit,
+            output: execution.output,
+            failure: execution.failure.map(Into::into),
+        }
+    }
+}
+
+impl From<evm_engine::Asset> for Asset {
+    fn from(asset: evm_engine::Asset) -> Self {
+        match asset {
+            evm_engine::Asset::Native { symbol, decimals } => Self::Native { symbol, decimals },
+            evm_engine::Asset::Erc20 {
+                contract_address,
+                symbol,
+                decimals,
+                name,
+            } => Self::Erc20 {
+                contract_address,
+                symbol,
+                decimals,
+                name,
+            },
+            evm_engine::Asset::Erc721 {
+                contract_address,
+                token_id,
+                collection_name,
+                name,
+                symbol,
+            } => Self::Erc721 {
+                contract_address,
+                token_id,
+                collection_name,
+                name,
+                symbol,
+            },
+            evm_engine::Asset::Erc1155 {
+                contract_address,
+                token_id,
+                collection_name,
+                name,
+                symbol,
+            } => Self::Erc1155 {
+                contract_address,
+                token_id,
+                collection_name,
+                name,
+                symbol,
+            },
+        }
+    }
+}
+
+impl From<evm_engine::Collection> for Collection {
+    fn from(collection: evm_engine::Collection) -> Self {
+        match collection {
+            evm_engine::Collection::Erc721 {
+                contract_address,
+                collection_name,
+                name,
+                symbol,
+            } => Self::Erc721 {
+                contract_address,
+                collection_name,
+                name,
+                symbol,
+            },
+            evm_engine::Collection::Erc1155 {
+                contract_address,
+                collection_name,
+                name,
+                symbol,
+            } => Self::Erc1155 {
+                contract_address,
+                collection_name,
+                name,
+                symbol,
+            },
+        }
+    }
+}
+
+impl From<evm_engine::TransferChange> for TransferChange {
+    fn from(change: evm_engine::TransferChange) -> Self {
+        Self {
+            asset: change.asset.into(),
+            from: change.from,
+            to: change.to,
+            amount: change.amount,
+        }
+    }
+}
+
+impl From<evm_engine::MintChange> for MintChange {
+    fn from(change: evm_engine::MintChange) -> Self {
+        Self {
+            asset: change.asset.into(),
+            to: change.to,
+            amount: change.amount,
+        }
+    }
+}
+
+impl From<evm_engine::BurnChange> for BurnChange {
+    fn from(change: evm_engine::BurnChange) -> Self {
+        Self {
+            asset: change.asset.into(),
+            from: change.from,
+            amount: change.amount,
+        }
+    }
+}
+
+impl From<evm_engine::ApprovalChange> for ApprovalChange {
+    fn from(change: evm_engine::ApprovalChange) -> Self {
+        Self {
+            asset: change.asset.into(),
+            owner: change.owner,
+            spender: change.spender,
+            amount: change.amount,
+        }
+    }
+}
+
+impl From<evm_engine::ApprovalForAllChange> for ApprovalForAllChange {
+    fn from(change: evm_engine::ApprovalForAllChange) -> Self {
+        Self {
+            collection: change.collection.into(),
+            owner: change.owner,
+            operator: change.operator,
+            approved: change.approved,
+        }
+    }
+}
+
+impl From<evm_engine::Change> for Change {
+    fn from(change: evm_engine::Change) -> Self {
+        match change {
+            evm_engine::Change::Transfer(change) => Self::Transfer(change.into()),
+            evm_engine::Change::Mint(change) => Self::Mint(change.into()),
+            evm_engine::Change::Burn(change) => Self::Burn(change.into()),
+            evm_engine::Change::Approval(change) => Self::Approval(change.into()),
+            evm_engine::Change::ApprovalForAll(change) => Self::ApprovalForAll(change.into()),
         }
     }
 }
@@ -111,7 +325,9 @@ mod tests {
             })],
         );
 
-        let mapped = SimulateEvmTransactionOutput::from_engine_simulation(simulation);
+        let mapped: SimulateEvmTransactionOutput = simulation.into();
+        assert_eq!(mapped.execution.chain_id, 1);
+        assert_eq!(mapped.execution.gas_used, 0x5208);
         assert_eq!(mapped.changes.len(), 1);
 
         let Change::Transfer(change) = &mapped.changes[0] else {

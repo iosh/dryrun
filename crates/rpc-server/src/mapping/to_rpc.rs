@@ -6,17 +6,19 @@ impl From<simulation_service::SimulateEvmTransactionOutput>
     for rpc::EvmSimulateTransactionResponse
 {
     fn from(output: simulation_service::SimulateEvmTransactionOutput) -> Self {
+        let simulation_service::SimulateEvmTransactionOutput { execution, changes } = output;
+
         Self {
             execution: rpc::Execution {
-                chain_id: format_u64_quantity(output.chain_id),
-                block: output.block.into(),
-                status: output.status.into(),
-                gas_used: format_u64_quantity(output.gas_used),
-                gas_limit: format_u64_quantity(output.gas_limit),
-                output: format!("{:#x}", output.output),
-                error: output.error.map(Into::into),
+                chain_id: format_u64_quantity(execution.chain_id),
+                block: execution.block.into(),
+                status: execution.status.into(),
+                gas_used: format_u64_quantity(execution.gas_used),
+                gas_limit: format_u64_quantity(execution.gas_limit),
+                output: format!("{:#x}", execution.output),
+                error: execution.failure.map(Into::into),
             },
-            changes: output.changes.into_iter().map(Into::into).collect(),
+            changes: changes.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -30,17 +32,17 @@ impl From<simulation_service::SimulatedBlock> for rpc::SimulatedBlock {
     }
 }
 
-impl From<simulation_service::SimulationStatus> for rpc::SimulationStatus {
-    fn from(status: simulation_service::SimulationStatus) -> Self {
+impl From<simulation_service::ExecutionStatus> for rpc::SimulationStatus {
+    fn from(status: simulation_service::ExecutionStatus) -> Self {
         match status {
-            simulation_service::SimulationStatus::Success => Self::Success,
-            simulation_service::SimulationStatus::Failed => Self::Failed,
+            simulation_service::ExecutionStatus::Success => Self::Success,
+            simulation_service::ExecutionStatus::Failed => Self::Failed,
         }
     }
 }
 
-impl From<simulation_service::SimulationError> for rpc::ExecutionError {
-    fn from(error: simulation_service::SimulationError) -> Self {
+impl From<simulation_service::ExecutionFailure> for rpc::ExecutionError {
+    fn from(error: simulation_service::ExecutionFailure) -> Self {
         Self {
             code: error.code,
             message: error.message,
@@ -171,19 +173,21 @@ mod tests {
     #[test]
     fn service_output_maps_into_rpc_response() {
         let output = simulation_service::SimulateEvmTransactionOutput {
-            chain_id: 1,
-            block: simulation_service::SimulatedBlock {
-                number: 0x1234,
-                hash: B256::from_str(
-                    "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                )
-                .expect("hash"),
+            execution: simulation_service::SimulationExecution {
+                chain_id: 1,
+                block: simulation_service::SimulatedBlock {
+                    number: 0x1234,
+                    hash: B256::from_str(
+                        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    )
+                    .expect("hash"),
+                },
+                status: simulation_service::ExecutionStatus::Success,
+                gas_used: 0x5208,
+                gas_limit: 0x5300,
+                output: Bytes::from_str("0x0102").expect("bytes"),
+                failure: None,
             },
-            status: simulation_service::SimulationStatus::Success,
-            gas_used: 0x5208,
-            gas_limit: 0x5300,
-            output: Bytes::from_str("0x0102").expect("bytes"),
-            error: None,
             changes: vec![simulation_service::Change::Transfer(
                 simulation_service::TransferChange {
                     asset: simulation_service::Asset::Erc20 {
@@ -231,23 +235,25 @@ mod tests {
     #[test]
     fn failed_service_output_maps_error_into_execution() {
         let output = simulation_service::SimulateEvmTransactionOutput {
-            chain_id: 1,
-            block: simulation_service::SimulatedBlock {
-                number: 0x1234,
-                hash: B256::from_str(
-                    "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                )
-                .expect("hash"),
+            execution: simulation_service::SimulationExecution {
+                chain_id: 1,
+                block: simulation_service::SimulatedBlock {
+                    number: 0x1234,
+                    hash: B256::from_str(
+                        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    )
+                    .expect("hash"),
+                },
+                status: simulation_service::ExecutionStatus::Failed,
+                gas_used: 0x5208,
+                gas_limit: 0x5300,
+                output: Bytes::new(),
+                failure: Some(simulation_service::ExecutionFailure {
+                    code: "REVERT".to_string(),
+                    message: "execution reverted".to_string(),
+                    reason: Some("insufficient output".to_string()),
+                }),
             },
-            status: simulation_service::SimulationStatus::Failed,
-            gas_used: 0x5208,
-            gas_limit: 0x5300,
-            output: Bytes::new(),
-            error: Some(simulation_service::SimulationError {
-                code: "REVERT".to_string(),
-                message: "execution reverted".to_string(),
-                reason: Some("insufficient output".to_string()),
-            }),
             changes: Vec::new(),
         };
 
