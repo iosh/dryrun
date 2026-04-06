@@ -58,12 +58,12 @@ impl SimulateTransactionOptions {
 
 impl Transaction {
     pub(crate) fn validate(&self) -> Result<(), ValidationError> {
-        if let Some(tx_type) = self.tx_type {
-            if !matches!(tx_type, 0x0..=0x2) {
-                return Err(ValidationError::not_supported(
-                    "`transaction.type` only supports `0x0`, `0x1`, and `0x2`",
-                ));
-            }
+        if let Some(tx_type) = self.tx_type
+            && !matches!(tx_type, 0x0..=0x2)
+        {
+            return Err(ValidationError::not_supported(
+                "`transaction.type` only supports `0x0`, `0x1`, and `0x2`",
+            ));
         }
 
         if let Some(access_list) = &self.access_list {
@@ -84,12 +84,11 @@ impl Transaction {
 
         if let (Some(max_fee), Some(max_priority)) =
             (self.max_fee_per_gas, self.max_priority_fee_per_gas)
+            && max_priority > max_fee
         {
-            if max_priority > max_fee {
-                return Err(ValidationError::invalid_params(
-                    "`transaction.maxPriorityFeePerGas` cannot exceed `transaction.maxFeePerGas`",
-                ));
-            }
+            return Err(ValidationError::invalid_params(
+                "`transaction.maxPriorityFeePerGas` cannot exceed `transaction.maxFeePerGas`",
+            ));
         }
 
         match self.tx_type {

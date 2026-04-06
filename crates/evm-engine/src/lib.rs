@@ -1,6 +1,7 @@
 mod artifacts;
 mod asset_changes;
 mod chain_spec;
+mod change_observer;
 mod error;
 mod execution;
 mod frames;

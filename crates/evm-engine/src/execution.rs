@@ -4,6 +4,7 @@ use crate::{
     artifacts::{ExecutionArtifacts, RawExecutionLog},
     asset_changes::{Erc20Metadata, extract_asset_changes, fill_erc20_metadata},
     chain_spec::resolve_execution_spec_id,
+    change_observer::ChangeObserverInspector,
     frames::ExecutionFrame,
     trace::TraceInspector,
 };
@@ -386,12 +387,15 @@ fn execute_transaction(
         .with_db(db)
         .modify_cfg_chained(|cfg| *cfg = cfg_env)
         .modify_block_chained(|block| *block = block_env)
-        .build_mainnet_with_inspector(TraceInspector::new());
+        .build_mainnet_with_inspector((TraceInspector::new(), ChangeObserverInspector::new()));
 
     let artifacts = match evm.inspect_tx_commit(tx_env) {
         Ok(result) => {
-            let frames = std::mem::take(&mut evm.inspector).into_frames();
-            build_execution_artifacts(result, frames, resolved_block)
+            let (trace_inspector, change_observer) = std::mem::take(&mut evm.inspector);
+            let frames = trace_inspector.into_frames();
+            let observed_changes = change_observer.into_observed_changes();
+
+            build_execution_artifacts(result, frames, observed_changes, resolved_block)
         }
         Err(EVMError::Transaction(error)) => {
             build_invalid_transaction_artifacts(resolved_block, transaction, error)
@@ -419,6 +423,7 @@ fn execute_transaction(
 fn build_execution_artifacts(
     result: ExecutionResult<HaltReason>,
     frames: Vec<ExecutionFrame>,
+    observed_changes: Vec<crate::change_observer::ObservedChange>,
     resolved_block: &ResolvedExecutionBlock,
 ) -> ExecutionArtifacts {
     match result {
@@ -432,6 +437,7 @@ fn build_execution_artifacts(
             gas_limit: gas.limit(),
             output: output.into_data(),
             failure: None,
+            observed_changes,
             logs: map_execution_logs(logs),
             frames,
         },
@@ -638,6 +644,7 @@ fn build_failed_artifacts(
         gas_limit,
         output,
         failure: Some(failure),
+        observed_changes: Vec::new(),
         logs: Vec::new(),
         frames,
     }

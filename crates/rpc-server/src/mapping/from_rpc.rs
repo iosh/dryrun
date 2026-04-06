@@ -1,6 +1,6 @@
 use std::convert::TryFrom;
 
-use alloy::primitives::{Bytes, U256};
+use alloy::primitives::U256;
 
 use crate::{errors::ValidationError, interface as rpc};
 
@@ -53,7 +53,7 @@ fn map_transaction(
         nonce: transaction.nonce,
         gas_limit: transaction.gas,
         value: transaction.value.unwrap_or(U256::ZERO),
-        data: transaction.data.unwrap_or_else(Bytes::new),
+        data: transaction.data.unwrap_or_default(),
         access_list: transaction
             .access_list
             .unwrap_or_default()

@@ -1,6 +1,10 @@
 use alloy_primitives::{Address, B256, Bytes};
 
-use crate::{EvmExecutionFailure, EvmExecutionStatus, SimulatedBlock, frames::ExecutionFrame};
+use crate::{
+    EvmExecutionFailure, EvmExecutionStatus, SimulatedBlock,
+    change_observer::ObservedChange,
+    frames::ExecutionFrame,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RawExecutionLog {
@@ -19,6 +23,7 @@ pub(crate) struct ExecutionArtifacts {
     pub(crate) gas_limit: u64,
     pub(crate) output: Bytes,
     pub(crate) failure: Option<EvmExecutionFailure>,
+    pub(crate) observed_changes: Vec<ObservedChange>,
     pub(crate) logs: Vec<RawExecutionLog>,
     pub(crate) frames: Vec<ExecutionFrame>,
 }
