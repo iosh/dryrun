@@ -9,8 +9,8 @@ pub use error::SimulationServiceError;
 pub use types::{
     AccessListItem, ApprovalChange, ApprovalForAllChange, Asset, BlockRef, BurnChange, Change,
     Collection, EvmTransaction, EvmTransactionType, ExecutionFailure, ExecutionStatus, MintChange,
-    SimulateEvmTransactionInput, SimulateEvmTransactionOutput, SimulatedBlock,
-    SimulationExecution, TransferChange,
+    SimulateEvmTransactionInput, SimulateEvmTransactionOutput, SimulatedBlock, SimulationExecution,
+    TransferChange,
 };
 
 #[derive(Debug, Clone)]
@@ -81,7 +81,11 @@ impl From<EvmTransaction> for evm_engine::EvmTransaction {
             gas_limit: transaction.gas_limit,
             value: transaction.value,
             data: transaction.data,
-            access_list: transaction.access_list.into_iter().map(Into::into).collect(),
+            access_list: transaction
+                .access_list
+                .into_iter()
+                .map(Into::into)
+                .collect(),
             gas_price: transaction.gas_price,
             max_fee_per_gas: transaction.max_fee_per_gas,
             max_priority_fee_per_gas: transaction.max_priority_fee_per_gas,
@@ -345,5 +349,91 @@ mod tests {
 
         assert_eq!(symbol.as_deref(), Some("USDC"));
         assert_eq!(*decimals, Some(6));
+    }
+
+    #[test]
+    fn engine_approval_changes_map_into_service_output() {
+        let owner = Address::from_str("0x1111111111111111111111111111111111111111").expect("owner");
+        let spender =
+            Address::from_str("0x2222222222222222222222222222222222222222").expect("spender");
+        let operator =
+            Address::from_str("0x3333333333333333333333333333333333333333").expect("operator");
+        let erc20 = Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").expect("erc20");
+        let erc721 =
+            Address::from_str("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").expect("erc721");
+
+        let simulation = EvmSimulation::new(
+            EvmExecution {
+                chain_id: 1,
+                block: evm_engine::SimulatedBlock {
+                    number: 1,
+                    hash: B256::ZERO,
+                },
+                status: evm_engine::EvmExecutionStatus::Success,
+                gas_used: 21_000,
+                gas_limit: 50_000,
+                output: Bytes::new(),
+                failure: None,
+            },
+            vec![
+                evm_engine::Change::Approval(evm_engine::ApprovalChange {
+                    asset: evm_engine::Asset::Erc20 {
+                        contract_address: erc20,
+                        symbol: Some("USDC".to_string()),
+                        decimals: Some(6),
+                        name: None,
+                    },
+                    owner,
+                    spender,
+                    amount: Some(U256::from(9_u64)),
+                }),
+                evm_engine::Change::ApprovalForAll(evm_engine::ApprovalForAllChange {
+                    collection: evm_engine::Collection::Erc721 {
+                        contract_address: erc721,
+                        collection_name: None,
+                        name: None,
+                        symbol: Some("NFT".to_string()),
+                    },
+                    owner,
+                    operator,
+                    approved: false,
+                }),
+            ],
+        );
+
+        let mapped: SimulateEvmTransactionOutput = simulation.into();
+        assert_eq!(mapped.changes.len(), 2);
+
+        let Change::Approval(approval) = &mapped.changes[0] else {
+            panic!("expected approval change");
+        };
+        assert_eq!(approval.owner, owner);
+        assert_eq!(approval.spender, spender);
+        assert_eq!(approval.amount, Some(U256::from(9_u64)));
+        assert!(matches!(
+            approval.asset,
+            Asset::Erc20 {
+                contract_address,
+                symbol: Some(ref symbol),
+                decimals: Some(6),
+                name: None,
+            } if contract_address == erc20 && symbol == "USDC"
+        ));
+
+        let Change::ApprovalForAll(approval_for_all) = &mapped.changes[1] else {
+            panic!("expected approval for all change");
+        };
+        assert_eq!(approval_for_all.owner, owner);
+        assert_eq!(approval_for_all.operator, operator);
+        assert!(!approval_for_all.approved);
+        assert!(matches!(
+            approval_for_all.collection,
+            Collection::Erc721 {
+                contract_address,
+                collection_name: None,
+                name: None,
+                symbol: Some(ref symbol),
+            } if contract_address == erc721 && symbol == "NFT"
+        ));
     }
 }

@@ -265,4 +265,104 @@ mod tests {
         assert_eq!(error.message, "execution reverted");
         assert_eq!(error.reason.as_deref(), Some("insufficient output"));
     }
+
+    #[test]
+    fn approval_changes_map_into_rpc_response() {
+        let owner = Address::from_str("0x1111111111111111111111111111111111111111").expect("owner");
+        let spender =
+            Address::from_str("0x2222222222222222222222222222222222222222").expect("spender");
+        let operator =
+            Address::from_str("0x3333333333333333333333333333333333333333").expect("operator");
+        let erc20 = Address::from_str("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").expect("erc20");
+        let erc1155 =
+            Address::from_str("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb").expect("erc1155");
+
+        let output = simulation_service::SimulateEvmTransactionOutput {
+            execution: simulation_service::SimulationExecution {
+                chain_id: 1,
+                block: simulation_service::SimulatedBlock {
+                    number: 1,
+                    hash: B256::ZERO,
+                },
+                status: simulation_service::ExecutionStatus::Success,
+                gas_used: 21_000,
+                gas_limit: 50_000,
+                output: Bytes::new(),
+                failure: None,
+            },
+            changes: vec![
+                simulation_service::Change::Approval(simulation_service::ApprovalChange {
+                    asset: simulation_service::Asset::Erc20 {
+                        contract_address: erc20,
+                        symbol: Some("USDC".to_string()),
+                        decimals: Some(6),
+                        name: None,
+                    },
+                    owner,
+                    spender,
+                    amount: Some(U256::from(10_u64)),
+                }),
+                simulation_service::Change::ApprovalForAll(
+                    simulation_service::ApprovalForAllChange {
+                        collection: simulation_service::Collection::Erc1155 {
+                            contract_address: erc1155,
+                            collection_name: None,
+                            name: None,
+                            symbol: Some("COL".to_string()),
+                        },
+                        owner,
+                        operator,
+                        approved: true,
+                    },
+                ),
+            ],
+        };
+
+        let response: rpc::EvmSimulateTransactionResponse = output.into();
+        assert_eq!(response.changes.len(), 2);
+
+        let rpc::Change::Approval {
+            asset,
+            owner: rpc_owner,
+            spender: rpc_spender,
+            amount,
+        } = &response.changes[0]
+        else {
+            panic!("expected approval change");
+        };
+        assert_eq!(rpc_owner, "0x1111111111111111111111111111111111111111");
+        assert_eq!(rpc_spender, "0x2222222222222222222222222222222222222222");
+        assert_eq!(amount.as_deref(), Some("0xa"));
+        assert!(matches!(
+            asset,
+            rpc::Asset::Erc20 {
+                contract_address,
+                symbol: Some(symbol),
+                decimals: Some(6),
+                name: None,
+            } if contract_address == "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" && symbol == "USDC"
+        ));
+
+        let rpc::Change::ApprovalForAll {
+            collection,
+            owner: rpc_owner,
+            operator: rpc_operator,
+            approved,
+        } = &response.changes[1]
+        else {
+            panic!("expected approval for all change");
+        };
+        assert_eq!(rpc_owner, "0x1111111111111111111111111111111111111111");
+        assert_eq!(rpc_operator, "0x3333333333333333333333333333333333333333");
+        assert!(*approved);
+        assert!(matches!(
+            collection,
+            rpc::Collection::Erc1155 {
+                contract_address,
+                collection_name: None,
+                name: None,
+                symbol: Some(symbol),
+            } if contract_address == "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" && symbol == "COL"
+        ));
+    }
 }

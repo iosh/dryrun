@@ -56,14 +56,14 @@ impl From<ValidationError> for ErrorObjectOwned {
 }
 
 pub(crate) fn internal_error(
-    subkind: Option<&'static str>,
+    kind_code: Option<&'static str>,
     details: impl Into<String>,
 ) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(
         INTERNAL_ERROR_CODE,
         "Internal error",
         Some(ErrorData {
-            subkind,
+            subkind: kind_code,
             details: details.into(),
         }),
     )
@@ -78,4 +78,22 @@ pub(crate) fn not_supported(details: impl Into<String>) -> ErrorObjectOwned {
             details: details.into(),
         }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::to_value;
+
+    use super::internal_error;
+
+    #[test]
+    fn internal_error_serializes_subkind_and_details() {
+        let error = internal_error(Some("runtime_error"), "execution task panicked");
+
+        let value = to_value(error).expect("rpc error should serialize");
+        assert_eq!(value["code"], -32603);
+        assert_eq!(value["message"], "Internal error");
+        assert_eq!(value["data"]["subkind"], "runtime_error");
+        assert_eq!(value["data"]["details"], "execution task panicked");
+    }
 }

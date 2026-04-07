@@ -1,19 +1,23 @@
-mod artifacts;
-mod asset_changes;
 mod chain_spec;
-mod change_observer;
+mod change;
+mod change_detection;
+mod change_observation;
 mod error;
 mod execution;
-mod frames;
-mod trace;
-mod types;
+mod simulation;
+mod transaction;
 
-pub use error::EvmEngineError;
+pub use change::{
+    ApprovalChange, ApprovalForAllChange, Asset, BurnChange, Change, Collection, MintChange,
+    TransferChange,
+};
+pub use error::{EvmEngineError, EvmEngineInternalKind};
 use execution::simulate_execution;
-pub use types::{
-    AccessListItem, ApprovalChange, ApprovalForAllChange, Asset, BlockRef, BurnChange, Change,
-    Collection, EvmExecution, EvmExecutionFailure, EvmExecutionInput, EvmExecutionStatus,
-    EvmSimulation, EvmTransaction, EvmTransactionType, MintChange, SimulatedBlock, TransferChange,
+pub use simulation::{
+    EvmExecution, EvmExecutionFailure, EvmExecutionStatus, EvmSimulation, SimulatedBlock,
+};
+pub use transaction::{
+    AccessListItem, BlockRef, EvmExecutionInput, EvmTransaction, EvmTransactionType,
 };
 
 #[derive(Debug, Clone)]
@@ -30,26 +34,6 @@ impl EvmEngine {
         &self,
         input: EvmExecutionInput,
     ) -> Result<EvmSimulation, EvmEngineError> {
-        ensure_supported_block_ref(&input.block)?;
-        ensure_supported_transaction_type(input.transaction.tx_type)?;
-
         simulate_execution(&self.rpc_url, input).await
-    }
-}
-
-fn ensure_supported_block_ref(block: &BlockRef) -> Result<(), EvmEngineError> {
-    match block {
-        BlockRef::Latest | BlockRef::Number(_) => Ok(()),
-        BlockRef::Hash(_) => Err(EvmEngineError::not_supported(
-            "block.hash is not supported yet",
-        )),
-    }
-}
-
-fn ensure_supported_transaction_type(tx_type: EvmTransactionType) -> Result<(), EvmEngineError> {
-    match tx_type {
-        EvmTransactionType::Legacy
-        | EvmTransactionType::AccessList
-        | EvmTransactionType::DynamicFee => Ok(()),
     }
 }

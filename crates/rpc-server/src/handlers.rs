@@ -69,10 +69,11 @@ impl DryrunRpcServer for RpcHandler {
 }
 
 fn map_service_error(error: SimulationServiceError) -> ErrorObjectOwned {
-    match error {
-        SimulationServiceError::NotSupported(details) => not_supported(details),
-        SimulationServiceError::Internal { subkind, details } => {
-            internal_error(Some(subkind), details)
-        }
+    let details = error.details().to_owned();
+
+    if error.is_not_supported() {
+        not_supported(details)
+    } else {
+        internal_error(error.kind_code(), details)
     }
 }

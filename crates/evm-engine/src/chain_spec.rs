@@ -26,30 +26,13 @@ fn validate_supported_chain_id(chain_id: u64) -> Result<(), EvmEngineError> {
 }
 
 fn resolve_mainnet_hardfork(block_number: u64, timestamp: u64) -> EthereumHardfork {
-    for hardfork in [
-        EthereumHardfork::Amsterdam,
-        EthereumHardfork::Bpo5,
-        EthereumHardfork::Bpo4,
-        EthereumHardfork::Bpo3,
-        EthereumHardfork::Bpo2,
-        EthereumHardfork::Bpo1,
-        EthereumHardfork::Osaka,
-        EthereumHardfork::Prague,
-        EthereumHardfork::Cancun,
-        EthereumHardfork::Shanghai,
-    ] {
-        if is_mainnet_timestamp_fork_active(hardfork, timestamp) {
-            return hardfork;
+    for (hardfork, condition) in EthereumHardfork::mainnet().iter().rev() {
+        if condition.active_at_timestamp_or_number(timestamp, block_number) {
+            return *hardfork;
         }
     }
 
-    EthereumHardfork::from_mainnet_block_number(block_number)
-}
-
-fn is_mainnet_timestamp_fork_active(hardfork: EthereumHardfork, timestamp: u64) -> bool {
-    hardfork
-        .activation_timestamp(Chain::mainnet())
-        .is_some_and(|activation_timestamp| timestamp >= activation_timestamp)
+    EthereumHardfork::Frontier
 }
 
 fn map_hardfork_to_spec_id(hardfork: EthereumHardfork) -> Result<SpecId, EvmEngineError> {

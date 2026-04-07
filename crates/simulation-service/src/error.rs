@@ -2,22 +2,48 @@ use evm_engine::EvmEngineError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
-pub enum SimulationServiceError {
-    #[error("{0}")]
-    NotSupported(String),
+#[error(transparent)]
+pub struct SimulationServiceError(#[from] EvmEngineError);
 
-    #[error("{details}")]
-    Internal {
-        subkind: &'static str,
-        details: String,
-    },
+impl SimulationServiceError {
+    pub fn is_not_supported(&self) -> bool {
+        self.0.is_not_supported()
+    }
+
+    pub fn kind_code(&self) -> Option<&'static str> {
+        self.0.kind_code()
+    }
+
+    pub fn details(&self) -> &str {
+        self.0.details()
+    }
 }
 
-impl From<EvmEngineError> for SimulationServiceError {
-    fn from(error: EvmEngineError) -> Self {
-        match error {
-            EvmEngineError::NotSupported(details) => Self::NotSupported(details),
-            EvmEngineError::Internal { subkind, details } => Self::Internal { subkind, details },
-        }
+#[cfg(test)]
+mod tests {
+    use evm_engine::EvmEngineError;
+
+    use super::SimulationServiceError;
+
+    #[test]
+    fn wrapper_delegates_internal_error_classification() {
+        let error = SimulationServiceError::from(EvmEngineError::state_access_error(
+            "missing account state",
+        ));
+
+        assert!(!error.is_not_supported());
+        assert_eq!(error.kind_code(), Some("state_access_error"));
+        assert_eq!(error.details(), "missing account state");
+    }
+
+    #[test]
+    fn wrapper_delegates_not_supported_error_classification() {
+        let error = SimulationServiceError::from(EvmEngineError::not_supported(
+            "block.hash is not supported yet",
+        ));
+
+        assert!(error.is_not_supported());
+        assert_eq!(error.kind_code(), None);
+        assert_eq!(error.details(), "block.hash is not supported yet");
     }
 }

@@ -1,4 +1,4 @@
-use alloy_primitives::{Address, B256, Bytes, Log, U256, keccak256};
+use alloy_primitives::{Address, B256, Bytes, Log, U256};
 use revm::{
     Inspector,
     context::ContextTr,
@@ -9,27 +9,25 @@ use revm::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ObservedChange {
+pub(crate) enum Observation {
     NativeTransfer {
         from: Address,
         to: Address,
         amount: U256,
     },
-    Erc20Transfer {
-        contract_address: Address,
-        from: Address,
-        to: Address,
-        amount: U256,
+    Log {
+        address: Address,
+        topics: Vec<B256>,
+        data: Bytes,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ChangeJournalEntry {
-    Committed(ObservedChange),
-    PendingCreateTransfer {
-        from: Address,
-        amount: U256,
-    },
+enum ObservationJournalEntry {
+    Committed(Observation),
+    // CREATE transfers need a placeholder because the created address is only
+    // known when the frame finishes.
+    PendingCreateTransfer { from: Address, amount: U256 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,13 +37,13 @@ struct FrameCheckpoint {
 }
 
 #[derive(Debug, Default)]
-struct ChangeJournal {
+struct ObservationJournal {
     checkpoints: Vec<FrameCheckpoint>,
-    entries: Vec<ChangeJournalEntry>,
+    entries: Vec<ObservationJournalEntry>,
 }
 
-impl ChangeJournal {
-    fn push_call_frame(&mut self, native_transfer: Option<ObservedChange>) {
+impl ObservationJournal {
+    fn push_call_frame(&mut self, native_transfer: Option<Observation>) {
         let checkpoint = self.entries.len();
         self.checkpoints.push(FrameCheckpoint {
             checkpoint,
@@ -53,7 +51,8 @@ impl ChangeJournal {
         });
 
         if let Some(change) = native_transfer {
-            self.entries.push(ChangeJournalEntry::Committed(change));
+            self.entries
+                .push(ObservationJournalEntry::Committed(change));
         }
     }
 
@@ -64,7 +63,7 @@ impl ChangeJournal {
         } else {
             let index = self.entries.len();
             self.entries
-                .push(ChangeJournalEntry::PendingCreateTransfer { from, amount });
+                .push(ObservationJournalEntry::PendingCreateTransfer { from, amount });
             Some(index)
         };
 
@@ -79,6 +78,8 @@ impl ChangeJournal {
             return;
         };
 
+        // Reverting a frame also discards every observation produced by its
+        // descendants because they all live past the same checkpoint.
         if !success {
             self.entries.truncate(frame.checkpoint);
             return;
@@ -91,58 +92,58 @@ impl ChangeJournal {
             return;
         };
 
-        let ChangeJournalEntry::PendingCreateTransfer { from, amount } =
-            self.entries[index].clone()
+        let ObservationJournalEntry::PendingCreateTransfer { from, amount } = &self.entries[index]
         else {
             return;
         };
 
-        self.entries[index] = ChangeJournalEntry::Committed(ObservedChange::NativeTransfer {
-            from,
+        self.entries[index] = ObservationJournalEntry::Committed(Observation::NativeTransfer {
+            from: *from,
             to,
-            amount,
+            amount: *amount,
         });
     }
 
-    fn record_change(&mut self, change: ObservedChange) {
-        self.entries.push(ChangeJournalEntry::Committed(change));
+    fn record_observation(&mut self, observation: Observation) {
+        self.entries
+            .push(ObservationJournalEntry::Committed(observation));
     }
 
     fn record_log_parts(&mut self, address: Address, topics: &[B256], data: &Bytes) {
-        let Some(change) = extract_erc20_transfer_from_parts(address, topics, data) else {
-            return;
-        };
-
-        self.record_change(change);
+        self.record_observation(Observation::Log {
+            address,
+            topics: topics.to_vec(),
+            data: data.clone(),
+        });
     }
 
-    fn into_observed_changes(self) -> Vec<ObservedChange> {
+    fn into_observations(self) -> Vec<Observation> {
         self.entries
             .into_iter()
             .filter_map(|entry| match entry {
-                ChangeJournalEntry::Committed(change) => Some(change),
-                ChangeJournalEntry::PendingCreateTransfer { .. } => None,
+                ObservationJournalEntry::Committed(observation) => Some(observation),
+                ObservationJournalEntry::PendingCreateTransfer { .. } => None,
             })
             .collect()
     }
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct ChangeObserverInspector {
-    journal: ChangeJournal,
+pub(crate) struct ChangeObservationInspector {
+    journal: ObservationJournal,
 }
 
-impl ChangeObserverInspector {
+impl ChangeObservationInspector {
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub(crate) fn into_observed_changes(self) -> Vec<ObservedChange> {
-        self.journal.into_observed_changes()
+    pub(crate) fn into_observations(self) -> Vec<Observation> {
+        self.journal.into_observations()
     }
 }
 
-impl<CTX, INTR> Inspector<CTX, INTR> for ChangeObserverInspector
+impl<CTX, INTR> Inspector<CTX, INTR> for ChangeObservationInspector
 where
     CTX: ContextTr,
     INTR: InterpreterTypes,
@@ -183,15 +184,18 @@ where
             return;
         }
 
-        self.journal.record_change(ObservedChange::NativeTransfer {
-            from: contract,
-            to: target,
-            amount: value,
-        });
+        self.journal
+            .record_observation(Observation::NativeTransfer {
+                from: contract,
+                to: target,
+                amount: value,
+            });
     }
 }
 
-fn observed_call_transfer(inputs: &CallInputs) -> Option<ObservedChange> {
+// Native value transfers are observed from CALL-like execution semantics rather
+// than from logs because they are an EVM effect, not a contract event.
+fn observed_call_transfer(inputs: &CallInputs) -> Option<Observation> {
     let amount = inputs.transfer_value()?;
 
     if amount.is_zero() {
@@ -202,7 +206,7 @@ fn observed_call_transfer(inputs: &CallInputs) -> Option<ObservedChange> {
         return None;
     }
 
-    Some(ObservedChange::NativeTransfer {
+    Some(Observation::NativeTransfer {
         from: inputs.caller,
         to: inputs.target_address,
         amount,
@@ -213,89 +217,55 @@ fn is_success(result: &InstructionResult) -> bool {
     result.is_ok()
 }
 
-fn erc20_transfer_topic0() -> B256 {
-    keccak256("Transfer(address,address,uint256)".as_bytes())
-}
-
-fn is_zero_padded_address_topic(topic: &B256) -> bool {
-    topic.as_slice()[..12].iter().all(|&byte| byte == 0)
-}
-
-fn extract_erc20_transfer_from_parts(
-    address: Address,
-    topics: &[B256],
-    data: &Bytes,
-) -> Option<ObservedChange> {
-    if topics.len() != 3 {
-        return None;
-    }
-
-    if topics[0] != erc20_transfer_topic0() {
-        return None;
-    }
-
-    if data.len() != 32 {
-        return None;
-    }
-
-    if !is_zero_padded_address_topic(&topics[1]) || !is_zero_padded_address_topic(&topics[2]) {
-        return None;
-    }
-
-    Some(ObservedChange::Erc20Transfer {
-        contract_address: address,
-        from: Address::from_word(topics[1]),
-        to: Address::from_word(topics[2]),
-        amount: U256::from_be_slice(data.as_ref()),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
 
-    use alloy_primitives::{Address, U256};
+    use alloy_primitives::{Address, B256, Bytes, U256};
 
-    use super::{ChangeJournal, ObservedChange};
+    use super::{Observation, ObservationJournal};
 
     fn address(value: &str) -> Address {
         Address::from_str(value).expect("address")
     }
 
+    fn topic(value: u8) -> B256 {
+        B256::repeat_byte(value)
+    }
+
     #[test]
-    fn keeps_mixed_changes_in_real_observed_order() {
-        let mut journal = ChangeJournal::default();
+    fn keeps_native_transfers_and_logs_in_real_observed_order() {
+        let mut journal = ObservationJournal::default();
         let from = address("0x1111111111111111111111111111111111111111");
         let callee = address("0x2222222222222222222222222222222222222222");
         let token = address("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48");
-        let user = address("0x3333333333333333333333333333333333333333");
+        let topics = vec![topic(0xaa), topic(0xbb)];
+        let data = Bytes::from(vec![0x01, 0x02]);
 
-        journal.push_call_frame(Some(ObservedChange::NativeTransfer {
+        journal.push_call_frame(Some(Observation::NativeTransfer {
             from,
             to: callee,
             amount: U256::from(1_u64),
         }));
-        journal.record_change(ObservedChange::Erc20Transfer {
-            contract_address: token,
-            from: callee,
-            to: user,
-            amount: U256::from(2_u64),
+        journal.record_observation(Observation::Log {
+            address: token,
+            topics: topics.clone(),
+            data: data.clone(),
         });
         journal.pop_frame(true, None);
 
         assert_eq!(
-            journal.into_observed_changes(),
+            journal.into_observations(),
             vec![
-                ObservedChange::NativeTransfer {
+                Observation::NativeTransfer {
                     from,
                     to: callee,
                     amount: U256::from(1_u64),
                 },
-                ObservedChange::Erc20Transfer {
-                    contract_address: token,
-                    from: callee,
-                    to: user,
-                    amount: U256::from(2_u64),
+                Observation::Log {
+                    address: token,
+                    topics,
+                    data,
                 },
             ]
         );
@@ -303,31 +273,31 @@ mod tests {
 
     #[test]
     fn truncates_reverted_branch_with_all_descendants() {
-        let mut journal = ChangeJournal::default();
+        let mut journal = ObservationJournal::default();
         let root_from = address("0x1111111111111111111111111111111111111111");
         let root_to = address("0x2222222222222222222222222222222222222222");
         let reverted_to = address("0x3333333333333333333333333333333333333333");
         let sibling_to = address("0x4444444444444444444444444444444444444444");
 
-        journal.push_call_frame(Some(ObservedChange::NativeTransfer {
+        journal.push_call_frame(Some(Observation::NativeTransfer {
             from: root_from,
             to: root_to,
             amount: U256::from(1_u64),
         }));
 
-        journal.push_call_frame(Some(ObservedChange::NativeTransfer {
+        journal.push_call_frame(Some(Observation::NativeTransfer {
             from: root_to,
             to: reverted_to,
             amount: U256::from(2_u64),
         }));
-        journal.record_change(ObservedChange::NativeTransfer {
+        journal.record_observation(Observation::NativeTransfer {
             from: reverted_to,
             to: sibling_to,
             amount: U256::from(3_u64),
         });
         journal.pop_frame(false, None);
 
-        journal.record_change(ObservedChange::NativeTransfer {
+        journal.record_observation(Observation::NativeTransfer {
             from: root_to,
             to: sibling_to,
             amount: U256::from(4_u64),
@@ -335,14 +305,14 @@ mod tests {
         journal.pop_frame(true, None);
 
         assert_eq!(
-            journal.into_observed_changes(),
+            journal.into_observations(),
             vec![
-                ObservedChange::NativeTransfer {
+                Observation::NativeTransfer {
                     from: root_from,
                     to: root_to,
                     amount: U256::from(1_u64),
                 },
-                ObservedChange::NativeTransfer {
+                Observation::NativeTransfer {
                     from: root_to,
                     to: sibling_to,
                     amount: U256::from(4_u64),
@@ -353,33 +323,33 @@ mod tests {
 
     #[test]
     fn keeps_create_transfer_at_original_position_after_success() {
-        let mut journal = ChangeJournal::default();
+        let mut journal = ObservationJournal::default();
         let creator = address("0x1111111111111111111111111111111111111111");
         let created = address("0x2222222222222222222222222222222222222222");
         let token = address("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48");
+        let topics = vec![topic(0xcc)];
+        let data = Bytes::from(vec![0x03]);
 
         journal.push_create_frame(creator, U256::from(1_u64));
-        journal.record_change(ObservedChange::Erc20Transfer {
-            contract_address: token,
-            from: created,
-            to: creator,
-            amount: U256::from(2_u64),
+        journal.record_observation(Observation::Log {
+            address: token,
+            topics: topics.clone(),
+            data: data.clone(),
         });
         journal.pop_frame(true, Some(created));
 
         assert_eq!(
-            journal.into_observed_changes(),
+            journal.into_observations(),
             vec![
-                ObservedChange::NativeTransfer {
+                Observation::NativeTransfer {
                     from: creator,
                     to: created,
                     amount: U256::from(1_u64),
                 },
-                ObservedChange::Erc20Transfer {
-                    contract_address: token,
-                    from: created,
-                    to: creator,
-                    amount: U256::from(2_u64),
+                Observation::Log {
+                    address: token,
+                    topics,
+                    data,
                 },
             ]
         );
@@ -387,18 +357,18 @@ mod tests {
 
     #[test]
     fn drops_create_transfer_and_nested_changes_on_revert() {
-        let mut journal = ChangeJournal::default();
+        let mut journal = ObservationJournal::default();
         let creator = address("0x1111111111111111111111111111111111111111");
         let other = address("0x2222222222222222222222222222222222222222");
 
         journal.push_create_frame(creator, U256::from(1_u64));
-        journal.record_change(ObservedChange::NativeTransfer {
+        journal.record_observation(Observation::NativeTransfer {
             from: other,
             to: creator,
             amount: U256::from(2_u64),
         });
         journal.pop_frame(false, None);
 
-        assert!(journal.into_observed_changes().is_empty());
+        assert!(journal.into_observations().is_empty());
     }
 }
