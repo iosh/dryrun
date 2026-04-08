@@ -101,9 +101,10 @@ fn load_erc20_metadata<INSP>(
     execution_chain_id: u64,
     token_address: Address,
 ) -> Erc20Metadata {
-    // ERC20 metadata is exposed as separate getters, so collecting both fields
-    // currently requires two auxiliary calls.
+    // This slice keeps ERC20 metadata loading minimal. We only probe stable
+    // display fields that already exist in the current implementation path.
     Erc20Metadata {
+        name: None,
         symbol: call_erc20_symbol(evm, transaction, execution_chain_id, token_address),
         decimals: call_erc20_decimals(evm, transaction, execution_chain_id, token_address),
     }

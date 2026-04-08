@@ -185,6 +185,48 @@ pub enum Change {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct NativeAssetDisplay {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decimals: Option<u8>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Erc20AssetDisplay {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decimals: Option<u8>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Erc721CollectionDisplay {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Erc1155CollectionDisplay {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NftTokenDisplay {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(
     tag = "type",
     rename_all = "SCREAMING_SNAKE_CASE",
@@ -193,38 +235,28 @@ pub enum Change {
 pub enum Asset {
     Native {
         #[serde(skip_serializing_if = "Option::is_none")]
-        symbol: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        decimals: Option<u8>,
+        display: Option<NativeAssetDisplay>,
     },
     Erc20 {
         contract_address: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        symbol: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        decimals: Option<u8>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        name: Option<String>,
+        display: Option<Erc20AssetDisplay>,
     },
     Erc721 {
         contract_address: String,
         token_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        collection_name: Option<String>,
+        collection: Option<Erc721CollectionDisplay>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        name: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        symbol: Option<String>,
+        token: Option<NftTokenDisplay>,
     },
     Erc1155 {
         contract_address: String,
         token_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        collection_name: Option<String>,
+        collection: Option<Erc1155CollectionDisplay>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        name: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        symbol: Option<String>,
+        token: Option<NftTokenDisplay>,
     },
 }
 
@@ -238,19 +270,11 @@ pub enum Collection {
     Erc721 {
         contract_address: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        collection_name: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        name: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        symbol: Option<String>,
+        collection: Option<Erc721CollectionDisplay>,
     },
     Erc1155 {
         contract_address: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        collection_name: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        name: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        symbol: Option<String>,
+        collection: Option<Erc1155CollectionDisplay>,
     },
 }

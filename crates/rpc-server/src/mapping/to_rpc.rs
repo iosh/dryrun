@@ -51,30 +51,64 @@ impl From<simulation_service::ExecutionFailure> for rpc::ExecutionError {
     }
 }
 
+impl From<simulation_service::NativeAssetDisplay> for rpc::NativeAssetDisplay {
+    fn from(display: simulation_service::NativeAssetDisplay) -> Self {
+        Self {
+            symbol: display.symbol,
+            decimals: display.decimals,
+        }
+    }
+}
+
+impl From<simulation_service::Erc20AssetDisplay> for rpc::Erc20AssetDisplay {
+    fn from(display: simulation_service::Erc20AssetDisplay) -> Self {
+        Self {
+            name: display.name,
+            symbol: display.symbol,
+            decimals: display.decimals,
+        }
+    }
+}
+
+impl From<simulation_service::Erc721CollectionDisplay> for rpc::Erc721CollectionDisplay {
+    fn from(collection: simulation_service::Erc721CollectionDisplay) -> Self {
+        Self {
+            name: collection.name,
+            symbol: collection.symbol,
+        }
+    }
+}
+
+impl From<simulation_service::Erc1155CollectionDisplay> for rpc::Erc1155CollectionDisplay {
+    fn from(collection: simulation_service::Erc1155CollectionDisplay) -> Self {
+        Self {
+            name: collection.name,
+        }
+    }
+}
+
+impl From<simulation_service::NftTokenDisplay> for rpc::NftTokenDisplay {
+    fn from(token: simulation_service::NftTokenDisplay) -> Self {
+        Self { name: token.name }
+    }
+}
+
 impl From<simulation_service::Collection> for rpc::Collection {
     fn from(collection: simulation_service::Collection) -> Self {
         match collection {
             simulation_service::Collection::Erc721 {
                 contract_address,
-                collection_name,
-                name,
-                symbol,
+                collection,
             } => Self::Erc721 {
                 contract_address: format!("{:#x}", contract_address),
-                collection_name,
-                name,
-                symbol,
+                collection: collection.map(Into::into),
             },
             simulation_service::Collection::Erc1155 {
                 contract_address,
-                collection_name,
-                name,
-                symbol,
+                collection,
             } => Self::Erc1155 {
                 contract_address: format!("{:#x}", contract_address),
-                collection_name,
-                name,
-                symbol,
+                collection: collection.map(Into::into),
             },
         }
     }
@@ -83,45 +117,37 @@ impl From<simulation_service::Collection> for rpc::Collection {
 impl From<simulation_service::Asset> for rpc::Asset {
     fn from(asset: simulation_service::Asset) -> Self {
         match asset {
-            simulation_service::Asset::Native { symbol, decimals } => {
-                Self::Native { symbol, decimals }
-            }
+            simulation_service::Asset::Native { display } => Self::Native {
+                display: display.map(Into::into),
+            },
             simulation_service::Asset::Erc20 {
                 contract_address,
-                symbol,
-                decimals,
-                name,
+                display,
             } => Self::Erc20 {
                 contract_address: format!("{:#x}", contract_address),
-                symbol,
-                decimals,
-                name,
+                display: display.map(Into::into),
             },
             simulation_service::Asset::Erc721 {
                 contract_address,
                 token_id,
-                collection_name,
-                name,
-                symbol,
+                collection,
+                token,
             } => Self::Erc721 {
                 contract_address: format!("{:#x}", contract_address),
                 token_id: format_u256_quantity(token_id),
-                collection_name,
-                name,
-                symbol,
+                collection: collection.map(Into::into),
+                token: token.map(Into::into),
             },
             simulation_service::Asset::Erc1155 {
                 contract_address,
                 token_id,
-                collection_name,
-                name,
-                symbol,
+                collection,
+                token,
             } => Self::Erc1155 {
                 contract_address: format!("{:#x}", contract_address),
                 token_id: format_u256_quantity(token_id),
-                collection_name,
-                name,
-                symbol,
+                collection: collection.map(Into::into),
+                token: token.map(Into::into),
             },
         }
     }
@@ -195,9 +221,11 @@ mod tests {
                             "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
                         )
                         .expect("token"),
-                        symbol: Some("USDC".to_string()),
-                        decimals: Some(6),
-                        name: None,
+                        display: Some(simulation_service::Erc20AssetDisplay {
+                            name: None,
+                            symbol: Some("USDC".to_string()),
+                            decimals: Some(6),
+                        }),
                     },
                     from: Address::from_str("0x1111111111111111111111111111111111111111")
                         .expect("from"),
@@ -221,15 +249,13 @@ mod tests {
 
         assert_eq!(amount.as_deref(), Some("0xde0b6b3a7640000"));
 
-        let rpc::Asset::Erc20 {
-            symbol, decimals, ..
-        } = asset
-        else {
+        let rpc::Asset::Erc20 { display, .. } = asset else {
             panic!("expected erc20 asset");
         };
 
-        assert_eq!(symbol.as_deref(), Some("USDC"));
-        assert_eq!(*decimals, Some(6));
+        let display = display.as_ref().expect("expected erc20 display");
+        assert_eq!(display.symbol.as_deref(), Some("USDC"));
+        assert_eq!(display.decimals, Some(6));
     }
 
     #[test]
@@ -294,9 +320,11 @@ mod tests {
                 simulation_service::Change::Approval(simulation_service::ApprovalChange {
                     asset: simulation_service::Asset::Erc20 {
                         contract_address: erc20,
-                        symbol: Some("USDC".to_string()),
-                        decimals: Some(6),
-                        name: None,
+                        display: Some(simulation_service::Erc20AssetDisplay {
+                            name: None,
+                            symbol: Some("USDC".to_string()),
+                            decimals: Some(6),
+                        }),
                     },
                     owner,
                     spender,
@@ -306,9 +334,9 @@ mod tests {
                     simulation_service::ApprovalForAllChange {
                         collection: simulation_service::Collection::Erc1155 {
                             contract_address: erc1155,
-                            collection_name: None,
-                            name: None,
-                            symbol: Some("COL".to_string()),
+                            collection: Some(simulation_service::Erc1155CollectionDisplay {
+                                name: Some("Collection".to_string()),
+                            }),
                         },
                         owner,
                         operator,
@@ -337,9 +365,11 @@ mod tests {
             asset,
             rpc::Asset::Erc20 {
                 contract_address,
-                symbol: Some(symbol),
-                decimals: Some(6),
-                name: None,
+                display: Some(rpc::Erc20AssetDisplay {
+                    name: None,
+                    symbol: Some(symbol),
+                    decimals: Some(6),
+                }),
             } if contract_address == "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" && symbol == "USDC"
         ));
 
@@ -359,10 +389,10 @@ mod tests {
             collection,
             rpc::Collection::Erc1155 {
                 contract_address,
-                collection_name: None,
-                name: None,
-                symbol: Some(symbol),
-            } if contract_address == "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" && symbol == "COL"
+                collection: Some(rpc::Erc1155CollectionDisplay {
+                    name: Some(name),
+                }),
+            } if contract_address == "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" && name == "Collection"
         ));
     }
 }

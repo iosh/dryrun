@@ -8,8 +8,9 @@ mod simulation;
 mod transaction;
 
 pub use change::{
-    ApprovalChange, ApprovalForAllChange, Asset, BurnChange, Change, Collection, MintChange,
-    TransferChange,
+    ApprovalChange, ApprovalForAllChange, Asset, BurnChange, Change, Collection, Erc20AssetDisplay,
+    Erc721CollectionDisplay, Erc1155CollectionDisplay, MintChange, NativeAssetDisplay,
+    NftTokenDisplay, TransferChange,
 };
 pub use error::{EvmEngineError, EvmEngineInternalKind};
 use execution::simulate_execution;

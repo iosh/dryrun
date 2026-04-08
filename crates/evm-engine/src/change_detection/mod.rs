@@ -10,10 +10,14 @@ use crate::{
 };
 
 use self::detectors::{
-    ApprovalDetector, ApprovalForAllDetector, NativeTransferDetector, StandardTransferDetector,
+    ApprovalDetector, ApprovalForAllDetector, Erc1155TransferDetector, NativeTransferDetector,
+    StandardTransferDetector,
 };
 #[cfg(test)]
-use self::log_parsing::{approval_for_all_topic0, approval_topic0, transfer_topic0};
+use self::log_parsing::{
+    approval_for_all_topic0, approval_topic0, transfer_batch_topic0, transfer_single_topic0,
+    transfer_topic0,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ContractKind {
@@ -25,6 +29,7 @@ pub(crate) enum ContractKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct Erc20Metadata {
+    pub name: Option<String>,
     pub symbol: Option<String>,
     pub decimals: Option<u8>,
 }
@@ -78,6 +83,7 @@ impl ChangeDetectionPipeline {
             standard_detectors: vec![
                 Box::new(NativeTransferDetector),
                 Box::new(StandardTransferDetector),
+                Box::new(Erc1155TransferDetector),
                 Box::new(ApprovalDetector),
                 Box::new(ApprovalForAllDetector),
             ],

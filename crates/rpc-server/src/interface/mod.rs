@@ -2,7 +2,8 @@ mod types;
 mod validation;
 
 pub use types::{
-    AccessListItem, Asset, BlockRef, Change, Collection, EvmSimulateTransactionRequest,
-    EvmSimulateTransactionResponse, Execution, ExecutionError, SimulateTransactionOptions,
-    SimulatedBlock, SimulationStatus, Transaction,
+    AccessListItem, Asset, BlockRef, Change, Collection, Erc20AssetDisplay,
+    Erc721CollectionDisplay, Erc1155CollectionDisplay, EvmSimulateTransactionRequest,
+    EvmSimulateTransactionResponse, Execution, ExecutionError, NativeAssetDisplay, NftTokenDisplay,
+    SimulateTransactionOptions, SimulatedBlock, SimulationStatus, Transaction,
 };

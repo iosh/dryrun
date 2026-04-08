@@ -8,9 +8,10 @@ use evm_engine::{EvmEngine, EvmExecutionInput, EvmSimulation};
 pub use error::SimulationServiceError;
 pub use types::{
     AccessListItem, ApprovalChange, ApprovalForAllChange, Asset, BlockRef, BurnChange, Change,
-    Collection, EvmTransaction, EvmTransactionType, ExecutionFailure, ExecutionStatus, MintChange,
-    SimulateEvmTransactionInput, SimulateEvmTransactionOutput, SimulatedBlock, SimulationExecution,
-    TransferChange,
+    Collection, Erc20AssetDisplay, Erc721CollectionDisplay, Erc1155CollectionDisplay,
+    EvmTransaction, EvmTransactionType, ExecutionFailure, ExecutionStatus, MintChange,
+    NativeAssetDisplay, NftTokenDisplay, SimulateEvmTransactionInput, SimulateEvmTransactionOutput,
+    SimulatedBlock, SimulationExecution, TransferChange,
 };
 
 #[derive(Debug, Clone)]
@@ -146,46 +147,82 @@ impl From<evm_engine::EvmExecution> for SimulationExecution {
     }
 }
 
+impl From<evm_engine::NativeAssetDisplay> for NativeAssetDisplay {
+    fn from(display: evm_engine::NativeAssetDisplay) -> Self {
+        Self {
+            symbol: display.symbol,
+            decimals: display.decimals,
+        }
+    }
+}
+
+impl From<evm_engine::Erc20AssetDisplay> for Erc20AssetDisplay {
+    fn from(display: evm_engine::Erc20AssetDisplay) -> Self {
+        Self {
+            name: display.name,
+            symbol: display.symbol,
+            decimals: display.decimals,
+        }
+    }
+}
+
+impl From<evm_engine::Erc721CollectionDisplay> for Erc721CollectionDisplay {
+    fn from(collection: evm_engine::Erc721CollectionDisplay) -> Self {
+        Self {
+            name: collection.name,
+            symbol: collection.symbol,
+        }
+    }
+}
+
+impl From<evm_engine::Erc1155CollectionDisplay> for Erc1155CollectionDisplay {
+    fn from(collection: evm_engine::Erc1155CollectionDisplay) -> Self {
+        Self {
+            name: collection.name,
+        }
+    }
+}
+
+impl From<evm_engine::NftTokenDisplay> for NftTokenDisplay {
+    fn from(token: evm_engine::NftTokenDisplay) -> Self {
+        Self { name: token.name }
+    }
+}
+
 impl From<evm_engine::Asset> for Asset {
     fn from(asset: evm_engine::Asset) -> Self {
         match asset {
-            evm_engine::Asset::Native { symbol, decimals } => Self::Native { symbol, decimals },
+            evm_engine::Asset::Native { display } => Self::Native {
+                display: display.map(Into::into),
+            },
             evm_engine::Asset::Erc20 {
                 contract_address,
-                symbol,
-                decimals,
-                name,
+                display,
             } => Self::Erc20 {
                 contract_address,
-                symbol,
-                decimals,
-                name,
+                display: display.map(Into::into),
             },
             evm_engine::Asset::Erc721 {
                 contract_address,
                 token_id,
-                collection_name,
-                name,
-                symbol,
+                collection,
+                token,
             } => Self::Erc721 {
                 contract_address,
                 token_id,
-                collection_name,
-                name,
-                symbol,
+                collection: collection.map(Into::into),
+                token: token.map(Into::into),
             },
             evm_engine::Asset::Erc1155 {
                 contract_address,
                 token_id,
-                collection_name,
-                name,
-                symbol,
+                collection,
+                token,
             } => Self::Erc1155 {
                 contract_address,
                 token_id,
-                collection_name,
-                name,
-                symbol,
+                collection: collection.map(Into::into),
+                token: token.map(Into::into),
             },
         }
     }
@@ -196,25 +233,17 @@ impl From<evm_engine::Collection> for Collection {
         match collection {
             evm_engine::Collection::Erc721 {
                 contract_address,
-                collection_name,
-                name,
-                symbol,
+                collection,
             } => Self::Erc721 {
                 contract_address,
-                collection_name,
-                name,
-                symbol,
+                collection: collection.map(Into::into),
             },
             evm_engine::Collection::Erc1155 {
                 contract_address,
-                collection_name,
-                name,
-                symbol,
+                collection,
             } => Self::Erc1155 {
                 contract_address,
-                collection_name,
-                name,
-                symbol,
+                collection: collection.map(Into::into),
             },
         }
     }
@@ -318,9 +347,11 @@ mod tests {
                         "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
                     )
                     .expect("token"),
-                    symbol: Some("USDC".to_string()),
-                    decimals: Some(6),
-                    name: None,
+                    display: Some(evm_engine::Erc20AssetDisplay {
+                        name: None,
+                        symbol: Some("USDC".to_string()),
+                        decimals: Some(6),
+                    }),
                 },
                 from: Address::from_str("0x1111111111111111111111111111111111111111")
                     .expect("from"),
@@ -340,15 +371,13 @@ mod tests {
 
         assert_eq!(change.amount, Some(U256::from(0x1234_u64)));
 
-        let Asset::Erc20 {
-            symbol, decimals, ..
-        } = &change.asset
-        else {
+        let Asset::Erc20 { display, .. } = &change.asset else {
             panic!("expected erc20 asset");
         };
 
-        assert_eq!(symbol.as_deref(), Some("USDC"));
-        assert_eq!(*decimals, Some(6));
+        let display = display.as_ref().expect("expected erc20 display");
+        assert_eq!(display.symbol.as_deref(), Some("USDC"));
+        assert_eq!(display.decimals, Some(6));
     }
 
     #[test]
@@ -379,9 +408,11 @@ mod tests {
                 evm_engine::Change::Approval(evm_engine::ApprovalChange {
                     asset: evm_engine::Asset::Erc20 {
                         contract_address: erc20,
-                        symbol: Some("USDC".to_string()),
-                        decimals: Some(6),
-                        name: None,
+                        display: Some(evm_engine::Erc20AssetDisplay {
+                            name: None,
+                            symbol: Some("USDC".to_string()),
+                            decimals: Some(6),
+                        }),
                     },
                     owner,
                     spender,
@@ -390,9 +421,10 @@ mod tests {
                 evm_engine::Change::ApprovalForAll(evm_engine::ApprovalForAllChange {
                     collection: evm_engine::Collection::Erc721 {
                         contract_address: erc721,
-                        collection_name: None,
-                        name: None,
-                        symbol: Some("NFT".to_string()),
+                        collection: Some(evm_engine::Erc721CollectionDisplay {
+                            name: None,
+                            symbol: Some("NFT".to_string()),
+                        }),
                     },
                     owner,
                     operator,
@@ -411,13 +443,15 @@ mod tests {
         assert_eq!(approval.spender, spender);
         assert_eq!(approval.amount, Some(U256::from(9_u64)));
         assert!(matches!(
-            approval.asset,
+            &approval.asset,
             Asset::Erc20 {
                 contract_address,
-                symbol: Some(ref symbol),
-                decimals: Some(6),
-                name: None,
-            } if contract_address == erc20 && symbol == "USDC"
+                display: Some(Erc20AssetDisplay {
+                    name: None,
+                    symbol: Some(symbol),
+                    decimals: Some(6),
+                }),
+            } if *contract_address == erc20 && symbol == "USDC"
         ));
 
         let Change::ApprovalForAll(approval_for_all) = &mapped.changes[1] else {
@@ -427,13 +461,14 @@ mod tests {
         assert_eq!(approval_for_all.operator, operator);
         assert!(!approval_for_all.approved);
         assert!(matches!(
-            approval_for_all.collection,
+            &approval_for_all.collection,
             Collection::Erc721 {
                 contract_address,
-                collection_name: None,
-                name: None,
-                symbol: Some(ref symbol),
-            } if contract_address == erc721 && symbol == "NFT"
+                collection: Some(Erc721CollectionDisplay {
+                    name: None,
+                    symbol: Some(symbol),
+                }),
+            } if *contract_address == erc721 && symbol == "NFT"
         ));
     }
 }

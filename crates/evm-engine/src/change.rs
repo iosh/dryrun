@@ -1,30 +1,54 @@
 use alloy_primitives::{Address, U256};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeAssetDisplay {
+    pub symbol: Option<String>,
+    pub decimals: Option<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Erc20AssetDisplay {
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub decimals: Option<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Erc721CollectionDisplay {
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Erc1155CollectionDisplay {
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NftTokenDisplay {
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Asset {
     Native {
-        symbol: Option<String>,
-        decimals: Option<u8>,
+        display: Option<NativeAssetDisplay>,
     },
     Erc20 {
         contract_address: Address,
-        symbol: Option<String>,
-        decimals: Option<u8>,
-        name: Option<String>,
+        display: Option<Erc20AssetDisplay>,
     },
     Erc721 {
         contract_address: Address,
         token_id: U256,
-        collection_name: Option<String>,
-        name: Option<String>,
-        symbol: Option<String>,
+        collection: Option<Erc721CollectionDisplay>,
+        token: Option<NftTokenDisplay>,
     },
     Erc1155 {
         contract_address: Address,
         token_id: U256,
-        collection_name: Option<String>,
-        name: Option<String>,
-        symbol: Option<String>,
+        collection: Option<Erc1155CollectionDisplay>,
+        token: Option<NftTokenDisplay>,
     },
 }
 
@@ -32,15 +56,11 @@ pub enum Asset {
 pub enum Collection {
     Erc721 {
         contract_address: Address,
-        collection_name: Option<String>,
-        name: Option<String>,
-        symbol: Option<String>,
+        collection: Option<Erc721CollectionDisplay>,
     },
     Erc1155 {
         contract_address: Address,
-        collection_name: Option<String>,
-        name: Option<String>,
-        symbol: Option<String>,
+        collection: Option<Erc1155CollectionDisplay>,
     },
 }
 

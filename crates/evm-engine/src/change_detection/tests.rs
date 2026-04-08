@@ -1,15 +1,18 @@
 use std::{collections::HashMap, str::FromStr};
 
+use alloy::sol_types::SolValue;
 use alloy_primitives::{Address, B256, Bytes, U256};
 
 use crate::{
-    ApprovalChange, ApprovalForAllChange, Asset, Change, Collection, SimulatedBlock,
-    change_observation::Observation, execution::ExecutionArtifacts,
+    ApprovalChange, ApprovalForAllChange, Asset, BurnChange, Change, Collection, Erc20AssetDisplay,
+    MintChange, SimulatedBlock, TransferChange, change_observation::Observation,
+    execution::ExecutionArtifacts,
 };
 
 use super::{
     ChangeDetectionPipeline, ContractKind, DetectionContext, DetectionOutcome, DetectionSupport,
-    Erc20Metadata, ObservationDetector, approval_for_all_topic0, approval_topic0, transfer_topic0,
+    Erc20Metadata, ObservationDetector, approval_for_all_topic0, approval_topic0,
+    transfer_batch_topic0, transfer_single_topic0, transfer_topic0,
 };
 
 struct TestSupport {
@@ -34,10 +37,10 @@ impl TestSupport {
     }
 
     fn insert_fungible_token(&mut self, token: Address) {
-        self.insert_kind(token, ContractKind::FungibleLike);
         self.metadata.insert(
             token,
             Erc20Metadata {
+                name: None,
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
             },
@@ -115,7 +118,11 @@ fn indexed_address(address: Address) -> B256 {
     address.into_word()
 }
 
-fn approval_observation(
+fn indexed_u256(value: U256) -> B256 {
+    B256::from(value.to_be_bytes::<32>())
+}
+
+fn erc20_approval_observation(
     contract_address: Address,
     owner: Address,
     spender: Address,
@@ -129,6 +136,24 @@ fn approval_observation(
             indexed_address(spender),
         ],
         data: Bytes::from(value.to_be_bytes_vec()),
+    }
+}
+
+fn erc721_approval_observation(
+    contract_address: Address,
+    owner: Address,
+    spender: Address,
+    token_id: U256,
+) -> Observation {
+    Observation::Log {
+        address: contract_address,
+        topics: vec![
+            approval_topic0(),
+            indexed_address(owner),
+            indexed_address(spender),
+            indexed_u256(token_id),
+        ],
+        data: Bytes::new(),
     }
 }
 
@@ -149,7 +174,7 @@ fn approval_for_all_observation(
     }
 }
 
-fn transfer_observation(
+fn erc20_transfer_observation(
     contract_address: Address,
     from: Address,
     to: Address,
@@ -166,21 +191,102 @@ fn transfer_observation(
     }
 }
 
+fn erc721_transfer_observation(
+    contract_address: Address,
+    from: Address,
+    to: Address,
+    token_id: U256,
+) -> Observation {
+    Observation::Log {
+        address: contract_address,
+        topics: vec![
+            transfer_topic0(),
+            indexed_address(from),
+            indexed_address(to),
+            indexed_u256(token_id),
+        ],
+        data: Bytes::new(),
+    }
+}
+
+fn erc1155_transfer_single_observation(
+    contract_address: Address,
+    operator: Address,
+    from: Address,
+    to: Address,
+    token_id: U256,
+    amount: U256,
+) -> Observation {
+    Observation::Log {
+        address: contract_address,
+        topics: vec![
+            transfer_single_topic0(),
+            indexed_address(operator),
+            indexed_address(from),
+            indexed_address(to),
+        ],
+        data: Bytes::from((token_id, amount).abi_encode_sequence()),
+    }
+}
+
+fn erc1155_transfer_batch_observation(
+    contract_address: Address,
+    operator: Address,
+    from: Address,
+    to: Address,
+    ids: &[u64],
+    values: &[u64],
+) -> Observation {
+    Observation::Log {
+        address: contract_address,
+        topics: vec![
+            transfer_batch_topic0(),
+            indexed_address(operator),
+            indexed_address(from),
+            indexed_address(to),
+        ],
+        data: Bytes::from(
+            (
+                ids.iter().copied().map(U256::from).collect::<Vec<_>>(),
+                values.iter().copied().map(U256::from).collect::<Vec<_>>(),
+            )
+                .abi_encode_sequence(),
+        ),
+    }
+}
+
 fn erc20_asset(contract_address: Address) -> Asset {
     Asset::Erc20 {
         contract_address,
-        symbol: Some("USDC".to_string()),
-        decimals: Some(6),
-        name: None,
+        display: Some(Erc20AssetDisplay {
+            name: None,
+            symbol: Some("USDC".to_string()),
+            decimals: Some(6),
+        }),
+    }
+}
+
+fn erc721_asset(contract_address: Address, token_id: u64) -> Asset {
+    Asset::Erc721 {
+        contract_address,
+        token_id: U256::from(token_id),
+        collection: None,
+        token: None,
+    }
+}
+
+fn erc1155_asset(contract_address: Address, token_id: u64) -> Asset {
+    Asset::Erc1155 {
+        contract_address,
+        token_id: U256::from(token_id),
+        collection: None,
+        token: None,
     }
 }
 
 fn native_transfer_change(from: Address, to: Address, amount: u64) -> Change {
-    Change::Transfer(crate::TransferChange {
-        asset: Asset::Native {
-            symbol: None,
-            decimals: None,
-        },
+    Change::Transfer(TransferChange {
+        asset: Asset::Native { display: None },
         from,
         to,
         amount: Some(U256::from(amount)),
@@ -188,10 +294,82 @@ fn native_transfer_change(from: Address, to: Address, amount: u64) -> Change {
 }
 
 fn erc20_transfer_change(token: Address, from: Address, to: Address, amount: u64) -> Change {
-    Change::Transfer(crate::TransferChange {
+    Change::Transfer(TransferChange {
         asset: erc20_asset(token),
         from,
         to,
+        amount: Some(U256::from(amount)),
+    })
+}
+
+fn erc20_mint_change(token: Address, to: Address, amount: u64) -> Change {
+    Change::Mint(MintChange {
+        asset: erc20_asset(token),
+        to,
+        amount: Some(U256::from(amount)),
+    })
+}
+
+fn erc20_burn_change(token: Address, from: Address, amount: u64) -> Change {
+    Change::Burn(BurnChange {
+        asset: erc20_asset(token),
+        from,
+        amount: Some(U256::from(amount)),
+    })
+}
+
+fn erc721_transfer_change(token: Address, from: Address, to: Address, token_id: u64) -> Change {
+    Change::Transfer(TransferChange {
+        asset: erc721_asset(token, token_id),
+        from,
+        to,
+        amount: None,
+    })
+}
+
+fn erc721_mint_change(token: Address, to: Address, token_id: u64) -> Change {
+    Change::Mint(MintChange {
+        asset: erc721_asset(token, token_id),
+        to,
+        amount: None,
+    })
+}
+
+fn erc721_burn_change(token: Address, from: Address, token_id: u64) -> Change {
+    Change::Burn(BurnChange {
+        asset: erc721_asset(token, token_id),
+        from,
+        amount: None,
+    })
+}
+
+fn erc1155_transfer_change(
+    token: Address,
+    from: Address,
+    to: Address,
+    token_id: u64,
+    amount: u64,
+) -> Change {
+    Change::Transfer(TransferChange {
+        asset: erc1155_asset(token, token_id),
+        from,
+        to,
+        amount: Some(U256::from(amount)),
+    })
+}
+
+fn erc1155_mint_change(token: Address, to: Address, token_id: u64, amount: u64) -> Change {
+    Change::Mint(MintChange {
+        asset: erc1155_asset(token, token_id),
+        to,
+        amount: Some(U256::from(amount)),
+    })
+}
+
+fn erc1155_burn_change(token: Address, from: Address, token_id: u64, amount: u64) -> Change {
+    Change::Burn(BurnChange {
+        asset: erc1155_asset(token, token_id),
+        from,
         amount: Some(U256::from(amount)),
     })
 }
@@ -212,13 +390,7 @@ fn erc721_approval_change(
     token_id: u64,
 ) -> Change {
     Change::Approval(ApprovalChange {
-        asset: Asset::Erc721 {
-            contract_address: token,
-            token_id: U256::from(token_id),
-            collection_name: None,
-            name: None,
-            symbol: None,
-        },
+        asset: erc721_asset(token, token_id),
         owner,
         spender,
         amount: None,
@@ -228,18 +400,14 @@ fn erc721_approval_change(
 fn erc721_collection(contract_address: Address) -> Collection {
     Collection::Erc721 {
         contract_address,
-        collection_name: None,
-        name: None,
-        symbol: None,
+        collection: None,
     }
 }
 
 fn erc1155_collection(contract_address: Address) -> Collection {
     Collection::Erc1155 {
         contract_address,
-        collection_name: None,
-        name: None,
-        symbol: None,
+        collection: None,
     }
 }
 
@@ -277,7 +445,7 @@ fn returns_empty_for_failed_execution() {
 }
 
 #[test]
-fn maps_native_and_fungible_transfers_in_observed_order() {
+fn maps_native_and_erc20_transfers_in_observed_order() {
     let token = address("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48");
     let native_from = address("0x1111111111111111111111111111111111111111");
     let native_to = address("0x2222222222222222222222222222222222222222");
@@ -293,7 +461,7 @@ fn maps_native_and_fungible_transfers_in_observed_order() {
                 to: native_to,
                 amount: U256::from(1_u64),
             },
-            transfer_observation(token, token_from, token_to, U256::from(2_u64)),
+            erc20_transfer_observation(token, token_from, token_to, U256::from(2_u64)),
         ],
         &mut support,
     );
@@ -308,6 +476,152 @@ fn maps_native_and_fungible_transfers_in_observed_order() {
 }
 
 #[test]
+fn maps_erc20_transfer_logs_into_transfer_mint_and_burn_changes() {
+    let token = address("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48");
+    let owner = address("0x1111111111111111111111111111111111111111");
+    let recipient = address("0x2222222222222222222222222222222222222222");
+    let mut support = TestSupport::new();
+    support.insert_fungible_token(token);
+
+    let changes = successful_changes(
+        vec![
+            erc20_transfer_observation(token, owner, recipient, U256::from(5_u64)),
+            erc20_transfer_observation(token, Address::ZERO, recipient, U256::from(6_u64)),
+            erc20_transfer_observation(token, owner, Address::ZERO, U256::from(7_u64)),
+        ],
+        &mut support,
+    );
+
+    assert_eq!(
+        changes,
+        vec![
+            erc20_transfer_change(token, owner, recipient, 5),
+            erc20_mint_change(token, recipient, 6),
+            erc20_burn_change(token, owner, 7),
+        ]
+    );
+}
+
+#[test]
+fn maps_erc721_transfer_logs_into_transfer_mint_and_burn_changes() {
+    let token = address("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    let owner = address("0x1111111111111111111111111111111111111111");
+    let recipient = address("0x2222222222222222222222222222222222222222");
+    let mut support = TestSupport::new();
+
+    let changes = successful_changes(
+        vec![
+            erc721_transfer_observation(token, owner, recipient, U256::from(42_u64)),
+            erc721_transfer_observation(token, Address::ZERO, recipient, U256::from(43_u64)),
+            erc721_transfer_observation(token, owner, Address::ZERO, U256::from(44_u64)),
+        ],
+        &mut support,
+    );
+
+    assert_eq!(
+        changes,
+        vec![
+            erc721_transfer_change(token, owner, recipient, 42),
+            erc721_mint_change(token, recipient, 43),
+            erc721_burn_change(token, owner, 44),
+        ]
+    );
+    assert_eq!(support.contract_kind_loads, 0);
+}
+
+#[test]
+fn maps_erc1155_transfer_single_logs_into_transfer_mint_and_burn_changes() {
+    let token = address("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    let operator = address("0x9999999999999999999999999999999999999999");
+    let owner = address("0x1111111111111111111111111111111111111111");
+    let recipient = address("0x2222222222222222222222222222222222222222");
+    let mut support = TestSupport::new();
+
+    let changes = successful_changes(
+        vec![
+            erc1155_transfer_single_observation(
+                token,
+                operator,
+                owner,
+                recipient,
+                U256::from(11_u64),
+                U256::from(5_u64),
+            ),
+            erc1155_transfer_single_observation(
+                token,
+                operator,
+                Address::ZERO,
+                recipient,
+                U256::from(12_u64),
+                U256::from(6_u64),
+            ),
+            erc1155_transfer_single_observation(
+                token,
+                operator,
+                owner,
+                Address::ZERO,
+                U256::from(13_u64),
+                U256::from(7_u64),
+            ),
+        ],
+        &mut support,
+    );
+
+    assert_eq!(
+        changes,
+        vec![
+            erc1155_transfer_change(token, owner, recipient, 11, 5),
+            erc1155_mint_change(token, recipient, 12, 6),
+            erc1155_burn_change(token, owner, 13, 7),
+        ]
+    );
+}
+
+#[test]
+fn expands_erc1155_transfer_batch_logs_into_ordered_atomic_changes() {
+    let token = address("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    let operator = address("0x9999999999999999999999999999999999999999");
+    let owner = address("0x1111111111111111111111111111111111111111");
+    let recipient = address("0x2222222222222222222222222222222222222222");
+    let mut support = TestSupport::new();
+
+    let changes = successful_changes(
+        vec![
+            erc1155_transfer_batch_observation(token, operator, owner, recipient, &[3, 4], &[5, 6]),
+            erc1155_transfer_batch_observation(
+                token,
+                operator,
+                Address::ZERO,
+                recipient,
+                &[7, 8],
+                &[9, 10],
+            ),
+            erc1155_transfer_batch_observation(
+                token,
+                operator,
+                owner,
+                Address::ZERO,
+                &[11, 12],
+                &[13, 14],
+            ),
+        ],
+        &mut support,
+    );
+
+    assert_eq!(
+        changes,
+        vec![
+            erc1155_transfer_change(token, owner, recipient, 3, 5),
+            erc1155_transfer_change(token, owner, recipient, 4, 6),
+            erc1155_mint_change(token, recipient, 7, 9),
+            erc1155_mint_change(token, recipient, 8, 10),
+            erc1155_burn_change(token, owner, 11, 13),
+            erc1155_burn_change(token, owner, 12, 14),
+        ]
+    );
+}
+
+#[test]
 fn maps_approval_changes_for_erc20_and_erc721() {
     let erc20 = address("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48");
     let erc721 = address("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
@@ -315,12 +629,11 @@ fn maps_approval_changes_for_erc20_and_erc721() {
     let spender = address("0x2222222222222222222222222222222222222222");
     let mut support = TestSupport::new();
     support.insert_fungible_token(erc20);
-    support.insert_kind(erc721, ContractKind::Erc721);
 
     let changes = successful_changes(
         vec![
-            approval_observation(erc20, owner, spender, U256::from(5_u64)),
-            approval_observation(erc721, owner, spender, U256::from(42_u64)),
+            erc20_approval_observation(erc20, owner, spender, U256::from(5_u64)),
+            erc721_approval_observation(erc721, owner, spender, U256::from(42_u64)),
         ],
         &mut support,
     );
@@ -362,7 +675,7 @@ fn maps_approval_for_all_for_erc721_and_erc1155() {
 }
 
 #[test]
-fn caches_contract_kinds_and_erc20_metadata_per_address() {
+fn caches_erc20_metadata_without_contract_kind_lookup_for_transfer_and_approval() {
     let token = address("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48");
     let owner = address("0x1111111111111111111111111111111111111111");
     let spender = address("0x2222222222222222222222222222222222222222");
@@ -372,8 +685,8 @@ fn caches_contract_kinds_and_erc20_metadata_per_address() {
 
     let changes = successful_changes(
         vec![
-            approval_observation(token, owner, spender, U256::from(7_u64)),
-            transfer_observation(token, owner, recipient, U256::from(8_u64)),
+            erc20_approval_observation(token, owner, spender, U256::from(7_u64)),
+            erc20_transfer_observation(token, owner, recipient, U256::from(8_u64)),
         ],
         &mut support,
     );
@@ -385,8 +698,34 @@ fn caches_contract_kinds_and_erc20_metadata_per_address() {
             erc20_transfer_change(token, owner, recipient, 8),
         ]
     );
-    assert_eq!(support.contract_kind_loads, 1);
+    assert_eq!(support.contract_kind_loads, 0);
     assert_eq!(support.erc20_metadata_loads, 1);
+}
+
+#[test]
+fn caches_contract_kinds_for_repeated_approval_for_all_logs() {
+    let erc721 = address("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    let owner = address("0x1111111111111111111111111111111111111111");
+    let operator = address("0x2222222222222222222222222222222222222222");
+    let mut support = TestSupport::new();
+    support.insert_kind(erc721, ContractKind::Erc721);
+
+    let changes = successful_changes(
+        vec![
+            approval_for_all_observation(erc721, owner, operator, true),
+            approval_for_all_observation(erc721, owner, operator, false),
+        ],
+        &mut support,
+    );
+
+    assert_eq!(
+        changes,
+        vec![
+            approval_for_all_change(erc721_collection(erc721), owner, operator, true),
+            approval_for_all_change(erc721_collection(erc721), owner, operator, false),
+        ]
+    );
+    assert_eq!(support.contract_kind_loads, 1);
 }
 
 #[test]
@@ -425,7 +764,7 @@ fn contract_specific_detector_can_override_standard_detection() {
     let changes = pipeline.extract_changes(
         &execution_artifacts(
             crate::EvmExecutionStatus::Success,
-            vec![approval_observation(
+            vec![erc20_approval_observation(
                 token,
                 owner,
                 spender,
