@@ -348,7 +348,7 @@ mod tests {
                     )
                     .expect("token"),
                     display: Some(evm_engine::Erc20AssetDisplay {
-                        name: None,
+                        name: Some("USD Coin".to_string()),
                         symbol: Some("USDC".to_string()),
                         decimals: Some(6),
                     }),
@@ -376,8 +376,67 @@ mod tests {
         };
 
         let display = display.as_ref().expect("expected erc20 display");
+        assert_eq!(display.name.as_deref(), Some("USD Coin"));
         assert_eq!(display.symbol.as_deref(), Some("USDC"));
         assert_eq!(display.decimals, Some(6));
+    }
+
+    #[test]
+    fn engine_erc721_transfer_maps_collection_metadata_into_service_output() {
+        let token =
+            Address::from_str("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").expect("erc721");
+        let from = Address::from_str("0x1111111111111111111111111111111111111111").expect("from");
+        let to = Address::from_str("0x2222222222222222222222222222222222222222").expect("to");
+
+        let simulation = EvmSimulation::new(
+            EvmExecution {
+                chain_id: 1,
+                block: evm_engine::SimulatedBlock {
+                    number: 1,
+                    hash: B256::ZERO,
+                },
+                status: evm_engine::EvmExecutionStatus::Success,
+                gas_used: 21_000,
+                gas_limit: 50_000,
+                output: Bytes::new(),
+                failure: None,
+            },
+            vec![evm_engine::Change::Transfer(evm_engine::TransferChange {
+                asset: evm_engine::Asset::Erc721 {
+                    contract_address: token,
+                    token_id: U256::from(42_u64),
+                    collection: Some(evm_engine::Erc721CollectionDisplay {
+                        name: Some("Mock NFT Collection".to_string()),
+                        symbol: Some("MNFT".to_string()),
+                    }),
+                    token: None,
+                },
+                from,
+                to,
+                amount: None,
+            })],
+        );
+
+        let mapped: SimulateEvmTransactionOutput = simulation.into();
+        let Change::Transfer(change) = &mapped.changes[0] else {
+            panic!("expected transfer change");
+        };
+
+        assert!(matches!(
+            &change.asset,
+            Asset::Erc721 {
+                contract_address,
+                token_id,
+                collection: Some(Erc721CollectionDisplay {
+                    name: Some(name),
+                    symbol: Some(symbol),
+                }),
+                token: None,
+            } if *contract_address == token
+                && *token_id == U256::from(42_u64)
+                && name == "Mock NFT Collection"
+                && symbol == "MNFT"
+        ));
     }
 
     #[test]
@@ -409,7 +468,7 @@ mod tests {
                     asset: evm_engine::Asset::Erc20 {
                         contract_address: erc20,
                         display: Some(evm_engine::Erc20AssetDisplay {
-                            name: None,
+                            name: Some("USD Coin".to_string()),
                             symbol: Some("USDC".to_string()),
                             decimals: Some(6),
                         }),
@@ -447,11 +506,11 @@ mod tests {
             Asset::Erc20 {
                 contract_address,
                 display: Some(Erc20AssetDisplay {
-                    name: None,
+                    name: Some(name),
                     symbol: Some(symbol),
                     decimals: Some(6),
                 }),
-            } if *contract_address == erc20 && symbol == "USDC"
+            } if *contract_address == erc20 && name == "USD Coin" && symbol == "USDC"
         ));
 
         let Change::ApprovalForAll(approval_for_all) = &mapped.changes[1] else {

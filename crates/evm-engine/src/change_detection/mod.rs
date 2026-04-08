@@ -6,7 +6,8 @@ use std::collections::HashMap;
 use alloy_primitives::Address;
 
 use crate::{
-    Change, EvmExecutionStatus, change_observation::Observation, execution::ExecutionArtifacts,
+    Change, Erc721CollectionDisplay, EvmExecutionStatus, change_observation::Observation,
+    execution::ExecutionArtifacts,
 };
 
 use self::detectors::{
@@ -34,12 +35,23 @@ pub(crate) struct Erc20Metadata {
     pub decimals: Option<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct Erc721CollectionMetadata {
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+}
+
 // Detectors ask for external facts through this trait so the semantic pipeline
 // can stay independent from the concrete execution backend.
 pub(crate) trait DetectionSupport {
     fn resolve_contract_kind(&mut self, contract_address: Address) -> ContractKind;
 
     fn load_erc20_metadata(&mut self, token_address: Address) -> Erc20Metadata;
+
+    fn load_erc721_collection_metadata(
+        &mut self,
+        contract_address: Address,
+    ) -> Erc721CollectionMetadata;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +174,7 @@ pub(crate) struct DetectionContext<'a> {
     chain_id: u64,
     contract_kinds: HashMap<Address, ContractKind>,
     erc20_metadata_by_address: HashMap<Address, Erc20Metadata>,
+    erc721_collection_metadata_by_address: HashMap<Address, Erc721CollectionMetadata>,
     support: &'a mut dyn DetectionSupport,
 }
 
@@ -171,6 +184,7 @@ impl<'a> DetectionContext<'a> {
             chain_id,
             contract_kinds: HashMap::new(),
             erc20_metadata_by_address: HashMap::new(),
+            erc721_collection_metadata_by_address: HashMap::new(),
             support,
         }
     }
@@ -194,6 +208,38 @@ impl<'a> DetectionContext<'a> {
         self.erc20_metadata_by_address
             .insert(token_address, metadata.clone());
         metadata
+    }
+
+    pub(super) fn erc721_collection_metadata(
+        &mut self,
+        contract_address: Address,
+    ) -> Erc721CollectionMetadata {
+        if let Some(metadata) = self
+            .erc721_collection_metadata_by_address
+            .get(&contract_address)
+        {
+            return metadata.clone();
+        }
+
+        let metadata = self
+            .support
+            .load_erc721_collection_metadata(contract_address);
+        self.erc721_collection_metadata_by_address
+            .insert(contract_address, metadata.clone());
+        metadata
+    }
+}
+
+pub(super) fn erc721_collection_display(
+    metadata: Erc721CollectionMetadata,
+) -> Option<Erc721CollectionDisplay> {
+    if metadata.name.is_none() && metadata.symbol.is_none() {
+        None
+    } else {
+        Some(Erc721CollectionDisplay {
+            name: metadata.name,
+            symbol: metadata.symbol,
+        })
     }
 }
 

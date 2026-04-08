@@ -15,7 +15,10 @@ use revm::{
 
 use crate::{
     Change, EvmExecutionStatus, EvmTransaction,
-    change_detection::{ChangeDetectionPipeline, ContractKind, DetectionSupport, Erc20Metadata},
+    change_detection::{
+        ChangeDetectionPipeline, ContractKind, DetectionSupport, Erc20Metadata,
+        Erc721CollectionMetadata,
+    },
     execution::ExecutionArtifacts,
     execution::MainnetAlloyEvm,
 };
@@ -24,8 +27,14 @@ const METADATA_CALL_GAS_LIMIT: u64 = 100_000;
 
 sol! {
     contract IERC20Metadata {
+        function name() external view returns (string);
         function symbol() external view returns (string);
         function decimals() external view returns (uint8);
+    }
+
+    contract IERC721Metadata {
+        function name() external view returns (string);
+        function symbol() external view returns (string);
     }
 
     contract IERC165 {
@@ -79,6 +88,18 @@ impl<INSP> DetectionSupport for ExecutionDetectionSupport<'_, INSP> {
             token_address,
         )
     }
+
+    fn load_erc721_collection_metadata(
+        &mut self,
+        contract_address: Address,
+    ) -> Erc721CollectionMetadata {
+        load_erc721_collection_metadata(
+            self.evm,
+            self.transaction,
+            self.execution_chain_id,
+            contract_address,
+        )
+    }
 }
 
 fn configure_relaxed_call_cfg(cfg: &mut CfgEnv) {
@@ -101,12 +122,38 @@ fn load_erc20_metadata<INSP>(
     execution_chain_id: u64,
     token_address: Address,
 ) -> Erc20Metadata {
-    // This slice keeps ERC20 metadata loading minimal. We only probe stable
-    // display fields that already exist in the current implementation path.
+    // ERC20 metadata is best-effort and optional. Failures should not affect
+    // change extraction itself.
     Erc20Metadata {
-        name: None,
+        name: call_erc20_name(evm, transaction, execution_chain_id, token_address),
         symbol: call_erc20_symbol(evm, transaction, execution_chain_id, token_address),
         decimals: call_erc20_decimals(evm, transaction, execution_chain_id, token_address),
+    }
+}
+
+fn load_erc721_collection_metadata<INSP>(
+    evm: &mut MainnetAlloyEvm<INSP>,
+    transaction: &EvmTransaction,
+    execution_chain_id: u64,
+    contract_address: Address,
+) -> Erc721CollectionMetadata {
+    // Only load collection metadata from the standard ERC721 metadata
+    // extension, and leave optional fields empty when that support is absent.
+    let supports_metadata = try_supports_interface(
+        evm,
+        transaction,
+        execution_chain_id,
+        contract_address,
+        [0x5b, 0x5e, 0x13, 0x9f],
+    );
+
+    if supports_metadata != Some(true) {
+        return Erc721CollectionMetadata::default();
+    }
+
+    Erc721CollectionMetadata {
+        name: call_erc721_name(evm, transaction, execution_chain_id, contract_address),
+        symbol: call_erc721_symbol(evm, transaction, execution_chain_id, contract_address),
     }
 }
 
@@ -191,6 +238,25 @@ fn call_erc20_symbol<INSP>(
     IERC20Metadata::symbolCall::abi_decode_returns(output.as_ref()).ok()
 }
 
+fn call_erc20_name<INSP>(
+    evm: &mut MainnetAlloyEvm<INSP>,
+    transaction: &EvmTransaction,
+    execution_chain_id: u64,
+    token_address: Address,
+) -> Option<String> {
+    let output = transact_metadata_call(
+        evm,
+        create_metadata_call_tx_env(
+            transaction,
+            execution_chain_id,
+            token_address,
+            IERC20Metadata::nameCall {}.abi_encode().into(),
+        ),
+    )?;
+
+    IERC20Metadata::nameCall::abi_decode_returns(output.as_ref()).ok()
+}
+
 fn call_erc20_decimals<INSP>(
     evm: &mut MainnetAlloyEvm<INSP>,
     transaction: &EvmTransaction,
@@ -208,6 +274,44 @@ fn call_erc20_decimals<INSP>(
     )?;
 
     IERC20Metadata::decimalsCall::abi_decode_returns(output.as_ref()).ok()
+}
+
+fn call_erc721_name<INSP>(
+    evm: &mut MainnetAlloyEvm<INSP>,
+    transaction: &EvmTransaction,
+    execution_chain_id: u64,
+    contract_address: Address,
+) -> Option<String> {
+    let output = transact_metadata_call(
+        evm,
+        create_metadata_call_tx_env(
+            transaction,
+            execution_chain_id,
+            contract_address,
+            IERC721Metadata::nameCall {}.abi_encode().into(),
+        ),
+    )?;
+
+    IERC721Metadata::nameCall::abi_decode_returns(output.as_ref()).ok()
+}
+
+fn call_erc721_symbol<INSP>(
+    evm: &mut MainnetAlloyEvm<INSP>,
+    transaction: &EvmTransaction,
+    execution_chain_id: u64,
+    contract_address: Address,
+) -> Option<String> {
+    let output = transact_metadata_call(
+        evm,
+        create_metadata_call_tx_env(
+            transaction,
+            execution_chain_id,
+            contract_address,
+            IERC721Metadata::symbolCall {}.abi_encode().into(),
+        ),
+    )?;
+
+    IERC721Metadata::symbolCall::abi_decode_returns(output.as_ref()).ok()
 }
 
 fn create_metadata_call_tx_env(

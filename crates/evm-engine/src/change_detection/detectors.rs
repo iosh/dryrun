@@ -7,6 +7,7 @@ use crate::{
 
 use super::{
     ContractKind, DetectionContext, DetectionOutcome, ObservationDetector,
+    erc721_collection_display,
     log_parsing::{
         extract_approval_for_all_log, extract_erc20_approval_log, extract_erc20_transfer_log,
         extract_erc721_approval_log, extract_erc721_transfer_log,
@@ -57,7 +58,7 @@ impl ObservationDetector for StandardTransferDetector {
         };
 
         DetectionOutcome::handled(classify_standard_transfer(
-            erc721_asset(transfer.contract_address, transfer.token_id),
+            erc721_asset(transfer.contract_address, transfer.token_id, context),
             transfer.from,
             transfer.to,
             None,
@@ -128,7 +129,7 @@ impl ObservationDetector for ApprovalDetector {
         };
 
         DetectionOutcome::handled(Change::Approval(ApprovalChange {
-            asset: erc721_asset(approval.contract_address, approval.token_id),
+            asset: erc721_asset(approval.contract_address, approval.token_id, context),
             owner: approval.owner,
             spender: approval.spender,
             amount: None,
@@ -149,7 +150,7 @@ impl ObservationDetector for ApprovalForAllDetector {
         };
 
         let collection = match context.contract_kind(approval_for_all.contract_address) {
-            ContractKind::Erc721 => erc721_collection(approval_for_all.contract_address),
+            ContractKind::Erc721 => erc721_collection(approval_for_all.contract_address, context),
             ContractKind::Erc1155 => erc1155_collection(approval_for_all.contract_address),
             ContractKind::FungibleLike | ContractKind::Unknown => {
                 return DetectionOutcome::ignored();
@@ -184,19 +185,23 @@ fn erc20_asset(contract_address: Address, context: &mut DetectionContext<'_>) ->
     }
 }
 
-fn erc721_asset(contract_address: Address, token_id: U256) -> Asset {
+fn erc721_asset(
+    contract_address: Address,
+    token_id: U256,
+    context: &mut DetectionContext<'_>,
+) -> Asset {
     Asset::Erc721 {
         contract_address,
         token_id,
-        collection: None,
+        collection: erc721_collection_display(context.erc721_collection_metadata(contract_address)),
         token: None,
     }
 }
 
-fn erc721_collection(contract_address: Address) -> Collection {
+fn erc721_collection(contract_address: Address, context: &mut DetectionContext<'_>) -> Collection {
     Collection::Erc721 {
         contract_address,
-        collection: None,
+        collection: erc721_collection_display(context.erc721_collection_metadata(contract_address)),
     }
 }
 

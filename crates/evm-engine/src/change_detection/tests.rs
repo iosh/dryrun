@@ -5,30 +5,34 @@ use alloy_primitives::{Address, B256, Bytes, U256};
 
 use crate::{
     ApprovalChange, ApprovalForAllChange, Asset, BurnChange, Change, Collection, Erc20AssetDisplay,
-    MintChange, SimulatedBlock, TransferChange, change_observation::Observation,
-    execution::ExecutionArtifacts,
+    Erc721CollectionDisplay, MintChange, SimulatedBlock, TransferChange,
+    change_observation::Observation, execution::ExecutionArtifacts,
 };
 
 use super::{
     ChangeDetectionPipeline, ContractKind, DetectionContext, DetectionOutcome, DetectionSupport,
-    Erc20Metadata, ObservationDetector, approval_for_all_topic0, approval_topic0,
-    transfer_batch_topic0, transfer_single_topic0, transfer_topic0,
+    Erc20Metadata, Erc721CollectionMetadata, ObservationDetector, approval_for_all_topic0,
+    approval_topic0, transfer_batch_topic0, transfer_single_topic0, transfer_topic0,
 };
 
 struct TestSupport {
     kinds: HashMap<Address, ContractKind>,
-    metadata: HashMap<Address, Erc20Metadata>,
+    erc20_metadata: HashMap<Address, Erc20Metadata>,
+    erc721_collection_metadata: HashMap<Address, Erc721CollectionMetadata>,
     contract_kind_loads: usize,
     erc20_metadata_loads: usize,
+    erc721_collection_metadata_loads: usize,
 }
 
 impl TestSupport {
     fn new() -> Self {
         Self {
             kinds: HashMap::new(),
-            metadata: HashMap::new(),
+            erc20_metadata: HashMap::new(),
+            erc721_collection_metadata: HashMap::new(),
             contract_kind_loads: 0,
             erc20_metadata_loads: 0,
+            erc721_collection_metadata_loads: 0,
         }
     }
 
@@ -37,12 +41,22 @@ impl TestSupport {
     }
 
     fn insert_fungible_token(&mut self, token: Address) {
-        self.metadata.insert(
+        self.erc20_metadata.insert(
             token,
             Erc20Metadata {
-                name: None,
+                name: Some("USD Coin".to_string()),
                 symbol: Some("USDC".to_string()),
                 decimals: Some(6),
+            },
+        );
+    }
+
+    fn insert_erc721_collection(&mut self, contract: Address) {
+        self.erc721_collection_metadata.insert(
+            contract,
+            Erc721CollectionMetadata {
+                name: Some("Mock NFT Collection".to_string()),
+                symbol: Some("MNFT".to_string()),
             },
         );
     }
@@ -59,8 +73,19 @@ impl DetectionSupport for TestSupport {
 
     fn load_erc20_metadata(&mut self, token_address: Address) -> Erc20Metadata {
         self.erc20_metadata_loads += 1;
-        self.metadata
+        self.erc20_metadata
             .get(&token_address)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn load_erc721_collection_metadata(
+        &mut self,
+        contract_address: Address,
+    ) -> Erc721CollectionMetadata {
+        self.erc721_collection_metadata_loads += 1;
+        self.erc721_collection_metadata
+            .get(&contract_address)
             .cloned()
             .unwrap_or_default()
     }
@@ -259,7 +284,7 @@ fn erc20_asset(contract_address: Address) -> Asset {
     Asset::Erc20 {
         contract_address,
         display: Some(Erc20AssetDisplay {
-            name: None,
+            name: Some("USD Coin".to_string()),
             symbol: Some("USDC".to_string()),
             decimals: Some(6),
         }),
@@ -270,7 +295,10 @@ fn erc721_asset(contract_address: Address, token_id: u64) -> Asset {
     Asset::Erc721 {
         contract_address,
         token_id: U256::from(token_id),
-        collection: None,
+        collection: Some(Erc721CollectionDisplay {
+            name: Some("Mock NFT Collection".to_string()),
+            symbol: Some("MNFT".to_string()),
+        }),
         token: None,
     }
 }
@@ -400,7 +428,10 @@ fn erc721_approval_change(
 fn erc721_collection(contract_address: Address) -> Collection {
     Collection::Erc721 {
         contract_address,
-        collection: None,
+        collection: Some(Erc721CollectionDisplay {
+            name: Some("Mock NFT Collection".to_string()),
+            symbol: Some("MNFT".to_string()),
+        }),
     }
 }
 
@@ -508,6 +539,7 @@ fn maps_erc721_transfer_logs_into_transfer_mint_and_burn_changes() {
     let owner = address("0x1111111111111111111111111111111111111111");
     let recipient = address("0x2222222222222222222222222222222222222222");
     let mut support = TestSupport::new();
+    support.insert_erc721_collection(token);
 
     let changes = successful_changes(
         vec![
@@ -629,6 +661,7 @@ fn maps_approval_changes_for_erc20_and_erc721() {
     let spender = address("0x2222222222222222222222222222222222222222");
     let mut support = TestSupport::new();
     support.insert_fungible_token(erc20);
+    support.insert_erc721_collection(erc721);
 
     let changes = successful_changes(
         vec![
@@ -656,6 +689,7 @@ fn maps_approval_for_all_for_erc721_and_erc1155() {
     let mut support = TestSupport::new();
     support.insert_kind(erc721, ContractKind::Erc721);
     support.insert_kind(erc1155, ContractKind::Erc1155);
+    support.insert_erc721_collection(erc721);
 
     let changes = successful_changes(
         vec![
@@ -709,6 +743,7 @@ fn caches_contract_kinds_for_repeated_approval_for_all_logs() {
     let operator = address("0x2222222222222222222222222222222222222222");
     let mut support = TestSupport::new();
     support.insert_kind(erc721, ContractKind::Erc721);
+    support.insert_erc721_collection(erc721);
 
     let changes = successful_changes(
         vec![
@@ -726,6 +761,34 @@ fn caches_contract_kinds_for_repeated_approval_for_all_logs() {
         ]
     );
     assert_eq!(support.contract_kind_loads, 1);
+}
+
+#[test]
+fn caches_erc721_collection_metadata_without_contract_kind_lookup() {
+    let erc721 = address("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    let owner = address("0x1111111111111111111111111111111111111111");
+    let recipient = address("0x2222222222222222222222222222222222222222");
+    let spender = address("0x3333333333333333333333333333333333333333");
+    let mut support = TestSupport::new();
+    support.insert_erc721_collection(erc721);
+
+    let changes = successful_changes(
+        vec![
+            erc721_transfer_observation(erc721, owner, recipient, U256::from(1_u64)),
+            erc721_approval_observation(erc721, owner, spender, U256::from(2_u64)),
+        ],
+        &mut support,
+    );
+
+    assert_eq!(
+        changes,
+        vec![
+            erc721_transfer_change(erc721, owner, recipient, 1),
+            erc721_approval_change(erc721, owner, spender, 2),
+        ]
+    );
+    assert_eq!(support.contract_kind_loads, 0);
+    assert_eq!(support.erc721_collection_metadata_loads, 1);
 }
 
 #[test]

@@ -222,7 +222,7 @@ mod tests {
                         )
                         .expect("token"),
                         display: Some(simulation_service::Erc20AssetDisplay {
-                            name: None,
+                            name: Some("USD Coin".to_string()),
                             symbol: Some("USDC".to_string()),
                             decimals: Some(6),
                         }),
@@ -254,8 +254,69 @@ mod tests {
         };
 
         let display = display.as_ref().expect("expected erc20 display");
+        assert_eq!(display.name.as_deref(), Some("USD Coin"));
         assert_eq!(display.symbol.as_deref(), Some("USDC"));
         assert_eq!(display.decimals, Some(6));
+    }
+
+    #[test]
+    fn erc721_transfer_asset_maps_collection_metadata_into_rpc_response() {
+        let token =
+            Address::from_str("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").expect("erc721");
+        let output = simulation_service::SimulateEvmTransactionOutput {
+            execution: simulation_service::SimulationExecution {
+                chain_id: 1,
+                block: simulation_service::SimulatedBlock {
+                    number: 1,
+                    hash: B256::ZERO,
+                },
+                status: simulation_service::ExecutionStatus::Success,
+                gas_used: 21_000,
+                gas_limit: 50_000,
+                output: Bytes::new(),
+                failure: None,
+            },
+            changes: vec![simulation_service::Change::Transfer(
+                simulation_service::TransferChange {
+                    asset: simulation_service::Asset::Erc721 {
+                        contract_address: token,
+                        token_id: U256::from(42_u64),
+                        collection: Some(simulation_service::Erc721CollectionDisplay {
+                            name: Some("Mock NFT Collection".to_string()),
+                            symbol: Some("MNFT".to_string()),
+                        }),
+                        token: None,
+                    },
+                    from: Address::from_str("0x1111111111111111111111111111111111111111")
+                        .expect("from"),
+                    to: Address::from_str("0x2222222222222222222222222222222222222222")
+                        .expect("to"),
+                    amount: None,
+                },
+            )],
+        };
+
+        let response: rpc::EvmSimulateTransactionResponse = output.into();
+        let rpc::Change::Transfer { asset, amount, .. } = &response.changes[0] else {
+            panic!("expected transfer change");
+        };
+
+        assert!(amount.is_none());
+        assert!(matches!(
+            asset,
+            rpc::Asset::Erc721 {
+                contract_address,
+                token_id,
+                collection: Some(rpc::Erc721CollectionDisplay {
+                    name: Some(name),
+                    symbol: Some(symbol),
+                }),
+                token: None,
+            } if contract_address == "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                && token_id == "0x2a"
+                && name == "Mock NFT Collection"
+                && symbol == "MNFT"
+        ));
     }
 
     #[test]
@@ -321,7 +382,7 @@ mod tests {
                     asset: simulation_service::Asset::Erc20 {
                         contract_address: erc20,
                         display: Some(simulation_service::Erc20AssetDisplay {
-                            name: None,
+                            name: Some("USD Coin".to_string()),
                             symbol: Some("USDC".to_string()),
                             decimals: Some(6),
                         }),
@@ -366,11 +427,13 @@ mod tests {
             rpc::Asset::Erc20 {
                 contract_address,
                 display: Some(rpc::Erc20AssetDisplay {
-                    name: None,
+                    name: Some(name),
                     symbol: Some(symbol),
                     decimals: Some(6),
                 }),
-            } if contract_address == "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" && symbol == "USDC"
+            } if contract_address == "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+                && name == "USD Coin"
+                && symbol == "USDC"
         ));
 
         let rpc::Change::ApprovalForAll {
