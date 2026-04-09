@@ -1,0 +1,24 @@
+services:
+  dryrun:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: dryrun:local
+    restart: unless-stopped
+    init: true
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./env.toml:/app/env.toml:ro
+    environment:
+      APP_SERVER__HOST: 0.0.0.0
+      APP_METRICS__ENABLED: "true"
+      APP_METRICS__LISTEN_ADDRESS: 0.0.0.0:9000
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true

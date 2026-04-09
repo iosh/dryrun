@@ -1,5 +1,3 @@
-use std::env;
-
 use config::{Config, Environment, File};
 use serde::Deserialize;
 
@@ -44,12 +42,15 @@ pub struct MetricsConfig {
 
 impl AppConfig {
     pub fn load() -> Result<Self, config::ConfigError> {
-        let run_mode = env::var("RUN_MODE").unwrap_or_else(|_| "development".into());
-
         let config = Config::builder()
-            .add_source(File::with_name(&run_mode).required(false))
+            .add_source(File::with_name("env").required(false))
             .add_source(File::with_name("local").required(false))
-            .add_source(Environment::with_prefix("app"))
+            .add_source(
+                Environment::with_prefix("app")
+                    .prefix_separator("_")
+                    .separator("__")
+                    .try_parsing(true),
+            )
             .build()?;
 
         config.try_deserialize()
