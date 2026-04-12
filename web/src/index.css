@@ -1,4 +1,29 @@
+@import '@fontsource/space-grotesk/latin-500.css';
+@import '@fontsource/space-grotesk/latin-700.css';
+@import '@fontsource/ibm-plex-sans/latin-400.css';
+@import '@fontsource/ibm-plex-sans/latin-500.css';
+@import '@fontsource/ibm-plex-sans/latin-600.css';
+@import '@fontsource/ibm-plex-mono/latin-500.css';
+@import '@fontsource/ibm-plex-mono/latin-600.css';
 @import "tailwindcss";
+
+@theme {
+  --font-sans: "IBM Plex Sans", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+  --font-display: "Space Grotesk", "IBM Plex Sans", sans-serif;
+
+  --color-brand-600: #1d4ed8;
+  --color-brand-700: #1e40af;
+  --color-shell-50: #f6f8fb;
+  --color-shell-100: #f3f6fa;
+  --color-shell-150: #edf2f7;
+  --color-line: #d9e2ec;
+  --color-ink-950: #0b1220;
+  --color-ink-600: #66758a;
+  --color-ink-400: #94a3b8;
+
+  --shadow-card: 0 18px 40px rgba(11, 18, 32, 0.04);
+}
 
 @layer base {
   * {
@@ -12,14 +37,38 @@
   body {
     margin: 0;
     min-height: 100vh;
-    font-family:
-      Inter, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background:
+      radial-gradient(circle at top left, rgba(219, 234, 254, 0.85), transparent 26%),
+      linear-gradient(180deg, #fbfdff 0%, var(--color-shell-50) 36%, #eef3f8 100%);
+    color: var(--color-ink-950);
+    font-family: var(--font-sans);
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
   #root {
     min-height: 100vh;
+  }
+
+  pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  textarea {
+    resize: vertical;
+  }
+
+  ::selection {
+    background: rgba(29, 78, 216, 0.14);
   }
 }
