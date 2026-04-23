@@ -3,11 +3,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: server-runtime
     image: dryrun:local
     restart: unless-stopped
     init: true
-    ports:
-      - "8080:8080"
     volumes:
       - ./env.toml:/app/env.toml:ro
     environment:
@@ -20,5 +19,19 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web-runtime
+    image: dryrun-web:local
+    restart: unless-stopped
+    depends_on:
+      - dryrun
+    ports:
+      - "80:80"
     security_opt:
       - no-new-privileges:true
