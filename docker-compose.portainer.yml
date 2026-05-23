@@ -1,0 +1,54 @@
+services:
+  dryrun:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: server-runtime
+    image: dryrun-server:prod
+    restart: unless-stopped
+    init: true
+    environment:
+      APP_SERVER__HOST: 0.0.0.0
+      APP_SERVER__PORT: "8080"
+      APP_TRACING__LEVEL: info
+      APP_TRACING__FORMAT: json
+      APP_ETHEREUM__RPC_URL: ${APP_ETHEREUM__RPC_URL:?set APP_ETHEREUM__RPC_URL in Portainer}
+      APP_METRICS__ENABLED: "true"
+      APP_METRICS__LISTEN_ADDRESS: 127.0.0.1:9000
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web-runtime
+    image: dryrun-web:prod
+    restart: unless-stopped
+    init: true
+    depends_on:
+      - dryrun
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: ${TRAEFIK_NETWORK}
+      traefik.http.routers.dryrun.rule: Host(`${APP_DOMAIN:?set APP_DOMAIN in Portainer}`)
+      traefik.http.routers.dryrun.entrypoints: websecure
+      traefik.http.routers.dryrun.tls: "true"
+      traefik.http.routers.dryrun.tls.certresolver: ${TRAEFIK_CERT_RESOLVER}
+      traefik.http.services.dryrun.loadbalancer.server.port: "80"
+    networks:
+      - default
+      - proxy
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  proxy:
+    external: true
+    name: ${TRAEFIK_NETWORK}
