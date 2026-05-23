@@ -44,6 +44,7 @@ type ParseResult<TValue> = ParseSuccess<TValue> | ParseFailure;
 export interface ParsedSimulationValues {
   accessList?: DryrunAccessListItem[];
   block?: DryrunBlockRef;
+  chainId?: Hex;
   data?: Hex;
   from?: Address;
   gas?: Hex;
@@ -98,6 +99,11 @@ export function parseSimulationFormValues(
     'executionBlock',
     parseBlockRef(formValues.executionBlock),
   );
+  values.chainId = readParsedValue(
+    fieldIssues,
+    'chainId',
+    parseOptionalIntegerQuantity(formValues.chainId, 'Chain ID'),
+  );
   values.nonce = readParsedValue(
     fieldIssues,
     'nonce',
@@ -151,6 +157,8 @@ export function validateSimulationField<TKey extends keyof SimulationFormValues>
       return toIssue(parseOptionalHex(value, 'Calldata', true));
     case 'executionBlock':
       return toIssue(parseBlockRef(value));
+    case 'chainId':
+      return toIssue(parseOptionalIntegerQuantity(value, 'Chain ID'));
     case 'nonce':
       return toIssue(parseOptionalIntegerQuantity(value, 'Nonce'));
     case 'gasPriceGwei':
@@ -189,6 +197,7 @@ export function serializeSimulationRequest(
   const {
     accessList,
     block,
+    chainId,
     data,
     from,
     gas,
@@ -204,6 +213,7 @@ export function serializeSimulationRequest(
     block,
     transaction: {
       ...(accessList && accessList.length > 0 ? { accessList } : {}),
+      ...(chainId ? { chainId } : {}),
       ...(data ? { data } : {}),
       ...(gasPrice ? { gasPrice } : {}),
       ...(maxFeePerGas ? { maxFeePerGas } : {}),
@@ -229,6 +239,7 @@ export function hydrateSimulationFormValues(
   return {
     accessListJson: JSON.stringify(transaction.accessList ?? [], null, 2),
     calldata: transaction.data ?? '0x',
+    chainId: formatQuantityInput(coerceHexQuantity(transaction.chainId)),
     executionBlock: formatBlockRef(block),
     from: transaction.from,
     gasLimit: formatQuantityInput(coerceHexQuantity(transaction.gas)),

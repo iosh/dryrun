@@ -97,11 +97,21 @@ export function SimulationComposer({
           <div className="grid gap-4 sm:grid-cols-2">
             <TextInputField
               form={form}
+              label="Chain ID"
+              name="chainId"
+              optional
+              placeholder="Auto"
+            />
+            <TextInputField
+              form={form}
               label="Nonce"
               name="nonce"
               optional
               placeholder="Auto"
             />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
             <form.Field name="txType">
               {(field) => (
                 <LabeledField label="Tx Type">
@@ -121,9 +131,6 @@ export function SimulationComposer({
                 </LabeledField>
               )}
             </form.Field>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
             <TextInputField
               form={form}
               label="Gas Price (Gwei)"
@@ -131,6 +138,9 @@ export function SimulationComposer({
               optional
               placeholder="Legacy / 2930"
             />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
             <TextInputField
               form={form}
               label="Max Fee Per Gas (Gwei)"
@@ -138,9 +148,6 @@ export function SimulationComposer({
               optional
               placeholder="1559 only"
             />
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
             <TextInputField
               form={form}
               label="Max Priority Fee (Gwei)"
@@ -148,6 +155,9 @@ export function SimulationComposer({
               optional
               placeholder="1559 only"
             />
+          </div>
+
+          <div className="grid gap-4">
             <TextAreaField
               form={form}
               label="Access List (JSON)"

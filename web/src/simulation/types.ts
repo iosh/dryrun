@@ -10,6 +10,7 @@ export type TxTypeOption =
   | 'dynamic-fee';
 
 export interface SimulationFormValues {
+  chainId: string;
   from: string;
   to: string;
   valueEth: string;

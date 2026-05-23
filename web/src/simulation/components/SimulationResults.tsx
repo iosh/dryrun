@@ -147,6 +147,25 @@ export function SimulationResults({
             />
           </div>
 
+          {execution.error ? (
+            <Panel className="border-amber-200 bg-amber-50 p-4 shadow-none">
+              <div className="space-y-2">
+                <p className="text-sm font-semibold text-amber-800">
+                  Execution Failed
+                </p>
+                <p className="text-sm leading-6 text-amber-800">
+                  {execution.error.message}
+                </p>
+                <div className="flex flex-wrap gap-2 font-mono text-[11px] uppercase tracking-[0.12em] text-amber-800">
+                  <span>{execution.error.code}</span>
+                  {execution.error.reason ? (
+                    <span>{execution.error.reason}</span>
+                  ) : null}
+                </div>
+              </div>
+            </Panel>
+          ) : null}
+
           <Panel className="bg-shell-100 p-4 shadow-none">
             <div className="space-y-2">
               <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-ink-600">
