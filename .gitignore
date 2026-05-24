@@ -29,3 +29,5 @@ development.toml
 production.toml
 local.toml
 env.toml
+
+/private/

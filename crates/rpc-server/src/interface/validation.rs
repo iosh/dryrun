@@ -50,7 +50,6 @@ impl SimulateTransactionOptions {
         validate_reserved_option("stateOverrides", self.state_overrides.as_ref())?;
         validate_reserved_option("blockOverrides", self.block_overrides.as_ref())?;
         validate_reserved_option("include", self.include.as_ref())?;
-        validate_reserved_option("mode", self.mode.as_ref())?;
 
         Ok(())
     }

@@ -35,8 +35,6 @@ pub struct SimulateTransactionOptions {
     pub block_overrides: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include: Option<Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mode: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

@@ -43,7 +43,6 @@ export interface DryrunSimulateTransactionOptions {
   stateOverrides?: unknown;
   blockOverrides?: unknown;
   include?: unknown;
-  mode?: unknown;
 }
 
 export interface DryrunTransactionRequest {
