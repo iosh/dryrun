@@ -31,3 +31,6 @@ local.toml
 env.toml
 
 /private/
+
+.cargo/config.toml
+.vscode/settings.json

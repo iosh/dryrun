@@ -6,6 +6,7 @@ edition = "2024"
 resolver = "3"
 members = [
     "bin",
+    "crates/conflux-engine",
     "crates/evm-engine",
     "crates/rpc-server",
     "crates/simulation-service",
@@ -13,6 +14,7 @@ members = [
 
 [workspace.dependencies]
 evm-engine = { path = "crates/evm-engine" }
+conflux-engine = { path = "crates/conflux-engine" }
 rpc-server = { path = "crates/rpc-server" }
 simulation-service = { path = "crates/simulation-service" }
 
