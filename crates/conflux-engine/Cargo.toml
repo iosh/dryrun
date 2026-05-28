@@ -9,4 +9,7 @@ primitives = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" 
 cfx-storage = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-statedb = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 
+cfx-internal-common = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+tracing = { workspace = true }
+
 thiserror = { workspace = true }

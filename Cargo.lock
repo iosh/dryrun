@@ -1817,11 +1817,13 @@ dependencies = [
 name = "conflux-engine"
 version = "0.1.0"
 dependencies = [
+ "cfx-internal-common",
  "cfx-statedb",
  "cfx-storage",
  "cfx-types",
  "primitives",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]
