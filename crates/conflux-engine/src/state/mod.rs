@@ -1,13 +1,16 @@
+mod codec;
 mod rpc_state_key;
 
 use std::{collections::HashMap, sync::Mutex};
 
 use cfx_internal_common::StateRootWithAuxInfo;
 use cfx_statedb::StateDb;
-use cfx_storage::{Error as StorageError, MptKeyValue, Result as StorageResult, StorageStateTrait};
+use cfx_storage::{
+    Error as StorageError, MptKeyValue, Result as StorageResult, StorageStateTrait,
+};
 use primitives::{EpochId, StorageKeyWithSpace};
 
-use self::rpc_state_key::{RpcStateKey, RpcStateKeyError};
+use self::rpc_state_key::{NativeGlobalParam, RpcStateKey, RpcStateKeyError};
 
 pub fn new_state_db(storage: Box<dyn StorageStateTrait>) -> StateDb {
     StateDb::new(storage)
@@ -70,7 +73,11 @@ impl RpcBackedStorage {
             .clone())
     }
 
-    fn unsupported(&self, operation: &'static str, key: StorageKeyWithSpace<'_>) -> StorageError {
+    fn unsupported(
+        &self,
+        operation: &'static str,
+        key: StorageKeyWithSpace<'_>,
+    ) -> StorageError {
         let message = format!(
             "unsupported rpc-backed storage operation: operation={operation}, context={:?}, key={:?}",
             self.context, key
@@ -96,8 +103,8 @@ impl RpcBackedStorage {
     fn unresolved_rpc_mapping(
         &self,
         operation: &'static str,
-        rpc_key: &RpcStateKey,
         key: StorageKeyWithSpace<'_>,
+        rpc_key: &RpcStateKey,
     ) -> StorageError {
         let message = format!(
             "rpc-backed storage mapping not implemented yet: operation={operation}, context={:?}, rpc_key={rpc_key:?}, key={key:?}",
@@ -137,6 +144,43 @@ impl RpcBackedStorage {
             CachedRead::Present(value) => Some(value),
             CachedRead::Absent => None,
         }
+    }
+
+    // This is the future handoff point from semantic RPC state into Conflux raw bytes.
+    fn fetch_rpc_value(
+        &self,
+        access_key: StorageKeyWithSpace<'_>,
+        rpc_key: &RpcStateKey,
+    ) -> StorageResult<Option<Box<[u8]>>> {
+        self.record_stats(|stats| stats.unsupported += 1)?;
+
+        match rpc_key {
+            RpcStateKey::EspaceAccount { .. } => {
+                Err(self.unresolved_rpc_mapping("get_espace_account", access_key, rpc_key))
+            }
+            RpcStateKey::EspaceStorageSlot { .. } => {
+                Err(self.unresolved_rpc_mapping("get_espace_storage_slot", access_key, rpc_key))
+            }
+            RpcStateKey::EspaceCode { .. } => {
+                Err(self.unresolved_rpc_mapping("get_espace_code", access_key, rpc_key))
+            }
+            RpcStateKey::NativeGlobalParam(param) => {
+                self.fetch_native_global_param(access_key, *param)
+            }
+        }
+    }
+
+    fn fetch_native_global_param(
+        &self,
+        access_key: StorageKeyWithSpace<'_>,
+        param: NativeGlobalParam,
+    ) -> StorageResult<Option<Box<[u8]>>> {
+        let _ = param;
+        Err(self.unresolved_rpc_mapping(
+            "get_native_global_param",
+            access_key,
+            &RpcStateKey::NativeGlobalParam(param),
+        ))
     }
 
     fn record_stats(&self, update: impl FnOnce(&mut StorageReadStats)) -> StorageResult<()> {
@@ -191,12 +235,8 @@ impl StorageStateTrait for RpcBackedStorage {
             }
         };
 
-        self.record_stats(|stats| {
-            stats.cache_misses += 1;
-            stats.unsupported += 1;
-        })?;
-
-        Err(self.unresolved_rpc_mapping("get", &rpc_key, access_key))
+        self.record_stats(|stats| stats.cache_misses += 1)?;
+        self.fetch_rpc_value(access_key, &rpc_key)
     }
 
     fn set(&mut self, access_key: StorageKeyWithSpace, value: Box<[u8]>) -> StorageResult<()> {
@@ -214,12 +254,14 @@ impl StorageStateTrait for RpcBackedStorage {
             .insert(access_key.to_key_bytes(), CachedRead::Absent);
         Ok(())
     }
+
     fn delete_test_only(
         &mut self,
         access_key: StorageKeyWithSpace,
     ) -> StorageResult<Option<Box<[u8]>>> {
         Err(self.unsupported("delete_test_only", access_key))
     }
+
     fn delete_all(
         &mut self,
         access_key_prefix: StorageKeyWithSpace,

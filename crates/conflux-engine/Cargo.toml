@@ -13,3 +13,6 @@ cfx-internal-common = { git = "https://github.com/iosh/conflux-rust.git", branch
 tracing = { workspace = true }
 
 thiserror = { workspace = true }
+
+rlp = "0.6"
+keccak-hash = "0.12"
