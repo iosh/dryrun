@@ -1,9 +1,13 @@
+mod rpc_state_key;
+
 use std::{collections::HashMap, sync::Mutex};
 
 use cfx_internal_common::StateRootWithAuxInfo;
 use cfx_statedb::StateDb;
 use cfx_storage::{Error as StorageError, MptKeyValue, Result as StorageResult, StorageStateTrait};
 use primitives::{EpochId, StorageKeyWithSpace};
+
+use self::rpc_state_key::{RpcStateKey, RpcStateKeyError};
 
 pub fn new_state_db(storage: Box<dyn StorageStateTrait>) -> StateDb {
     StateDb::new(storage)
@@ -30,7 +34,7 @@ enum CachedRead {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct StorageReadStates {
+pub struct StorageReadStats {
     pub get_calls: u64,
     pub cache_hits: u64,
     pub cache_misses: u64,
@@ -45,7 +49,7 @@ pub struct RpcBackedStorage {
     // Per-simulation remote read cache.
     cache: Mutex<HashMap<CacheKey, CachedRead>>,
     // Minimal counters for missing coverage and repeated reads.
-    stats: Mutex<StorageReadStates>,
+    stats: Mutex<StorageReadStats>,
 }
 
 impl RpcBackedStorage {
@@ -54,11 +58,11 @@ impl RpcBackedStorage {
             context,
             overlay: Mutex::new(HashMap::new()),
             cache: Mutex::new(HashMap::new()),
-            stats: Mutex::new(StorageReadStates::default()),
+            stats: Mutex::new(StorageReadStats::default()),
         }
     }
 
-    pub fn stats(&self) -> StorageResult<StorageReadStates> {
+    pub fn stats(&self) -> StorageResult<StorageReadStats> {
         Ok(self
             .stats
             .lock()
@@ -70,6 +74,34 @@ impl RpcBackedStorage {
         let message = format!(
             "unsupported rpc-backed storage operation: operation={operation}, context={:?}, key={:?}",
             self.context, key
+        );
+        tracing::warn!("{message}");
+        StorageError::Msg(message)
+    }
+
+    fn unsupported_storage_key(
+        &self,
+        operation: &'static str,
+        key: StorageKeyWithSpace<'_>,
+        error: RpcStateKeyError,
+    ) -> StorageError {
+        let message = format!(
+            "unsupported rpc-backed storage key: operation={operation}, context={:?}, key={key:?}, reason={error}",
+            self.context
+        );
+        tracing::warn!("{message}");
+        StorageError::Msg(message)
+    }
+
+    fn unresolved_rpc_mapping(
+        &self,
+        operation: &'static str,
+        rpc_key: &RpcStateKey,
+        key: StorageKeyWithSpace<'_>,
+    ) -> StorageError {
+        let message = format!(
+            "rpc-backed storage mapping not implemented yet: operation={operation}, context={:?}, rpc_key={rpc_key:?}, key={key:?}",
+            self.context
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)
@@ -106,7 +138,8 @@ impl RpcBackedStorage {
             CachedRead::Absent => None,
         }
     }
-    fn record_stats(&self, update: impl FnOnce(&mut StorageReadStates)) -> StorageResult<()> {
+
+    fn record_stats(&self, update: impl FnOnce(&mut StorageReadStats)) -> StorageResult<()> {
         let mut stats = self.stats.lock().map_err(|_| Self::lock_error("stats"))?;
         update(&mut stats);
         Ok(())
@@ -122,6 +155,7 @@ impl StorageStateTrait for RpcBackedStorage {
         self.record_stats(|stats| stats.get_calls += 1)?;
 
         let key_bytes = access_key.to_key_bytes();
+        // Overlay writes shadow the remote snapshot for this simulation.
         if let Some(read) = self
             .overlay
             .lock()
@@ -144,12 +178,25 @@ impl StorageStateTrait for RpcBackedStorage {
             return Ok(Self::cached_read_to_result(read));
         }
 
+        // Before we can fetch anything from RPC, we need to understand which
+        // semantic state item this raw storage key refers to.
+        let rpc_key = match RpcStateKey::from_storage_key(access_key) {
+            Ok(rpc_key) => rpc_key,
+            Err(error) => {
+                self.record_stats(|stats| {
+                    stats.cache_misses += 1;
+                    stats.unsupported += 1;
+                })?;
+                return Err(self.unsupported_storage_key("get", access_key, error));
+            }
+        };
+
         self.record_stats(|stats| {
             stats.cache_misses += 1;
             stats.unsupported += 1;
         })?;
 
-        Err(self.unsupported("get", access_key))
+        Err(self.unresolved_rpc_mapping("get", &rpc_key, access_key))
     }
 
     fn set(&mut self, access_key: StorageKeyWithSpace, value: Box<[u8]>) -> StorageResult<()> {
