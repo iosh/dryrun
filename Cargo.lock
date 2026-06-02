@@ -1817,6 +1817,7 @@ dependencies = [
 name = "conflux-engine"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "cfx-internal-common",
  "cfx-statedb",
  "cfx-storage",
@@ -1825,6 +1826,7 @@ dependencies = [
  "primitives",
  "rlp 0.6.1",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 

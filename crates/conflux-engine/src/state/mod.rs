@@ -10,6 +10,7 @@ use std::{
 use cfx_internal_common::StateRootWithAuxInfo;
 use cfx_statedb::StateDb;
 use cfx_storage::{Error as StorageError, MptKeyValue, Result as StorageResult, StorageStateTrait};
+use cfx_types::{Address, H256};
 use primitives::{EpochId, StorageKeyWithSpace};
 
 use self::{
@@ -134,6 +135,16 @@ impl RpcBackedStorage {
         StorageError::Msg(message)
     }
 
+    fn unsupported_context(&self, operation: &'static str, expected: &'static str) -> StorageError {
+        let message = format!(
+            "unsupported rpc-backed storage context: operation={operation}, expected={expected},
+              actual={:?}",
+            self.context
+        );
+        tracing::warn!("{message}");
+        StorageError::Msg(message)
+    }
+
     fn cache_key(&self, access_key: StorageKeyWithSpace<'_>) -> CacheKey {
         CacheKey {
             context: self.context.clone(),
@@ -174,12 +185,22 @@ impl RpcBackedStorage {
 
     fn fetch_espace_storage_slot(
         &self,
-        address: cfx_types::Address,
-        slot: cfx_types::H256,
+        address: Address,
+        slot: H256,
     ) -> StorageResult<Option<Box<[u8]>>> {
+        let block_id = match &self.context {
+            ExecutionContext::EspaceBlock { block_id } => block_id.as_str(),
+            _ => {
+                return Err(self.unsupported_context(
+                    "get_espace_storage_at",
+                    "ExecutionContext::EspaceBlock",
+                ));
+            }
+        };
+
         let value = self
             .provider
-            .get_espace_storage_at(address, slot)
+            .get_espace_storage_at(block_id, address, slot)
             .map_err(|error| self.provider_error("get_espace_storage_at", error))?;
 
         Ok(value.map(encode_espace_storage_slot))
