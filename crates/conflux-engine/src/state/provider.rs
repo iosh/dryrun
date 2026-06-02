@@ -1,12 +1,11 @@
-use std::future::Future;
-
 use alloy::{
-    eips::{BlockId, BlockNumberOrTag},
+    eips::BlockId,
     network::Ethereum,
-    primitives::{Address as AlloyAddress, B256, U256 as AlloyU256},
+    primitives::{Address as AlloyAddress, U256 as AlloyU256},
     providers::{DynProvider, Provider, ProviderBuilder},
     transports::http::reqwest,
 };
+
 use cfx_types::{Address, H256, U256};
 use thiserror::Error;
 use tokio::runtime::{Handle, Runtime};
@@ -19,6 +18,12 @@ pub(crate) trait RemoteStateProvider: Send + Sync {
         address: Address,
         slot: H256,
     ) -> Result<Option<U256>, RemoteStateProviderError>;
+
+    fn get_espace_code_at(
+        &self,
+        block_id: &str,
+        address: Address,
+    ) -> Result<Vec<u8>, RemoteStateProviderError>;
 }
 /// eSpace state reader backed by an alloy provider.
 pub(crate) struct HttpEspaceProvider {
@@ -35,9 +40,7 @@ impl HttpEspaceProvider {
                     message: format!("invalid rpc url: {error}"),
                 })?;
 
-        let provider = ProviderBuilder::new()
-            .connect_http(parsed_url.clone())
-            .erased();
+        let provider = ProviderBuilder::new().connect_http(parsed_url).erased();
         let runtime = HandleOrRuntime::capture()?;
 
         Ok(Self { provider, runtime })
@@ -61,7 +64,23 @@ impl RemoteStateProvider for HttpEspaceProvider {
                 .block_id(block_id),
         )?;
 
-        Ok(alloy_u256_to_cfx_option(value))
+        let value = cfx_u256_from_alloy(value);
+        Ok((!value.is_zero()).then_some(value))
+    }
+
+    fn get_espace_code_at(
+        &self,
+        block_id: &str,
+        address: Address,
+    ) -> Result<Vec<u8>, RemoteStateProviderError> {
+        let alloy_address = AlloyAddress::from_slice(address.as_bytes());
+        let block_id = parse_block_id(block_id)?;
+
+        let code = self
+            .runtime
+            .block_on(self.provider.get_code_at(alloy_address).block_id(block_id))?;
+
+        Ok(code.to_vec())
     }
 }
 #[derive(Debug)]
@@ -84,25 +103,13 @@ impl HandleOrRuntime {
 
     fn block_on<F>(&self, future: F) -> F::Output
     where
-        F: IntoFuture + Send,
-        F::IntoFuture: Send,
-        F::Output: Send,
+        F: IntoFuture,
     {
         let future = future.into_future();
 
         match self {
             Self::Handle(handle) => {
-                let use_block_in_place = Handle::try_current()
-                    .ok()
-                    .map(|current| {
-                        !matches!(
-                            current.runtime_flavor(),
-                            tokio::runtime::RuntimeFlavor::CurrentThread
-                        )
-                    })
-                    .unwrap_or(false);
-
-                if use_block_in_place {
+                if can_block_in_place_on_current_runtime() {
                     tokio::task::block_in_place(move || handle.block_on(future))
                 } else {
                     handle.block_on(future)
@@ -111,6 +118,15 @@ impl HandleOrRuntime {
             Self::Runtime(runtime) => runtime.block_on(future),
         }
     }
+}
+
+fn can_block_in_place_on_current_runtime() -> bool {
+    Handle::try_current().ok().is_some_and(|handle| {
+        !matches!(
+            handle.runtime_flavor(),
+            tokio::runtime::RuntimeFlavor::CurrentThread
+        )
+    })
 }
 
 fn parse_block_id(block_id: &str) -> Result<BlockId, RemoteStateProviderError> {
@@ -122,16 +138,12 @@ fn parse_block_id(block_id: &str) -> Result<BlockId, RemoteStateProviderError> {
         })
 }
 
-fn alloy_u256_to_cfx_option(value: AlloyU256) -> Option<U256> {
-    let value = U256::from_big_endian(&value.to_be_bytes::<32>());
-    if value.is_zero() { None } else { Some(value) }
+fn cfx_u256_from_alloy(value: AlloyU256) -> U256 {
+    U256::from_big_endian(&value.to_be_bytes::<32>())
 }
 
 #[derive(Debug, Error)]
 pub(crate) enum RemoteStateProviderError {
-    #[error("remote state provider method is not implemented: {method}")]
-    Unimplemented { method: &'static str },
-
     #[error("remote state provider config error: {message}")]
     Config { message: String },
 

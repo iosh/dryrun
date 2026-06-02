@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cfx_types::{Address, H256, U256};
 use keccak_hash::keccak;
-use primitives::{CodeInfo, account::EthereumAccount, storage::StorageValue};
+use primitives::{CodeInfo, storage::StorageValue};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -11,27 +11,11 @@ pub(crate) enum StateValueCodecError {
     EspaceCodeHashMismatch { expected: H256, actual: H256 },
 }
 
-// eSpace account values follow the upstream EthereumAccount RLP layout.
-pub(crate) fn encode_espace_account(balance: U256, nonce: U256, code_hash: H256) -> Box<[u8]> {
-    rlp::encode(&EthereumAccount {
-        balance,
-        nonce,
-        code_hash,
-    })
-    .to_vec()
-    .into_boxed_slice()
-}
-
 // eSpace storage slots are encoded as StorageValue with no owner.
 pub(crate) fn encode_espace_storage_slot(value: U256) -> Box<[u8]> {
     rlp::encode(&StorageValue { value, owner: None })
         .to_vec()
         .into_boxed_slice()
-}
-
-// Native global params are stored as plain U256 RLP values.
-pub(crate) fn encode_native_u256(value: U256) -> Box<[u8]> {
-    rlp::encode(&value).to_vec().into_boxed_slice()
 }
 
 // eSpace code values follow the upstream CodeInfo RLP layout.
