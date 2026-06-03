@@ -14,7 +14,9 @@ use cfx_types::{Address, H256};
 use primitives::{EpochId, StorageKeyWithSpace};
 
 use self::{
-    codec::{StateValueCodecError, encode_espace_code, encode_espace_storage_slot},
+    codec::{
+        StateValueCodecError, encode_espace_code, encode_espace_storage_slot, encode_native_u256,
+    },
     provider::{RemoteStateProvider, RemoteStateProviderError},
     request::{StateReadRequest, StateReadRequestError},
 };
@@ -24,13 +26,14 @@ pub fn new_state_db(storage: Box<dyn StorageStateTrait>) -> StateDb {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum ExecutionContext {
-    EspaceBlock { block_id: String },
+pub struct ConfluxStateSnapshot {
+    pub espace_block_id: String,
+    pub native_epoch: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct CacheKey {
-    context: ExecutionContext,
+    snapshot: ConfluxStateSnapshot,
     key_bytes: Vec<u8>,
 }
 
@@ -42,7 +45,7 @@ enum CachedRead {
 }
 
 pub struct RpcBackedStorage {
-    context: ExecutionContext,
+    snapshot: ConfluxStateSnapshot,
     provider: Arc<dyn RemoteStateProvider>,
     // Simulation writes shadow remote state.
     overlay: Mutex<HashMap<Vec<u8>, CachedRead>>,
@@ -51,9 +54,9 @@ pub struct RpcBackedStorage {
 }
 
 impl RpcBackedStorage {
-    pub fn new(context: ExecutionContext, provider: Arc<dyn RemoteStateProvider>) -> Self {
+    pub fn new(snapshot: ConfluxStateSnapshot, provider: Arc<dyn RemoteStateProvider>) -> Self {
         Self {
-            context,
+            snapshot,
             provider,
             overlay: Mutex::new(HashMap::new()),
             cache: Mutex::new(HashMap::new()),
@@ -62,8 +65,8 @@ impl RpcBackedStorage {
 
     fn unsupported(&self, operation: &'static str, key: StorageKeyWithSpace<'_>) -> StorageError {
         let message = format!(
-            "unsupported rpc-backed storage operation: operation={operation}, context={:?}, key={:?}",
-            self.context, key
+            "unsupported rpc-backed storage operation: operation={operation}, snapshot={:?}, key={:?}",
+            self.snapshot, key
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)
@@ -76,8 +79,8 @@ impl RpcBackedStorage {
         error: StateReadRequestError,
     ) -> StorageError {
         let message = format!(
-            "unsupported rpc-backed storage key: operation={operation}, context={:?}, key={key:?}, reason={error}",
-            self.context
+            "unsupported rpc-backed storage key: operation={operation}, snapshot={:?}, key={key:?}, reason={error}",
+            self.snapshot
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)
@@ -85,8 +88,8 @@ impl RpcBackedStorage {
 
     fn unsupported_operation(&self, operation: &'static str) -> StorageError {
         let message = format!(
-            "unsupported rpc-backed storage operation: operation={operation}, context={:?}",
-            self.context
+            "unsupported rpc-backed storage operation: operation={operation}, snapshot={:?}",
+            self.snapshot
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)
@@ -94,8 +97,8 @@ impl RpcBackedStorage {
 
     fn unsupported_commit(&self, epoch: EpochId) -> StorageError {
         let message = format!(
-            "unsupported rpc-backed storage operation: operation=commit, context={:?}, epoch={epoch:?}",
-            self.context
+            "unsupported rpc-backed storage operation: operation=commit, snapshot={:?}, epoch={epoch:?}",
+            self.snapshot
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)
@@ -103,7 +106,7 @@ impl RpcBackedStorage {
 
     fn cache_key(&self, access_key: StorageKeyWithSpace<'_>) -> CacheKey {
         CacheKey {
-            context: self.context.clone(),
+            snapshot: self.snapshot.clone(),
             key_bytes: access_key.to_key_bytes(),
         }
     }
@@ -118,12 +121,17 @@ impl RpcBackedStorage {
     // This is the future handoff point from semantic RPC state into Conflux raw bytes.
     fn fetch_rpc_value(&self, rpc_key: &StateReadRequest) -> StorageResult<Option<Box<[u8]>>> {
         match rpc_key {
+            StateReadRequest::NativeInterestRate => self.fetch_native_interest_rate(),
             StateReadRequest::EspaceStorageSlot { address, slot } => {
                 self.fetch_espace_storage_slot(*address, *slot)
             }
             StateReadRequest::EspaceCode { address, code_hash } => {
                 self.fetch_espace_code(*address, *code_hash)
             }
+            StateReadRequest::NativeAccumulateInterestRate => {
+                self.fetch_native_accumulate_interest_rate()
+            }
+            StateReadRequest::NativeTotalIssued => self.fetch_native_total_issued(),
         }
     }
 
@@ -132,9 +140,7 @@ impl RpcBackedStorage {
         address: Address,
         slot: H256,
     ) -> StorageResult<Option<Box<[u8]>>> {
-        let block_id = match &self.context {
-            ExecutionContext::EspaceBlock { block_id } => block_id.as_str(),
-        };
+        let block_id = self.snapshot.espace_block_id.as_str();
 
         let value = self
             .provider
@@ -149,9 +155,7 @@ impl RpcBackedStorage {
         address: Address,
         expected_code_hash: H256,
     ) -> StorageResult<Option<Box<[u8]>>> {
-        let block_id = match &self.context {
-            ExecutionContext::EspaceBlock { block_id } => block_id.as_str(),
-        };
+        let block_id = self.snapshot.espace_block_id.as_str();
 
         let code = self
             .provider
@@ -167,15 +171,48 @@ impl RpcBackedStorage {
             .map_err(|error| self.codec_error("encode_espace_code", error))
     }
 
+    fn fetch_native_interest_rate(&self) -> StorageResult<Option<Box<[u8]>>> {
+        let epoch = self.snapshot.native_epoch.as_str();
+
+        let value = self
+            .provider
+            .get_native_interest_rate(epoch)
+            .map_err(|error| self.provider_error("get_native_interest_rate", error))?;
+
+        Ok(Some(encode_native_u256(value)))
+    }
+
+    fn fetch_native_accumulate_interest_rate(&self) -> StorageResult<Option<Box<[u8]>>> {
+        let epoch = self.snapshot.native_epoch.as_str();
+
+        let value = self
+            .provider
+            .get_native_accumulate_interest_rate(epoch)
+            .map_err(|error| self.provider_error("get_native_accumulate_interest_rate", error))?;
+
+        Ok(Some(encode_native_u256(value)))
+    }
+
+    fn fetch_native_total_issued(&self) -> StorageResult<Option<Box<[u8]>>> {
+        let epoch = self.snapshot.native_epoch.as_str();
+
+        let supply_info = self
+            .provider
+            .get_native_supply_info(epoch)
+            .map_err(|error| self.provider_error("get_native_supply_info", error))?;
+
+        Ok(Some(encode_native_u256(supply_info.total_issued)))
+    }
+
     fn provider_error(
         &self,
         operation: &'static str,
         error: RemoteStateProviderError,
     ) -> StorageError {
         let message = format!(
-            "rpc-backed storage provider error: operation={operation}, context={:?},
+            "rpc-backed storage provider error: operation={operation}, snapshot={:?},
               reason={error}",
-            self.context
+            self.snapshot
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)
@@ -183,8 +220,8 @@ impl RpcBackedStorage {
 
     fn codec_error(&self, operation: &'static str, error: StateValueCodecError) -> StorageError {
         let message = format!(
-            "rpc-backed storage codec error: operation={operation}, context={:?}, reason={error}",
-            self.context
+            "rpc-backed storage codec error: operation={operation}, snapshot={:?}, reason={error}",
+            self.snapshot
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)

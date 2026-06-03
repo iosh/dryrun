@@ -11,6 +11,10 @@ pub(crate) enum StateValueCodecError {
     EspaceCodeHashMismatch { expected: H256, actual: H256 },
 }
 
+pub(crate) fn encode_native_u256(value: U256) -> Box<[u8]> {
+    rlp::encode(&value).to_vec().into_boxed_slice()
+}
+
 // eSpace storage slots are encoded as StorageValue with no owner.
 pub(crate) fn encode_espace_storage_slot(value: U256) -> Box<[u8]> {
     rlp::encode(&StorageValue { value, owner: None })

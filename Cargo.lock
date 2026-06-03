@@ -1825,6 +1825,7 @@ dependencies = [
  "keccak-hash",
  "primitives",
  "rlp 0.6.1",
+ "serde",
  "thiserror",
  "tokio",
  "tracing",

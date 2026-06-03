@@ -7,8 +7,15 @@ use alloy::{
 };
 
 use cfx_types::{Address, H256, U256};
+use serde::Deserialize;
 use thiserror::Error;
 use tokio::runtime::{Handle, Runtime};
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativeSupplyInfo {
+    pub total_issued: U256,
+}
 
 /// Remote state access
 pub(crate) trait RemoteStateProvider: Send + Sync {
@@ -24,6 +31,18 @@ pub(crate) trait RemoteStateProvider: Send + Sync {
         block_id: &str,
         address: Address,
     ) -> Result<Vec<u8>, RemoteStateProviderError>;
+
+    fn get_native_interest_rate(&self, epoch: &str) -> Result<U256, RemoteStateProviderError>;
+
+    fn get_native_accumulate_interest_rate(
+        &self,
+        epoch: &str,
+    ) -> Result<U256, RemoteStateProviderError>;
+
+    fn get_native_supply_info(
+        &self,
+        epoch: &str,
+    ) -> Result<NativeSupplyInfo, RemoteStateProviderError>;
 }
 /// eSpace state reader backed by an alloy provider.
 pub(crate) struct HttpEspaceProvider {
@@ -81,6 +100,48 @@ impl RemoteStateProvider for HttpEspaceProvider {
             .block_on(self.provider.get_code_at(alloy_address).block_id(block_id))?;
 
         Ok(code.to_vec())
+    }
+
+    fn get_native_interest_rate(&self, epoch: &str) -> Result<U256, RemoteStateProviderError> {
+        self.runtime
+            .block_on(
+                self.provider
+                    .client()
+                    .request("cfx_getInterestRate", (epoch,)),
+            )
+            .map_err(|error| RemoteStateProviderError::RpcRequest {
+                message: error.to_string(),
+            })
+    }
+
+    fn get_native_accumulate_interest_rate(
+        &self,
+        epoch: &str,
+    ) -> Result<U256, RemoteStateProviderError> {
+        self.runtime
+            .block_on(
+                self.provider
+                    .client()
+                    .request("cfx_getAccumulateInterestRate", (epoch,)),
+            )
+            .map_err(|error| RemoteStateProviderError::RpcRequest {
+                message: error.to_string(),
+            })
+    }
+
+    fn get_native_supply_info(
+        &self,
+        epoch: &str,
+    ) -> Result<NativeSupplyInfo, RemoteStateProviderError> {
+        self.runtime
+            .block_on(
+                self.provider
+                    .client()
+                    .request("cfx_getSupplyInfo", (epoch,)),
+            )
+            .map_err(|error| RemoteStateProviderError::RpcRequest {
+                message: error.to_string(),
+            })
     }
 }
 #[derive(Debug)]
@@ -155,4 +216,7 @@ pub(crate) enum RemoteStateProviderError {
 
     #[error("remote state rpc request failed: {0}")]
     Rpc(#[from] alloy::transports::TransportError),
+
+    #[error("remote state rpc request failed: {message}")]
+    RpcRequest { message: String },
 }

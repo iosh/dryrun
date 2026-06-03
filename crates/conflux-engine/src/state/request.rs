@@ -1,5 +1,9 @@
 use std::fmt;
 
+use cfx_statedb::global_params::{
+    AccumulateInterestRate, GlobalParamKey, InterestRate, TotalIssued,
+};
+
 use cfx_types::{Address, H256, Space};
 use primitives::{StorageKey, StorageKeyWithSpace};
 use thiserror::Error;
@@ -9,6 +13,9 @@ const HASH_BYTES: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StateReadRequest {
+    NativeTotalIssued,
+    NativeInterestRate,
+    NativeAccumulateInterestRate,
     EspaceStorageSlot { address: Address, slot: H256 },
     EspaceCode { address: Address, code_hash: H256 },
 }
@@ -19,9 +26,7 @@ impl StateReadRequest {
     ) -> Result<Self, StateReadRequestError> {
         match storage_key.space {
             Space::Ethereum => from_espace_key(storage_key.key),
-            Space::Native => Err(StateReadRequestError::UnsupportedSpace {
-                space: storage_key.space,
-            }),
+            Space::Native => from_native_key(storage_key),
         }
     }
 }
@@ -75,8 +80,8 @@ impl fmt::Display for StorageKeyKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub(crate) enum StateReadRequestError {
-    #[error("unsupported state space: {space:?}")]
-    UnsupportedSpace { space: Space },
+    #[error("unsupported native state key")]
+    UnsupportedNativeKey,
     #[error("unsupported eSpace storage key kind: {kind}")]
     UnsupportedEspaceKey { kind: StorageKeyKind },
     #[error("invalid address length: expected {ADDRESS_BYTES} bytes, got {actual}")]
@@ -87,6 +92,23 @@ pub(crate) enum StateReadRequestError {
     InvalidEspaceCodeHashLength { actual: usize },
 }
 
+fn from_native_key(
+    storage_key: StorageKeyWithSpace<'_>,
+) -> Result<StateReadRequest, StateReadRequestError> {
+    if storage_key == <InterestRate as GlobalParamKey>::STORAGE_KEY {
+        return Ok(StateReadRequest::NativeInterestRate);
+    }
+
+    if storage_key == <AccumulateInterestRate as GlobalParamKey>::STORAGE_KEY {
+        return Ok(StateReadRequest::NativeAccumulateInterestRate);
+    }
+
+    if storage_key == <TotalIssued as GlobalParamKey>::STORAGE_KEY {
+        return Ok(StateReadRequest::NativeTotalIssued);
+    }
+
+    Err(StateReadRequestError::UnsupportedNativeKey)
+}
 fn from_espace_key(key: StorageKey<'_>) -> Result<StateReadRequest, StateReadRequestError> {
     match key {
         StorageKey::StorageKey {
