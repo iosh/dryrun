@@ -1,7 +1,7 @@
 use std::fmt;
 
 use cfx_statedb::global_params::{
-    AccumulateInterestRate, GlobalParamKey, InterestRate, TotalIssued,
+    AccumulateInterestRate, GlobalParamKey, InterestRate, TotalIssued, TotalStaking,
 };
 
 use cfx_types::{Address, H256, Space};
@@ -14,6 +14,7 @@ const HASH_BYTES: usize = 32;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StateReadRequest {
     NativeTotalIssued,
+    NativeTotalStaking,
     NativeInterestRate,
     NativeAccumulateInterestRate,
     EspaceStorageSlot { address: Address, slot: H256 },
@@ -105,6 +106,10 @@ fn from_native_key(
 
     if storage_key == <TotalIssued as GlobalParamKey>::STORAGE_KEY {
         return Ok(StateReadRequest::NativeTotalIssued);
+    }
+
+    if storage_key == <TotalStaking as GlobalParamKey>::STORAGE_KEY {
+        return Ok(StateReadRequest::NativeTotalStaking);
     }
 
     Err(StateReadRequestError::UnsupportedNativeKey)

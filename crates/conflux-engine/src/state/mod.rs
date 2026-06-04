@@ -132,6 +132,7 @@ impl RpcBackedStorage {
                 self.fetch_native_accumulate_interest_rate()
             }
             StateReadRequest::NativeTotalIssued => self.fetch_native_total_issued(),
+            StateReadRequest::NativeTotalStaking => self.fetch_native_total_staking(),
         }
     }
 
@@ -202,6 +203,17 @@ impl RpcBackedStorage {
             .map_err(|error| self.provider_error("get_native_supply_info", error))?;
 
         Ok(Some(encode_native_u256(supply_info.total_issued)))
+    }
+
+    fn fetch_native_total_staking(&self) -> StorageResult<Option<Box<[u8]>>> {
+        let epoch = self.snapshot.native_epoch.as_str();
+
+        let supply_info = self
+            .provider
+            .get_native_supply_info(epoch)
+            .map_err(|error| self.provider_error("get_native_supply_info", error))?;
+
+        Ok(Some(encode_native_u256(supply_info.total_staking)))
     }
 
     fn provider_error(

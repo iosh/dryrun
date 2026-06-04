@@ -15,6 +15,7 @@ use tokio::runtime::{Handle, Runtime};
 #[serde(rename_all = "camelCase")]
 pub(crate) struct NativeSupplyInfo {
     pub total_issued: U256,
+    pub total_staking: U256,
 }
 
 /// Remote state access
