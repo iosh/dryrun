@@ -6,7 +6,7 @@ use alloy::{
     transports::http::reqwest,
 };
 
-use cfx_types::{Address, H256, U256};
+use cfx_types::{Address, H256, U64, U256};
 use serde::Deserialize;
 use thiserror::Error;
 use tokio::runtime::{Handle, Runtime};
@@ -16,6 +16,30 @@ use tokio::runtime::{Handle, Runtime};
 pub(crate) struct NativeSupplyInfo {
     pub total_issued: U256,
     pub total_staking: U256,
+    pub total_espace_tokens: U256,
+    pub total_collateral: U256,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativeStorageCollateralInfo {
+    pub converted_storage_points: U256,
+    pub used_storage_points: U256,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativePoSEconomics {
+    pub total_pos_staking_tokens: U256,
+    pub distributable_pos_interest: U256,
+    pub last_distribute_block: U64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativeVoteParamsInfo {
+    pub pow_base_reward: U256,
+    pub base_fee_share_prop: U256,
 }
 
 /// Remote state access
@@ -44,6 +68,22 @@ pub(crate) trait RemoteStateProvider: Send + Sync {
         &self,
         epoch: &str,
     ) -> Result<NativeSupplyInfo, RemoteStateProviderError>;
+
+    fn get_native_collateral_info(
+        &self,
+        epoch: &str,
+    ) -> Result<NativeStorageCollateralInfo, RemoteStateProviderError>;
+
+    fn get_native_pos_economics(
+        &self,
+        epoch: &str,
+    ) -> Result<NativePoSEconomics, RemoteStateProviderError>;
+    fn get_native_vote_params(
+        &self,
+        epoch: &str,
+    ) -> Result<NativeVoteParamsInfo, RemoteStateProviderError>;
+
+    fn get_native_fee_burnt(&self, epoch: &str) -> Result<U256, RemoteStateProviderError>;
 }
 /// eSpace state reader backed by an alloy provider.
 pub(crate) struct HttpEspaceProvider {
@@ -139,6 +179,59 @@ impl RemoteStateProvider for HttpEspaceProvider {
                 self.provider
                     .client()
                     .request("cfx_getSupplyInfo", (epoch,)),
+            )
+            .map_err(|error| RemoteStateProviderError::RpcRequest {
+                message: error.to_string(),
+            })
+    }
+
+    fn get_native_vote_params(
+        &self,
+        epoch: &str,
+    ) -> Result<NativeVoteParamsInfo, RemoteStateProviderError> {
+        self.runtime
+            .block_on(
+                self.provider
+                    .client()
+                    .request("cfx_getParamsFromVote", (epoch,)),
+            )
+            .map_err(|error| RemoteStateProviderError::RpcRequest {
+                message: error.to_string(),
+            })
+    }
+
+    fn get_native_fee_burnt(&self, epoch: &str) -> Result<U256, RemoteStateProviderError> {
+        self.runtime
+            .block_on(self.provider.client().request("cfx_getFeeBurnt", (epoch,)))
+            .map_err(|error| RemoteStateProviderError::RpcRequest {
+                message: error.to_string(),
+            })
+    }
+
+    fn get_native_collateral_info(
+        &self,
+        epoch: &str,
+    ) -> Result<NativeStorageCollateralInfo, RemoteStateProviderError> {
+        self.runtime
+            .block_on(
+                self.provider
+                    .client()
+                    .request("cfx_getCollateralInfo", (epoch,)),
+            )
+            .map_err(|error| RemoteStateProviderError::RpcRequest {
+                message: error.to_string(),
+            })
+    }
+
+    fn get_native_pos_economics(
+        &self,
+        epoch: &str,
+    ) -> Result<NativePoSEconomics, RemoteStateProviderError> {
+        self.runtime
+            .block_on(
+                self.provider
+                    .client()
+                    .request("cfx_getPoSEconomics", (epoch,)),
             )
             .map_err(|error| RemoteStateProviderError::RpcRequest {
                 message: error.to_string(),

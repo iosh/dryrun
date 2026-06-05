@@ -8,9 +8,10 @@ use std::{
 };
 
 use cfx_internal_common::StateRootWithAuxInfo;
+use cfx_parameters::staking::DRIPS_PER_STORAGE_COLLATERAL_UNIT;
 use cfx_statedb::StateDb;
 use cfx_storage::{Error as StorageError, MptKeyValue, Result as StorageResult, StorageStateTrait};
-use cfx_types::{Address, H256};
+use cfx_types::{Address, H256, U256};
 use primitives::{EpochId, StorageKeyWithSpace};
 
 use self::{
@@ -133,7 +134,143 @@ impl RpcBackedStorage {
             }
             StateReadRequest::NativeTotalIssued => self.fetch_native_total_issued(),
             StateReadRequest::NativeTotalStaking => self.fetch_native_total_staking(),
+            StateReadRequest::NativeTotalEvmToken => self.fetch_native_total_evm_token(),
+            StateReadRequest::NativeTotalStorage => self.fetch_native_total_storage(),
+
+            StateReadRequest::NativeUsedStoragePoints => self.fetch_native_used_storage_points(),
+            StateReadRequest::NativeConvertedStoragePoints => {
+                self.fetch_native_converted_storage_points()
+            }
+
+            StateReadRequest::NativeTotalPosStaking => self.fetch_native_total_pos_staking(),
+            StateReadRequest::NativeDistributablePosInterest => {
+                self.fetch_native_distributable_pos_interest()
+            }
+            StateReadRequest::NativeLastDistributeBlock => {
+                self.fetch_native_last_distribute_block()
+            }
+            StateReadRequest::NativePowBaseReward => self.fetch_native_pow_base_reward(),
+            StateReadRequest::NativeTotalBurnt1559 => self.fetch_native_total_burnt_1559(),
+            StateReadRequest::NativeBaseFeeProp => self.fetch_native_base_fee_prop(),
         }
+    }
+
+    fn fetch_native_pow_base_reward(&self) -> StorageResult<Option<Box<[u8]>>> {
+        let epoch = self.snapshot.native_epoch.as_str();
+
+        let vote_params = self
+            .provider
+            .get_native_vote_params(epoch)
+            .map_err(|error| self.provider_error("get_native_vote_params", error))?;
+
+        Ok(Some(encode_native_u256(vote_params.pow_base_reward)))
+    }
+
+    fn fetch_native_total_burnt_1559(&self) -> StorageResult<Option<Box<[u8]>>> {
+        let epoch = self.snapshot.native_epoch.as_str();
+
+        let value = self
+            .provider
+            .get_native_fee_burnt(epoch)
+            .map_err(|error| self.provider_error("get_native_fee_burnt", error))?;
+
+        Ok(Some(encode_native_u256(value)))
+    }
+
+    fn fetch_native_base_fee_prop(&self) -> StorageResult<Option<Box<[u8]>>> {
+        let epoch = self.snapshot.native_epoch.as_str();
+
+        let vote_params = self
+            .provider
+            .get_native_vote_params(epoch)
+            .map_err(|error| self.provider_error("get_native_vote_params", error))?;
+
+        Ok(Some(encode_native_u256(vote_params.base_fee_share_prop)))
+    }
+    fn fetch_native_total_pos_staking(&self) -> StorageResult<Option<Box<[u8]>>> {
+        let epoch = self.snapshot.native_epoch.as_str();
+
+        let pos_economics = self
+            .provider
+            .get_native_pos_economics(epoch)
+            .map_err(|error| self.provider_error("get_native_pos_economics", error))?;
+
+        Ok(Some(encode_native_u256(
+            pos_economics.total_pos_staking_tokens,
+        )))
+    }
+
+    fn fetch_native_distributable_pos_interest(&self) -> StorageResult<Option<Box<[u8]>>> {
+        let epoch = self.snapshot.native_epoch.as_str();
+
+        let pos_economics = self
+            .provider
+            .get_native_pos_economics(epoch)
+            .map_err(|error| self.provider_error("get_native_pos_economics", error))?;
+
+        Ok(Some(encode_native_u256(
+            pos_economics.distributable_pos_interest,
+        )))
+    }
+
+    fn fetch_native_last_distribute_block(&self) -> StorageResult<Option<Box<[u8]>>> {
+        let epoch = self.snapshot.native_epoch.as_str();
+
+        let pos_economics = self
+            .provider
+            .get_native_pos_economics(epoch)
+            .map_err(|error| self.provider_error("get_native_pos_economics", error))?;
+
+        Ok(Some(encode_native_u256(U256::from(
+            pos_economics.last_distribute_block.as_u64(),
+        ))))
+    }
+
+    fn fetch_native_used_storage_points(&self) -> StorageResult<Option<Box<[u8]>>> {
+        let epoch = self.snapshot.native_epoch.as_str();
+
+        let collateral_info = self
+            .provider
+            .get_native_collateral_info(epoch)
+            .map_err(|error| self.provider_error("get_native_collateral_info", error))?;
+
+        Ok(Some(encode_native_u256(
+            collateral_info.used_storage_points * *DRIPS_PER_STORAGE_COLLATERAL_UNIT,
+        )))
+    }
+
+    fn fetch_native_converted_storage_points(&self) -> StorageResult<Option<Box<[u8]>>> {
+        let epoch = self.snapshot.native_epoch.as_str();
+
+        let collateral_info = self
+            .provider
+            .get_native_collateral_info(epoch)
+            .map_err(|error| self.provider_error("get_native_collateral_info", error))?;
+
+        Ok(Some(encode_native_u256(
+            collateral_info.converted_storage_points * *DRIPS_PER_STORAGE_COLLATERAL_UNIT,
+        )))
+    }
+
+    fn fetch_native_total_storage(&self) -> StorageResult<Option<Box<[u8]>>> {
+        let epoch = self.snapshot.native_epoch.as_str();
+
+        let supply_info = self
+            .provider
+            .get_native_supply_info(epoch)
+            .map_err(|error| self.provider_error("get_native_supply_info", error))?;
+
+        Ok(Some(encode_native_u256(supply_info.total_collateral)))
+    }
+    fn fetch_native_total_evm_token(&self) -> StorageResult<Option<Box<[u8]>>> {
+        let epoch = self.snapshot.native_epoch.as_str();
+
+        let supply_info = self
+            .provider
+            .get_native_supply_info(epoch)
+            .map_err(|error| self.provider_error("get_native_supply_info", error))?;
+
+        Ok(Some(encode_native_u256(supply_info.total_espace_tokens)))
     }
 
     fn fetch_espace_storage_slot(

@@ -1,7 +1,9 @@
 use std::fmt;
 
 use cfx_statedb::global_params::{
-    AccumulateInterestRate, GlobalParamKey, InterestRate, TotalIssued, TotalStaking,
+    AccumulateInterestRate, BaseFeeProp, ConvertedStoragePoints, DistributablePoSInterest,
+    GlobalParamKey, InterestRate, LastDistributeBlock, PowBaseReward, TotalBurnt1559,
+    TotalEvmToken, TotalIssued, TotalPosStaking, TotalStaking, TotalStorage, UsedStoragePoints,
 };
 
 use cfx_types::{Address, H256, Space};
@@ -16,7 +18,18 @@ pub(crate) enum StateReadRequest {
     NativeTotalIssued,
     NativeTotalStaking,
     NativeInterestRate,
+    NativeTotalEvmToken,
+    NativeTotalStorage,
+    NativeUsedStoragePoints,
+    NativeConvertedStoragePoints,
     NativeAccumulateInterestRate,
+    NativeTotalPosStaking,
+    NativeDistributablePosInterest,
+    NativeLastDistributeBlock,
+    NativePowBaseReward,
+    NativeTotalBurnt1559,
+    NativeBaseFeeProp,
+
     EspaceStorageSlot { address: Address, slot: H256 },
     EspaceCode { address: Address, code_hash: H256 },
 }
@@ -110,6 +123,46 @@ fn from_native_key(
 
     if storage_key == <TotalStaking as GlobalParamKey>::STORAGE_KEY {
         return Ok(StateReadRequest::NativeTotalStaking);
+    }
+
+    if storage_key == <TotalEvmToken as GlobalParamKey>::STORAGE_KEY {
+        return Ok(StateReadRequest::NativeTotalEvmToken);
+    }
+
+    if storage_key == <TotalStorage as GlobalParamKey>::STORAGE_KEY {
+        return Ok(StateReadRequest::NativeTotalStorage);
+    }
+
+    if storage_key == <UsedStoragePoints as GlobalParamKey>::STORAGE_KEY {
+        return Ok(StateReadRequest::NativeUsedStoragePoints);
+    }
+
+    if storage_key == <ConvertedStoragePoints as GlobalParamKey>::STORAGE_KEY {
+        return Ok(StateReadRequest::NativeConvertedStoragePoints);
+    }
+
+    if storage_key == <TotalPosStaking as GlobalParamKey>::STORAGE_KEY {
+        return Ok(StateReadRequest::NativeTotalPosStaking);
+    }
+
+    if storage_key == <DistributablePoSInterest as GlobalParamKey>::STORAGE_KEY {
+        return Ok(StateReadRequest::NativeDistributablePosInterest);
+    }
+
+    if storage_key == <LastDistributeBlock as GlobalParamKey>::STORAGE_KEY {
+        return Ok(StateReadRequest::NativeLastDistributeBlock);
+    }
+
+    if storage_key == <PowBaseReward as GlobalParamKey>::STORAGE_KEY {
+        return Ok(StateReadRequest::NativePowBaseReward);
+    }
+
+    if storage_key == <TotalBurnt1559 as GlobalParamKey>::STORAGE_KEY {
+        return Ok(StateReadRequest::NativeTotalBurnt1559);
+    }
+
+    if storage_key == <BaseFeeProp as GlobalParamKey>::STORAGE_KEY {
+        return Ok(StateReadRequest::NativeBaseFeeProp);
     }
 
     Err(StateReadRequestError::UnsupportedNativeKey)

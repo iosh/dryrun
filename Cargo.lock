@@ -1819,6 +1819,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "cfx-internal-common",
+ "cfx-parameters",
  "cfx-statedb",
  "cfx-storage",
  "cfx-types",
