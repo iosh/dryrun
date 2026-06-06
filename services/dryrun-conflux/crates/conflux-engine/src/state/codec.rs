@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use cfx_types::{Address, H256, U256};
 use keccak_hash::keccak;
-use primitives::{CodeInfo, storage::StorageValue};
+use primitives::{CodeInfo, account::EthereumAccount, storage::StorageValue};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -43,4 +43,24 @@ pub(crate) fn encode_espace_code(
     })
     .to_vec()
     .into_boxed_slice())
+}
+
+pub(crate) fn encode_espace_account(
+    balance: U256,
+    nonce: U256,
+    code: Vec<u8>,
+) -> Option<Box<[u8]>> {
+    if balance.is_zero() && nonce.is_zero() && code.is_empty() {
+        return None;
+    }
+
+    Some(
+        rlp::encode(&EthereumAccount {
+            balance,
+            nonce,
+            code_hash: keccak(&code),
+        })
+        .to_vec()
+        .into_boxed_slice(),
+    )
 }

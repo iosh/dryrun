@@ -30,6 +30,7 @@ pub(crate) enum StateReadRequest {
     NativeTotalBurnt1559,
     NativeBaseFeeProp,
 
+    EspaceAccount { address: Address },
     EspaceStorageSlot { address: Address, slot: H256 },
     EspaceCode { address: Address, code_hash: H256 },
 }
@@ -169,6 +170,9 @@ fn from_native_key(
 }
 fn from_espace_key(key: StorageKey<'_>) -> Result<StateReadRequest, StateReadRequestError> {
     match key {
+        StorageKey::AccountKey(address_bytes) => Ok(StateReadRequest::EspaceAccount {
+            address: parse_address(address_bytes)?,
+        }),
         StorageKey::StorageKey {
             address_bytes,
             storage_key,

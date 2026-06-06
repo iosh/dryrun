@@ -14,6 +14,8 @@ use cfx_storage::{Error as StorageError, MptKeyValue, Result as StorageResult, S
 use cfx_types::{Address, H256, U256};
 use primitives::{EpochId, StorageKeyWithSpace};
 
+use crate::state::codec::encode_espace_account;
+
 use self::{
     codec::{
         StateValueCodecError, encode_espace_code, encode_espace_storage_slot, encode_native_u256,
@@ -123,6 +125,7 @@ impl RpcBackedStorage {
     fn fetch_rpc_value(&self, rpc_key: &StateReadRequest) -> StorageResult<Option<Box<[u8]>>> {
         match rpc_key {
             StateReadRequest::NativeInterestRate => self.fetch_native_interest_rate(),
+            StateReadRequest::EspaceAccount { address } => self.fetch_espace_account(*address),
             StateReadRequest::EspaceStorageSlot { address, slot } => {
                 self.fetch_espace_storage_slot(*address, *slot)
             }
@@ -136,12 +139,10 @@ impl RpcBackedStorage {
             StateReadRequest::NativeTotalStaking => self.fetch_native_total_staking(),
             StateReadRequest::NativeTotalEvmToken => self.fetch_native_total_evm_token(),
             StateReadRequest::NativeTotalStorage => self.fetch_native_total_storage(),
-
             StateReadRequest::NativeUsedStoragePoints => self.fetch_native_used_storage_points(),
             StateReadRequest::NativeConvertedStoragePoints => {
                 self.fetch_native_converted_storage_points()
             }
-
             StateReadRequest::NativeTotalPosStaking => self.fetch_native_total_pos_staking(),
             StateReadRequest::NativeDistributablePosInterest => {
                 self.fetch_native_distributable_pos_interest()
@@ -271,6 +272,27 @@ impl RpcBackedStorage {
             .map_err(|error| self.provider_error("get_native_supply_info", error))?;
 
         Ok(Some(encode_native_u256(supply_info.total_espace_tokens)))
+    }
+
+    fn fetch_espace_account(&self, address: Address) -> StorageResult<Option<Box<[u8]>>> {
+        let block_id = self.snapshot.espace_block_id.as_str();
+
+        let balance = self
+            .provider
+            .get_espace_balance(block_id, address)
+            .map_err(|error| self.provider_error("get_espace_balance", error))?;
+
+        let nonce = self
+            .provider
+            .get_espace_transaction_count(block_id, address)
+            .map_err(|error| self.provider_error("get_espace_transaction_count", error))?;
+
+        let code = self
+            .provider
+            .get_espace_code_at(block_id, address)
+            .map_err(|error| self.provider_error("get_espace_code_at", error))?;
+
+        Ok(encode_espace_account(balance, nonce, code))
     }
 
     fn fetch_espace_storage_slot(
