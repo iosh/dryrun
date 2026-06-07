@@ -1,10 +1,10 @@
 services:
-  dryrun:
+  dryrun-evm:
     build:
       context: .
       dockerfile: Dockerfile
-      target: server-runtime
-    image: dryrun-server:prod
+      target: evm-runtime
+    image: dryrun-evm:prod
     restart: unless-stopped
     init: true
     environment:
@@ -24,6 +24,26 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  dryrun-conflux:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: conflux-runtime
+    image: dryrun-conflux:prod
+    restart: unless-stopped
+    init: true
+    environment:
+      DRYRUN_CONFLUX_LISTEN_ADDR: 0.0.0.0:8547
+      DRYRUN_CONFLUX_HEALTH_LISTEN_ADDR: 0.0.0.0:9001
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+
   web:
     build:
       context: .
@@ -33,7 +53,7 @@ services:
     restart: unless-stopped
     init: true
     depends_on:
-      - dryrun
+      - dryrun-evm
     labels:
       traefik.enable: "true"
       traefik.docker.network: ${TRAEFIK_NETWORK}

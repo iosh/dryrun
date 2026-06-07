@@ -1,0 +1,46 @@
+use std::{env, error::Error, net::SocketAddr};
+
+use jsonrpsee::{RpcModule, server::Server};
+use tracing::info;
+use tracing_subscriber::EnvFilter;
+
+mod health;
+
+const DEFAULT_RPC_LISTEN_ADDR: &str = "127.0.0.1:8547";
+const DEFAULT_HEALTH_LISTEN_ADDR: &str = "127.0.0.1:9001";
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
+
+    let health_addr = health_listen_addr()?;
+    let _health_handle = health::start_health_server(health_addr).await?;
+
+    let rpc_addr = rpc_listen_addr()?;
+    let server = Server::builder().build(rpc_addr).await?;
+    let local_addr = server.local_addr()?;
+
+    let module = RpcModule::new(());
+    let handle = server.start(module);
+
+    info!("dryrun-conflux RPC server started at {}", local_addr);
+
+    handle.stopped().await;
+
+    Ok(())
+}
+
+fn rpc_listen_addr() -> Result<SocketAddr, Box<dyn Error>> {
+    let value = env::var("DRYRUN_CONFLUX_LISTEN_ADDR")
+        .unwrap_or_else(|_| DEFAULT_RPC_LISTEN_ADDR.to_owned());
+
+    Ok(value.parse()?)
+}
+
+fn health_listen_addr() -> Result<SocketAddr, Box<dyn Error>> {
+    let value = env::var("DRYRUN_CONFLUX_HEALTH_LISTEN_ADDR")
+        .unwrap_or_else(|_| DEFAULT_HEALTH_LISTEN_ADDR.to_owned());
+
+    Ok(value.parse()?)
+}

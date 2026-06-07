@@ -1,5 +1,9 @@
 .git
 .gitignore
 target
+**/target
+web/node_modules
+web/dist
 .env
 env.toml
+local.toml

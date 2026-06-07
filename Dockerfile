@@ -1,12 +1,20 @@
-FROM rust:1-bookworm AS server-builder
+FROM rust:1-bookworm AS evm-builder
 
-WORKDIR /app
+WORKDIR /app/dryrun-evm
 
-COPY . .
+COPY dryrun-evm ./
 
 RUN cargo build --locked --release -p dryrun
 
-FROM debian:bookworm-slim AS server-runtime
+FROM rust:1-bookworm AS conflux-builder
+
+WORKDIR /app/dryrun-conflux
+
+COPY dryrun-conflux ./
+
+RUN cargo build --locked --release
+
+FROM debian:bookworm-slim AS runtime-base
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
@@ -15,14 +23,25 @@ RUN apt-get update \
 
 WORKDIR /app
 
-COPY --from=server-builder /app/target/release/dryrun /usr/local/bin/dryrun
+USER appuser
+
+FROM runtime-base AS evm-runtime
+
+COPY --from=evm-builder /app/dryrun-evm/target/release/dryrun /usr/local/bin/dryrun
 
 EXPOSE 8080
 EXPOSE 9000
 
-USER appuser
-
 CMD ["dryrun"]
+
+FROM runtime-base AS conflux-runtime
+
+COPY --from=conflux-builder /app/dryrun-conflux/target/release/dryrun-conflux /usr/local/bin/dryrun-conflux
+
+EXPOSE 8547
+EXPOSE 9001
+
+CMD ["dryrun-conflux"]
 
 FROM node:24-alpine AS web-builder
 
