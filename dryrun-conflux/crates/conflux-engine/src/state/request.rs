@@ -47,7 +47,7 @@ impl StateReadRequest {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StorageKeyKind {
+pub(crate) enum StorageKeyKind {
     Account,
     StorageRoot,
     Storage,

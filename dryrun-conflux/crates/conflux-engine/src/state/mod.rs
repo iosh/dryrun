@@ -2,6 +2,11 @@ mod codec;
 mod provider;
 mod request;
 
+pub use self::provider::{
+    HttpEspaceProvider, NativePoSEconomics, NativeStorageCollateralInfo, NativeSupplyInfo,
+    NativeVoteParamsInfo, RemoteStateProvider, RemoteStateProviderError,
+};
+
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -20,7 +25,6 @@ use self::{
     codec::{
         StateValueCodecError, encode_espace_code, encode_espace_storage_slot, encode_native_u256,
     },
-    provider::{RemoteStateProvider, RemoteStateProviderError},
     request::{StateReadRequest, StateReadRequestError},
 };
 
