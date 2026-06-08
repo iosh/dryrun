@@ -1,12 +1,12 @@
-use alloy::{
-    eips::BlockId,
-    network::Ethereum,
-    primitives::{Address as AlloyAddress, U256 as AlloyU256},
-    providers::{DynProvider, Provider, ProviderBuilder},
-    transports::http::reqwest,
-};
+use std::future::IntoFuture;
+
 use cfx_types::{Address, H256, U64, U256};
-use serde::Deserialize;
+use jsonrpsee::{
+    core::{client::ClientT, traits::ToRpcParams},
+    http_client::{HttpClient, HttpClientBuilder},
+    rpc_params,
+};
+use serde::{Deserialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::runtime::{Handle, Runtime};
 
@@ -41,7 +41,6 @@ pub struct NativeVoteParamsInfo {
     pub base_fee_share_prop: U256,
 }
 
-/// Remote state access
 pub trait RemoteStateProvider: Send + Sync {
     fn get_espace_storage_at(
         &self,
@@ -89,6 +88,7 @@ pub trait RemoteStateProvider: Send + Sync {
         &self,
         epoch: &str,
     ) -> Result<NativePoSEconomics, RemoteStateProviderError>;
+
     fn get_native_vote_params(
         &self,
         epoch: &str,
@@ -97,25 +97,38 @@ pub trait RemoteStateProvider: Send + Sync {
     fn get_native_fee_burnt(&self, epoch: &str) -> Result<U256, RemoteStateProviderError>;
 }
 
-/// Remote state reader backed by an Alloy HTTP provider.
 pub struct HttpEspaceProvider {
-    provider: DynProvider<Ethereum>,
+    client: HttpClient,
     runtime: HandleOrRuntime,
 }
 
 impl HttpEspaceProvider {
     pub fn new(rpc_url: String) -> Result<Self, RemoteStateProviderError> {
-        let parsed_url: reqwest::Url =
-            rpc_url
-                .parse()
-                .map_err(|error| RemoteStateProviderError::Config {
-                    message: format!("invalid rpc url: {error}"),
-                })?;
+        let client = HttpClientBuilder::default()
+            .build(&rpc_url)
+            .map_err(|error| RemoteStateProviderError::Config {
+                message: format!("invalid rpc url or http client config: {error}"),
+            })?;
 
-        let provider = ProviderBuilder::new().connect_http(parsed_url).erased();
         let runtime = HandleOrRuntime::capture()?;
 
-        Ok(Self { provider, runtime })
+        Ok(Self { client, runtime })
+    }
+
+    fn rpc_request<R, Params>(
+        &self,
+        method: &'static str,
+        params: Params,
+    ) -> Result<R, RemoteStateProviderError>
+    where
+        R: DeserializeOwned,
+        Params: ToRpcParams + Send,
+    {
+        self.runtime
+            .block_on(self.client.request(method, params))
+            .map_err(|error| RemoteStateProviderError::RpcRequest {
+                message: error.to_string(),
+            })
     }
 }
 
@@ -126,17 +139,12 @@ impl RemoteStateProvider for HttpEspaceProvider {
         address: Address,
         slot: H256,
     ) -> Result<Option<U256>, RemoteStateProviderError> {
-        let alloy_address = AlloyAddress::from_slice(address.as_bytes());
-        let alloy_slot = AlloyU256::from_be_slice(slot.as_bytes());
-        let block_id = parse_block_id(block_id)?;
-
-        let value = self.runtime.block_on(
-            self.provider
-                .get_storage_at(alloy_address, alloy_slot)
-                .block_id(block_id),
+        let value: String = self.rpc_request(
+            "eth_getStorageAt",
+            rpc_params![hex_address(address), hex_h256(slot), block_id],
         )?;
 
-        let value = cfx_u256_from_alloy(value);
+        let value = parse_hex_u256(value, "eth_getStorageAt")?;
         Ok((!value.is_zero()).then_some(value))
     }
 
@@ -145,14 +153,10 @@ impl RemoteStateProvider for HttpEspaceProvider {
         block_id: &str,
         address: Address,
     ) -> Result<Vec<u8>, RemoteStateProviderError> {
-        let alloy_address = AlloyAddress::from_slice(address.as_bytes());
-        let block_id = parse_block_id(block_id)?;
+        let value: String =
+            self.rpc_request("eth_getCode", rpc_params![hex_address(address), block_id])?;
 
-        let code = self
-            .runtime
-            .block_on(self.provider.get_code_at(alloy_address).block_id(block_id))?;
-
-        Ok(code.to_vec())
+        decode_hex_bytes(value, "eth_getCode")
     }
 
     fn get_espace_balance(
@@ -160,14 +164,12 @@ impl RemoteStateProvider for HttpEspaceProvider {
         block_id: &str,
         address: Address,
     ) -> Result<U256, RemoteStateProviderError> {
-        let alloy_address = AlloyAddress::from_slice(address.as_bytes());
-        let block_id = parse_block_id(block_id)?;
+        let value: String = self.rpc_request(
+            "eth_getBalance",
+            rpc_params![hex_address(address), block_id],
+        )?;
 
-        let balance = self
-            .runtime
-            .block_on(self.provider.get_balance(alloy_address).block_id(block_id))?;
-
-        Ok(cfx_u256_from_alloy(balance))
+        parse_hex_u256(value, "eth_getBalance")
     }
 
     fn get_espace_transaction_count(
@@ -175,109 +177,55 @@ impl RemoteStateProvider for HttpEspaceProvider {
         block_id: &str,
         address: Address,
     ) -> Result<U256, RemoteStateProviderError> {
-        let alloy_address = AlloyAddress::from_slice(address.as_bytes());
-        let block_id = parse_block_id(block_id)?;
+        let value: String = self.rpc_request(
+            "eth_getTransactionCount",
+            rpc_params![hex_address(address), block_id],
+        )?;
 
-        let nonce = self
-            .runtime
-            .block_on(
-                self.provider
-                    .get_transaction_count(alloy_address)
-                    .block_id(block_id),
-            )?;
-
-        Ok(U256::from(nonce))
+        parse_hex_u256(value, "eth_getTransactionCount")
     }
 
     fn get_native_interest_rate(&self, epoch: &str) -> Result<U256, RemoteStateProviderError> {
-        self.runtime
-            .block_on(
-                self.provider
-                    .client()
-                    .request("cfx_getInterestRate", (epoch,)),
-            )
-            .map_err(|error| RemoteStateProviderError::RpcRequest {
-                message: error.to_string(),
-            })
+        self.rpc_request("cfx_getInterestRate", rpc_params![epoch])
     }
 
     fn get_native_accumulate_interest_rate(
         &self,
         epoch: &str,
     ) -> Result<U256, RemoteStateProviderError> {
-        self.runtime
-            .block_on(
-                self.provider
-                    .client()
-                    .request("cfx_getAccumulateInterestRate", (epoch,)),
-            )
-            .map_err(|error| RemoteStateProviderError::RpcRequest {
-                message: error.to_string(),
-            })
+        self.rpc_request("cfx_getAccumulateInterestRate", rpc_params![epoch])
     }
 
     fn get_native_supply_info(
         &self,
         epoch: &str,
     ) -> Result<NativeSupplyInfo, RemoteStateProviderError> {
-        self.runtime
-            .block_on(self.provider.client().request("cfx_getSupplyInfo", (epoch,)))
-            .map_err(|error| RemoteStateProviderError::RpcRequest {
-                message: error.to_string(),
-            })
+        self.rpc_request("cfx_getSupplyInfo", rpc_params![epoch])
     }
 
     fn get_native_collateral_info(
         &self,
         epoch: &str,
     ) -> Result<NativeStorageCollateralInfo, RemoteStateProviderError> {
-        self.runtime
-            .block_on(
-                self.provider
-                    .client()
-                    .request("cfx_getCollateralInfo", (epoch,)),
-            )
-            .map_err(|error| RemoteStateProviderError::RpcRequest {
-                message: error.to_string(),
-            })
+        self.rpc_request("cfx_getCollateralInfo", rpc_params![epoch])
     }
 
     fn get_native_pos_economics(
         &self,
         epoch: &str,
     ) -> Result<NativePoSEconomics, RemoteStateProviderError> {
-        self.runtime
-            .block_on(
-                self.provider
-                    .client()
-                    .request("cfx_getPoSEconomics", (epoch,)),
-            )
-            .map_err(|error| RemoteStateProviderError::RpcRequest {
-                message: error.to_string(),
-            })
+        self.rpc_request("cfx_getPoSEconomics", rpc_params![epoch])
     }
 
     fn get_native_vote_params(
         &self,
         epoch: &str,
     ) -> Result<NativeVoteParamsInfo, RemoteStateProviderError> {
-        self.runtime
-            .block_on(
-                self.provider
-                    .client()
-                    .request("cfx_getParamsFromVote", (epoch,)),
-            )
-            .map_err(|error| RemoteStateProviderError::RpcRequest {
-                message: error.to_string(),
-            })
+        self.rpc_request("cfx_getParamsFromVote", rpc_params![epoch])
     }
 
     fn get_native_fee_burnt(&self, epoch: &str) -> Result<U256, RemoteStateProviderError> {
-        self.runtime
-            .block_on(self.provider.client().request("cfx_getFeeBurnt", (epoch,)))
-            .map_err(|error| RemoteStateProviderError::RpcRequest {
-                message: error.to_string(),
-            })
+        self.rpc_request("cfx_getFeeBurnt", rpc_params![epoch])
     }
 }
 
@@ -327,17 +275,43 @@ fn can_block_in_place_on_current_runtime() -> bool {
     })
 }
 
-fn parse_block_id(block_id: &str) -> Result<BlockId, RemoteStateProviderError> {
-    block_id
-        .parse::<BlockId>()
-        .map_err(|error| RemoteStateProviderError::InvalidBlockId {
-            block_id: block_id.to_owned(),
-            message: error.to_string(),
-        })
+fn hex_address(address: Address) -> String {
+    format!("0x{}", hex::encode(address.as_bytes()))
 }
 
-fn cfx_u256_from_alloy(value: AlloyU256) -> U256 {
-    U256::from_big_endian(&value.to_be_bytes::<32>())
+fn hex_h256(value: H256) -> String {
+    format!("0x{}", hex::encode(value.as_bytes()))
+}
+
+fn parse_hex_u256(value: String, field: &'static str) -> Result<U256, RemoteStateProviderError> {
+    let digits = value.strip_prefix("0x").unwrap_or(&value).to_owned();
+
+    if digits.is_empty() {
+        return Ok(U256::zero());
+    }
+
+    U256::from_str_radix(&digits, 16).map_err(|error| RemoteStateProviderError::HexValue {
+        field,
+        value,
+        message: error.to_string(),
+    })
+}
+
+fn decode_hex_bytes(
+    value: String,
+    field: &'static str,
+) -> Result<Vec<u8>, RemoteStateProviderError> {
+    let digits = value.strip_prefix("0x").unwrap_or(&value).to_owned();
+
+    if digits.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    hex::decode(&digits).map_err(|error| RemoteStateProviderError::HexValue {
+        field,
+        value,
+        message: error.to_string(),
+    })
 }
 
 #[derive(Debug, Error)]
@@ -348,12 +322,16 @@ pub enum RemoteStateProviderError {
     #[error("remote state provider runtime error: {message}")]
     Runtime { message: String },
 
-    #[error("remote state provider invalid block id `{block_id}`: {message}")]
-    InvalidBlockId { block_id: String, message: String },
-
-    #[error("remote state rpc request failed: {0}")]
-    Rpc(#[from] alloy::transports::TransportError),
-
     #[error("remote state rpc request failed: {message}")]
     RpcRequest { message: String },
+
+    #[error(
+        "remote state rpc hex value decode failed: field={field},
+      value={value}, reason={message}"
+    )]
+    HexValue {
+        field: &'static str,
+        value: String,
+        message: String,
+    },
 }
