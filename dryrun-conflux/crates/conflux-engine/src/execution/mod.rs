@@ -1,5 +1,6 @@
-use cfx_execute_helper::estimation::EstimationContext;
+use cfx_execute_helper::estimation::{EstimateExt, EstimateRequest, EstimationContext};
 use cfx_executor::{
+    executive::ExecutionOutcome,
     machine::{Machine, VmFactory},
     spec::CommonParams,
     state::State,
@@ -9,8 +10,8 @@ use cfx_vm_types::{Env, Spec};
 
 use std::{collections::BTreeMap, sync::Arc};
 
-use cfx_types::{Address, H256, Space, SpaceMap, U256};
-use primitives::BlockNumber;
+use cfx_types::{Address, AddressSpaceUtil, H256, Space, SpaceMap, U256};
+use primitives::{BlockNumber, SignedTransaction, transaction::EthereumTransaction};
 
 use crate::state::{ConfluxStateSnapshot, RemoteStateProvider, RpcBackedStorage, new_state_db};
 
@@ -30,6 +31,28 @@ pub struct VirtualCallEnvInput {
     pub base_gas_price: SpaceMap<U256>,
     pub burnt_gas_price: SpaceMap<U256>,
     pub transaction_hash: H256,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct VirtualCallEstimateRequestInput {
+    pub has_sender: bool,
+    pub has_gas_limit: bool,
+    pub has_gas_price: bool,
+    pub has_nonce: bool,
+    pub collect_access_list: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct VirtualCallTransactionInput {
+    pub tx: EthereumTransaction,
+    pub sender: Address,
+}
+
+#[derive(Debug, Clone)]
+pub struct VirtualCallInput {
+    pub env: VirtualCallEnvInput,
+    pub transaction: VirtualCallTransactionInput,
+    pub estimate_request: VirtualCallEstimateRequestInput,
 }
 
 pub fn build_rpc_backed_state(
@@ -76,13 +99,38 @@ pub fn build_virtual_call_spec(machine: &Machine, env: &Env) -> Spec {
     machine.spec(env.number, env.epoch_height)
 }
 
-pub fn probe_virtual_call_context(
+pub fn build_virtual_call_estimate_request(
+    input: VirtualCallEstimateRequestInput,
+) -> EstimateRequest {
+    EstimateRequest {
+        has_sender: input.has_sender,
+        has_gas_limit: input.has_gas_limit,
+        has_gas_price: input.has_gas_price,
+        has_nonce: input.has_nonce,
+        has_storage_limit: false, // eSpace eth_call path does not use storage_limit.
+        collect_access_list: input.collect_access_list,
+    }
+}
+
+pub fn fake_sign_evm_transaction(tx: EthereumTransaction, sender: Address) -> SignedTransaction {
+    tx.fake_sign_rpc(sender.with_evm_space())
+}
+
+pub fn build_virtual_call_transaction(input: VirtualCallTransactionInput) -> SignedTransaction {
+    fake_sign_evm_transaction(input.tx, input.sender)
+}
+
+pub fn execute_virtual_call(
     state: &mut State,
     machine: &Machine,
-    env_input: VirtualCallEnvInput,
-) {
-    let env = build_virtual_call_env(env_input);
+    input: VirtualCallInput,
+) -> StateDbResult<(ExecutionOutcome, EstimateExt)> {
+    let env = build_virtual_call_env(input.env);
     let spec = build_virtual_call_spec(machine, &env);
+    let tx = build_virtual_call_transaction(input.transaction);
+    let request = build_virtual_call_estimate_request(input.estimate_request);
 
-    let _context = EstimationContext::new(state, &env, machine, &spec);
+    let mut context = EstimationContext::new(state, &env, machine, &spec);
+
+    context.transact_virtual(tx, request)
 }
