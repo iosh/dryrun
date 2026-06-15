@@ -8,29 +8,54 @@ use cfx_executor::{
 use cfx_statedb::Result as StateDbResult;
 use cfx_vm_types::{Env, Spec};
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
-use cfx_types::{Address, AddressSpaceUtil, H256, Space, SpaceMap, U256};
-use primitives::{BlockNumber, SignedTransaction, transaction::EthereumTransaction};
+use cfx_types::{Address, AddressSpaceUtil, H256, SpaceMap, U256};
 
 use crate::state::{ConfluxStateSnapshot, RemoteStateProvider, RpcBackedStorage, new_state_db};
+use cfx_parameters::consensus::TRANSACTION_DEFAULT_EPOCH_BOUND;
+use primitives::{BlockNumber, SignedTransaction, transaction::EthereumTransaction};
 
-#[derive(Debug, Clone)]
-pub struct VirtualCallEnvInput {
-    pub native_chain_id: u32,
-    pub ethereum_chain_id: u32,
-    pub block_number: BlockNumber,
-    pub epoch_height: u64,
-    pub author: Address,
-    pub timestamp: u64,
-    pub gas_limit: U256,
-    pub last_hash: H256,
+// Public block RPC does not expose the upstream-resolved PoS view/decision height.
+#[derive(Debug, Clone, Copy)]
+pub struct VirtualCallFinalityContext {
     pub pos_view: Option<u64>,
     pub finalized_epoch: Option<u64>,
-    pub transaction_epoch_bound: u64,
-    pub base_gas_price: SpaceMap<U256>,
-    pub burnt_gas_price: SpaceMap<U256>,
-    pub transaction_hash: H256,
+}
+impl VirtualCallFinalityContext {
+    pub fn unavailable() -> Self {
+        Self {
+            pos_view: None,
+            finalized_epoch: None,
+        }
+    }
+}
+
+// Native and eSpace base fees come from different public RPC block views.
+#[derive(Debug, Clone, Copy)]
+pub struct VirtualCallBaseGasPriceInput {
+    pub native_base_fee_per_gas: Option<U256>,
+    pub ethereum_base_fee_per_gas: Option<U256>,
+}
+
+impl VirtualCallBaseGasPriceInput {
+    pub fn into_space_map(self) -> SpaceMap<U256> {
+        SpaceMap::new(
+            self.native_base_fee_per_gas.unwrap_or(U256::zero()),
+            self.ethereum_base_fee_per_gas.unwrap_or(U256::zero()),
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct VirtualCallBlockContextInput {
+    pub pivot_block_number: BlockNumber,
+    pub pivot_epoch_height: u64,
+    pub author: Address,
+    pub timestamp: u64,
+    pub epoch_hash: H256,
+    pub finality: VirtualCallFinalityContext,
+    pub base_gas_price: VirtualCallBaseGasPriceInput,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -50,7 +75,7 @@ pub struct VirtualCallTransactionInput {
 
 #[derive(Debug, Clone)]
 pub struct VirtualCallInput {
-    pub env: VirtualCallEnvInput,
+    pub block_context: VirtualCallBlockContextInput,
     pub transaction: VirtualCallTransactionInput,
     pub estimate_request: VirtualCallEstimateRequestInput,
 }
@@ -65,28 +90,43 @@ pub fn build_rpc_backed_state(
     State::new(db)
 }
 
-pub fn build_virtual_call_env(input: VirtualCallEnvInput) -> Env {
-    let chain_id = BTreeMap::from([
-        (Space::Native, input.native_chain_id),
-        (Space::Ethereum, input.ethereum_chain_id),
-    ]);
+fn virtual_call_execution_block_number(pivot_block_number: BlockNumber) -> BlockNumber {
+    pivot_block_number + 1
+}
+
+fn virtual_call_epoch_height(pivot_epoch_height: u64) -> u64 {
+    pivot_epoch_height + 1
+}
+
+pub fn build_virtual_call_env(
+    machine: &Machine,
+    state: &State,
+    tx: &SignedTransaction,
+    input: VirtualCallBlockContextInput,
+) -> Env {
+    let execution_block_number = virtual_call_execution_block_number(input.pivot_block_number);
+    let epoch_height = virtual_call_epoch_height(input.pivot_epoch_height);
+    let base_gas_price = input.base_gas_price.into_space_map();
+    // Derived from state, not from public block RPC.
+    let burnt_gas_price = base_gas_price.map_all(|x| state.burnt_gas_price(x));
 
     Env {
-        chain_id,
-        number: input.block_number,
+        chain_id: machine.params().chain_id_map(epoch_height),
+        number: execution_block_number,
         author: input.author,
         timestamp: input.timestamp,
         difficulty: U256::zero(),
-        gas_limit: input.gas_limit,
-        last_hash: input.last_hash,
+        gas_limit: tx.gas().clone(),
+        last_hash: input.epoch_hash,
         accumulated_gas_used: U256::zero(),
-        epoch_height: input.epoch_height,
-        pos_view: input.pos_view,
-        finalized_epoch: input.finalized_epoch,
-        transaction_epoch_bound: input.transaction_epoch_bound,
-        base_gas_price: input.base_gas_price,
-        burnt_gas_price: input.burnt_gas_price,
-        transaction_hash: input.transaction_hash,
+        epoch_height,
+        pos_view: input.finality.pos_view,
+        finalized_epoch: input.finality.finalized_epoch,
+        // Upstream verification default, not a public block field.
+        transaction_epoch_bound: TRANSACTION_DEFAULT_EPOCH_BOUND,
+        base_gas_price,
+        burnt_gas_price,
+        transaction_hash: tx.hash(),
         ..Default::default()
     }
 }
@@ -125,9 +165,9 @@ pub fn execute_virtual_call(
     machine: &Machine,
     input: VirtualCallInput,
 ) -> StateDbResult<(ExecutionOutcome, EstimateExt)> {
-    let env = build_virtual_call_env(input.env);
-    let spec = build_virtual_call_spec(machine, &env);
     let tx = build_virtual_call_transaction(input.transaction);
+    let env = build_virtual_call_env(machine, state, &tx, input.block_context);
+    let spec = build_virtual_call_spec(machine, &env);
     let request = build_virtual_call_estimate_request(input.estimate_request);
 
     let mut context = EstimationContext::new(state, &env, machine, &spec);
