@@ -3,8 +3,8 @@ mod provider;
 mod request;
 
 pub use self::provider::{
-    HttpEspaceProvider, NativePoSEconomics, NativeStorageCollateralInfo, NativeSupplyInfo,
-    NativeVoteParamsInfo, RemoteStateProvider, RemoteStateProviderError,
+    EspaceRpcBlock, HttpEspaceProvider, NativePoSEconomics, NativeStorageCollateralInfo,
+    NativeSupplyInfo, NativeVoteParamsInfo, RemoteStateProvider, RemoteStateProviderError,
 };
 
 use std::{

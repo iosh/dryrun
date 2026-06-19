@@ -2,7 +2,6 @@ use cfx_execute_helper::estimation::{EstimateExt, EstimateRequest, EstimationCon
 use cfx_executor::{
     executive::ExecutionOutcome,
     machine::{Machine, VmFactory},
-    spec::CommonParams,
     state::State,
 };
 use cfx_statedb::Result as StateDbResult;
@@ -12,10 +11,18 @@ use std::sync::Arc;
 
 use cfx_types::{Address, AddressSpaceUtil, H256, SpaceMap, U256};
 
-use crate::state::{ConfluxStateSnapshot, RemoteStateProvider, RpcBackedStorage, new_state_db};
+use crate::state::{
+    ConfluxStateSnapshot, EspaceRpcBlock, RemoteStateProvider, RpcBackedStorage, new_state_db,
+};
+
 use cfx_parameters::consensus::TRANSACTION_DEFAULT_EPOCH_BOUND;
 use primitives::{BlockNumber, SignedTransaction, transaction::EthereumTransaction};
 
+use cfx_rpc_cfx_types::Block as NativeRpcBlock;
+use thiserror::Error;
+
+mod params;
+pub use params::pinned_mainnet_common_params;
 // Public block RPC does not expose the upstream-resolved PoS view/decision height.
 #[derive(Debug, Clone, Copy)]
 pub struct VirtualCallFinalityContext {
@@ -48,6 +55,21 @@ impl VirtualCallBaseGasPriceInput {
 }
 
 #[derive(Debug, Clone)]
+pub struct VirtualCallNativePivotBlockInput {
+    pub block_number: BlockNumber,
+    pub epoch_height: u64,
+    pub author: Address,
+    pub timestamp: u64,
+    pub hash: H256,
+    pub base_fee_per_gas: Option<U256>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct VirtualCallEspaceBlockInput {
+    pub base_fee_per_gas: Option<U256>,
+}
+
+#[derive(Debug, Clone)]
 pub struct VirtualCallBlockContextInput {
     pub pivot_block_number: BlockNumber,
     pub pivot_epoch_height: u64,
@@ -56,6 +78,13 @@ pub struct VirtualCallBlockContextInput {
     pub epoch_hash: H256,
     pub finality: VirtualCallFinalityContext,
     pub base_gas_price: VirtualCallBaseGasPriceInput,
+}
+#[derive(Debug, Error)]
+pub enum VirtualCallBlockContextError {
+    #[error("native pivot block is missing blockNumber")]
+    MissingBlockNumber,
+    #[error("native pivot block {field} exceeds u64: {value:?}")]
+    U64Overflow { field: &'static str, value: U256 },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -78,6 +107,43 @@ pub struct VirtualCallInput {
     pub block_context: VirtualCallBlockContextInput,
     pub transaction: VirtualCallTransactionInput,
     pub estimate_request: VirtualCallEstimateRequestInput,
+}
+
+pub fn build_virtual_call_native_pivot_block_input(
+    block: NativeRpcBlock,
+) -> Result<VirtualCallNativePivotBlockInput, VirtualCallBlockContextError> {
+    Ok(VirtualCallNativePivotBlockInput {
+        block_number: required_block_number(block.block_number)?,
+        epoch_height: u256_to_u64(block.height, "height")?,
+        author: block.miner.hex_address,
+        timestamp: u256_to_u64(block.timestamp, "timestamp")?,
+        hash: block.hash,
+        base_fee_per_gas: block.base_fee_per_gas,
+    })
+}
+pub fn build_virtual_call_espace_block_input(block: EspaceRpcBlock) -> VirtualCallEspaceBlockInput {
+    VirtualCallEspaceBlockInput {
+        base_fee_per_gas: block.base_fee_per_gas,
+    }
+}
+
+pub fn build_virtual_call_block_context(
+    pivot: VirtualCallNativePivotBlockInput,
+    espace: VirtualCallEspaceBlockInput,
+    finality: VirtualCallFinalityContext,
+) -> VirtualCallBlockContextInput {
+    VirtualCallBlockContextInput {
+        pivot_block_number: pivot.block_number,
+        pivot_epoch_height: pivot.epoch_height,
+        author: pivot.author,
+        timestamp: pivot.timestamp,
+        epoch_hash: pivot.hash,
+        finality,
+        base_gas_price: VirtualCallBaseGasPriceInput {
+            native_base_fee_per_gas: pivot.base_fee_per_gas,
+            ethereum_base_fee_per_gas: espace.base_fee_per_gas,
+        },
+    }
 }
 
 pub fn build_rpc_backed_state(
@@ -131,8 +197,8 @@ pub fn build_virtual_call_env(
     }
 }
 
-pub fn build_virtual_call_machine(params: CommonParams) -> Machine {
-    Machine::new_with_builtin(params, VmFactory::default())
+pub fn build_virtual_call_machine() -> Machine {
+    Machine::new_with_builtin(pinned_mainnet_common_params(), VmFactory::default())
 }
 
 pub fn build_virtual_call_spec(machine: &Machine, env: &Env) -> Spec {
@@ -173,4 +239,18 @@ pub fn execute_virtual_call(
     let mut context = EstimationContext::new(state, &env, machine, &spec);
 
     context.transact_virtual(tx, request)
+}
+
+fn required_block_number(value: Option<U256>) -> Result<BlockNumber, VirtualCallBlockContextError> {
+    value
+        .ok_or(VirtualCallBlockContextError::MissingBlockNumber)
+        .and_then(|value| u256_to_u64(value, "blockNumber"))
+}
+
+fn u256_to_u64(value: U256, field: &'static str) -> Result<u64, VirtualCallBlockContextError> {
+    if value > U256::from(u64::MAX) {
+        return Err(VirtualCallBlockContextError::U64Overflow { field, value });
+    }
+
+    Ok(value.as_u64())
 }

@@ -10,6 +10,8 @@ use serde::{Deserialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::runtime::{Handle, Runtime};
 
+use cfx_rpc_cfx_types::Block as NativeRpcBlock;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeSupplyInfo {
@@ -39,6 +41,12 @@ pub struct NativePoSEconomics {
 pub struct NativeVoteParamsInfo {
     pub pow_base_reward: U256,
     pub base_fee_share_prop: U256,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EspaceRpcBlock {
+    pub base_fee_per_gas: Option<U256>,
 }
 
 pub trait RemoteStateProvider: Send + Sync {
@@ -95,6 +103,16 @@ pub trait RemoteStateProvider: Send + Sync {
     ) -> Result<NativeVoteParamsInfo, RemoteStateProviderError>;
 
     fn get_native_fee_burnt(&self, epoch: &str) -> Result<U256, RemoteStateProviderError>;
+
+    fn get_native_block_by_epoch_number(
+        &self,
+        epoch_number: &str,
+    ) -> Result<Option<NativeRpcBlock>, RemoteStateProviderError>;
+
+    fn get_espace_block_by_number(
+        &self,
+        block_number: &str,
+    ) -> Result<Option<EspaceRpcBlock>, RemoteStateProviderError>;
 }
 
 pub struct HttpEspaceProvider {
@@ -226,6 +244,23 @@ impl RemoteStateProvider for HttpEspaceProvider {
 
     fn get_native_fee_burnt(&self, epoch: &str) -> Result<U256, RemoteStateProviderError> {
         self.rpc_request("cfx_getFeeBurnt", rpc_params![epoch])
+    }
+
+    fn get_native_block_by_epoch_number(
+        &self,
+        epoch_number: &str,
+    ) -> Result<Option<NativeRpcBlock>, RemoteStateProviderError> {
+        self.rpc_request(
+            "cfx_getBlockByEpochNumber",
+            rpc_params![epoch_number, false],
+        )
+    }
+
+    fn get_espace_block_by_number(
+        &self,
+        block_number: &str,
+    ) -> Result<Option<EspaceRpcBlock>, RemoteStateProviderError> {
+        self.rpc_request("eth_getBlockByNumber", rpc_params![block_number, false])
     }
 }
 

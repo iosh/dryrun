@@ -1825,6 +1825,7 @@ dependencies = [
  "cfx-executor",
  "cfx-internal-common",
  "cfx-parameters",
+ "cfx-rpc-cfx-types",
  "cfx-statedb",
  "cfx-storage",
  "cfx-types",
