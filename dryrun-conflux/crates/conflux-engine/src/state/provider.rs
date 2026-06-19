@@ -1,5 +1,7 @@
 use std::future::IntoFuture;
 
+use cfx_addr::{EncodingOptions, Network, cfx_addr_encode};
+use cfx_rpc_cfx_types::RpcAddress;
 use cfx_types::{Address, H256, U64, U256};
 use jsonrpsee::{
     core::{client::ClientT, traits::ToRpcParams},
@@ -9,8 +11,6 @@ use jsonrpsee::{
 use serde::{Deserialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::runtime::{Handle, Runtime};
-
-use cfx_rpc_cfx_types::Block as NativeRpcBlock;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,6 +47,27 @@ pub struct NativeVoteParamsInfo {
 #[serde(rename_all = "camelCase")]
 pub struct EspaceRpcBlock {
     pub base_fee_per_gas: Option<U256>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeRpcAccount {
+    pub balance: U256,
+    pub nonce: U256,
+    pub staking_balance: U256,
+    pub collateral_for_storage: U256,
+    pub accumulated_interest_return: U256,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeRpcBlock {
+    pub hash: H256,
+    pub height: U256,
+    pub miner: RpcAddress,
+    pub block_number: Option<U256>,
+    pub base_fee_per_gas: Option<U256>,
+    pub timestamp: U256,
 }
 
 pub trait RemoteStateProvider: Send + Sync {
@@ -104,6 +125,12 @@ pub trait RemoteStateProvider: Send + Sync {
 
     fn get_native_fee_burnt(&self, epoch: &str) -> Result<U256, RemoteStateProviderError>;
 
+    fn get_native_account(
+        &self,
+        epoch: &str,
+        address: Address,
+    ) -> Result<NativeRpcAccount, RemoteStateProviderError>;
+
     fn get_native_block_by_epoch_number(
         &self,
         epoch_number: &str,
@@ -116,24 +143,42 @@ pub trait RemoteStateProvider: Send + Sync {
 }
 
 pub struct HttpEspaceProvider {
-    client: HttpClient,
+    espace_client: HttpClient,
+    native_client: HttpClient,
     runtime: HandleOrRuntime,
 }
 
 impl HttpEspaceProvider {
     pub fn new(rpc_url: String) -> Result<Self, RemoteStateProviderError> {
-        let client = HttpClientBuilder::default()
-            .build(&rpc_url)
+        Self::new_with_native_rpc(rpc_url.clone(), rpc_url)
+    }
+
+    pub fn new_with_native_rpc(
+        espace_rpc_url: String,
+        native_rpc_url: String,
+    ) -> Result<Self, RemoteStateProviderError> {
+        let espace_client = HttpClientBuilder::default()
+            .build(&espace_rpc_url)
             .map_err(|error| RemoteStateProviderError::Config {
-                message: format!("invalid rpc url or http client config: {error}"),
+                message: format!("invalid eSpace rpc url or http client config: {error}"),
+            })?;
+
+        let native_client = HttpClientBuilder::default()
+            .build(&native_rpc_url)
+            .map_err(|error| RemoteStateProviderError::Config {
+                message: format!("invalid native rpc url or http client config: {error}"),
             })?;
 
         let runtime = HandleOrRuntime::capture()?;
 
-        Ok(Self { client, runtime })
+        Ok(Self {
+            espace_client,
+            native_client,
+            runtime,
+        })
     }
 
-    fn rpc_request<R, Params>(
+    fn espace_rpc_request<R, Params>(
         &self,
         method: &'static str,
         params: Params,
@@ -143,7 +188,23 @@ impl HttpEspaceProvider {
         Params: ToRpcParams + Send,
     {
         self.runtime
-            .block_on(self.client.request(method, params))
+            .block_on(self.espace_client.request(method, params))
+            .map_err(|error| RemoteStateProviderError::RpcRequest {
+                message: error.to_string(),
+            })
+    }
+
+    fn native_rpc_request<R, Params>(
+        &self,
+        method: &'static str,
+        params: Params,
+    ) -> Result<R, RemoteStateProviderError>
+    where
+        R: DeserializeOwned,
+        Params: ToRpcParams + Send,
+    {
+        self.runtime
+            .block_on(self.native_client.request(method, params))
             .map_err(|error| RemoteStateProviderError::RpcRequest {
                 message: error.to_string(),
             })
@@ -157,9 +218,13 @@ impl RemoteStateProvider for HttpEspaceProvider {
         address: Address,
         slot: H256,
     ) -> Result<Option<U256>, RemoteStateProviderError> {
-        let value: String = self.rpc_request(
+        let value: String = self.espace_rpc_request(
             "eth_getStorageAt",
-            rpc_params![hex_address(address), hex_h256(slot), block_id],
+            rpc_params![
+                hex_address(address),
+                hex_storage_slot_position(slot),
+                block_id
+            ],
         )?;
 
         let value = parse_hex_u256(value, "eth_getStorageAt")?;
@@ -172,7 +237,7 @@ impl RemoteStateProvider for HttpEspaceProvider {
         address: Address,
     ) -> Result<Vec<u8>, RemoteStateProviderError> {
         let value: String =
-            self.rpc_request("eth_getCode", rpc_params![hex_address(address), block_id])?;
+            self.espace_rpc_request("eth_getCode", rpc_params![hex_address(address), block_id])?;
 
         decode_hex_bytes(value, "eth_getCode")
     }
@@ -182,7 +247,7 @@ impl RemoteStateProvider for HttpEspaceProvider {
         block_id: &str,
         address: Address,
     ) -> Result<U256, RemoteStateProviderError> {
-        let value: String = self.rpc_request(
+        let value: String = self.espace_rpc_request(
             "eth_getBalance",
             rpc_params![hex_address(address), block_id],
         )?;
@@ -195,7 +260,7 @@ impl RemoteStateProvider for HttpEspaceProvider {
         block_id: &str,
         address: Address,
     ) -> Result<U256, RemoteStateProviderError> {
-        let value: String = self.rpc_request(
+        let value: String = self.espace_rpc_request(
             "eth_getTransactionCount",
             rpc_params![hex_address(address), block_id],
         )?;
@@ -204,53 +269,63 @@ impl RemoteStateProvider for HttpEspaceProvider {
     }
 
     fn get_native_interest_rate(&self, epoch: &str) -> Result<U256, RemoteStateProviderError> {
-        self.rpc_request("cfx_getInterestRate", rpc_params![epoch])
+        self.native_rpc_request("cfx_getInterestRate", rpc_params![epoch])
     }
 
     fn get_native_accumulate_interest_rate(
         &self,
         epoch: &str,
     ) -> Result<U256, RemoteStateProviderError> {
-        self.rpc_request("cfx_getAccumulateInterestRate", rpc_params![epoch])
+        self.native_rpc_request("cfx_getAccumulateInterestRate", rpc_params![epoch])
     }
 
     fn get_native_supply_info(
         &self,
         epoch: &str,
     ) -> Result<NativeSupplyInfo, RemoteStateProviderError> {
-        self.rpc_request("cfx_getSupplyInfo", rpc_params![epoch])
+        self.native_rpc_request("cfx_getSupplyInfo", rpc_params![epoch])
     }
 
     fn get_native_collateral_info(
         &self,
         epoch: &str,
     ) -> Result<NativeStorageCollateralInfo, RemoteStateProviderError> {
-        self.rpc_request("cfx_getCollateralInfo", rpc_params![epoch])
+        self.native_rpc_request("cfx_getCollateralInfo", rpc_params![epoch])
     }
 
     fn get_native_pos_economics(
         &self,
         epoch: &str,
     ) -> Result<NativePoSEconomics, RemoteStateProviderError> {
-        self.rpc_request("cfx_getPoSEconomics", rpc_params![epoch])
+        self.native_rpc_request("cfx_getPoSEconomics", rpc_params![epoch])
     }
 
     fn get_native_vote_params(
         &self,
         epoch: &str,
     ) -> Result<NativeVoteParamsInfo, RemoteStateProviderError> {
-        self.rpc_request("cfx_getParamsFromVote", rpc_params![epoch])
+        self.native_rpc_request("cfx_getParamsFromVote", rpc_params![epoch])
     }
 
     fn get_native_fee_burnt(&self, epoch: &str) -> Result<U256, RemoteStateProviderError> {
-        self.rpc_request("cfx_getFeeBurnt", rpc_params![epoch])
+        self.native_rpc_request("cfx_getFeeBurnt", rpc_params![epoch])
+    }
+
+    fn get_native_account(
+        &self,
+        epoch: &str,
+        address: Address,
+    ) -> Result<NativeRpcAccount, RemoteStateProviderError> {
+        let address = native_mainnet_rpc_address(address)?;
+
+        self.native_rpc_request("cfx_getAccount", rpc_params![address, epoch])
     }
 
     fn get_native_block_by_epoch_number(
         &self,
         epoch_number: &str,
     ) -> Result<Option<NativeRpcBlock>, RemoteStateProviderError> {
-        self.rpc_request(
+        self.native_rpc_request(
             "cfx_getBlockByEpochNumber",
             rpc_params![epoch_number, false],
         )
@@ -260,7 +335,7 @@ impl RemoteStateProvider for HttpEspaceProvider {
         &self,
         block_number: &str,
     ) -> Result<Option<EspaceRpcBlock>, RemoteStateProviderError> {
-        self.rpc_request("eth_getBlockByNumber", rpc_params![block_number, false])
+        self.espace_rpc_request("eth_getBlockByNumber", rpc_params![block_number, false])
     }
 }
 
@@ -314,8 +389,23 @@ fn hex_address(address: Address) -> String {
     format!("0x{}", hex::encode(address.as_bytes()))
 }
 
-fn hex_h256(value: H256) -> String {
-    format!("0x{}", hex::encode(value.as_bytes()))
+fn hex_storage_slot_position(slot: H256) -> String {
+    let digits = hex::encode(slot.as_bytes());
+    let digits = digits.trim_start_matches('0');
+
+    if digits.is_empty() {
+        "0x0".to_owned()
+    } else {
+        format!("0x{digits}")
+    }
+}
+
+fn native_mainnet_rpc_address(address: Address) -> Result<String, RemoteStateProviderError> {
+    cfx_addr_encode(address.as_bytes(), Network::Main, EncodingOptions::QrCode).map_err(|error| {
+        RemoteStateProviderError::Address {
+            message: error.to_string(),
+        }
+    })
 }
 
 fn parse_hex_u256(value: String, field: &'static str) -> Result<U256, RemoteStateProviderError> {
@@ -325,11 +415,18 @@ fn parse_hex_u256(value: String, field: &'static str) -> Result<U256, RemoteStat
         return Ok(U256::zero());
     }
 
-    U256::from_str_radix(&digits, 16).map_err(|error| RemoteStateProviderError::HexValue {
-        field,
-        value,
-        message: error.to_string(),
+    let bytes = hex::decode(if digits.len() % 2 == 0 {
+        digits.clone()
+    } else {
+        format!("0{digits}")
     })
+    .map_err(|error| RemoteStateProviderError::HexValue {
+        field,
+        value: value.clone(),
+        message: error.to_string(),
+    })?;
+
+    Ok(U256::from_big_endian(&bytes))
 }
 
 fn decode_hex_bytes(
@@ -369,4 +466,7 @@ pub enum RemoteStateProviderError {
         value: String,
         message: String,
     },
+
+    #[error("remote state rpc address encode failed: {message}")]
+    Address { message: String },
 }

@@ -29,6 +29,7 @@ pub(crate) enum StateReadRequest {
     NativePowBaseReward,
     NativeTotalBurnt1559,
     NativeBaseFeeProp,
+    NativeAccount { address: Address },
 
     EspaceAccount { address: Address },
     EspaceStorageSlot { address: Address, slot: H256 },
@@ -110,6 +111,12 @@ pub(crate) enum StateReadRequestError {
 fn from_native_key(
     storage_key: StorageKeyWithSpace<'_>,
 ) -> Result<StateReadRequest, StateReadRequestError> {
+    if let StorageKey::AccountKey(address_bytes) = storage_key.key {
+        return Ok(StateReadRequest::NativeAccount {
+            address: parse_address(address_bytes)?,
+        });
+    }
+
     if storage_key == <InterestRate as GlobalParamKey>::STORAGE_KEY {
         return Ok(StateReadRequest::NativeInterestRate);
     }

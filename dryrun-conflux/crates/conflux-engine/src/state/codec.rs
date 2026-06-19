@@ -2,7 +2,11 @@ use std::sync::Arc;
 
 use cfx_types::{Address, H256, U256};
 use keccak_hash::keccak;
-use primitives::{CodeInfo, account::EthereumAccount, storage::StorageValue};
+use primitives::{
+    CodeInfo,
+    account::{BasicAccount, EthereumAccount},
+    storage::StorageValue,
+};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -13,6 +17,35 @@ pub(crate) enum StateValueCodecError {
 
 pub(crate) fn encode_native_u256(value: U256) -> Box<[u8]> {
     rlp::encode(&value).to_vec().into_boxed_slice()
+}
+
+pub(crate) fn encode_native_basic_account(
+    balance: U256,
+    nonce: U256,
+    staking_balance: U256,
+    collateral_for_storage: U256,
+    accumulated_interest_return: U256,
+) -> Option<Box<[u8]>> {
+    if balance.is_zero()
+        && nonce.is_zero()
+        && staking_balance.is_zero()
+        && collateral_for_storage.is_zero()
+        && accumulated_interest_return.is_zero()
+    {
+        return None;
+    }
+
+    Some(
+        rlp::encode(&BasicAccount {
+            balance,
+            nonce,
+            staking_balance,
+            collateral_for_storage,
+            accumulated_interest_return,
+        })
+        .to_vec()
+        .into_boxed_slice(),
+    )
 }
 
 // eSpace storage slots are encoded as StorageValue with no owner.

@@ -3,8 +3,9 @@ mod provider;
 mod request;
 
 pub use self::provider::{
-    EspaceRpcBlock, HttpEspaceProvider, NativePoSEconomics, NativeStorageCollateralInfo,
-    NativeSupplyInfo, NativeVoteParamsInfo, RemoteStateProvider, RemoteStateProviderError,
+    EspaceRpcBlock, HttpEspaceProvider, NativePoSEconomics, NativeRpcBlock,
+    NativeStorageCollateralInfo, NativeSupplyInfo, NativeVoteParamsInfo, RemoteStateProvider,
+    RemoteStateProviderError,
 };
 
 use std::{
@@ -23,7 +24,8 @@ use crate::state::codec::encode_espace_account;
 
 use self::{
     codec::{
-        StateValueCodecError, encode_espace_code, encode_espace_storage_slot, encode_native_u256,
+        StateValueCodecError, encode_espace_code, encode_espace_storage_slot,
+        encode_native_basic_account, encode_native_u256,
     },
     request::{StateReadRequest, StateReadRequestError},
 };
@@ -157,7 +159,25 @@ impl RpcBackedStorage {
             StateReadRequest::NativePowBaseReward => self.fetch_native_pow_base_reward(),
             StateReadRequest::NativeTotalBurnt1559 => self.fetch_native_total_burnt_1559(),
             StateReadRequest::NativeBaseFeeProp => self.fetch_native_base_fee_prop(),
+            StateReadRequest::NativeAccount { address } => self.fetch_native_account(*address),
         }
+    }
+
+    fn fetch_native_account(&self, address: Address) -> StorageResult<Option<Box<[u8]>>> {
+        let epoch = self.snapshot.native_epoch.as_str();
+
+        let account = self
+            .provider
+            .get_native_account(epoch, address)
+            .map_err(|error| self.provider_error("get_native_account", error))?;
+
+        Ok(encode_native_basic_account(
+            account.balance,
+            account.nonce,
+            account.staking_balance,
+            account.collateral_for_storage,
+            account.accumulated_interest_return,
+        ))
     }
 
     fn fetch_native_pow_base_reward(&self) -> StorageResult<Option<Box<[u8]>>> {

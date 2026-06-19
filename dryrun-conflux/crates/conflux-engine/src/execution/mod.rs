@@ -1,6 +1,6 @@
 use cfx_execute_helper::estimation::{EstimateExt, EstimateRequest, EstimationContext};
 use cfx_executor::{
-    executive::ExecutionOutcome,
+    executive::{ExecutionOutcome, ExecutiveContext, TransactOptions},
     machine::{Machine, VmFactory},
     state::State,
 };
@@ -12,13 +12,13 @@ use std::sync::Arc;
 use cfx_types::{Address, AddressSpaceUtil, H256, SpaceMap, U256};
 
 use crate::state::{
-    ConfluxStateSnapshot, EspaceRpcBlock, RemoteStateProvider, RpcBackedStorage, new_state_db,
+    ConfluxStateSnapshot, EspaceRpcBlock, NativeRpcBlock, RemoteStateProvider, RpcBackedStorage,
+    new_state_db,
 };
 
 use cfx_parameters::consensus::TRANSACTION_DEFAULT_EPOCH_BOUND;
 use primitives::{BlockNumber, SignedTransaction, transaction::EthereumTransaction};
 
-use cfx_rpc_cfx_types::Block as NativeRpcBlock;
 use thiserror::Error;
 
 mod params;
@@ -109,6 +109,10 @@ pub struct VirtualCallInput {
     pub estimate_request: VirtualCallEstimateRequestInput,
 }
 
+pub struct TransactionExecutionInput {
+    pub block_context: VirtualCallBlockContextInput,
+    pub transaction: VirtualCallTransactionInput,
+}
 pub fn build_virtual_call_native_pivot_block_input(
     block: NativeRpcBlock,
 ) -> Result<VirtualCallNativePivotBlockInput, VirtualCallBlockContextError> {
@@ -214,7 +218,6 @@ pub fn build_virtual_call_estimate_request(
         has_gas_price: input.has_gas_price,
         has_nonce: input.has_nonce,
         has_storage_limit: false, // eSpace eth_call path does not use storage_limit.
-        collect_access_list: input.collect_access_list,
     }
 }
 
@@ -239,6 +242,29 @@ pub fn execute_virtual_call(
     let mut context = EstimationContext::new(state, &env, machine, &spec);
 
     context.transact_virtual(tx, request)
+}
+
+pub fn execute_transaction(
+    state: &mut State,
+    machine: &Machine,
+    input: TransactionExecutionInput,
+) -> StateDbResult<ExecutionOutcome> {
+    let tx = build_virtual_call_transaction(input.transaction);
+    let mut env = build_virtual_call_env(machine, state, &tx, input.block_context);
+    let spec = build_virtual_call_spec(machine, &env);
+
+    env.transaction_hash = tx.hash();
+
+    let outcome = ExecutiveContext::new(state, &env, machine, &spec)
+        .transact(&tx, TransactOptions::default())?;
+
+    state.update_state_post_tx_execution(!spec.cip645.fix_eip1153);
+
+    if let Some(burnt_fee) = outcome.try_as_executed().and_then(|e| e.burnt_fee) {
+        state.burn_by_cip1559(burnt_fee);
+    }
+
+    Ok(outcome)
 }
 
 fn required_block_number(value: Option<U256>) -> Result<BlockNumber, VirtualCallBlockContextError> {
