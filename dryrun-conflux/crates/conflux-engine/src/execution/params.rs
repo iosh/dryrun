@@ -26,8 +26,17 @@ pub fn pinned_mainnet_common_params() -> CommonParams {
     const HYDRA_TRANSITION_NUMBER: u64 = 92_060_600;
     const HYDRA_TRANSITION_HEIGHT: u64 = 36_935_000;
     const CIP43_INIT_END_NUMBER: u64 = 92_751_800;
-
-    let cip112_transition_height = *CIP112_TRANSITION_HEIGHT.get_or_init(|| u64::MAX);
+    const DAO_VOTE_TRANSITION_NUMBER: u64 = 133_800_000;
+    const DAO_VOTE_TRANSITION_HEIGHT: u64 = 56_800_000;
+    const SIGMA_FIX_TRANSITION_NUMBER: u64 = 137_740_000;
+    const BURN_COLLATERAL_TRANSITION_NUMBER: u64 = 188_900_000;
+    const CIP112_TRANSITION_HEIGHT_DEFAULT: u64 = 79_050_000;
+    const BASE_FEE_BURN_TRANSITION_NUMBER: u64 = 247_480_000;
+    const BASE_FEE_BURN_TRANSITION_HEIGHT: u64 = 101_900_000;
+    const C2_FIX_TRANSITION_HEIGHT: u64 = 118_580_000;
+    const EOA_CODE_TRANSITION_HEIGHT: u64 = 129_680_000;
+    let cip112_transition_height =
+        *CIP112_TRANSITION_HEIGHT.get_or_init(|| CIP112_TRANSITION_HEIGHT_DEFAULT);
 
     let mut params = CommonParams::default();
 
@@ -64,40 +73,40 @@ pub fn pinned_mainnet_common_params() -> CommonParams {
     params.transition_heights.cip90a = HYDRA_TRANSITION_HEIGHT;
     params.transition_numbers.cip90b = HYDRA_TRANSITION_NUMBER;
 
-    params.transition_numbers.cip94n = u64::MAX;
-    params.transition_heights.cip94h = u64::MAX;
-    params.transition_numbers.cip97 = u64::MAX;
-    params.transition_numbers.cip98 = u64::MAX;
-    params.transition_numbers.cip105 = u64::MAX;
-    params.transition_numbers.cip_sigma_fix = u64::MAX;
-    params.transition_numbers.cip107 = u64::MAX;
+    params.transition_numbers.cip94n = DAO_VOTE_TRANSITION_NUMBER;
+    params.transition_heights.cip94h = DAO_VOTE_TRANSITION_HEIGHT;
+    params.transition_numbers.cip97 = DAO_VOTE_TRANSITION_NUMBER;
+    params.transition_numbers.cip98 = DAO_VOTE_TRANSITION_NUMBER;
+    params.transition_numbers.cip105 = DAO_VOTE_TRANSITION_NUMBER;
+    params.transition_numbers.cip_sigma_fix = SIGMA_FIX_TRANSITION_NUMBER;
+    params.transition_numbers.cip107 = BURN_COLLATERAL_TRANSITION_NUMBER;
     params.transition_heights.cip112 = cip112_transition_height;
-    params.transition_numbers.cip118 = u64::MAX;
-    params.transition_numbers.cip119 = u64::MAX;
+    params.transition_numbers.cip118 = BURN_COLLATERAL_TRANSITION_NUMBER;
+    params.transition_numbers.cip119 = BURN_COLLATERAL_TRANSITION_NUMBER;
 
-    params.transition_numbers.cip131 = u64::MAX;
-    params.transition_numbers.cip132 = u64::MAX;
-    params.transition_numbers.cip133b = u64::MAX;
-    params.transition_numbers.cip137 = u64::MAX;
-    params.transition_numbers.cancun_opcodes = u64::MAX;
-    params.transition_numbers.cip144 = u64::MAX;
-    params.transition_numbers.cip145 = u64::MAX;
+    params.transition_numbers.cip131 = BASE_FEE_BURN_TRANSITION_NUMBER;
+    params.transition_numbers.cip132 = BASE_FEE_BURN_TRANSITION_NUMBER;
+    params.transition_numbers.cip133b = BASE_FEE_BURN_TRANSITION_NUMBER;
+    params.transition_numbers.cip137 = BASE_FEE_BURN_TRANSITION_NUMBER;
+    params.transition_numbers.cancun_opcodes = BASE_FEE_BURN_TRANSITION_NUMBER;
+    params.transition_numbers.cip144 = BASE_FEE_BURN_TRANSITION_NUMBER;
+    params.transition_numbers.cip145 = BASE_FEE_BURN_TRANSITION_NUMBER;
 
-    params.transition_heights.cip130 = u64::MAX;
-    params.transition_heights.cip133e = u64::MAX;
-    params.transition_heights.cip1559 = u64::MAX;
-    params.transition_heights.cip150 = u64::MAX;
-    params.transition_heights.cip151 = u64::MAX;
-    params.transition_heights.cip152 = u64::MAX;
-    params.transition_heights.cip154 = u64::MAX;
-    params.transition_heights.cip7702 = u64::MAX;
-    params.transition_heights.cip645 = u64::MAX;
+    params.transition_heights.cip130 = BASE_FEE_BURN_TRANSITION_HEIGHT;
+    params.transition_heights.cip133e = BASE_FEE_BURN_TRANSITION_HEIGHT;
+    params.transition_heights.cip1559 = BASE_FEE_BURN_TRANSITION_HEIGHT;
+    params.transition_heights.cip150 = EOA_CODE_TRANSITION_HEIGHT;
+    params.transition_heights.cip151 = EOA_CODE_TRANSITION_HEIGHT;
+    params.transition_heights.cip152 = EOA_CODE_TRANSITION_HEIGHT;
+    params.transition_heights.cip154 = EOA_CODE_TRANSITION_HEIGHT;
+    params.transition_heights.cip7702 = EOA_CODE_TRANSITION_HEIGHT;
+    params.transition_heights.cip645 = EOA_CODE_TRANSITION_HEIGHT;
     params.transition_heights.align_evm = u64::MAX;
-    params.transition_heights.eip2935 = u64::MAX;
-    params.transition_heights.eip2537 = u64::MAX;
-    params.transition_heights.eip7623 = u64::MAX;
-    params.transition_heights.cip_c2_fix = u64::MAX;
-    params.transition_heights.cip145_fix = u64::MAX;
+    params.transition_heights.eip2935 = EOA_CODE_TRANSITION_HEIGHT;
+    params.transition_heights.eip2537 = EOA_CODE_TRANSITION_HEIGHT;
+    params.transition_heights.eip7623 = EOA_CODE_TRANSITION_HEIGHT;
+    params.transition_heights.cip_c2_fix = C2_FIX_TRANSITION_HEIGHT;
+    params.transition_heights.cip145_fix = EOA_CODE_TRANSITION_HEIGHT;
     params.transition_heights.cip166 = u64::MAX;
 
     params
