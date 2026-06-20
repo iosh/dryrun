@@ -14,7 +14,6 @@ cfx-internal-common = { git = "https://github.com/iosh/conflux-rust.git", branch
 cfx-parameters = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-addr = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 
-cfx-execute-helper = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-executor = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-vm-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 
