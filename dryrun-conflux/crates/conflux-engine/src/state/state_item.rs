@@ -5,7 +5,6 @@ use cfx_statedb::global_params::{
     GlobalParamKey, InterestRate, LastDistributeBlock, PowBaseReward, TotalBurnt1559,
     TotalEvmToken, TotalIssued, TotalPosStaking, TotalStaking, TotalStorage, UsedStoragePoints,
 };
-
 use cfx_types::{Address, H256, Space};
 use primitives::{StorageKey, StorageKeyWithSpace};
 use thiserror::Error;
@@ -14,37 +13,46 @@ const ADDRESS_BYTES: usize = StorageKeyWithSpace::ACCOUNT_BYTES;
 const HASH_BYTES: usize = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StateReadRequest {
-    NativeTotalIssued,
-    NativeTotalStaking,
-    NativeInterestRate,
-    NativeTotalEvmToken,
-    NativeTotalStorage,
-    NativeUsedStoragePoints,
-    NativeConvertedStoragePoints,
-    NativeAccumulateInterestRate,
-    NativeTotalPosStaking,
-    NativeDistributablePosInterest,
-    NativeLastDistributeBlock,
-    NativePowBaseReward,
-    NativeTotalBurnt1559,
-    NativeBaseFeeProp,
-    NativeAccount { address: Address },
-
-    EspaceAccount { address: Address },
-    EspaceStorageSlot { address: Address, slot: H256 },
-    EspaceCode { address: Address, code_hash: H256 },
+pub(crate) enum StateItem {
+    Native(NativeStateItem),
+    Espace(EspaceStateItem),
 }
 
-impl StateReadRequest {
+impl StateItem {
     pub(crate) fn from_storage_key(
         storage_key: StorageKeyWithSpace<'_>,
-    ) -> Result<Self, StateReadRequestError> {
+    ) -> Result<Self, StateItemError> {
         match storage_key.space {
-            Space::Ethereum => from_espace_key(storage_key.key),
-            Space::Native => from_native_key(storage_key),
+            Space::Ethereum => from_espace_key(storage_key.key).map(Self::Espace),
+            Space::Native => from_native_key(storage_key).map(Self::Native),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NativeStateItem {
+    TotalIssued,
+    TotalStaking,
+    InterestRate,
+    TotalEvmToken,
+    TotalStorage,
+    UsedStoragePoints,
+    ConvertedStoragePoints,
+    AccumulateInterestRate,
+    TotalPosStaking,
+    DistributablePosInterest,
+    LastDistributeBlock,
+    PowBaseReward,
+    TotalBurnt1559,
+    BaseFeeProp,
+    Account { address: Address },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EspaceStateItem {
+    Account { address: Address },
+    StorageSlot { address: Address, slot: H256 },
+    Code { address: Address, code_hash: H256 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -95,7 +103,7 @@ impl fmt::Display for StorageKeyKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub(crate) enum StateReadRequestError {
+pub(crate) enum StateItemError {
     #[error("unsupported native state key")]
     UnsupportedNativeKey,
     #[error("unsupported eSpace storage key kind: {kind}")]
@@ -110,99 +118,100 @@ pub(crate) enum StateReadRequestError {
 
 fn from_native_key(
     storage_key: StorageKeyWithSpace<'_>,
-) -> Result<StateReadRequest, StateReadRequestError> {
+) -> Result<NativeStateItem, StateItemError> {
     if let StorageKey::AccountKey(address_bytes) = storage_key.key {
-        return Ok(StateReadRequest::NativeAccount {
+        return Ok(NativeStateItem::Account {
             address: parse_address(address_bytes)?,
         });
     }
 
     if storage_key == <InterestRate as GlobalParamKey>::STORAGE_KEY {
-        return Ok(StateReadRequest::NativeInterestRate);
+        return Ok(NativeStateItem::InterestRate);
     }
 
     if storage_key == <AccumulateInterestRate as GlobalParamKey>::STORAGE_KEY {
-        return Ok(StateReadRequest::NativeAccumulateInterestRate);
+        return Ok(NativeStateItem::AccumulateInterestRate);
     }
 
     if storage_key == <TotalIssued as GlobalParamKey>::STORAGE_KEY {
-        return Ok(StateReadRequest::NativeTotalIssued);
+        return Ok(NativeStateItem::TotalIssued);
     }
 
     if storage_key == <TotalStaking as GlobalParamKey>::STORAGE_KEY {
-        return Ok(StateReadRequest::NativeTotalStaking);
+        return Ok(NativeStateItem::TotalStaking);
     }
 
     if storage_key == <TotalEvmToken as GlobalParamKey>::STORAGE_KEY {
-        return Ok(StateReadRequest::NativeTotalEvmToken);
+        return Ok(NativeStateItem::TotalEvmToken);
     }
 
     if storage_key == <TotalStorage as GlobalParamKey>::STORAGE_KEY {
-        return Ok(StateReadRequest::NativeTotalStorage);
+        return Ok(NativeStateItem::TotalStorage);
     }
 
     if storage_key == <UsedStoragePoints as GlobalParamKey>::STORAGE_KEY {
-        return Ok(StateReadRequest::NativeUsedStoragePoints);
+        return Ok(NativeStateItem::UsedStoragePoints);
     }
 
     if storage_key == <ConvertedStoragePoints as GlobalParamKey>::STORAGE_KEY {
-        return Ok(StateReadRequest::NativeConvertedStoragePoints);
+        return Ok(NativeStateItem::ConvertedStoragePoints);
     }
 
     if storage_key == <TotalPosStaking as GlobalParamKey>::STORAGE_KEY {
-        return Ok(StateReadRequest::NativeTotalPosStaking);
+        return Ok(NativeStateItem::TotalPosStaking);
     }
 
     if storage_key == <DistributablePoSInterest as GlobalParamKey>::STORAGE_KEY {
-        return Ok(StateReadRequest::NativeDistributablePosInterest);
+        return Ok(NativeStateItem::DistributablePosInterest);
     }
 
     if storage_key == <LastDistributeBlock as GlobalParamKey>::STORAGE_KEY {
-        return Ok(StateReadRequest::NativeLastDistributeBlock);
+        return Ok(NativeStateItem::LastDistributeBlock);
     }
 
     if storage_key == <PowBaseReward as GlobalParamKey>::STORAGE_KEY {
-        return Ok(StateReadRequest::NativePowBaseReward);
+        return Ok(NativeStateItem::PowBaseReward);
     }
 
     if storage_key == <TotalBurnt1559 as GlobalParamKey>::STORAGE_KEY {
-        return Ok(StateReadRequest::NativeTotalBurnt1559);
+        return Ok(NativeStateItem::TotalBurnt1559);
     }
 
     if storage_key == <BaseFeeProp as GlobalParamKey>::STORAGE_KEY {
-        return Ok(StateReadRequest::NativeBaseFeeProp);
+        return Ok(NativeStateItem::BaseFeeProp);
     }
 
-    Err(StateReadRequestError::UnsupportedNativeKey)
+    Err(StateItemError::UnsupportedNativeKey)
 }
-fn from_espace_key(key: StorageKey<'_>) -> Result<StateReadRequest, StateReadRequestError> {
+
+fn from_espace_key(key: StorageKey<'_>) -> Result<EspaceStateItem, StateItemError> {
     match key {
-        StorageKey::AccountKey(address_bytes) => Ok(StateReadRequest::EspaceAccount {
+        StorageKey::AccountKey(address_bytes) => Ok(EspaceStateItem::Account {
             address: parse_address(address_bytes)?,
         }),
         StorageKey::StorageKey {
             address_bytes,
             storage_key,
-        } => Ok(StateReadRequest::EspaceStorageSlot {
+        } => Ok(EspaceStateItem::StorageSlot {
             address: parse_address(address_bytes)?,
             slot: parse_storage_slot(storage_key)?,
         }),
         StorageKey::CodeKey {
             address_bytes,
             code_hash_bytes,
-        } => Ok(StateReadRequest::EspaceCode {
+        } => Ok(EspaceStateItem::Code {
             address: parse_address(address_bytes)?,
             code_hash: parse_code_hash(code_hash_bytes)?,
         }),
-        other => Err(StateReadRequestError::UnsupportedEspaceKey {
+        other => Err(StateItemError::UnsupportedEspaceKey {
             kind: StorageKeyKind::from_storage_key(other),
         }),
     }
 }
 
-fn parse_address(address_bytes: &[u8]) -> Result<Address, StateReadRequestError> {
+fn parse_address(address_bytes: &[u8]) -> Result<Address, StateItemError> {
     if address_bytes.len() != ADDRESS_BYTES {
-        return Err(StateReadRequestError::InvalidAddressLength {
+        return Err(StateItemError::InvalidAddressLength {
             actual: address_bytes.len(),
         });
     }
@@ -210,9 +219,9 @@ fn parse_address(address_bytes: &[u8]) -> Result<Address, StateReadRequestError>
     Ok(Address::from_slice(address_bytes))
 }
 
-fn parse_storage_slot(slot_bytes: &[u8]) -> Result<H256, StateReadRequestError> {
+fn parse_storage_slot(slot_bytes: &[u8]) -> Result<H256, StateItemError> {
     if slot_bytes.len() != HASH_BYTES {
-        return Err(StateReadRequestError::InvalidEspaceStorageSlotLength {
+        return Err(StateItemError::InvalidEspaceStorageSlotLength {
             actual: slot_bytes.len(),
         });
     }
@@ -220,9 +229,9 @@ fn parse_storage_slot(slot_bytes: &[u8]) -> Result<H256, StateReadRequestError> 
     Ok(H256::from_slice(slot_bytes))
 }
 
-fn parse_code_hash(code_hash_bytes: &[u8]) -> Result<H256, StateReadRequestError> {
+fn parse_code_hash(code_hash_bytes: &[u8]) -> Result<H256, StateItemError> {
     if code_hash_bytes.len() != HASH_BYTES {
-        return Err(StateReadRequestError::InvalidEspaceCodeHashLength {
+        return Err(StateItemError::InvalidEspaceCodeHashLength {
             actual: code_hash_bytes.len(),
         });
     }

@@ -10,7 +10,7 @@ use primitives::{
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub(crate) enum StateValueCodecError {
+pub(crate) enum StateValueEncodingError {
     #[error("eSpace code hash mismatch: expected {expected:?}, got {actual:?}")]
     EspaceCodeHashMismatch { expected: H256, actual: H256 },
 }
@@ -55,16 +55,15 @@ pub(crate) fn encode_espace_storage_slot(value: U256) -> Box<[u8]> {
         .into_boxed_slice()
 }
 
-// eSpace code values follow the upstream CodeInfo RLP layout.
-// CodeKey already carries the expected hash, so we verify the code bytes first.
-
+// eSpace code values follow the upstream CodeInfo RLP layout. CodeKey already
+// carries the expected hash, so verify the code bytes before encoding.
 pub(crate) fn encode_espace_code(
     expected_code_hash: H256,
     code: Vec<u8>,
-) -> Result<Box<[u8]>, StateValueCodecError> {
+) -> Result<Box<[u8]>, StateValueEncodingError> {
     let actual_code_hash = keccak(&code);
     if actual_code_hash != expected_code_hash {
-        return Err(StateValueCodecError::EspaceCodeHashMismatch {
+        return Err(StateValueEncodingError::EspaceCodeHashMismatch {
             expected: expected_code_hash,
             actual: actual_code_hash,
         });

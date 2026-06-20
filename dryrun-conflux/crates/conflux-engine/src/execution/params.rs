@@ -14,11 +14,11 @@ use cfx_parameters::{
 use cfx_types::{AllChainID, SpaceMap, U256};
 use primitives::block_header::CIP112_TRANSITION_HEIGHT;
 
-/// Pinned mainnet params must stay aligned with the current upstream commit.
+/// Mainnet params mirrored from the current upstream commit.
 ///
 /// Upstream keeps some config state outside `CommonParams` itself, so we mirror
 /// that here instead of relying on `cfx_config`.
-pub fn pinned_mainnet_common_params() -> CommonParams {
+pub fn mainnet_common_params() -> CommonParams {
     const MAINNET_NATIVE_CHAIN_ID: u32 = 1029;
     const MAINNET_EVM_CHAIN_ID: u32 = 1030;
     const MAINNET_NETWORK_ID: u64 = 1029;
