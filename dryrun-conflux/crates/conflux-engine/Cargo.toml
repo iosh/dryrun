@@ -6,6 +6,7 @@ edition = { workspace = true }
 [dependencies]
 jsonrpsee = { workspace = true, features = ["http-client"] }
 hex = "0.4"
+cfx-bytes = { workspace = true }
 cfx-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 primitives = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-storage = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }

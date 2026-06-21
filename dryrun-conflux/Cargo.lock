@@ -1584,6 +1584,7 @@ name = "conflux-engine"
 version = "0.1.0"
 dependencies = [
  "cfx-addr",
+ "cfx-bytes",
  "cfx-executor",
  "cfx-internal-common",
  "cfx-parameters",
