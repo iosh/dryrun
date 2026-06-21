@@ -1,0 +1,11 @@
+[package]
+name = "conflux-service"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+cfx-bytes = { workspace = true }
+cfx-types = { workspace = true }
+conflux-engine = { workspace = true }
+primitives = { workspace = true }
+thiserror = { workspace = true }

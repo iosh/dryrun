@@ -1604,6 +1604,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "conflux-service"
+version = "0.1.0"
+dependencies = [
+ "cfx-bytes",
+ "cfx-types",
+ "conflux-engine",
+ "primitives",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "console"
 version = "0.15.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"

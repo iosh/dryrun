@@ -4,20 +4,14 @@ use thiserror::Error;
 
 use crate::state::{EspaceRpcBlock, NativeRpcBlock};
 
-// Public block RPC does not expose the upstream-resolved PoS view/decision height.
-#[derive(Debug, Clone, Copy)]
+// Used by Native Context / PoS internal contracts. Upstream derives these
+// values from a pivot block's PoS reference; ordinary eSpace execution does not
+// depend on them, so the RPC-backed path keeps them optional until that
+// resolution is implemented.
+#[derive(Debug, Clone, Copy, Default)]
 pub struct ExecutionConsensusContext {
     pub pos_view: Option<u64>,
     pub finalized_epoch: Option<u64>,
-}
-
-impl ExecutionConsensusContext {
-    pub fn unavailable() -> Self {
-        Self {
-            pos_view: None,
-            finalized_epoch: None,
-        }
-    }
 }
 
 // Native and eSpace base fees come from different public RPC block views.
