@@ -13,6 +13,15 @@ pub enum ConfluxEngineError {
     #[error(transparent)]
     BlockContext(#[from] ExecutionBlockContextError),
 
+    #[error("block context error: {message}")]
+    InvalidBlockContext { message: String },
+
+    #[error("invalid eSpace transaction: {message}")]
+    InvalidTransaction { message: String },
+
+    #[error("unsupported eSpace transaction type: {tx_type}")]
+    UnsupportedTransactionType { tx_type: &'static str },
+
     #[error(transparent)]
     RemoteState(#[from] RemoteStateProviderError),
 

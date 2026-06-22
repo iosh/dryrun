@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use cfx_parameters::staking::DRIPS_PER_STORAGE_COLLATERAL_UNIT;
+use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;
+use cfx_rpc_eth_types::BlockId as EthBlockId;
 use cfx_storage::{Error as StorageError, Result as StorageResult};
 use cfx_types::{Address, H256, U256};
 
@@ -74,12 +76,12 @@ impl RemoteStateReader {
         }
     }
 
-    fn native_epoch(&self) -> &str {
-        self.state_point.native_epoch.as_str()
+    fn native_epoch(&self) -> CfxEpochNumber {
+        self.state_point.native_epoch.clone()
     }
 
-    fn espace_block_number(&self) -> &str {
-        self.state_point.espace_block_number.as_str()
+    fn espace_block(&self) -> EthBlockId {
+        self.state_point.espace_block
     }
 
     fn fetch_native_account(&self, address: Address) -> StorageResult<StateRead> {
@@ -234,21 +236,21 @@ impl RemoteStateReader {
     }
 
     fn fetch_espace_account(&self, address: Address) -> StorageResult<StateRead> {
-        let block_number = self.espace_block_number();
+        let block = self.espace_block();
 
         let balance = self
             .provider
-            .get_espace_balance(block_number, address)
+            .get_espace_balance(block, address)
             .map_err(|error| self.provider_error("get_espace_balance", error))?;
 
         let nonce = self
             .provider
-            .get_espace_transaction_count(block_number, address)
+            .get_espace_transaction_count(block, address)
             .map_err(|error| self.provider_error("get_espace_transaction_count", error))?;
 
         let code = self
             .provider
-            .get_espace_code_at(block_number, address)
+            .get_espace_code_at(block, address)
             .map_err(|error| self.provider_error("get_espace_code_at", error))?;
 
         Ok(encode_espace_account(balance, nonce, code))
@@ -257,7 +259,7 @@ impl RemoteStateReader {
     fn fetch_espace_storage_slot(&self, address: Address, slot: H256) -> StorageResult<StateRead> {
         let value = self
             .provider
-            .get_espace_storage_at(self.espace_block_number(), address, slot)
+            .get_espace_storage_at(self.espace_block(), address, slot)
             .map_err(|error| self.provider_error("get_espace_storage_at", error))?;
 
         Ok(value.map(encode_espace_storage_slot))
@@ -270,7 +272,7 @@ impl RemoteStateReader {
     ) -> StorageResult<StateRead> {
         let code = self
             .provider
-            .get_espace_code_at(self.espace_block_number(), address)
+            .get_espace_code_at(self.espace_block(), address)
             .map_err(|error| self.provider_error("get_espace_code_at", error))?;
 
         if code.is_empty() {

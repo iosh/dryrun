@@ -1,6 +1,7 @@
 use std::future::IntoFuture;
 
-use cfx_rpc_cfx_types::RpcAddress;
+use cfx_rpc_cfx_types::{EpochNumber, RpcAddress};
+use cfx_rpc_eth_types::BlockId;
 use cfx_types::{Address, H256, U256};
 use jsonrpsee::{
     core::{client::ClientT, traits::ToRpcParams},
@@ -89,7 +90,7 @@ impl HttpConfluxStateProvider {
 impl RemoteStateProvider for HttpConfluxStateProvider {
     fn get_espace_storage_at(
         &self,
-        block_number: &str,
+        block_number: BlockId,
         address: Address,
         slot: H256,
     ) -> Result<Option<U256>, RemoteStateProviderError> {
@@ -108,7 +109,7 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
 
     fn get_espace_code_at(
         &self,
-        block_number: &str,
+        block_number: BlockId,
         address: Address,
     ) -> Result<Vec<u8>, RemoteStateProviderError> {
         let value: String =
@@ -119,7 +120,7 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
 
     fn get_espace_balance(
         &self,
-        block_number: &str,
+        block_number: BlockId,
         address: Address,
     ) -> Result<U256, RemoteStateProviderError> {
         self.espace_rpc_request("eth_getBalance", rpc_params![address, block_number])
@@ -127,7 +128,7 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
 
     fn get_espace_transaction_count(
         &self,
-        block_number: &str,
+        block_number: BlockId,
         address: Address,
     ) -> Result<U256, RemoteStateProviderError> {
         self.espace_rpc_request(
@@ -136,52 +137,55 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
         )
     }
 
-    fn get_native_interest_rate(&self, epoch: &str) -> Result<U256, RemoteStateProviderError> {
+    fn get_native_interest_rate(
+        &self,
+        epoch: EpochNumber,
+    ) -> Result<U256, RemoteStateProviderError> {
         self.native_rpc_request("cfx_getInterestRate", rpc_params![epoch])
     }
 
     fn get_native_accumulate_interest_rate(
         &self,
-        epoch: &str,
+        epoch: EpochNumber,
     ) -> Result<U256, RemoteStateProviderError> {
         self.native_rpc_request("cfx_getAccumulateInterestRate", rpc_params![epoch])
     }
 
     fn get_native_supply_info(
         &self,
-        epoch: &str,
+        epoch: EpochNumber,
     ) -> Result<NativeSupplyInfo, RemoteStateProviderError> {
         self.native_rpc_request("cfx_getSupplyInfo", rpc_params![epoch])
     }
 
     fn get_native_collateral_info(
         &self,
-        epoch: &str,
+        epoch: EpochNumber,
     ) -> Result<NativeStorageCollateralInfo, RemoteStateProviderError> {
         self.native_rpc_request("cfx_getCollateralInfo", rpc_params![epoch])
     }
 
     fn get_native_pos_economics(
         &self,
-        epoch: &str,
+        epoch: EpochNumber,
     ) -> Result<NativePoSEconomics, RemoteStateProviderError> {
         self.native_rpc_request("cfx_getPoSEconomics", rpc_params![epoch])
     }
 
     fn get_native_vote_params(
         &self,
-        epoch: &str,
+        epoch: EpochNumber,
     ) -> Result<NativeVoteParamsInfo, RemoteStateProviderError> {
         self.native_rpc_request("cfx_getParamsFromVote", rpc_params![epoch])
     }
 
-    fn get_native_fee_burnt(&self, epoch: &str) -> Result<U256, RemoteStateProviderError> {
+    fn get_native_fee_burnt(&self, epoch: EpochNumber) -> Result<U256, RemoteStateProviderError> {
         self.native_rpc_request("cfx_getFeeBurnt", rpc_params![epoch])
     }
 
     fn get_native_account(
         &self,
-        epoch: &str,
+        epoch: EpochNumber,
         address: Address,
     ) -> Result<NativeRpcAccount, RemoteStateProviderError> {
         let address = RpcAddress::try_from_h160(address, self.config.chain.native_address_network)
@@ -192,7 +196,7 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
 
     fn get_native_block_by_epoch_number(
         &self,
-        epoch_number: &str,
+        epoch_number: EpochNumber,
     ) -> Result<Option<NativeRpcBlock>, RemoteStateProviderError> {
         self.native_rpc_request(
             "cfx_getBlockByEpochNumber",
@@ -202,7 +206,7 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
 
     fn get_espace_block_by_number(
         &self,
-        block_number: &str,
+        block_number: BlockId,
     ) -> Result<Option<EspaceRpcBlock>, RemoteStateProviderError> {
         self.espace_rpc_request("eth_getBlockByNumber", rpc_params![block_number, false])
     }

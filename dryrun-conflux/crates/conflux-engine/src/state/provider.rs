@@ -5,76 +5,81 @@ use crate::state::rpc_types::{
     EspaceRpcBlock, NativePoSEconomics, NativeRpcAccount, NativeRpcBlock,
     NativeStorageCollateralInfo, NativeSupplyInfo, NativeVoteParamsInfo,
 };
+use cfx_rpc_cfx_types::EpochNumber;
+use cfx_rpc_eth_types::BlockId;
 
 pub trait RemoteStateProvider: Send + Sync {
     fn get_espace_storage_at(
         &self,
-        block_number: &str,
+        block: BlockId,
         address: Address,
         slot: H256,
     ) -> Result<Option<U256>, RemoteStateProviderError>;
 
     fn get_espace_code_at(
         &self,
-        block_number: &str,
+        block: BlockId,
         address: Address,
     ) -> Result<Vec<u8>, RemoteStateProviderError>;
 
     fn get_espace_balance(
         &self,
-        block_number: &str,
+        block: BlockId,
         address: Address,
     ) -> Result<U256, RemoteStateProviderError>;
 
     fn get_espace_transaction_count(
         &self,
-        block_number: &str,
+        block: BlockId,
         address: Address,
     ) -> Result<U256, RemoteStateProviderError>;
 
-    fn get_native_interest_rate(&self, epoch: &str) -> Result<U256, RemoteStateProviderError>;
+    fn get_native_interest_rate(
+        &self,
+        epoch: EpochNumber,
+    ) -> Result<U256, RemoteStateProviderError>;
 
     fn get_native_accumulate_interest_rate(
         &self,
-        epoch: &str,
+        epoch: EpochNumber,
     ) -> Result<U256, RemoteStateProviderError>;
 
     fn get_native_supply_info(
         &self,
-        epoch: &str,
+        epoch: EpochNumber,
     ) -> Result<NativeSupplyInfo, RemoteStateProviderError>;
 
     fn get_native_collateral_info(
         &self,
-        epoch: &str,
+        epoch: EpochNumber,
     ) -> Result<NativeStorageCollateralInfo, RemoteStateProviderError>;
 
     fn get_native_pos_economics(
         &self,
-        epoch: &str,
+        epoch: EpochNumber,
     ) -> Result<NativePoSEconomics, RemoteStateProviderError>;
 
     fn get_native_vote_params(
         &self,
-        epoch: &str,
+        epoch: EpochNumber,
     ) -> Result<NativeVoteParamsInfo, RemoteStateProviderError>;
 
-    fn get_native_fee_burnt(&self, epoch: &str) -> Result<U256, RemoteStateProviderError>;
+    fn get_native_fee_burnt(&self, epoch: EpochNumber) -> Result<U256, RemoteStateProviderError>;
 
     fn get_native_account(
         &self,
-        epoch: &str,
+        epoch: EpochNumber,
         address: Address,
     ) -> Result<NativeRpcAccount, RemoteStateProviderError>;
 
     fn get_native_block_by_epoch_number(
         &self,
-        epoch_number: &str,
+        epoch_number: EpochNumber,
     ) -> Result<Option<NativeRpcBlock>, RemoteStateProviderError>;
 
     fn get_espace_block_by_number(
         &self,
-        block_number: &str,
+        block_number: BlockId,
     ) -> Result<Option<EspaceRpcBlock>, RemoteStateProviderError>;
 }
 

@@ -20,6 +20,7 @@ cfx-vm-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry
 
 cfx-rpc-cfx-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 
+cfx-rpc-eth-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 keccak-hash = "0.5"
 rlp = "0.4"
 serde = { version = "1", features = ["derive"] }

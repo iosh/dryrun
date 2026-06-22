@@ -1589,6 +1589,7 @@ dependencies = [
  "cfx-internal-common",
  "cfx-parameters",
  "cfx-rpc-cfx-types",
+ "cfx-rpc-eth-types",
  "cfx-statedb",
  "cfx-storage",
  "cfx-types",

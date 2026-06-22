@@ -1,5 +1,7 @@
 use cfx_bytes::Bytes;
+use cfx_executor::executive::{ExecutionError, ExecutionOutcome};
 use cfx_types::{H256, U256};
+use cfx_vm_types as vm;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EspaceExecutionStatus {
@@ -51,4 +53,78 @@ impl EspaceSimulation {
     pub fn into_execution(self) -> EspaceExecution {
         self.execution
     }
+}
+
+pub(crate) fn build_espace_execution(
+    chain_id: u32,
+    block: SimulatedBlock,
+    gas_limit: U256,
+    outcome: ExecutionOutcome,
+) -> EspaceExecution {
+    let failure = build_failure(&outcome);
+    let status = if failure.is_some() {
+        EspaceExecutionStatus::Failed
+    } else {
+        EspaceExecutionStatus::Success
+    };
+
+    let executed = outcome.try_into_executed();
+
+    EspaceExecution {
+        chain_id: u64::from(chain_id),
+        block,
+        status,
+        gas_used: executed
+            .as_ref()
+            .map(|executed| executed.gas_used)
+            .unwrap_or_else(U256::zero),
+        gas_limit,
+        gas_charged: executed
+            .as_ref()
+            .map(|executed| executed.gas_charged)
+            .unwrap_or_else(U256::zero),
+        fee: executed
+            .as_ref()
+            .map(|executed| executed.fee)
+            .unwrap_or_else(U256::zero),
+        burnt_fee: executed.as_ref().and_then(|executed| executed.burnt_fee),
+        output: executed.map(|executed| executed.output).unwrap_or_default(),
+        failure,
+    }
+}
+
+fn build_failure(outcome: &ExecutionOutcome) -> Option<EspaceExecutionFailure> {
+    match outcome {
+        ExecutionOutcome::Finished(_) => None,
+        ExecutionOutcome::ExecutionErrorBumpNonce(error, executed) => Some(
+            build_execution_error_failure(error, executed.output.as_ref()),
+        ),
+        ExecutionOutcome::NotExecutedDrop(_)
+        | ExecutionOutcome::NotExecutedToReconsiderPacking(_) => Some(EspaceExecutionFailure {
+            code: "TRANSACTION_NOT_EXECUTED".to_string(),
+            message: outcome.error_message(),
+            reason: None,
+        }),
+    }
+}
+
+fn build_execution_error_failure(error: &ExecutionError, output: &[u8]) -> EspaceExecutionFailure {
+    if error == &ExecutionError::VmError(vm::Error::Reverted) {
+        return EspaceExecutionFailure {
+            code: "REVERT".to_string(),
+            message: "execution reverted".to_string(),
+            reason: revert_reason(output),
+        };
+    }
+
+    EspaceExecutionFailure {
+        code: "EXECUTION_FAILED".to_string(),
+        message: format!("{error:?}"),
+        reason: None,
+    }
+}
+
+// TODO
+fn revert_reason(_output: &[u8]) -> Option<String> {
+    None
 }

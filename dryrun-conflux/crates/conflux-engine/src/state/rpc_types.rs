@@ -36,9 +36,10 @@ pub struct NativeVoteParamsInfo {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EspaceRpcBlock {
+    pub hash: H256,
+    pub number: U256,
     pub base_fee_per_gas: Option<U256>,
 }
-
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeRpcAccount {
