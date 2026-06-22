@@ -1,7 +1,5 @@
 use crate::interface as rpc;
 
-use super::primitives::{format_u64_quantity, format_u256_quantity};
-
 impl From<simulation_service::SimulateEvmTransactionOutput>
     for rpc::EvmSimulateTransactionResponse
 {
@@ -10,12 +8,12 @@ impl From<simulation_service::SimulateEvmTransactionOutput>
 
         Self {
             execution: rpc::Execution {
-                chain_id: format_u64_quantity(execution.chain_id),
+                chain_id: execution.chain_id,
                 block: execution.block.into(),
                 status: execution.status.into(),
-                gas_used: format_u64_quantity(execution.gas_used),
-                gas_limit: format_u64_quantity(execution.gas_limit),
-                output: format!("{:#x}", execution.output),
+                gas_used: execution.gas_used,
+                gas_limit: execution.gas_limit,
+                output: execution.output,
                 error: execution.failure.map(Into::into),
             },
             changes: changes.into_iter().map(Into::into).collect(),
@@ -26,8 +24,8 @@ impl From<simulation_service::SimulateEvmTransactionOutput>
 impl From<simulation_service::SimulatedBlock> for rpc::SimulatedBlock {
     fn from(block: simulation_service::SimulatedBlock) -> Self {
         Self {
-            number: format_u64_quantity(block.number),
-            hash: format!("{:#x}", block.hash),
+            number: block.number,
+            hash: block.hash,
         }
     }
 }
@@ -100,14 +98,14 @@ impl From<simulation_service::Collection> for rpc::Collection {
                 contract_address,
                 collection,
             } => Self::Erc721 {
-                contract_address: format!("{:#x}", contract_address),
+                contract_address,
                 collection: collection.map(Into::into),
             },
             simulation_service::Collection::Erc1155 {
                 contract_address,
                 collection,
             } => Self::Erc1155 {
-                contract_address: format!("{:#x}", contract_address),
+                contract_address,
                 collection: collection.map(Into::into),
             },
         }
@@ -124,7 +122,7 @@ impl From<simulation_service::Asset> for rpc::Asset {
                 contract_address,
                 display,
             } => Self::Erc20 {
-                contract_address: format!("{:#x}", contract_address),
+                contract_address,
                 display: display.map(Into::into),
             },
             simulation_service::Asset::Erc721 {
@@ -133,8 +131,8 @@ impl From<simulation_service::Asset> for rpc::Asset {
                 collection,
                 token,
             } => Self::Erc721 {
-                contract_address: format!("{:#x}", contract_address),
-                token_id: format_u256_quantity(token_id),
+                contract_address,
+                token_id,
                 collection: collection.map(Into::into),
                 token: token.map(Into::into),
             },
@@ -144,8 +142,8 @@ impl From<simulation_service::Asset> for rpc::Asset {
                 collection,
                 token,
             } => Self::Erc1155 {
-                contract_address: format!("{:#x}", contract_address),
-                token_id: format_u256_quantity(token_id),
+                contract_address,
+                token_id,
                 collection: collection.map(Into::into),
                 token: token.map(Into::into),
             },
@@ -158,30 +156,30 @@ impl From<simulation_service::Change> for rpc::Change {
         match change {
             simulation_service::Change::Transfer(change) => Self::Transfer {
                 asset: change.asset.into(),
-                from: format!("{:#x}", change.from),
-                to: format!("{:#x}", change.to),
-                amount: change.amount.map(format_u256_quantity),
+                from: change.from,
+                to: change.to,
+                amount: change.amount,
             },
             simulation_service::Change::Mint(change) => Self::Mint {
                 asset: change.asset.into(),
-                to: format!("{:#x}", change.to),
-                amount: change.amount.map(format_u256_quantity),
+                to: change.to,
+                amount: change.amount,
             },
             simulation_service::Change::Burn(change) => Self::Burn {
                 asset: change.asset.into(),
-                from: format!("{:#x}", change.from),
-                amount: change.amount.map(format_u256_quantity),
+                from: change.from,
+                amount: change.amount,
             },
             simulation_service::Change::Approval(change) => Self::Approval {
                 asset: change.asset.into(),
-                owner: format!("{:#x}", change.owner),
-                spender: format!("{:#x}", change.spender),
-                amount: change.amount.map(format_u256_quantity),
+                owner: change.owner,
+                spender: change.spender,
+                amount: change.amount,
             },
             simulation_service::Change::ApprovalForAll(change) => Self::ApprovalForAll {
                 collection: change.collection.into(),
-                owner: format!("{:#x}", change.owner),
-                operator: format!("{:#x}", change.operator),
+                owner: change.owner,
+                operator: change.operator,
                 approved: change.approved,
             },
         }
@@ -193,6 +191,7 @@ mod tests {
     use std::str::FromStr;
 
     use alloy::primitives::{Address, B256, Bytes, U256};
+    use serde_json::json;
 
     use crate::interface as rpc;
 
@@ -237,17 +236,20 @@ mod tests {
         };
 
         let response: rpc::EvmSimulateTransactionResponse = output.into();
-        assert_eq!(response.execution.chain_id, "0x1");
-        assert_eq!(response.execution.block.number, "0x1234");
-        assert_eq!(response.execution.gas_used, "0x5208");
-        assert_eq!(response.execution.output, "0x0102");
+        assert_eq!(response.execution.chain_id, 1);
+        assert_eq!(response.execution.block.number, 0x1234);
+        assert_eq!(response.execution.gas_used, 0x5208);
+        assert_eq!(
+            response.execution.output,
+            Bytes::from_str("0x0102").unwrap()
+        );
         assert_eq!(response.changes.len(), 1);
 
         let rpc::Change::Transfer { asset, amount, .. } = &response.changes[0] else {
             panic!("expected transfer change");
         };
 
-        assert_eq!(amount.as_deref(), Some("0xde0b6b3a7640000"));
+        assert_eq!(*amount, Some(U256::from(0xde0b6b3a7640000_u64)));
 
         let rpc::Asset::Erc20 { display, .. } = asset else {
             panic!("expected erc20 asset");
@@ -257,6 +259,16 @@ mod tests {
         assert_eq!(display.name.as_deref(), Some("USD Coin"));
         assert_eq!(display.symbol.as_deref(), Some("USDC"));
         assert_eq!(display.decimals, Some(6));
+
+        let serialized = serde_json::to_value(&response).expect("response should serialize");
+        assert_eq!(serialized["execution"]["chainId"], json!("0x1"));
+        assert_eq!(serialized["execution"]["block"]["number"], json!("0x1234"));
+        assert_eq!(serialized["execution"]["gasUsed"], json!("0x5208"));
+        assert_eq!(serialized["execution"]["output"], json!("0x0102"));
+        assert_eq!(
+            serialized["changes"][0]["amount"],
+            json!("0xde0b6b3a7640000")
+        );
     }
 
     #[test]
@@ -312,11 +324,18 @@ mod tests {
                     symbol: Some(symbol),
                 }),
                 token: None,
-            } if contract_address == "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                && token_id == "0x2a"
+            } if contract_address == &token
+                && token_id == &U256::from(42_u64)
                 && name == "Mock NFT Collection"
                 && symbol == "MNFT"
         ));
+
+        let serialized = serde_json::to_value(&response).expect("response should serialize");
+        assert_eq!(
+            serialized["changes"][0]["asset"]["contractAddress"],
+            json!("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+        assert_eq!(serialized["changes"][0]["asset"]["tokenId"], json!("0x2a"));
     }
 
     #[test]
@@ -419,9 +438,9 @@ mod tests {
         else {
             panic!("expected approval change");
         };
-        assert_eq!(rpc_owner, "0x1111111111111111111111111111111111111111");
-        assert_eq!(rpc_spender, "0x2222222222222222222222222222222222222222");
-        assert_eq!(amount.as_deref(), Some("0xa"));
+        assert_eq!(rpc_owner, &owner);
+        assert_eq!(rpc_spender, &spender);
+        assert_eq!(*amount, Some(U256::from(10_u64)));
         assert!(matches!(
             asset,
             rpc::Asset::Erc20 {
@@ -431,7 +450,7 @@ mod tests {
                     symbol: Some(symbol),
                     decimals: Some(6),
                 }),
-            } if contract_address == "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+            } if contract_address == &erc20
                 && name == "USD Coin"
                 && symbol == "USDC"
         ));
@@ -445,8 +464,8 @@ mod tests {
         else {
             panic!("expected approval for all change");
         };
-        assert_eq!(rpc_owner, "0x1111111111111111111111111111111111111111");
-        assert_eq!(rpc_operator, "0x3333333333333333333333333333333333333333");
+        assert_eq!(rpc_owner, &owner);
+        assert_eq!(rpc_operator, &operator);
         assert!(*approved);
         assert!(matches!(
             collection,
@@ -455,7 +474,22 @@ mod tests {
                 collection: Some(rpc::Erc1155CollectionDisplay {
                     name: Some(name),
                 }),
-            } if contract_address == "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" && name == "Collection"
+            } if contract_address == &erc1155 && name == "Collection"
         ));
+
+        let serialized = serde_json::to_value(&response).expect("response should serialize");
+        assert_eq!(
+            serialized["changes"][0]["owner"],
+            json!("0x1111111111111111111111111111111111111111")
+        );
+        assert_eq!(
+            serialized["changes"][0]["spender"],
+            json!("0x2222222222222222222222222222222222222222")
+        );
+        assert_eq!(serialized["changes"][0]["amount"], json!("0xa"));
+        assert_eq!(
+            serialized["changes"][1]["operator"],
+            json!("0x3333333333333333333333333333333333333333")
+        );
     }
 }

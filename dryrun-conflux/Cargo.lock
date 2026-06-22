@@ -2180,10 +2180,16 @@ name = "dryrun-conflux"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "cfx-bytes",
+ "cfx-rpc-eth-types",
+ "cfx-types",
  "conflux-engine",
+ "conflux-service",
+ "hex",
  "jsonrpsee",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",

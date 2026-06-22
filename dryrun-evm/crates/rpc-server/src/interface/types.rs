@@ -108,12 +108,15 @@ pub struct EvmSimulateTransactionResponse {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Execution {
-    pub chain_id: String,
+    #[serde(with = "quantity")]
+    pub chain_id: u64,
     pub block: SimulatedBlock,
     pub status: SimulationStatus,
-    pub gas_used: String,
-    pub gas_limit: String,
-    pub output: String,
+    #[serde(with = "quantity")]
+    pub gas_used: u64,
+    #[serde(with = "quantity")]
+    pub gas_limit: u64,
+    pub output: Bytes,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<ExecutionError>,
 }
@@ -121,8 +124,9 @@ pub struct Execution {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SimulatedBlock {
-    pub number: String,
-    pub hash: String,
+    #[serde(with = "quantity")]
+    pub number: u64,
+    pub hash: B256,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -150,34 +154,34 @@ pub struct ExecutionError {
 pub enum Change {
     Transfer {
         asset: Asset,
-        from: String,
-        to: String,
+        from: Address,
+        to: Address,
         #[serde(skip_serializing_if = "Option::is_none")]
-        amount: Option<String>,
+        amount: Option<U256>,
     },
     Mint {
         asset: Asset,
-        to: String,
+        to: Address,
         #[serde(skip_serializing_if = "Option::is_none")]
-        amount: Option<String>,
+        amount: Option<U256>,
     },
     Burn {
         asset: Asset,
-        from: String,
+        from: Address,
         #[serde(skip_serializing_if = "Option::is_none")]
-        amount: Option<String>,
+        amount: Option<U256>,
     },
     Approval {
         asset: Asset,
-        owner: String,
-        spender: String,
+        owner: Address,
+        spender: Address,
         #[serde(skip_serializing_if = "Option::is_none")]
-        amount: Option<String>,
+        amount: Option<U256>,
     },
     ApprovalForAll {
         collection: Collection,
-        owner: String,
-        operator: String,
+        owner: Address,
+        operator: Address,
         approved: bool,
     },
 }
@@ -236,21 +240,21 @@ pub enum Asset {
         display: Option<NativeAssetDisplay>,
     },
     Erc20 {
-        contract_address: String,
+        contract_address: Address,
         #[serde(skip_serializing_if = "Option::is_none")]
         display: Option<Erc20AssetDisplay>,
     },
     Erc721 {
-        contract_address: String,
-        token_id: String,
+        contract_address: Address,
+        token_id: U256,
         #[serde(skip_serializing_if = "Option::is_none")]
         collection: Option<Erc721CollectionDisplay>,
         #[serde(skip_serializing_if = "Option::is_none")]
         token: Option<NftTokenDisplay>,
     },
     Erc1155 {
-        contract_address: String,
-        token_id: String,
+        contract_address: Address,
+        token_id: U256,
         #[serde(skip_serializing_if = "Option::is_none")]
         collection: Option<Erc1155CollectionDisplay>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -266,12 +270,12 @@ pub enum Asset {
 )]
 pub enum Collection {
     Erc721 {
-        contract_address: String,
+        contract_address: Address,
         #[serde(skip_serializing_if = "Option::is_none")]
         collection: Option<Erc721CollectionDisplay>,
     },
     Erc1155 {
-        contract_address: String,
+        contract_address: Address,
         #[serde(skip_serializing_if = "Option::is_none")]
         collection: Option<Erc1155CollectionDisplay>,
     },

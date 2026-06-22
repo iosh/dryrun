@@ -1,10 +1,16 @@
-use std::{env, error::Error, net::SocketAddr};
+use std::{env, error::Error, net::SocketAddr, sync::Arc};
 
-use jsonrpsee::{RpcModule, server::Server};
+use conflux_engine::{
+    ConfluxEngine,
+    config::{ConfluxChainConfig, ConfluxConfig, ConfluxRpcConfig},
+};
+use conflux_service::ConfluxService;
+use jsonrpsee::server::Server;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 mod health;
+mod rpc;
 
 const DEFAULT_RPC_LISTEN_ADDR: &str = "127.0.0.1:8547";
 const DEFAULT_HEALTH_LISTEN_ADDR: &str = "127.0.0.1:9001";
@@ -21,7 +27,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let server = Server::builder().build(rpc_addr).await?;
     let local_addr = server.local_addr()?;
 
-    let module = RpcModule::new(());
+    let engine = Arc::new(ConfluxEngine::new(conflux_config()?)?);
+    let service = Arc::new(ConfluxService::new(engine));
+    let module = rpc::build_rpc_module(service);
     let handle = server.start(module);
 
     info!("dryrun-conflux RPC server started at {}", local_addr);
@@ -29,6 +37,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     handle.stopped().await;
 
     Ok(())
+}
+
+fn conflux_config() -> Result<ConfluxConfig, Box<dyn Error>> {
+    Ok(ConfluxConfig {
+        chain: ConfluxChainConfig::mainnet(),
+        rpc: ConfluxRpcConfig {
+            evm_url: required_env("DRYRUN_CONFLUX_ESPACE_RPC_URL")?,
+            native_url: required_env("DRYRUN_CONFLUX_NATIVE_RPC_URL")?,
+        },
+    })
+}
+
+fn required_env(name: &'static str) -> Result<String, Box<dyn Error>> {
+    env::var(name).map_err(|_| format!("{name} must be set").into())
 }
 
 fn rpc_listen_addr() -> Result<SocketAddr, Box<dyn Error>> {

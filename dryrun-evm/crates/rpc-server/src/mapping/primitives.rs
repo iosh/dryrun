@@ -1,5 +1,3 @@
-use alloy::primitives::U256;
-
 use crate::errors::ValidationError;
 
 pub(super) fn parse_u64_quantity(value: &str, field: &str) -> Result<u64, ValidationError> {
@@ -12,12 +10,4 @@ pub(super) fn parse_u64_quantity(value: &str, field: &str) -> Result<u64, Valida
             "`{field}` must fit into an unsigned 64-bit integer"
         ))
     })
-}
-
-pub(super) fn format_u64_quantity(value: u64) -> String {
-    format!("0x{value:x}")
-}
-
-pub(super) fn format_u256_quantity(value: U256) -> String {
-    format!("{value:#x}")
 }
