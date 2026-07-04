@@ -21,6 +21,7 @@ type StateRead = Option<RawStateValue>;
 
 pub(crate) struct RemoteStateReader {
     state_point: ConfluxStatePoint,
+    native_epoch: CfxEpochNumber,
     provider: Arc<dyn RemoteStateProvider>,
 }
 
@@ -29,8 +30,10 @@ impl RemoteStateReader {
         state_point: ConfluxStatePoint,
         provider: Arc<dyn RemoteStateProvider>,
     ) -> Self {
+        let native_epoch = state_point.native_epoch.clone();
         Self {
             state_point,
+            native_epoch,
             provider,
         }
     }
@@ -77,7 +80,7 @@ impl RemoteStateReader {
     }
 
     fn native_epoch(&self) -> CfxEpochNumber {
-        self.state_point.native_epoch.clone()
+        self.native_epoch.clone()
     }
 
     fn espace_block(&self) -> EthBlockId {

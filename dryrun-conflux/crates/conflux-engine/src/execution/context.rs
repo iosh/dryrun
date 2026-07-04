@@ -65,7 +65,7 @@ pub enum ExecutionBlockContextError {
 }
 
 pub fn build_native_pivot_block_context(
-    block: NativeRpcBlock,
+    block: &NativeRpcBlock,
 ) -> Result<NativePivotBlockContext, ExecutionBlockContextError> {
     Ok(NativePivotBlockContext {
         block_number: required_block_number(block.block_number)?,
@@ -77,15 +77,15 @@ pub fn build_native_pivot_block_context(
     })
 }
 
-pub fn build_espace_block_context(block: EspaceRpcBlock) -> EspaceBlockContext {
+pub fn build_espace_block_context(block: &EspaceRpcBlock) -> EspaceBlockContext {
     EspaceBlockContext {
         base_fee_per_gas: block.base_fee_per_gas,
     }
 }
 
 pub fn build_execution_block_context(
-    pivot: NativePivotBlockContext,
-    espace: EspaceBlockContext,
+    pivot: &NativePivotBlockContext,
+    espace: &EspaceBlockContext,
     consensus: ExecutionConsensusContext,
 ) -> ExecutionBlockContext {
     ExecutionBlockContext {

@@ -118,14 +118,11 @@ fn resolve_chain_id(
     requested_chain_id: Option<u64>,
     fallback_chain_id: u32,
 ) -> Result<u32, ConfluxEngineError> {
-    match requested_chain_id {
-        Some(chain_id) => {
-            u32::try_from(chain_id).map_err(|_| ConfluxEngineError::InvalidTransaction {
-                message: format!("requested chain_id exceeds u32: {chain_id}"),
-            })
-        }
-        None => Ok(fallback_chain_id),
-    }
+    requested_chain_id.map_or(Ok(fallback_chain_id), |chain_id| {
+        u32::try_from(chain_id).map_err(|_| ConfluxEngineError::InvalidTransaction {
+            message: format!("requested chain_id exceeds u32: {chain_id}"),
+        })
+    })
 }
 
 fn map_access_list(items: Vec<AccessListItem>) -> Vec<PrimitiveAccessListItem> {

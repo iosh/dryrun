@@ -38,25 +38,24 @@ pub fn mainnet_common_params() -> CommonParams {
     let cip112_transition_height =
         *CIP112_TRANSITION_HEIGHT.get_or_init(|| CIP112_TRANSITION_HEIGHT_DEFAULT);
 
-    let mut params = CommonParams::default();
-
-    params.network_id = MAINNET_NETWORK_ID;
-    params.chain_id = ChainIdParamsInner::new_simple(AllChainID::new(
-        MAINNET_NATIVE_CHAIN_ID,
-        MAINNET_EVM_CHAIN_ID,
-    ));
-    params.min_base_price =
-        SpaceMap::new(INITIAL_1559_CORE_BASE_PRICE, INITIAL_1559_ETH_BASE_PRICE)
-            .map_all(U256::from);
-
-    params.anticone_penalty_ratio = ANTICONE_PENALTY_RATIO;
-    params.evm_transaction_block_ratio = EVM_TRANSACTION_BLOCK_RATIO;
-    params.evm_transaction_gas_ratio = EVM_TRANSACTION_GAS_RATIO;
-    params.params_dao_vote_period = DAO_PARAMETER_VOTE_PERIOD;
-    params.base_block_rewards = BTreeMap::from([
-        (0, INITIAL_BASE_MINING_REWARD_IN_UCFX.into()),
-        (TANZANITE_HEIGHT, MINING_REWARD_TANZANITE_IN_UCFX.into()),
-    ]);
+    let mut params = CommonParams {
+        network_id: MAINNET_NETWORK_ID,
+        chain_id: ChainIdParamsInner::new_simple(AllChainID::new(
+            MAINNET_NATIVE_CHAIN_ID,
+            MAINNET_EVM_CHAIN_ID,
+        )),
+        min_base_price: SpaceMap::new(INITIAL_1559_CORE_BASE_PRICE, INITIAL_1559_ETH_BASE_PRICE)
+            .map_all(U256::from),
+        anticone_penalty_ratio: ANTICONE_PENALTY_RATIO,
+        evm_transaction_block_ratio: EVM_TRANSACTION_BLOCK_RATIO,
+        evm_transaction_gas_ratio: EVM_TRANSACTION_GAS_RATIO,
+        params_dao_vote_period: DAO_PARAMETER_VOTE_PERIOD,
+        base_block_rewards: BTreeMap::from([
+            (0, INITIAL_BASE_MINING_REWARD_IN_UCFX.into()),
+            (TANZANITE_HEIGHT, MINING_REWARD_TANZANITE_IN_UCFX.into()),
+        ]),
+        ..Default::default()
+    };
 
     params.transition_heights.cip40 = TANZANITE_HEIGHT;
 

@@ -41,8 +41,7 @@ pub enum ConfluxServiceError {
 impl ConfluxServiceError {
     pub fn kind_code(&self) -> Option<&'static str> {
         match self {
-            Self::InvalidRequest { .. } => None,
-            Self::NotSupported { .. } => None,
+            Self::InvalidRequest { .. } | Self::NotSupported { .. } => None,
             Self::Engine(error) => Some(engine_error_kind(error)),
         }
     }
@@ -64,8 +63,7 @@ fn engine_error_kind(error: &conflux_engine::ConfluxEngineError) -> &'static str
     use conflux_engine::ConfluxEngineError;
 
     match error {
-        ConfluxEngineError::UnsupportedBlockSelector { .. }
-        | ConfluxEngineError::UnsupportedTransactionType { .. } => "not_supported",
+        ConfluxEngineError::UnsupportedTransactionType { .. } => "not_supported",
         ConfluxEngineError::BlockNotFound { .. } => "block_not_found",
         ConfluxEngineError::BlockContext(_) | ConfluxEngineError::InvalidBlockContext { .. } => {
             "block_context_error"
@@ -74,6 +72,5 @@ fn engine_error_kind(error: &conflux_engine::ConfluxEngineError) -> &'static str
         ConfluxEngineError::RemoteState(_) => "rpc_error",
         ConfluxEngineError::StateAccess { .. } => "state_access_error",
         ConfluxEngineError::ExecutionInternal { .. } => "engine_execution_error",
-        ConfluxEngineError::Unexpected { .. } => "unexpected",
     }
 }

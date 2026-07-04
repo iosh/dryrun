@@ -74,7 +74,7 @@ fn internal_error(kind_code: Option<&'static str>, details: impl Into<String>) -
     )
 }
 
-pub(super) fn map_service_error(error: ConfluxServiceError) -> ErrorObjectOwned {
+pub(super) fn map_service_error(error: &ConfluxServiceError) -> ErrorObjectOwned {
     let details = error.details();
 
     if error.is_invalid_request() {

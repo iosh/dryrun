@@ -101,12 +101,12 @@ impl ConfluxEngine {
             hash: blocks.espace_block.hash,
         };
 
-        let native_pivot = build_native_pivot_block_context(blocks.native_pivot_block)?;
-        let espace = build_espace_block_context(blocks.espace_block);
+        let native_pivot = build_native_pivot_block_context(&blocks.native_pivot_block)?;
+        let espace = build_espace_block_context(&blocks.espace_block);
 
         let block_context = build_execution_block_context(
-            native_pivot,
-            espace,
+            &native_pivot,
+            &espace,
             ExecutionConsensusContext::default(),
         );
 

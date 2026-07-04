@@ -37,7 +37,7 @@ pub fn build_transaction_env(
     machine: &Machine,
     state: &State,
     tx: &SignedTransaction,
-    input: ExecutionBlockContext,
+    input: &ExecutionBlockContext,
 ) -> Env {
     let execution_block_number = next_execution_block_number(input.pivot_block_number);
     let epoch_height = next_execution_epoch_height(input.pivot_epoch_height);
@@ -51,7 +51,7 @@ pub fn build_transaction_env(
         author: input.author,
         timestamp: input.timestamp,
         difficulty: U256::zero(),
-        gas_limit: tx.gas().clone(),
+        gas_limit: *tx.gas(),
         last_hash: input.epoch_hash,
         accumulated_gas_used: U256::zero(),
         epoch_height,
@@ -62,7 +62,6 @@ pub fn build_transaction_env(
         base_gas_price,
         burnt_gas_price,
         transaction_hash: tx.hash(),
-        ..Default::default()
     }
 }
 

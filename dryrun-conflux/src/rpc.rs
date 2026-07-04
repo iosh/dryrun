@@ -30,7 +30,7 @@ pub fn build_rpc_module(service: Arc<ConfluxService>) -> RpcModule<Arc<ConfluxSe
                     .simulate_espace_transaction(
                         request.try_into().map_err(ErrorObjectOwned::from)?,
                     )
-                    .map_err(map_service_error)?;
+                    .map_err(|error| map_service_error(&error))?;
 
                 Ok::<_, ErrorObjectOwned>(SimulateEspaceTransactionResponse::from(output))
             },

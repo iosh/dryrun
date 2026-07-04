@@ -298,7 +298,6 @@ fn infer_transaction_type(
 ) -> Result<service_espace::EspaceTransactionType, ValidationError> {
     Ok(
         match transaction.transaction_type.map(|value| value.as_u64()) {
-            Some(0x0) => service_espace::EspaceTransactionType::Legacy,
             Some(0x1) => service_espace::EspaceTransactionType::AccessList,
             Some(0x2) => service_espace::EspaceTransactionType::DynamicFee,
             None if transaction.max_fee_per_gas.is_some()
@@ -313,7 +312,7 @@ fn infer_transaction_type(
             {
                 service_espace::EspaceTransactionType::AccessList
             }
-            None => service_espace::EspaceTransactionType::Legacy,
+            Some(0x0) | None => service_espace::EspaceTransactionType::Legacy,
             Some(0x4) => {
                 return Err(ValidationError::not_supported(
                     "`transaction.type` `0x4` / EIP-7702 is not supported yet",

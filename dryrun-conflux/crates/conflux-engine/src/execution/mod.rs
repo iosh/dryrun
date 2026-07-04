@@ -32,7 +32,7 @@ pub fn execute_transaction(
     input: TransactionExecutionInput,
 ) -> StateDbResult<ExecutionOutcome> {
     let tx = signed_transaction_for_dryrun(input.transaction);
-    let env = build_transaction_env(machine, state, &tx, input.block_context);
+    let env = build_transaction_env(machine, state, &tx, &input.block_context);
     let spec = build_execution_spec(machine, &env);
 
     let outcome = ExecutiveContext::new(state, &env, machine, &spec)

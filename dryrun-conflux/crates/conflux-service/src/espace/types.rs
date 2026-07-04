@@ -202,7 +202,7 @@ impl TryFrom<SimulateEspaceTransactionInput> for engine::SimulateEspaceTransacti
 
     fn try_from(input: SimulateEspaceTransactionInput) -> Result<Self, Self::Error> {
         Ok(Self {
-            block: map_block_ref(input.block)?,
+            block: map_block_ref(&input.block)?,
             transaction: map_transaction(input.transaction),
         })
     }
@@ -262,10 +262,10 @@ impl From<engine::EspaceExecutionFailure> for ExecutionFailure {
     }
 }
 
-fn map_block_ref(block: BlockRef) -> Result<engine::EspaceBlockRef, ConfluxServiceError> {
+fn map_block_ref(block: &BlockRef) -> Result<engine::EspaceBlockRef, ConfluxServiceError> {
     match block {
         BlockRef::Latest => Ok(engine::EspaceBlockRef::Latest),
-        BlockRef::Number(number) => Ok(engine::EspaceBlockRef::Number(number)),
+        BlockRef::Number(number) => Ok(engine::EspaceBlockRef::Number(*number)),
         BlockRef::Hash(_) => Err(ConfluxServiceError::NotSupported {
             message: "eSpace block hash selectors are not supported yet".to_string(),
         }),

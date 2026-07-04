@@ -4,9 +4,6 @@ use crate::{execution::ExecutionBlockContextError, state::RemoteStateProviderErr
 
 #[derive(Debug, Error)]
 pub enum ConfluxEngineError {
-    #[error("unsupported eSpace block selector: {selector}")]
-    UnsupportedBlockSelector { selector: &'static str },
-
     #[error("eSpace block not found: {block}")]
     BlockNotFound { block: String },
 
@@ -30,7 +27,4 @@ pub enum ConfluxEngineError {
 
     #[error("engine execution failed: {message}")]
     ExecutionInternal { message: String },
-
-    #[error("unexpected engine error: {message}")]
-    Unexpected { message: String },
 }
