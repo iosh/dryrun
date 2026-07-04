@@ -19,11 +19,14 @@ pub use env::{
     build_execution_spec, build_mainnet_machine, build_rpc_backed_state, build_transaction_env,
 };
 pub use params::mainnet_common_params;
-pub use transaction::{EspaceTransactionInput, signed_transaction_for_dryrun};
+pub use transaction::{
+    DryRunTransactionInput, EspaceTransactionInput, NativeTransactionInput,
+    signed_transaction_for_dryrun,
+};
 
 pub struct TransactionExecutionInput {
     pub block_context: ExecutionBlockContext,
-    pub transaction: EspaceTransactionInput,
+    pub transaction: DryRunTransactionInput,
 }
 
 pub fn execute_transaction(

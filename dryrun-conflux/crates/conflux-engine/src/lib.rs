@@ -10,16 +10,17 @@ use std::sync::Arc;
 use crate::{
     config::ConfluxConfig,
     execution::{
-        ExecutionBlockContext, ExecutionConsensusContext, TransactionExecutionInput,
-        build_espace_block_context, build_execution_block_context, build_mainnet_machine,
-        build_native_pivot_block_context, build_rpc_backed_state, execute_transaction,
+        DryRunTransactionInput, ExecutionBlockContext, ExecutionConsensusContext,
+        TransactionExecutionInput, build_espace_block_context, build_execution_block_context,
+        build_mainnet_machine, build_native_pivot_block_context, build_rpc_backed_state,
+        execute_transaction,
     },
     simulation::build_espace_execution,
     state::{
         ConfluxStatePoint, EspaceRpcBlock, HttpConfluxStateProvider, NativeRpcBlock,
         RemoteStateProvider,
     },
-    transaction::build_espace_transaction_input,
+    transaction::{build_espace_transaction_input, build_native_transaction_input},
 };
 use cfx_types::{U64, U256};
 pub use error::ConfluxEngineError;
@@ -28,8 +29,9 @@ pub use simulation::{
     SimulatedBlock,
 };
 pub use transaction::{
-    AccessListItem, EspaceBlockRef, EspaceTransaction, EspaceTransactionType,
-    SimulateEspaceTransactionInput,
+    AccessListItem, EspaceBlockRef, EspaceTransaction, EspaceTransactionType, NativeEpochRef,
+    NativeTransaction, NativeTransactionType, SimulateEspaceTransactionInput,
+    SimulateNativeTransactionInput,
 };
 
 use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;
@@ -62,7 +64,7 @@ impl ConfluxEngine {
 
         let execution_input = TransactionExecutionInput {
             block_context: execution_context.block_context,
-            transaction,
+            transaction: DryRunTransactionInput::Espace(transaction),
         };
 
         let mut state =
@@ -86,6 +88,41 @@ impl ConfluxEngine {
             gas_limit,
             outcome,
         )))
+    }
+
+    pub fn simulate_native_transaction(
+        &self,
+        input: SimulateNativeTransactionInput,
+    ) -> Result<(), ConfluxEngineError> {
+        let SimulateNativeTransactionInput { epoch, transaction } = input;
+        let transaction = build_native_transaction_input(
+            transaction,
+            self.config.chain.native_chain_id,
+            fallback_epoch_height(&epoch),
+        )?;
+        let execution_context = self.resolve_native_execution_context(&epoch)?;
+
+        let execution_input = TransactionExecutionInput {
+            block_context: execution_context.block_context,
+            transaction: DryRunTransactionInput::Native(transaction),
+        };
+
+        let mut state =
+            build_rpc_backed_state(execution_context.state_point, Arc::clone(&self.provider))
+                .map_err(|error| ConfluxEngineError::StateAccess {
+                    message: error.to_string(),
+                })?;
+
+        let machine = build_mainnet_machine();
+
+        let _outcome =
+            execute_transaction(&mut state, &machine, execution_input).map_err(|error| {
+                ConfluxEngineError::ExecutionInternal {
+                    message: error.to_string(),
+                }
+            })?;
+
+        Ok(())
     }
 
     fn resolve_espace_execution_context(
@@ -117,6 +154,34 @@ impl ConfluxEngine {
         })
     }
 
+    fn resolve_native_execution_context(
+        &self,
+        epoch: &NativeEpochRef,
+    ) -> Result<NativeExecutionContext, ConfluxEngineError> {
+        let selector = ResolvedNativeEpochSelector::from_epoch_ref(epoch);
+        let state_point = selector.state_point();
+
+        let native_pivot_block = self
+            .provider
+            .get_native_block_by_epoch_number(selector.native_epoch)?
+            .ok_or_else(|| ConfluxEngineError::BlockNotFound {
+                block: "native pivot block".to_string(),
+            })?;
+
+        let native_pivot = build_native_pivot_block_context(&native_pivot_block)?;
+        let block_context = build_execution_block_context(
+            &native_pivot,
+            &execution::EspaceBlockContext {
+                base_fee_per_gas: None,
+            },
+            ExecutionConsensusContext::default(),
+        );
+
+        Ok(NativeExecutionContext {
+            block_context,
+            state_point,
+        })
+    }
     fn resolve_execution_blocks(
         &self,
         selector: ResolvedBlockSelector,
@@ -145,6 +210,11 @@ struct EspaceExecutionContext {
     block_context: ExecutionBlockContext,
     state_point: ConfluxStatePoint,
     simulated_block: SimulatedBlock,
+}
+
+struct NativeExecutionContext {
+    block_context: ExecutionBlockContext,
+    state_point: ConfluxStatePoint,
 }
 
 struct ExecutionBlocks {
@@ -178,6 +248,30 @@ impl ResolvedBlockSelector {
     }
 }
 
+struct ResolvedNativeEpochSelector {
+    native_epoch: CfxEpochNumber,
+}
+
+impl ResolvedNativeEpochSelector {
+    fn from_epoch_ref(epoch: &NativeEpochRef) -> Self {
+        match epoch {
+            NativeEpochRef::LatestState => Self {
+                native_epoch: CfxEpochNumber::LatestState,
+            },
+            NativeEpochRef::Number(number) => Self {
+                native_epoch: CfxEpochNumber::Num(U64::from(*number)),
+            },
+        }
+    }
+
+    fn state_point(&self) -> ConfluxStatePoint {
+        ConfluxStatePoint {
+            espace_block: EthBlockId::Latest,
+            native_epoch: self.native_epoch.clone(),
+        }
+    }
+}
+
 fn espace_block_number(block: &EspaceRpcBlock) -> Result<u64, ConfluxEngineError> {
     if block.number > U256::from(u64::MAX) {
         return Err(ConfluxEngineError::InvalidBlockContext {
@@ -186,4 +280,11 @@ fn espace_block_number(block: &EspaceRpcBlock) -> Result<u64, ConfluxEngineError
     }
 
     Ok(block.number.as_u64())
+}
+
+fn fallback_epoch_height(epoch: &NativeEpochRef) -> u64 {
+    match epoch {
+        NativeEpochRef::LatestState => 0,
+        NativeEpochRef::Number(number) => *number,
+    }
 }

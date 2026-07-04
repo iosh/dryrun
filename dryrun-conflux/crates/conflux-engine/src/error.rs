@@ -4,7 +4,7 @@ use crate::{execution::ExecutionBlockContextError, state::RemoteStateProviderErr
 
 #[derive(Debug, Error)]
 pub enum ConfluxEngineError {
-    #[error("eSpace block not found: {block}")]
+    #[error("block not found: {block}")]
     BlockNotFound { block: String },
 
     #[error(transparent)]
@@ -13,10 +13,10 @@ pub enum ConfluxEngineError {
     #[error("block context error: {message}")]
     InvalidBlockContext { message: String },
 
-    #[error("invalid eSpace transaction: {message}")]
+    #[error("invalid transaction: {message}")]
     InvalidTransaction { message: String },
 
-    #[error("unsupported eSpace transaction type: {tx_type}")]
+    #[error("unsupported transaction type: {tx_type}")]
     UnsupportedTransactionType { tx_type: &'static str },
 
     #[error(transparent)]
