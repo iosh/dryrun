@@ -54,7 +54,48 @@ impl EspaceSimulation {
         self.execution
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeExecutionStatus {
+    Success,
+    Failed,
+}
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeExecutionFailure {
+    pub code: String,
+    pub message: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeExecution {
+    pub chain_id: u64,
+    pub status: NativeExecutionStatus,
+    pub gas_used: U256,
+    pub gas_limit: U256,
+    pub gas_charged: U256,
+    pub fee: U256,
+    pub burnt_fee: Option<U256>,
+    pub output: Bytes,
+    pub failure: Option<NativeExecutionFailure>,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeSimulation {
+    execution: NativeExecution,
+}
+impl NativeSimulation {
+    pub fn new(execution: NativeExecution) -> Self {
+        Self { execution }
+    }
+
+    pub fn execution(&self) -> &NativeExecution {
+        &self.execution
+    }
+
+    pub fn into_execution(self) -> NativeExecution {
+        self.execution
+    }
+}
 pub(crate) fn build_espace_execution(
     chain_id: u32,
     block: SimulatedBlock,
@@ -92,6 +133,41 @@ pub(crate) fn build_espace_execution(
         failure,
     }
 }
+pub(crate) fn build_native_execution(
+    chain_id: u32,
+    gas_limit: U256,
+    outcome: ExecutionOutcome,
+) -> NativeExecution {
+    let failure = build_native_failure(&outcome);
+    let status = if failure.is_some() {
+        NativeExecutionStatus::Failed
+    } else {
+        NativeExecutionStatus::Success
+    };
+
+    let executed = outcome.try_into_executed();
+
+    NativeExecution {
+        chain_id: u64::from(chain_id),
+        status,
+        gas_used: executed
+            .as_ref()
+            .map(|executed| executed.gas_used)
+            .unwrap_or_else(U256::zero),
+        gas_limit,
+        gas_charged: executed
+            .as_ref()
+            .map(|executed| executed.gas_charged)
+            .unwrap_or_else(U256::zero),
+        fee: executed
+            .as_ref()
+            .map(|executed| executed.fee)
+            .unwrap_or_else(U256::zero),
+        burnt_fee: executed.as_ref().and_then(|executed| executed.burnt_fee),
+        output: executed.map(|executed| executed.output).unwrap_or_default(),
+        failure,
+    }
+}
 
 fn build_failure(outcome: &ExecutionOutcome) -> Option<EspaceExecutionFailure> {
     match outcome {
@@ -108,6 +184,13 @@ fn build_failure(outcome: &ExecutionOutcome) -> Option<EspaceExecutionFailure> {
     }
 }
 
+fn build_native_failure(outcome: &ExecutionOutcome) -> Option<NativeExecutionFailure> {
+    build_failure(outcome).map(|failure| NativeExecutionFailure {
+        code: failure.code,
+        message: failure.message,
+        reason: failure.reason,
+    })
+}
 fn build_execution_error_failure(error: &ExecutionError, output: &[u8]) -> EspaceExecutionFailure {
     if error == &ExecutionError::VmError(vm::Error::Reverted) {
         return EspaceExecutionFailure {

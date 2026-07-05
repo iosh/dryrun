@@ -15,7 +15,7 @@ use crate::{
         build_mainnet_machine, build_native_pivot_block_context, build_rpc_backed_state,
         execute_transaction,
     },
-    simulation::build_espace_execution,
+    simulation::{build_espace_execution, build_native_execution},
     state::{
         ConfluxStatePoint, EspaceRpcBlock, HttpConfluxStateProvider, NativeRpcBlock,
         RemoteStateProvider,
@@ -26,6 +26,7 @@ use cfx_types::{U64, U256};
 pub use error::ConfluxEngineError;
 pub use simulation::{
     EspaceExecution, EspaceExecutionFailure, EspaceExecutionStatus, EspaceSimulation,
+    NativeExecution, NativeExecutionFailure, NativeExecutionStatus, NativeSimulation,
     SimulatedBlock,
 };
 pub use transaction::{
@@ -93,8 +94,9 @@ impl ConfluxEngine {
     pub fn simulate_native_transaction(
         &self,
         input: SimulateNativeTransactionInput,
-    ) -> Result<(), ConfluxEngineError> {
+    ) -> Result<NativeSimulation, ConfluxEngineError> {
         let SimulateNativeTransactionInput { epoch, transaction } = input;
+        let gas_limit = transaction.gas_limit;
         let transaction = build_native_transaction_input(
             transaction,
             self.config.chain.native_chain_id,
@@ -115,14 +117,18 @@ impl ConfluxEngine {
 
         let machine = build_mainnet_machine();
 
-        let _outcome =
+        let outcome =
             execute_transaction(&mut state, &machine, execution_input).map_err(|error| {
                 ConfluxEngineError::ExecutionInternal {
                     message: error.to_string(),
                 }
             })?;
 
-        Ok(())
+        Ok(NativeSimulation::new(build_native_execution(
+            self.config.chain.native_chain_id,
+            gas_limit,
+            outcome,
+        )))
     }
 
     fn resolve_espace_execution_context(
