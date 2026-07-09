@@ -19,6 +19,7 @@ cfx-executor = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry
 cfx-vm-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 
 cfx-rpc-cfx-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+cfx-rpc-primitives = { workspace = true }
 
 cfx-rpc-eth-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 keccak-hash = "0.5"

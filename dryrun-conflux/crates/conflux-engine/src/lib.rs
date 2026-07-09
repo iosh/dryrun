@@ -17,12 +17,13 @@ use crate::{
     },
     simulation::{build_espace_execution, build_native_execution},
     state::{
-        ConfluxStatePoint, EspaceRpcBlock, HttpConfluxStateProvider, NativeRpcBlock,
+        ConfluxStateAnchor, ConfluxStatePoint, EspaceRpcBlock, HttpConfluxStateProvider,
+        NativeRpcBlock,
         RemoteStateProvider,
     },
     transaction::{build_espace_transaction_input, build_native_transaction_input},
 };
-use cfx_types::{U64, U256};
+use cfx_types::U256;
 pub use error::ConfluxEngineError;
 pub use simulation::{
     EspaceExecution, EspaceExecutionFailure, EspaceExecutionStatus, EspaceSimulation,
@@ -97,12 +98,12 @@ impl ConfluxEngine {
     ) -> Result<NativeSimulation, ConfluxEngineError> {
         let SimulateNativeTransactionInput { epoch, transaction } = input;
         let gas_limit = transaction.gas_limit;
+        let execution_context = self.resolve_native_execution_context(&epoch)?;
         let transaction = build_native_transaction_input(
             transaction,
             self.config.chain.native_chain_id,
-            fallback_epoch_height(&epoch),
+            execution_context.state_point.anchor().epoch_number(),
         )?;
-        let execution_context = self.resolve_native_execution_context(&epoch)?;
 
         let execution_input = TransactionExecutionInput {
             block_context: execution_context.block_context,
@@ -135,17 +136,23 @@ impl ConfluxEngine {
         &self,
         block: &EspaceBlockRef,
     ) -> Result<EspaceExecutionContext, ConfluxEngineError> {
-        let selector = ResolvedBlockSelector::from_block_ref(block);
-        let state_point = selector.state_point();
-        let blocks = self.resolve_execution_blocks(selector)?;
+        let espace_block = self
+            .provider
+            .get_espace_block_by_number(espace_block_selector(block))?
+            .ok_or_else(|| ConfluxEngineError::BlockNotFound {
+                block: "eSpace block".to_string(),
+            })?;
+        let state_anchor = state_anchor_from_espace_block(&espace_block)?;
+        let native_pivot_block = self.resolve_native_pivot_block(state_anchor)?;
 
         let simulated_block = SimulatedBlock {
-            number: espace_block_number(&blocks.espace_block)?,
-            hash: blocks.espace_block.hash,
+            number: state_anchor.epoch_number(),
+            hash: espace_block.hash,
         };
 
-        let native_pivot = build_native_pivot_block_context(&blocks.native_pivot_block)?;
-        let espace = build_espace_block_context(&blocks.espace_block);
+        let native_pivot = build_native_pivot_block_context(&native_pivot_block)?;
+        validate_same_state_anchor(state_anchor, state_anchor_from_native_pivot(&native_pivot))?;
+        let espace = build_espace_block_context(&espace_block);
 
         let block_context = build_execution_block_context(
             &native_pivot,
@@ -155,7 +162,7 @@ impl ConfluxEngine {
 
         Ok(EspaceExecutionContext {
             block_context,
-            state_point,
+            state_point: ConfluxStatePoint::from_anchor(state_anchor),
             simulated_block,
         })
     }
@@ -164,52 +171,52 @@ impl ConfluxEngine {
         &self,
         epoch: &NativeEpochRef,
     ) -> Result<NativeExecutionContext, ConfluxEngineError> {
-        let selector = ResolvedNativeEpochSelector::from_epoch_ref(epoch);
-        let state_point = selector.state_point();
-
         let native_pivot_block = self
             .provider
-            .get_native_block_by_epoch_number(selector.native_epoch)?
+            .get_native_block_by_epoch_number(native_epoch_selector(epoch))?
             .ok_or_else(|| ConfluxEngineError::BlockNotFound {
                 block: "native pivot block".to_string(),
             })?;
 
         let native_pivot = build_native_pivot_block_context(&native_pivot_block)?;
+        let state_anchor = state_anchor_from_native_pivot(&native_pivot);
+        let espace_block = self.resolve_espace_block_for_anchor(state_anchor)?;
+        validate_same_state_anchor(state_anchor, state_anchor_from_espace_block(&espace_block)?)?;
+        let espace = build_espace_block_context(&espace_block);
         let block_context = build_execution_block_context(
             &native_pivot,
-            &execution::EspaceBlockContext {
-                base_fee_per_gas: None,
-            },
+            &espace,
             ExecutionConsensusContext::default(),
         );
 
         Ok(NativeExecutionContext {
             block_context,
-            state_point,
+            state_point: ConfluxStatePoint::from_anchor(state_anchor),
         })
     }
-    fn resolve_execution_blocks(
-        &self,
-        selector: ResolvedBlockSelector,
-    ) -> Result<ExecutionBlocks, ConfluxEngineError> {
-        let espace_block = self
-            .provider
-            .get_espace_block_by_number(selector.espace_block)?
-            .ok_or_else(|| ConfluxEngineError::BlockNotFound {
-                block: "eSpace block".to_string(),
-            })?;
 
-        let native_pivot_block = self
+    fn resolve_native_pivot_block(
+        &self,
+        anchor: ConfluxStateAnchor,
+    ) -> Result<NativeRpcBlock, ConfluxEngineError> {
+        self
             .provider
-            .get_native_block_by_epoch_number(selector.native_epoch)?
+            .get_native_block_by_epoch_number(native_epoch_from_anchor(anchor))?
             .ok_or_else(|| ConfluxEngineError::BlockNotFound {
                 block: "native pivot block".to_string(),
-            })?;
+            })
+    }
 
-        Ok(ExecutionBlocks {
-            espace_block,
-            native_pivot_block,
-        })
+    fn resolve_espace_block_for_anchor(
+        &self,
+        anchor: ConfluxStateAnchor,
+    ) -> Result<EspaceRpcBlock, ConfluxEngineError> {
+        self
+            .provider
+            .get_espace_block_by_number(anchor.espace_block())?
+            .ok_or_else(|| ConfluxEngineError::BlockNotFound {
+                block: "eSpace block".to_string(),
+            })
     }
 }
 struct EspaceExecutionContext {
@@ -223,59 +230,46 @@ struct NativeExecutionContext {
     state_point: ConfluxStatePoint,
 }
 
-struct ExecutionBlocks {
-    espace_block: EspaceRpcBlock,
-    native_pivot_block: NativeRpcBlock,
-}
-struct ResolvedBlockSelector {
-    espace_block: EthBlockId,
-    native_epoch: CfxEpochNumber,
-}
-
-impl ResolvedBlockSelector {
-    fn from_block_ref(block: &EspaceBlockRef) -> Self {
-        match block {
-            EspaceBlockRef::Latest => Self {
-                espace_block: EthBlockId::Latest,
-                native_epoch: CfxEpochNumber::LatestState,
-            },
-            EspaceBlockRef::Number(number) => Self {
-                espace_block: EthBlockId::Num(*number),
-                native_epoch: CfxEpochNumber::Num(U64::from(*number)),
-            },
-        }
-    }
-
-    fn state_point(&self) -> ConfluxStatePoint {
-        ConfluxStatePoint {
-            espace_block: self.espace_block,
-            native_epoch: self.native_epoch.clone(),
-        }
+fn espace_block_selector(block: &EspaceBlockRef) -> EthBlockId {
+    match block {
+        EspaceBlockRef::Latest => EthBlockId::Latest,
+        EspaceBlockRef::Number(number) => EthBlockId::Num(*number),
     }
 }
 
-struct ResolvedNativeEpochSelector {
-    native_epoch: CfxEpochNumber,
+fn native_epoch_selector(epoch: &NativeEpochRef) -> CfxEpochNumber {
+    match epoch {
+        NativeEpochRef::LatestState => CfxEpochNumber::LatestState,
+        NativeEpochRef::Number(number) => CfxEpochNumber::Num((*number).into()),
+    }
 }
 
-impl ResolvedNativeEpochSelector {
-    fn from_epoch_ref(epoch: &NativeEpochRef) -> Self {
-        match epoch {
-            NativeEpochRef::LatestState => Self {
-                native_epoch: CfxEpochNumber::LatestState,
-            },
-            NativeEpochRef::Number(number) => Self {
-                native_epoch: CfxEpochNumber::Num(U64::from(*number)),
-            },
-        }
+fn native_epoch_from_anchor(anchor: ConfluxStateAnchor) -> CfxEpochNumber {
+    CfxEpochNumber::Num(anchor.epoch_number().into())
+}
+
+fn state_anchor_from_espace_block(
+    block: &EspaceRpcBlock,
+) -> Result<ConfluxStateAnchor, ConfluxEngineError> {
+    Ok(ConfluxStateAnchor::new(
+        espace_block_number(block)?,
+        block.hash,
+    ))
+}
+
+fn state_anchor_from_native_pivot(pivot: &execution::NativePivotBlockContext) -> ConfluxStateAnchor {
+    ConfluxStateAnchor::new(pivot.epoch_height, pivot.hash)
+}
+
+fn validate_same_state_anchor(
+    expected: ConfluxStateAnchor,
+    actual: ConfluxStateAnchor,
+) -> Result<(), ConfluxEngineError> {
+    if actual != expected {
+        return Err(ConfluxEngineError::StateAnchorInconsistent);
     }
 
-    fn state_point(&self) -> ConfluxStatePoint {
-        ConfluxStatePoint {
-            espace_block: EthBlockId::Latest,
-            native_epoch: self.native_epoch.clone(),
-        }
-    }
+    Ok(())
 }
 
 fn espace_block_number(block: &EspaceRpcBlock) -> Result<u64, ConfluxEngineError> {
@@ -286,11 +280,4 @@ fn espace_block_number(block: &EspaceRpcBlock) -> Result<u64, ConfluxEngineError
     }
 
     Ok(block.number.as_u64())
-}
-
-fn fallback_epoch_height(epoch: &NativeEpochRef) -> u64 {
-    match epoch {
-        NativeEpochRef::LatestState => 0,
-        NativeEpochRef::Number(number) => *number,
-    }
 }

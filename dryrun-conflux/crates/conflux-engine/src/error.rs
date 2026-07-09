@@ -13,6 +13,9 @@ pub enum ConfluxEngineError {
     #[error("block context error: {message}")]
     InvalidBlockContext { message: String },
 
+    #[error("state anchor is inconsistent")]
+    StateAnchorInconsistent,
+
     #[error("invalid transaction: {message}")]
     InvalidTransaction { message: String },
 

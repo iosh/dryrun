@@ -1,6 +1,6 @@
 use std::future::IntoFuture;
 
-use cfx_rpc_cfx_types::{EpochNumber, RpcAddress};
+use cfx_rpc_cfx_types::{EpochNumber, RpcAddress, epoch_number::BlockHashOrEpochNumber};
 use cfx_rpc_eth_types::BlockId;
 use cfx_types::{Address, H256, U256};
 use jsonrpsee::{
@@ -15,10 +15,11 @@ use crate::{
     config::ConfluxConfig,
     state::{
         provider::{RemoteStateProvider, RemoteStateProviderError},
-        rpc_encoding::decode_rpc_bytes,
+        rpc_encoding::{RpcStorageWord, decode_rpc_bytes},
         rpc_types::{
             EspaceRpcBlock, NativePoSEconomics, NativeRpcAccount, NativeRpcBlock,
-            NativeStorageCollateralInfo, NativeSupplyInfo, NativeVoteParamsInfo,
+            NativeSponsorInfo, NativeStorageCollateralInfo, NativeSupplyInfo,
+            NativeVoteParamsInfo,
         },
     },
 };
@@ -194,6 +195,67 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
         self.native_rpc_request("cfx_getAccount", rpc_params![address, epoch])
     }
 
+    fn get_native_sponsor_info(
+        &self,
+        epoch: EpochNumber,
+        address: Address,
+    ) -> Result<NativeSponsorInfo, RemoteStateProviderError> {
+        let address = RpcAddress::try_from_h160(address, self.config.chain.native_address_network)
+            .map_err(|error| RemoteStateProviderError::AddressEncoding { message: error })?;
+
+        self.native_rpc_request("cfx_getSponsorInfo", rpc_params![address, epoch])
+    }
+
+    fn get_native_code_at(
+        &self,
+        epoch: EpochNumber,
+        address: Address,
+    ) -> Result<Vec<u8>, RemoteStateProviderError> {
+        let address = RpcAddress::try_from_h160(address, self.config.chain.native_address_network)
+            .map_err(|error| RemoteStateProviderError::AddressEncoding { message: error })?;
+        let epoch = BlockHashOrEpochNumber::EpochNumber(epoch);
+
+        let value: String =
+            self.native_rpc_request("cfx_getCode", rpc_params![address, epoch])?;
+
+        decode_rpc_bytes(value, "cfx_getCode")
+    }
+
+    fn get_native_storage_at(
+        &self,
+        epoch: EpochNumber,
+        address: Address,
+        slot: H256,
+    ) -> Result<Option<U256>, RemoteStateProviderError> {
+        let address = RpcAddress::try_from_h160(address, self.config.chain.native_address_network)
+            .map_err(|error| RemoteStateProviderError::AddressEncoding { message: error })?;
+        let slot = U256::from_big_endian(slot.as_bytes());
+        let epoch = BlockHashOrEpochNumber::EpochNumber(epoch);
+
+        let value: RpcStorageWord =
+            self.native_rpc_request("cfx_getStorageAt", rpc_params![address, slot, epoch])?;
+
+        value.into_option_u256()
+    }
+
+    fn call_native(
+        &self,
+        epoch: EpochNumber,
+        to: Address,
+        data: Vec<u8>,
+    ) -> Result<Vec<u8>, RemoteStateProviderError> {
+        let to = RpcAddress::try_from_h160(to, self.config.chain.native_address_network)
+            .map_err(|error| RemoteStateProviderError::AddressEncoding { message: error })?;
+        let epoch = BlockHashOrEpochNumber::EpochNumber(epoch);
+        let request = NativeCallRequest {
+            to,
+            data: format!("0x{}", hex::encode(data)),
+        };
+
+        let value: String = self.native_rpc_request("cfx_call", rpc_params![request, epoch])?;
+        decode_rpc_bytes(value, "cfx_call")
+    }
+
     fn get_native_block_by_epoch_number(
         &self,
         epoch_number: EpochNumber,
@@ -210,6 +272,13 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
     ) -> Result<Option<EspaceRpcBlock>, RemoteStateProviderError> {
         self.espace_rpc_request("eth_getBlockByNumber", rpc_params![block_number, false])
     }
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeCallRequest {
+    to: RpcAddress,
+    data: String,
 }
 
 #[derive(Debug)]

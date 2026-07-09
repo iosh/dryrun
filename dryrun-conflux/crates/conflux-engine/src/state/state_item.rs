@@ -1,5 +1,8 @@
 use std::fmt;
 
+use crate::state::native_internal::{
+    NativeInternalStateItem, parse_native_internal_storage,
+};
 use cfx_statedb::global_params::{
     AccumulateInterestRate, BaseFeeProp, ConvertedStoragePoints, DistributablePoSInterest,
     GlobalParamKey, InterestRate, LastDistributeBlock, PowBaseReward, TotalBurnt1559,
@@ -46,6 +49,9 @@ pub(crate) enum NativeStateItem {
     TotalBurnt1559,
     BaseFeeProp,
     Account { address: Address },
+    StorageSlot { address: Address, slot: H256 },
+    InternalContractStorage(NativeInternalStateItem),
+    Code { address: Address, code_hash: H256 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,10 +116,10 @@ pub(crate) enum StateItemError {
     UnsupportedEspaceKey { kind: StorageKeyKind },
     #[error("invalid address length: expected {ADDRESS_BYTES} bytes, got {actual}")]
     InvalidAddressLength { actual: usize },
-    #[error("invalid eSpace storage slot length: expected {HASH_BYTES} bytes, got {actual}")]
-    InvalidEspaceStorageSlotLength { actual: usize },
-    #[error("invalid eSpace code hash length: expected {HASH_BYTES} bytes, got {actual}")]
-    InvalidEspaceCodeHashLength { actual: usize },
+    #[error("invalid storage slot length: expected {HASH_BYTES} bytes, got {actual}")]
+    InvalidStorageSlotLength { actual: usize },
+    #[error("invalid code hash length: expected {HASH_BYTES} bytes, got {actual}")]
+    InvalidCodeHashLength { actual: usize },
 }
 
 fn from_native_key(
@@ -181,6 +187,33 @@ fn from_native_key(
         return Ok(NativeStateItem::BaseFeeProp);
     }
 
+    if let StorageKey::StorageKey {
+        address_bytes,
+        storage_key,
+    } = storage_key.key
+    {
+        let address = parse_address(address_bytes)?;
+        if let Some(item) = parse_native_internal_storage(address, storage_key) {
+            return Ok(NativeStateItem::InternalContractStorage(item));
+        }
+
+        return Ok(NativeStateItem::StorageSlot {
+            address,
+            slot: parse_storage_slot(storage_key)?,
+        });
+    }
+
+    if let StorageKey::CodeKey {
+        address_bytes,
+        code_hash_bytes,
+    } = storage_key.key
+    {
+        return Ok(NativeStateItem::Code {
+            address: parse_address(address_bytes)?,
+            code_hash: parse_code_hash(code_hash_bytes)?,
+        });
+    }
+
     Err(StateItemError::UnsupportedNativeKey)
 }
 
@@ -221,7 +254,7 @@ fn parse_address(address_bytes: &[u8]) -> Result<Address, StateItemError> {
 
 fn parse_storage_slot(slot_bytes: &[u8]) -> Result<H256, StateItemError> {
     if slot_bytes.len() != HASH_BYTES {
-        return Err(StateItemError::InvalidEspaceStorageSlotLength {
+        return Err(StateItemError::InvalidStorageSlotLength {
             actual: slot_bytes.len(),
         });
     }
@@ -231,7 +264,7 @@ fn parse_storage_slot(slot_bytes: &[u8]) -> Result<H256, StateItemError> {
 
 fn parse_code_hash(code_hash_bytes: &[u8]) -> Result<H256, StateItemError> {
     if code_hash_bytes.len() != HASH_BYTES {
-        return Err(StateItemError::InvalidEspaceCodeHashLength {
+        return Err(StateItemError::InvalidCodeHashLength {
             actual: code_hash_bytes.len(),
         });
     }

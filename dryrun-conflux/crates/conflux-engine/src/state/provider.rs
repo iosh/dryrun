@@ -3,7 +3,7 @@ use thiserror::Error;
 
 use crate::state::rpc_types::{
     EspaceRpcBlock, NativePoSEconomics, NativeRpcAccount, NativeRpcBlock,
-    NativeStorageCollateralInfo, NativeSupplyInfo, NativeVoteParamsInfo,
+    NativeSponsorInfo, NativeStorageCollateralInfo, NativeSupplyInfo, NativeVoteParamsInfo,
 };
 use cfx_rpc_cfx_types::EpochNumber;
 use cfx_rpc_eth_types::BlockId;
@@ -71,6 +71,32 @@ pub trait RemoteStateProvider: Send + Sync {
         epoch: EpochNumber,
         address: Address,
     ) -> Result<NativeRpcAccount, RemoteStateProviderError>;
+
+    fn get_native_sponsor_info(
+        &self,
+        epoch: EpochNumber,
+        address: Address,
+    ) -> Result<NativeSponsorInfo, RemoteStateProviderError>;
+
+    fn get_native_code_at(
+        &self,
+        epoch: EpochNumber,
+        address: Address,
+    ) -> Result<Vec<u8>, RemoteStateProviderError>;
+
+    fn get_native_storage_at(
+        &self,
+        epoch: EpochNumber,
+        address: Address,
+        slot: H256,
+    ) -> Result<Option<U256>, RemoteStateProviderError>;
+
+    fn call_native(
+        &self,
+        epoch: EpochNumber,
+        to: Address,
+        data: Vec<u8>,
+    ) -> Result<Vec<u8>, RemoteStateProviderError>;
 
     fn get_native_block_by_epoch_number(
         &self,

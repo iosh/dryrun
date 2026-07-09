@@ -45,9 +45,23 @@ pub struct EspaceRpcBlock {
 pub struct NativeRpcAccount {
     pub balance: U256,
     pub nonce: U256,
+    pub code_hash: H256,
     pub staking_balance: U256,
     pub collateral_for_storage: U256,
     pub accumulated_interest_return: U256,
+    pub admin: RpcAddress,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeSponsorInfo {
+    pub sponsor_for_gas: RpcAddress,
+    pub sponsor_for_collateral: RpcAddress,
+    pub sponsor_gas_bound: U256,
+    pub sponsor_balance_for_gas: U256,
+    pub sponsor_balance_for_collateral: U256,
+    pub available_storage_points: U256,
+    pub used_storage_points: U256,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -1,5 +1,7 @@
 use cfx_executor::{
-    executive::{ExecutionOutcome, ExecutiveContext, TransactOptions},
+    executive::{
+        ChargeCollateral, ExecutionOutcome, ExecutiveContext, TransactOptions,
+    },
     machine::Machine,
     state::State,
 };
@@ -34,12 +36,13 @@ pub fn execute_transaction(
     machine: &Machine,
     input: TransactionExecutionInput,
 ) -> StateDbResult<ExecutionOutcome> {
+    let options = transact_options_for(&input.transaction);
     let tx = signed_transaction_for_dryrun(input.transaction);
     let env = build_transaction_env(machine, state, &tx, &input.block_context);
     let spec = build_execution_spec(machine, &env);
 
     let outcome = ExecutiveContext::new(state, &env, machine, &spec)
-        .transact(&tx, TransactOptions::default())?;
+        .transact(&tx, options)?;
 
     state.update_state_post_tx_execution(!spec.cip645.fix_eip1153);
 
@@ -48,4 +51,18 @@ pub fn execute_transaction(
     }
 
     Ok(outcome)
+}
+
+fn transact_options_for(
+    transaction: &DryRunTransactionInput,
+) -> TransactOptions<()> {
+    let mut options = TransactOptions::default();
+
+    if matches!(transaction, DryRunTransactionInput::Native(_)) {
+        // Public Native RPC returns storage values without storage owners.
+        // Use estimate mode so collateral checks do not fail incorrectly.
+        options.settings.charge_collateral = ChargeCollateral::EstimateSender;
+    }
+
+    options
 }

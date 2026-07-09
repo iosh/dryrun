@@ -13,6 +13,7 @@ conflux-engine = { path = "crates/conflux-engine" }
 conflux-service = { path = "crates/conflux-service" }
 cfx-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-bytes = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+cfx-rpc-primitives = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-rpc-eth-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 jsonrpsee = "0.26"
 primitives = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
