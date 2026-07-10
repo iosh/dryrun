@@ -49,6 +49,8 @@ pub(crate) enum NativeStateItem {
     TotalBurnt1559,
     BaseFeeProp,
     Account { address: Address },
+    DepositList { address: Address },
+    VoteList { address: Address },
     StorageSlot { address: Address, slot: H256 },
     InternalContractStorage(NativeInternalStateItem),
     Code { address: Address, code_hash: H256 },
@@ -110,8 +112,8 @@ impl fmt::Display for StorageKeyKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub(crate) enum StateItemError {
-    #[error("unsupported native state key")]
-    UnsupportedNativeKey,
+    #[error("unsupported native state key kind: {kind}")]
+    UnsupportedNativeKey { kind: StorageKeyKind },
     #[error("unsupported eSpace storage key kind: {kind}")]
     UnsupportedEspaceKey { kind: StorageKeyKind },
     #[error("invalid address length: expected {ADDRESS_BYTES} bytes, got {actual}")]
@@ -127,6 +129,18 @@ fn from_native_key(
 ) -> Result<NativeStateItem, StateItemError> {
     if let StorageKey::AccountKey(address_bytes) = storage_key.key {
         return Ok(NativeStateItem::Account {
+            address: parse_address(address_bytes)?,
+        });
+    }
+
+    if let StorageKey::DepositListKey(address_bytes) = storage_key.key {
+        return Ok(NativeStateItem::DepositList {
+            address: parse_address(address_bytes)?,
+        });
+    }
+
+    if let StorageKey::VoteListKey(address_bytes) = storage_key.key {
+        return Ok(NativeStateItem::VoteList {
             address: parse_address(address_bytes)?,
         });
     }
@@ -214,7 +228,9 @@ fn from_native_key(
         });
     }
 
-    Err(StateItemError::UnsupportedNativeKey)
+    Err(StateItemError::UnsupportedNativeKey {
+        kind: StorageKeyKind::from_storage_key(storage_key.key),
+    })
 }
 
 fn from_espace_key(key: StorageKey<'_>) -> Result<EspaceStateItem, StateItemError> {

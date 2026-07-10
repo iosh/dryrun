@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use cfx_parameters::staking::DRIPS_PER_STORAGE_COLLATERAL_UNIT;
 use primitives::{
-    CodeInfo,
+    CodeInfo, DepositInfo, DepositList, VoteStakeInfo, VoteStakeList,
     account::{BasicAccount, ContractAccount, EthereumAccount, SponsorInfo, StoragePoints},
     storage::StorageValue,
 };
@@ -116,6 +116,24 @@ pub(crate) fn encode_native_code(
     })
     .to_vec()
     .into_boxed_slice())
+}
+
+pub(crate) fn encode_native_deposit_list(
+    deposits: Vec<DepositInfo>,
+) -> Option<Box<[u8]>> {
+    if deposits.is_empty() {
+        return None;
+    }
+
+    Some(rlp::encode(&DepositList(deposits)).to_vec().into_boxed_slice())
+}
+
+pub(crate) fn encode_native_vote_list(votes: Vec<VoteStakeInfo>) -> Option<Box<[u8]>> {
+    if votes.is_empty() {
+        return None;
+    }
+
+    Some(rlp::encode(&VoteStakeList(votes)).to_vec().into_boxed_slice())
 }
 
 pub(crate) fn encode_native_storage_slot(value: U256) -> Box<[u8]> {

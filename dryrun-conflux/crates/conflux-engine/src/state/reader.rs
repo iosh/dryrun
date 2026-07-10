@@ -13,8 +13,8 @@ use crate::state::{
     state_value_encoding::{
         StateValueEncodingError, encode_espace_account, encode_espace_code,
         encode_espace_storage_slot, encode_native_basic_account, encode_native_code,
-        encode_native_contract_account, encode_native_storage_slot, encode_native_u256,
-        should_encode_native_contract_account,
+        encode_native_contract_account, encode_native_deposit_list, encode_native_storage_slot,
+        encode_native_u256, encode_native_vote_list, should_encode_native_contract_account,
     },
 };
 use cfx_types::{Address, H256, U256};
@@ -51,6 +51,8 @@ impl RemoteStateReader {
     fn read_native(&self, item: NativeStateItem) -> StorageResult<StateRead> {
         match item {
             NativeStateItem::Account { address } => self.fetch_native_account(address),
+            NativeStateItem::DepositList { address } => self.fetch_native_deposit_list(address),
+            NativeStateItem::VoteList { address } => self.fetch_native_vote_list(address),
             NativeStateItem::InterestRate => self.fetch_native_interest_rate(),
             NativeStateItem::AccumulateInterestRate => self.fetch_native_accumulate_interest_rate(),
             NativeStateItem::TotalIssued => self.fetch_native_total_issued(),
@@ -130,6 +132,24 @@ impl RemoteStateReader {
             account.collateral_for_storage,
             account.accumulated_interest_return,
         ))
+    }
+
+    fn fetch_native_deposit_list(&self, address: Address) -> StorageResult<StateRead> {
+        let deposits = self
+            .provider
+            .get_native_deposit_list(self.native_epoch(), address)
+            .map_err(|error| self.provider_error("get_native_deposit_list", error))?;
+
+        Ok(encode_native_deposit_list(deposits))
+    }
+
+    fn fetch_native_vote_list(&self, address: Address) -> StorageResult<StateRead> {
+        let votes = self
+            .provider
+            .get_native_vote_list(self.native_epoch(), address)
+            .map_err(|error| self.provider_error("get_native_vote_list", error))?;
+
+        Ok(encode_native_vote_list(votes))
     }
 
     fn fetch_native_storage_slot(&self, address: Address, slot: H256) -> StorageResult<StateRead> {

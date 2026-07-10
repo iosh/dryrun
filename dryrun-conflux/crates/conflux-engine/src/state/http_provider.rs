@@ -8,6 +8,7 @@ use jsonrpsee::{
     http_client::{HttpClient, HttpClientBuilder},
     rpc_params,
 };
+use primitives::{DepositInfo, VoteStakeInfo};
 use serde::de::DeserializeOwned;
 use tokio::runtime::{Handle, Runtime};
 
@@ -193,6 +194,28 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
             .map_err(|error| RemoteStateProviderError::AddressEncoding { message: error })?;
 
         self.native_rpc_request("cfx_getAccount", rpc_params![address, epoch])
+    }
+
+    fn get_native_deposit_list(
+        &self,
+        epoch: EpochNumber,
+        address: Address,
+    ) -> Result<Vec<DepositInfo>, RemoteStateProviderError> {
+        let address = RpcAddress::try_from_h160(address, self.config.chain.native_address_network)
+            .map_err(|error| RemoteStateProviderError::AddressEncoding { message: error })?;
+
+        self.native_rpc_request("cfx_getDepositList", rpc_params![address, epoch])
+    }
+
+    fn get_native_vote_list(
+        &self,
+        epoch: EpochNumber,
+        address: Address,
+    ) -> Result<Vec<VoteStakeInfo>, RemoteStateProviderError> {
+        let address = RpcAddress::try_from_h160(address, self.config.chain.native_address_network)
+            .map_err(|error| RemoteStateProviderError::AddressEncoding { message: error })?;
+
+        self.native_rpc_request("cfx_getVoteList", rpc_params![address, epoch])
     }
 
     fn get_native_sponsor_info(

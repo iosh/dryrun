@@ -1,4 +1,5 @@
 use cfx_types::{Address, H256, U256};
+use primitives::{DepositInfo, VoteStakeInfo};
 use thiserror::Error;
 
 use crate::state::rpc_types::{
@@ -71,6 +72,18 @@ pub trait RemoteStateProvider: Send + Sync {
         epoch: EpochNumber,
         address: Address,
     ) -> Result<NativeRpcAccount, RemoteStateProviderError>;
+
+    fn get_native_deposit_list(
+        &self,
+        epoch: EpochNumber,
+        address: Address,
+    ) -> Result<Vec<DepositInfo>, RemoteStateProviderError>;
+
+    fn get_native_vote_list(
+        &self,
+        epoch: EpochNumber,
+        address: Address,
+    ) -> Result<Vec<VoteStakeInfo>, RemoteStateProviderError>;
 
     fn get_native_sponsor_info(
         &self,
