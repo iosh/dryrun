@@ -27,9 +27,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let server = Server::builder().build(rpc_addr).await?;
     let local_addr = server.local_addr()?;
 
-    let engine = Arc::new(ConfluxEngine::new(conflux_config()?)?);
+    let config = conflux_config()?;
+    let native_address_network = config.chain.native_address_network;
+    let engine = Arc::new(ConfluxEngine::new(config)?);
     let service = Arc::new(ConfluxService::new(engine));
-    let module = rpc::build_rpc_module(service);
+    let module = rpc::build_rpc_module(service, native_address_network);
     let handle = server.start(module);
 
     info!("dryrun-conflux RPC server started at {}", local_addr);

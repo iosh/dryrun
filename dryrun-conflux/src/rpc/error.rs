@@ -74,6 +74,10 @@ fn internal_error(kind_code: Option<&'static str>, details: impl Into<String>) -
     )
 }
 
+pub(super) fn response_mapping_error(details: impl Into<String>) -> ErrorObjectOwned {
+    internal_error(Some("response_mapping_error"), details)
+}
+
 pub(super) fn map_service_error(error: &ConfluxServiceError) -> ErrorObjectOwned {
     let details = error.details();
 

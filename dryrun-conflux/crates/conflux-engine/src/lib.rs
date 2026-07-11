@@ -15,11 +15,12 @@ use crate::{
         build_mainnet_machine, build_native_pivot_block_context, build_rpc_backed_state,
         execute_transaction,
     },
-    simulation::{build_espace_execution, build_native_execution},
+    simulation::{
+        build_espace_execution, build_native_execution, build_native_not_executed,
+    },
     state::{
         ConfluxStateAnchor, ConfluxStatePoint, EspaceRpcBlock, HttpConfluxStateProvider,
-        NativeRpcBlock,
-        RemoteStateProvider,
+        NativeRpcBlock, RemoteStateProvider,
     },
     transaction::{build_espace_transaction_input, build_native_transaction_input},
 };
@@ -27,12 +28,12 @@ use cfx_types::U256;
 pub use error::ConfluxEngineError;
 pub use simulation::{
     EspaceExecution, EspaceExecutionFailure, EspaceExecutionStatus, EspaceSimulation,
-    NativeExecution, NativeExecutionFailure, NativeExecutionStatus, NativeSimulation,
-    SimulatedBlock,
+    NativeExecution, NativeExecutionFailure, NativeExecutionFailureCode, NativeExecutionStatus,
+    NativeSimulation, NativeStateAnchor, NativeStorageChange, SimulatedBlock,
 };
 pub use transaction::{
     AccessListItem, EspaceBlockRef, EspaceTransaction, EspaceTransactionType, NativeEpochRef,
-    NativeTransaction, NativeTransactionType, SimulateEspaceTransactionInput,
+    NativeTransaction, NativeTransactionVariant, SimulateEspaceTransactionInput,
     SimulateNativeTransactionInput,
 };
 
@@ -99,11 +100,23 @@ impl ConfluxEngine {
         let SimulateNativeTransactionInput { epoch, transaction } = input;
         let gas_limit = transaction.gas_limit;
         let execution_context = self.resolve_native_execution_context(&epoch)?;
-        let transaction = build_native_transaction_input(
-            transaction,
-            self.config.chain.native_chain_id,
-            execution_context.state_point.anchor().epoch_number(),
-        )?;
+        let state_anchor = NativeStateAnchor {
+            epoch_number: execution_context.state_point.anchor().epoch_number(),
+            pivot_hash: execution_context.state_point.anchor().pivot_hash(),
+        };
+
+        if let Err(failure) =
+            validate_native_transaction(&transaction, self.config.chain.native_chain_id)
+        {
+            return Ok(NativeSimulation::new(build_native_not_executed(
+                self.config.chain.native_chain_id,
+                state_anchor,
+                gas_limit,
+                failure,
+            )));
+        }
+
+        let transaction = build_native_transaction_input(transaction);
 
         let execution_input = TransactionExecutionInput {
             block_context: execution_context.block_context,
@@ -120,13 +133,14 @@ impl ConfluxEngine {
 
         let outcome =
             execute_transaction(&mut state, &machine, execution_input).map_err(|error| {
-                ConfluxEngineError::ExecutionInternal {
+                ConfluxEngineError::StateAccess {
                     message: error.to_string(),
                 }
             })?;
 
         Ok(NativeSimulation::new(build_native_execution(
             self.config.chain.native_chain_id,
+            state_anchor,
             gas_limit,
             outcome,
         )))
@@ -199,8 +213,7 @@ impl ConfluxEngine {
         &self,
         anchor: ConfluxStateAnchor,
     ) -> Result<NativeRpcBlock, ConfluxEngineError> {
-        self
-            .provider
+        self.provider
             .get_native_block_by_epoch_number(native_epoch_from_anchor(anchor))?
             .ok_or_else(|| ConfluxEngineError::BlockNotFound {
                 block: "native pivot block".to_string(),
@@ -211,8 +224,7 @@ impl ConfluxEngine {
         &self,
         anchor: ConfluxStateAnchor,
     ) -> Result<EspaceRpcBlock, ConfluxEngineError> {
-        self
-            .provider
+        self.provider
             .get_espace_block_by_number(anchor.espace_block())?
             .ok_or_else(|| ConfluxEngineError::BlockNotFound {
                 block: "eSpace block".to_string(),
@@ -257,7 +269,9 @@ fn state_anchor_from_espace_block(
     ))
 }
 
-fn state_anchor_from_native_pivot(pivot: &execution::NativePivotBlockContext) -> ConfluxStateAnchor {
+fn state_anchor_from_native_pivot(
+    pivot: &execution::NativePivotBlockContext,
+) -> ConfluxStateAnchor {
     ConfluxStateAnchor::new(pivot.epoch_height, pivot.hash)
 }
 
@@ -267,6 +281,61 @@ fn validate_same_state_anchor(
 ) -> Result<(), ConfluxEngineError> {
     if actual != expected {
         return Err(ConfluxEngineError::StateAnchorInconsistent);
+    }
+
+    Ok(())
+}
+
+fn validate_native_transaction(
+    transaction: &NativeTransaction,
+    expected_chain_id: u32,
+) -> Result<(), NativeExecutionFailure> {
+    if transaction.chain_id != expected_chain_id {
+        return Err(NativeExecutionFailure {
+            code: NativeExecutionFailureCode::ChainIdMismatch,
+            message: format!(
+                "transaction chain id {} does not match engine chain id {}",
+                transaction.chain_id, expected_chain_id
+            ),
+            reason: None,
+        });
+    }
+
+    match &transaction.variant {
+        NativeTransactionVariant::Cip155 { gas_price }
+        | NativeTransactionVariant::Cip2930 { gas_price, .. } => {
+            if gas_price.is_zero() {
+                return Err(NativeExecutionFailure {
+                    code: NativeExecutionFailureCode::ZeroGasPrice,
+                    message: "transaction gas price must be greater than zero".to_string(),
+                    reason: None,
+                });
+            }
+        }
+        NativeTransactionVariant::Cip1559 {
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+            ..
+        } => {
+            if max_fee_per_gas.is_zero() {
+                return Err(NativeExecutionFailure {
+                    code: NativeExecutionFailureCode::ZeroGasPrice,
+                    message: "transaction max fee per gas must be greater than zero".to_string(),
+                    reason: None,
+                });
+            }
+
+            if max_priority_fee_per_gas > max_fee_per_gas {
+                return Err(NativeExecutionFailure {
+                    code: NativeExecutionFailureCode::PriorityFeeExceedsMaxFee,
+                    message: format!(
+                        "max priority fee per gas {} exceeds max fee per gas {}",
+                        max_priority_fee_per_gas, max_fee_per_gas
+                    ),
+                    reason: None,
+                });
+            }
+        }
     }
 
     Ok(())

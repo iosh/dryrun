@@ -41,6 +41,10 @@ impl ConfluxStateAnchor {
         self.epoch_number
     }
 
+    pub(crate) fn pivot_hash(&self) -> H256 {
+        self.pivot_hash
+    }
+
     pub(crate) fn espace_block(&self) -> EthBlockId {
         EthBlockId::Num(self.epoch_number)
     }

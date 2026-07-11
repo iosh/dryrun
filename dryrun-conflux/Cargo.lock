@@ -2181,8 +2181,11 @@ name = "dryrun-conflux"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "cfx-addr",
  "cfx-bytes",
+ "cfx-rpc-cfx-types",
  "cfx-rpc-eth-types",
+ "cfx-rpc-primitives",
  "cfx-types",
  "conflux-engine",
  "conflux-service",

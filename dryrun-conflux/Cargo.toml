@@ -13,6 +13,8 @@ conflux-engine = { path = "crates/conflux-engine" }
 conflux-service = { path = "crates/conflux-service" }
 cfx-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-bytes = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+cfx-addr = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+cfx-rpc-cfx-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-rpc-primitives = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-rpc-eth-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 jsonrpsee = "0.26"
@@ -29,8 +31,11 @@ edition = { workspace = true }
 
 [dependencies]
 axum = { workspace = true }
+cfx-addr = { workspace = true }
 cfx-bytes = { workspace = true }
+cfx-rpc-cfx-types = { workspace = true }
 cfx-rpc-eth-types = { workspace = true }
+cfx-rpc-primitives = { workspace = true }
 cfx-types = { workspace = true }
 conflux-engine = { workspace = true }
 conflux-service = { workspace = true }

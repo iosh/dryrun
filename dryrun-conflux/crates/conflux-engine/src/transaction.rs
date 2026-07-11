@@ -34,17 +34,26 @@ pub enum EspaceTransactionType {
     Eip7702,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeTransactionType {
-    Legacy,
-    Cip2930,
-    Cip1559,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessListItem {
     pub address: Address,
     pub storage_keys: Vec<H256>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NativeTransactionVariant {
+    Cip155 {
+        gas_price: U256,
+    },
+    Cip2930 {
+        gas_price: U256,
+        access_list: Vec<AccessListItem>,
+    },
+    Cip1559 {
+        max_fee_per_gas: U256,
+        max_priority_fee_per_gas: U256,
+        access_list: Vec<AccessListItem>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,20 +74,16 @@ pub struct EspaceTransaction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeTransaction {
-    pub tx_type: NativeTransactionType,
     pub from: Address,
     pub to: Option<Address>,
-    pub nonce: Option<U256>,
+    pub nonce: U256,
     pub gas_limit: U256,
     pub value: U256,
     pub data: Bytes,
-    pub storage_limit: Option<u64>,
-    pub access_list: Vec<AccessListItem>,
-    pub gas_price: Option<U256>,
-    pub max_fee_per_gas: Option<U256>,
-    pub max_priority_fee_per_gas: Option<U256>,
-    pub requested_chain_id: Option<u64>,
-    pub requested_epoch_height: Option<u64>,
+    pub storage_limit: u64,
+    pub epoch_height: u64,
+    pub chain_id: u32,
+    pub variant: NativeTransactionVariant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,74 +108,76 @@ pub fn build_espace_transaction_input(
     Ok(EspaceTransactionInput { tx, sender })
 }
 
-pub fn build_native_transaction_input(
-    input: NativeTransaction,
-    fallback_chain_id: u32,
-    fallback_epoch_height: u64,
-) -> Result<NativeTransactionInput, ConfluxEngineError> {
+pub fn build_native_transaction_input(input: NativeTransaction) -> NativeTransactionInput {
     let sender = input.from;
-    let tx = build_typed_native_transaction(input, fallback_chain_id, fallback_epoch_height)?;
+    let tx = build_typed_native_transaction(input);
 
-    Ok(NativeTransactionInput { tx, sender })
+    NativeTransactionInput { tx, sender }
 }
 
-fn build_typed_native_transaction(
-    input: NativeTransaction,
-    fallback_chain_id: u32,
-    fallback_epoch_height: u64,
-) -> Result<TypedNativeTransaction, ConfluxEngineError> {
-    let chain_id = resolve_chain_id(input.requested_chain_id, fallback_chain_id)?;
-    let epoch_height = input
-        .requested_epoch_height
-        .unwrap_or(fallback_epoch_height);
-    let nonce = input.nonce.unwrap_or_default();
-    let storage_limit = input.storage_limit.unwrap_or(u64::MAX);
-    let action = action_from_to(input.to);
+fn build_typed_native_transaction(input: NativeTransaction) -> TypedNativeTransaction {
+    let NativeTransaction {
+        to,
+        nonce,
+        gas_limit,
+        value,
+        data,
+        storage_limit,
+        epoch_height,
+        chain_id,
+        variant,
+        ..
+    } = input;
 
-    Ok(match input.tx_type {
-        NativeTransactionType::Legacy => {
+    let action = action_from_to(to);
+
+    match variant {
+        NativeTransactionVariant::Cip155 { gas_price } => {
             TypedNativeTransaction::Cip155(PrimitiveNativeTransaction {
                 nonce,
-                gas_price: input.gas_price.unwrap_or_else(U256::one),
-                gas: input.gas_limit,
+                gas_price,
+                gas: gas_limit,
                 action,
-                value: input.value,
+                value,
                 storage_limit,
                 epoch_height,
                 chain_id,
-                data: input.data,
+                data,
             })
         }
-        NativeTransactionType::Cip2930 => TypedNativeTransaction::Cip2930(Cip2930Transaction {
+        NativeTransactionVariant::Cip2930 {
+            gas_price,
+            access_list,
+        } => TypedNativeTransaction::Cip2930(Cip2930Transaction {
             nonce,
-            gas_price: input.gas_price.unwrap_or_else(U256::one),
-            gas: input.gas_limit,
+            gas_price,
+            gas: gas_limit,
             action,
-            value: input.value,
+            value,
             storage_limit,
             epoch_height,
             chain_id,
-            data: input.data,
-            access_list: map_access_list(input.access_list),
+            data,
+            access_list: map_access_list(access_list),
         }),
-        NativeTransactionType::Cip1559 => TypedNativeTransaction::Cip1559(Cip1559Transaction {
+        NativeTransactionVariant::Cip1559 {
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+            access_list,
+        } => TypedNativeTransaction::Cip1559(Cip1559Transaction {
             nonce,
-            max_priority_fee_per_gas: input.max_priority_fee_per_gas.unwrap_or_default(),
-            max_fee_per_gas: input
-                .max_fee_per_gas
-                .or(input.max_priority_fee_per_gas)
-                .or(input.gas_price)
-                .unwrap_or_else(U256::one),
-            gas: input.gas_limit,
+            max_priority_fee_per_gas,
+            max_fee_per_gas,
+            gas: gas_limit,
             action,
-            value: input.value,
+            value,
             storage_limit,
             epoch_height,
             chain_id,
-            data: input.data,
-            access_list: map_access_list(input.access_list),
+            data,
+            access_list: map_access_list(access_list),
         }),
-    })
+    }
 }
 
 fn build_ethereum_transaction(

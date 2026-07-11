@@ -1,4 +1,5 @@
 pub mod espace;
+pub mod native;
 
 use std::sync::Arc;
 
@@ -21,6 +22,15 @@ impl ConfluxService {
     ) -> Result<espace::SimulateEspaceTransactionOutput, ConfluxServiceError> {
         let engine_input = input.try_into()?;
         let simulation = self.engine.simulate_espace_transaction(engine_input)?;
+
+        Ok(simulation.into())
+    }
+
+    pub fn simulate_native_transaction(
+        &self,
+        input: native::SimulateNativeTransactionInput,
+    ) -> Result<native::SimulateNativeTransactionOutput, ConfluxServiceError> {
+        let simulation = self.engine.simulate_native_transaction(input.into())?;
 
         Ok(simulation.into())
     }
