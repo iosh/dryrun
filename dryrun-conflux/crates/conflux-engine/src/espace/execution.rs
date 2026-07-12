@@ -5,17 +5,35 @@ use cfx_types::{H256, U256};
 pub enum EspaceExecutionStatus {
     Success,
     Failed,
+    NotExecuted,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SimulatedBlock {
     pub number: u64,
     pub hash: H256,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EspaceExecutionFailureCode {
+    ChainIdMismatch,
+    ZeroGasPrice,
+    PriorityFeeExceedsMaxFee,
+    NonceTooLow,
+    NonceTooHigh,
+    FeeBelowBaseFee,
+    IntrinsicGasTooLow,
+    SenderWithCode,
+    SenderDoesNotExist,
+    InsufficientFunds,
+    Revert,
+    OutOfGas,
+    NonceOverflow,
+    VmError,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EspaceExecutionFailure {
-    pub code: String,
+    pub code: EspaceExecutionFailureCode,
     pub message: String,
     pub reason: Option<String>,
 }

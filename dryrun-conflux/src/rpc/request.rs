@@ -58,6 +58,13 @@ struct NativeAccessListItem {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EspaceTransactionType {
+    Legacy,
+    Eip2930,
+    Eip1559,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeTransactionType {
     Cip155,
     Cip2930,
@@ -99,7 +106,7 @@ impl TryFrom<SimulateEspaceTransactionRequest> for service_espace::SimulateEspac
                 .block
                 .map(map_block_ref)
                 .transpose()?
-                .unwrap_or(service_espace::BlockRef::Latest),
+                .unwrap_or(service_espace::EspaceBlockRef::Latest),
             transaction: map_transaction(request.transaction)?,
         })
     }
@@ -164,95 +171,14 @@ impl SimulateTransactionOptions {
 }
 
 fn validate_transaction(transaction: &TransactionRequest) -> Result<(), ValidationError> {
-    if transaction.from.is_none() {
-        return Err(ValidationError::invalid_params(
-            "`transaction.from` is required",
-        ));
-    }
-
-    if transaction.gas.is_none() {
-        return Err(ValidationError::invalid_params(
-            "`transaction.gas` is required",
-        ));
-    }
-
     if transaction.authorization_list.is_some() {
         return Err(ValidationError::not_supported(
             "`transaction.authorizationList` is not supported yet",
         ));
     }
 
-    if let Some(tx_type) = transaction.transaction_type
-        && tx_type.as_u64() > 0x2
-    {
-        if tx_type.as_u64() == 0x4 {
-            return Err(ValidationError::not_supported(
-                "`transaction.type` `0x4` / EIP-7702 is not supported yet",
-            ));
-        }
-
-        return Err(ValidationError::not_supported(
-            "`transaction.type` only supports `0x0`, `0x1`, and `0x2`",
-        ));
-    }
-
-    let has_gas_price = transaction.gas_price.is_some();
-    let has_dynamic_fee =
-        transaction.max_fee_per_gas.is_some() || transaction.max_priority_fee_per_gas.is_some();
-
-    if has_gas_price && has_dynamic_fee {
-        return Err(ValidationError::invalid_params(
-            "`transaction.gasPrice` cannot be mixed with EIP-1559 fee fields",
-        ));
-    }
-
-    if let (Some(max_fee), Some(max_priority)) = (
-        transaction.max_fee_per_gas,
-        transaction.max_priority_fee_per_gas,
-    ) && max_priority > max_fee
-    {
-        return Err(ValidationError::invalid_params(
-            "`transaction.maxPriorityFeePerGas` cannot exceed `transaction.maxFeePerGas`",
-        ));
-    }
-
-    match transaction.transaction_type.map(|value| value.as_u64()) {
-        Some(0x0) => {
-            if transaction
-                .access_list
-                .as_ref()
-                .is_some_and(|items| !items.is_empty())
-            {
-                return Err(ValidationError::invalid_params(
-                    "`transaction.type` `0x0` cannot be combined with `transaction.accessList`",
-                ));
-            }
-            if has_dynamic_fee {
-                return Err(ValidationError::invalid_params(
-                    "`transaction.type` `0x0` cannot be combined with EIP-1559 fee fields",
-                ));
-            }
-        }
-        Some(0x1) => {
-            if has_dynamic_fee {
-                return Err(ValidationError::invalid_params(
-                    "`transaction.type` `0x1` cannot be combined with EIP-1559 fee fields",
-                ));
-            }
-        }
-        Some(0x2) => {
-            if has_gas_price {
-                return Err(ValidationError::invalid_params(
-                    "`transaction.type` `0x2` cannot be combined with `transaction.gasPrice`",
-                ));
-            }
-        }
-        _ => {}
-    }
-
     Ok(())
 }
-
 fn require_transaction_from(transaction: &TransactionRequest) -> Result<Address, ValidationError> {
     transaction
         .from
@@ -295,35 +221,41 @@ fn validate_reserved_option(field: &str, value: Option<&Value>) -> Result<(), Va
     Ok(())
 }
 
-fn map_block_ref(block: BlockRef) -> Result<service_espace::BlockRef, ValidationError> {
+fn map_block_ref(block: BlockRef) -> Result<service_espace::EspaceBlockRef, ValidationError> {
     match block {
         BlockRef::Tag(value) => match value.as_str() {
-            "latest" => Ok(service_espace::BlockRef::Latest),
-            value => Ok(service_espace::BlockRef::Number(parse_u64_quantity(
+            "latest" => Ok(service_espace::EspaceBlockRef::Latest),
+            value => Ok(service_espace::EspaceBlockRef::Number(parse_u64_quantity(
                 value, "block",
             )?)),
         },
-        BlockRef::Hash(selector) => Ok(service_espace::BlockRef::Hash(selector.block_hash)),
+        BlockRef::Hash(_) => Err(ValidationError::not_supported(
+            "eSpace block hash selectors are not supported yet",
+        )),
     }
 }
-
 fn map_transaction(
     transaction: TransactionRequest,
 ) -> Result<service_espace::EspaceTransaction, ValidationError> {
     let tx_type = infer_transaction_type(&transaction)?;
+    validate_transaction_shape(&transaction, tx_type)?;
+
     let from = require_transaction_from(&transaction)?;
+    let nonce = require_transaction_field(transaction.nonce, "transaction.nonce")?;
     let gas_limit = require_transaction_gas(&transaction)?;
+    let chain_id = u256_to_u32_quantity(
+        require_transaction_field(transaction.chain_id, "transaction.chainId")?,
+        "transaction.chainId",
+    )?;
 
     let TransactionRequest {
         to,
-        nonce,
         value,
         input,
         access_list,
         gas_price,
         max_fee_per_gas,
         max_priority_fee_per_gas,
-        chain_id,
         ..
     } = transaction;
 
@@ -335,29 +267,90 @@ fn map_transaction(
         .unwrap_or_default()
         .into();
 
+    let access_list = access_list
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| service_espace::AccessListItem {
+            address: item.address,
+            storage_keys: item.storage_keys,
+        })
+        .collect();
+
+    let variant = match tx_type {
+        EspaceTransactionType::Legacy => service_espace::EspaceTransactionVariant::Legacy {
+            gas_price: require_transaction_field(gas_price, "transaction.gasPrice")?,
+        },
+        EspaceTransactionType::Eip2930 => service_espace::EspaceTransactionVariant::Eip2930 {
+            gas_price: require_transaction_field(gas_price, "transaction.gasPrice")?,
+            access_list,
+        },
+        EspaceTransactionType::Eip1559 => service_espace::EspaceTransactionVariant::Eip1559 {
+            max_fee_per_gas: require_transaction_field(
+                max_fee_per_gas,
+                "transaction.maxFeePerGas",
+            )?,
+            max_priority_fee_per_gas: require_transaction_field(
+                max_priority_fee_per_gas,
+                "transaction.maxPriorityFeePerGas",
+            )?,
+            access_list,
+        },
+    };
+
     Ok(service_espace::EspaceTransaction {
-        tx_type,
-        requested_chain_id: chain_id
-            .map(|value| u256_to_u64_quantity(value, "transaction.chainId"))
-            .transpose()?,
         from,
         to,
         nonce,
         gas_limit,
         value: value.unwrap_or_default(),
         data,
-        access_list: access_list
-            .unwrap_or_default()
-            .into_iter()
-            .map(|item| service_espace::AccessListItem {
-                address: item.address,
-                storage_keys: item.storage_keys,
-            })
-            .collect(),
-        gas_price,
-        max_fee_per_gas,
-        max_priority_fee_per_gas,
+        chain_id,
+        variant,
     })
+}
+
+fn require_transaction_field<T>(value: Option<T>, field: &str) -> Result<T, ValidationError> {
+    value.ok_or_else(|| ValidationError::invalid_params(format!("`{field}` is required")))
+}
+
+fn validate_transaction_shape(
+    transaction: &TransactionRequest,
+    tx_type: EspaceTransactionType,
+) -> Result<(), ValidationError> {
+    let has_dynamic_fee =
+        transaction.max_fee_per_gas.is_some() || transaction.max_priority_fee_per_gas.is_some();
+
+    match tx_type {
+        EspaceTransactionType::Legacy => {
+            if transaction.access_list.is_some() {
+                return Err(ValidationError::invalid_params(
+                    "legacy transactions cannot include `transaction.accessList`",
+                ));
+            }
+
+            if has_dynamic_fee {
+                return Err(ValidationError::invalid_params(
+                    "legacy transactions cannot include EIP-1559 fee fields",
+                ));
+            }
+        }
+        EspaceTransactionType::Eip2930 => {
+            if has_dynamic_fee {
+                return Err(ValidationError::invalid_params(
+                    "EIP-2930 transactions cannot include EIP-1559 fee fields",
+                ));
+            }
+        }
+        EspaceTransactionType::Eip1559 => {
+            if transaction.gas_price.is_some() {
+                return Err(ValidationError::invalid_params(
+                    "EIP-1559 transactions cannot include `transaction.gasPrice`",
+                ));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn map_native_epoch(
@@ -559,38 +552,26 @@ fn map_native_access_list(items: Vec<NativeAccessListItem>) -> Vec<service_nativ
 
 fn infer_transaction_type(
     transaction: &TransactionRequest,
-) -> Result<service_espace::EspaceTransactionType, ValidationError> {
-    Ok(
-        match transaction.transaction_type.map(|value| value.as_u64()) {
-            Some(0x1) => service_espace::EspaceTransactionType::AccessList,
-            Some(0x2) => service_espace::EspaceTransactionType::DynamicFee,
-            None if transaction.max_fee_per_gas.is_some()
-                || transaction.max_priority_fee_per_gas.is_some() =>
-            {
-                service_espace::EspaceTransactionType::DynamicFee
-            }
-            None if transaction
-                .access_list
-                .as_ref()
-                .is_some_and(|items| !items.is_empty()) =>
-            {
-                service_espace::EspaceTransactionType::AccessList
-            }
-            Some(0x0) | None => service_espace::EspaceTransactionType::Legacy,
-            Some(0x4) => {
-                return Err(ValidationError::not_supported(
-                    "`transaction.type` `0x4` / EIP-7702 is not supported yet",
-                ));
-            }
-            Some(_) => {
-                return Err(ValidationError::not_supported(
-                    "`transaction.type` only supports `0x0`, `0x1`, and `0x2`",
-                ));
-            }
-        },
-    )
+) -> Result<EspaceTransactionType, ValidationError> {
+    match transaction.transaction_type.map(|value| value.as_u64()) {
+        Some(0x0) => Ok(EspaceTransactionType::Legacy),
+        Some(0x1) => Ok(EspaceTransactionType::Eip2930),
+        Some(0x2) => Ok(EspaceTransactionType::Eip1559),
+        Some(0x4) => Err(ValidationError::not_supported(
+            "`transaction.type` `0x4` / EIP-7702 is not supported yet",
+        )),
+        Some(_) => Err(ValidationError::invalid_params(
+            "`transaction.type` only supports `0x0`, `0x1`, and `0x2`",
+        )),
+        None if transaction.max_fee_per_gas.is_some()
+            || transaction.max_priority_fee_per_gas.is_some() =>
+        {
+            Ok(EspaceTransactionType::Eip1559)
+        }
+        None if transaction.access_list.is_some() => Ok(EspaceTransactionType::Eip2930),
+        None => Ok(EspaceTransactionType::Legacy),
+    }
 }
-
 fn parse_u64_quantity(value: &str, field: &str) -> Result<u64, ValidationError> {
     let value = parse_quantity(value)?;
 

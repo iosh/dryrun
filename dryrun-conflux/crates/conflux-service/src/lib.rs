@@ -20,8 +20,7 @@ impl ConfluxService {
         &self,
         input: espace::SimulateEspaceTransactionInput,
     ) -> Result<espace::SimulateEspaceTransactionOutput, ConfluxServiceError> {
-        let engine_input = input.try_into()?;
-        let simulation = self.engine.simulate_espace_transaction(engine_input)?;
+        let simulation = self.engine.simulate_espace_transaction(input)?;
 
         Ok(simulation.into())
     }

@@ -1,6 +1,6 @@
 pub mod config;
-pub mod espace;
 mod error;
+pub mod espace;
 pub mod execution;
 mod simulation;
 pub mod state;
@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::{
     config::ConfluxConfig,
+    espace::validate_espace_transaction,
     execution::{
         DryRunTransactionInput, ExecutionBlockContext, ExecutionConsensusContext,
         TransactionExecutionInput, build_espace_block_context, build_execution_block_context,
@@ -17,7 +18,8 @@ use crate::{
         execute_transaction,
     },
     simulation::{
-        build_espace_execution, build_native_execution, build_native_not_executed,
+        build_espace_execution, build_espace_not_executed, build_native_execution,
+        build_native_not_executed,
     },
     state::{
         ConfluxStateAnchor, ConfluxStatePoint, EspaceRpcBlock, HttpConfluxStateProvider,
@@ -29,8 +31,8 @@ use cfx_types::U256;
 pub use error::ConfluxEngineError;
 pub use espace::{
     AccessListItem, EspaceBlockRef, EspaceExecution, EspaceExecutionFailure,
-    EspaceExecutionStatus, EspaceSimulation, EspaceTransaction, EspaceTransactionType,
-    SimulateEspaceTransactionInput, SimulatedBlock,
+    EspaceExecutionFailureCode, EspaceExecutionStatus, EspaceSimulation, EspaceTransaction,
+    EspaceTransactionVariant, SimulateEspaceTransactionInput, SimulatedBlock,
 };
 pub use simulation::{
     NativeExecution, NativeExecutionFailure, NativeExecutionFailureCode, NativeExecutionStatus,
@@ -64,9 +66,20 @@ impl ConfluxEngine {
     ) -> Result<EspaceSimulation, ConfluxEngineError> {
         let SimulateEspaceTransactionInput { block, transaction } = input;
         let gas_limit = transaction.gas_limit;
-        let transaction =
-            build_espace_transaction_input(transaction, self.config.chain.evm_chain_id)?;
         let execution_context = self.resolve_espace_execution_context(&block)?;
+
+        if let Err(failure) =
+            validate_espace_transaction(&transaction, self.config.chain.evm_chain_id)
+        {
+            return Ok(EspaceSimulation::new(build_espace_not_executed(
+                self.config.chain.evm_chain_id,
+                execution_context.simulated_block,
+                gas_limit,
+                failure,
+            )));
+        }
+
+        let transaction = build_espace_transaction_input(transaction);
 
         let execution_input = TransactionExecutionInput {
             block_context: execution_context.block_context,
@@ -88,12 +101,14 @@ impl ConfluxEngine {
                 }
             })?;
 
-        Ok(EspaceSimulation::new(build_espace_execution(
+        let execution = build_espace_execution(
             self.config.chain.evm_chain_id,
             execution_context.simulated_block,
             gas_limit,
             outcome,
-        )))
+        )?;
+
+        Ok(EspaceSimulation::new(execution))
     }
 
     pub fn simulate_native_transaction(
