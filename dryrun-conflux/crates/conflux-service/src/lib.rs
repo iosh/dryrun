@@ -72,12 +72,10 @@ fn engine_error_kind(error: &conflux_engine::ConfluxEngineError) -> &'static str
     use conflux_engine::ConfluxEngineError;
 
     match error {
-        ConfluxEngineError::UnsupportedTransactionType { .. } => "not_supported",
         ConfluxEngineError::BlockNotFound { .. } => "block_not_found",
         ConfluxEngineError::BlockContext(_)
         | ConfluxEngineError::InvalidBlockContext { .. }
         | ConfluxEngineError::StateAnchorInconsistent => "block_context_error",
-        ConfluxEngineError::InvalidTransaction { .. } => "invalid_transaction",
         ConfluxEngineError::RemoteState(_) => "rpc_error",
         ConfluxEngineError::StateAccess { .. } => "state_access_error",
         ConfluxEngineError::ExecutionInternal { .. } => "engine_execution_error",

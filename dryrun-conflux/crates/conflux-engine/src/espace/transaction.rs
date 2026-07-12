@@ -1,6 +1,14 @@
 use super::{EspaceExecutionFailure, EspaceExecutionFailureCode};
 use cfx_bytes::Bytes;
 use cfx_types::{Address, H256, U256};
+use primitives::{
+    AccessListItem as PrimitiveAccessListItem,
+    transaction::{
+        Action, Eip155Transaction, Eip1559Transaction, Eip2930Transaction, EthereumTransaction,
+    },
+};
+
+use crate::execution::EspaceTransactionInput;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EspaceBlockRef {
@@ -46,6 +54,86 @@ pub struct EspaceTransaction {
 pub struct SimulateEspaceTransactionInput {
     pub block: EspaceBlockRef,
     pub transaction: EspaceTransaction,
+}
+
+pub(crate) fn build_espace_transaction_input(
+    input: EspaceTransaction,
+) -> EspaceTransactionInput {
+    let sender = input.from;
+    let tx = build_ethereum_transaction(input);
+
+    EspaceTransactionInput { tx, sender }
+}
+
+fn build_ethereum_transaction(input: EspaceTransaction) -> EthereumTransaction {
+    let EspaceTransaction {
+        to,
+        nonce,
+        gas_limit,
+        value,
+        data,
+        chain_id,
+        variant,
+        ..
+    } = input;
+
+    let action = action_from_to(to);
+
+    match variant {
+        EspaceTransactionVariant::Legacy { gas_price } => {
+            EthereumTransaction::Eip155(Eip155Transaction {
+                nonce,
+                gas_price,
+                gas: gas_limit,
+                action,
+                value,
+                chain_id: Some(chain_id),
+                data,
+            })
+        }
+        EspaceTransactionVariant::Eip2930 {
+            gas_price,
+            access_list,
+        } => EthereumTransaction::Eip2930(Eip2930Transaction {
+            chain_id,
+            nonce,
+            gas_price,
+            gas: gas_limit,
+            action,
+            value,
+            data,
+            access_list: map_access_list(access_list),
+        }),
+        EspaceTransactionVariant::Eip1559 {
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+            access_list,
+        } => EthereumTransaction::Eip1559(Eip1559Transaction {
+            chain_id,
+            nonce,
+            max_priority_fee_per_gas,
+            max_fee_per_gas,
+            gas: gas_limit,
+            action,
+            value,
+            data,
+            access_list: map_access_list(access_list),
+        }),
+    }
+}
+
+fn action_from_to(to: Option<Address>) -> Action {
+    to.map_or(Action::Create, Action::Call)
+}
+
+fn map_access_list(items: Vec<AccessListItem>) -> Vec<PrimitiveAccessListItem> {
+    items
+        .into_iter()
+        .map(|item| PrimitiveAccessListItem {
+            address: item.address,
+            storage_keys: item.storage_keys,
+        })
+        .collect()
 }
 
 pub(crate) fn validate_espace_transaction(

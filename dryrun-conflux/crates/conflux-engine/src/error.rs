@@ -16,12 +16,6 @@ pub enum ConfluxEngineError {
     #[error("state anchor is inconsistent")]
     StateAnchorInconsistent,
 
-    #[error("invalid transaction: {message}")]
-    InvalidTransaction { message: String },
-
-    #[error("unsupported transaction type: {tx_type}")]
-    UnsupportedTransactionType { tx_type: &'static str },
-
     #[error(transparent)]
     RemoteState(#[from] RemoteStateProviderError),
 

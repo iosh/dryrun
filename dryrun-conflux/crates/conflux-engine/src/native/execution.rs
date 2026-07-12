@@ -67,22 +67,3 @@ pub struct NativeExecution {
     pub output: Bytes,
     pub failure: Option<NativeExecutionFailure>,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NativeSimulation {
-    execution: NativeExecution,
-}
-
-impl NativeSimulation {
-    pub fn new(execution: NativeExecution) -> Self {
-        Self { execution }
-    }
-
-    pub fn execution(&self) -> &NativeExecution {
-        &self.execution
-    }
-
-    pub fn into_execution(self) -> NativeExecution {
-        self.execution
-    }
-}

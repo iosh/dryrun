@@ -51,22 +51,3 @@ pub struct EspaceExecution {
     pub output: Bytes,
     pub failure: Option<EspaceExecutionFailure>,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EspaceSimulation {
-    execution: EspaceExecution,
-}
-
-impl EspaceSimulation {
-    pub fn new(execution: EspaceExecution) -> Self {
-        Self { execution }
-    }
-
-    pub fn execution(&self) -> &EspaceExecution {
-        &self.execution
-    }
-
-    pub fn into_execution(self) -> EspaceExecution {
-        self.execution
-    }
-}

@@ -3,43 +3,36 @@ mod error;
 pub mod espace;
 pub mod execution;
 pub mod native;
-mod simulation;
 pub mod state;
-mod transaction;
 
 use std::sync::Arc;
 
 use crate::{
     config::ConfluxConfig,
-    espace::validate_espace_transaction,
+    espace::{
+        build_espace_execution, build_espace_not_executed, build_espace_transaction_input,
+        validate_espace_transaction, EspaceBlockRef, EspaceExecution, SimulateEspaceTransactionInput,
+        SimulatedBlock,
+    },
     execution::{
         DryRunTransactionInput, ExecutionBlockContext, ExecutionConsensusContext,
         TransactionExecutionInput, build_espace_block_context, build_execution_block_context,
         build_mainnet_machine, build_native_pivot_block_context, build_rpc_backed_state,
         execute_transaction,
     },
-    simulation::{
-        build_espace_execution, build_espace_not_executed, build_native_execution,
-        build_native_not_executed,
+    native::{
+        build_native_execution, build_native_not_executed, build_native_transaction_input,
+        NativeEpochRef, NativeExecution, NativeExecutionFailure, NativeExecutionFailureCode,
+        NativeStateAnchor, NativeTransaction, NativeTransactionVariant,
+        SimulateNativeTransactionInput,
     },
     state::{
         ConfluxStateAnchor, ConfluxStatePoint, EspaceRpcBlock, HttpConfluxStateProvider,
         NativeRpcBlock, RemoteStateProvider,
     },
-    transaction::{build_espace_transaction_input, build_native_transaction_input},
 };
 use cfx_types::U256;
 pub use error::ConfluxEngineError;
-pub use espace::{
-    AccessListItem, EspaceBlockRef, EspaceExecution, EspaceExecutionFailure,
-    EspaceExecutionFailureCode, EspaceExecutionStatus, EspaceSimulation, EspaceTransaction,
-    EspaceTransactionVariant, SimulateEspaceTransactionInput, SimulatedBlock,
-};
-pub use native::{
-    NativeExecution, NativeExecutionFailure, NativeExecutionFailureCode, NativeExecutionStatus,
-    NativeEpochRef, NativeSimulation, NativeStateAnchor, NativeStorageChange, NativeTransaction,
-    NativeTransactionVariant, SimulateNativeTransactionInput,
-};
 
 use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;
 use cfx_rpc_eth_types::BlockId as EthBlockId;
@@ -62,7 +55,7 @@ impl ConfluxEngine {
     pub fn simulate_espace_transaction(
         &self,
         input: SimulateEspaceTransactionInput,
-    ) -> Result<EspaceSimulation, ConfluxEngineError> {
+    ) -> Result<EspaceExecution, ConfluxEngineError> {
         let SimulateEspaceTransactionInput { block, transaction } = input;
         let gas_limit = transaction.gas_limit;
         let execution_context = self.resolve_espace_execution_context(&block)?;
@@ -70,12 +63,12 @@ impl ConfluxEngine {
         if let Err(failure) =
             validate_espace_transaction(&transaction, self.config.chain.evm_chain_id)
         {
-            return Ok(EspaceSimulation::new(build_espace_not_executed(
+            return Ok(build_espace_not_executed(
                 self.config.chain.evm_chain_id,
                 execution_context.simulated_block,
                 gas_limit,
                 failure,
-            )));
+            ));
         }
 
         let transaction = build_espace_transaction_input(transaction);
@@ -107,13 +100,13 @@ impl ConfluxEngine {
             outcome,
         )?;
 
-        Ok(EspaceSimulation::new(execution))
+        Ok(execution)
     }
 
     pub fn simulate_native_transaction(
         &self,
         input: SimulateNativeTransactionInput,
-    ) -> Result<NativeSimulation, ConfluxEngineError> {
+    ) -> Result<NativeExecution, ConfluxEngineError> {
         let SimulateNativeTransactionInput { epoch, transaction } = input;
         let gas_limit = transaction.gas_limit;
         let execution_context = self.resolve_native_execution_context(&epoch)?;
@@ -125,12 +118,12 @@ impl ConfluxEngine {
         if let Err(failure) =
             validate_native_transaction(&transaction, self.config.chain.native_chain_id)
         {
-            return Ok(NativeSimulation::new(build_native_not_executed(
+            return Ok(build_native_not_executed(
                 self.config.chain.native_chain_id,
                 state_anchor,
                 gas_limit,
                 failure,
-            )));
+            ));
         }
 
         let transaction = build_native_transaction_input(transaction);
@@ -155,12 +148,12 @@ impl ConfluxEngine {
                 }
             })?;
 
-        Ok(NativeSimulation::new(build_native_execution(
+        Ok(build_native_execution(
             self.config.chain.native_chain_id,
             state_anchor,
             gas_limit,
             outcome,
-        )))
+        ))
     }
 
     fn resolve_espace_execution_context(

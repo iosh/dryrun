@@ -1,6 +1,6 @@
 use cfx_types::{Address, U256};
 use conflux_engine as engine;
-pub use engine::{
+pub use engine::espace::{
     AccessListItem, EspaceBlockRef, EspaceExecution, EspaceExecutionFailure,
     EspaceExecutionFailureCode, EspaceExecutionStatus, EspaceTransaction,
     EspaceTransactionVariant, SimulateEspaceTransactionInput, SimulatedBlock,
@@ -122,10 +122,8 @@ pub struct SimulateEspaceTransactionOutput {
     pub execution: EspaceExecution,
 }
 
-impl From<engine::EspaceSimulation> for SimulateEspaceTransactionOutput {
-    fn from(simulation: engine::EspaceSimulation) -> Self {
-        Self {
-            execution: simulation.into_execution(),
-        }
+impl From<engine::espace::EspaceExecution> for SimulateEspaceTransactionOutput {
+    fn from(execution: engine::espace::EspaceExecution) -> Self {
+        Self { execution }
     }
 }
