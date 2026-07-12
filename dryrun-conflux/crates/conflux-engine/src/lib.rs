@@ -1,4 +1,5 @@
 pub mod config;
+pub mod espace;
 mod error;
 pub mod execution;
 mod simulation;
@@ -26,15 +27,17 @@ use crate::{
 };
 use cfx_types::U256;
 pub use error::ConfluxEngineError;
+pub use espace::{
+    AccessListItem, EspaceBlockRef, EspaceExecution, EspaceExecutionFailure,
+    EspaceExecutionStatus, EspaceSimulation, EspaceTransaction, EspaceTransactionType,
+    SimulateEspaceTransactionInput, SimulatedBlock,
+};
 pub use simulation::{
-    EspaceExecution, EspaceExecutionFailure, EspaceExecutionStatus, EspaceSimulation,
     NativeExecution, NativeExecutionFailure, NativeExecutionFailureCode, NativeExecutionStatus,
-    NativeSimulation, NativeStateAnchor, NativeStorageChange, SimulatedBlock,
+    NativeSimulation, NativeStateAnchor, NativeStorageChange,
 };
 pub use transaction::{
-    AccessListItem, EspaceBlockRef, EspaceTransaction, EspaceTransactionType, NativeEpochRef,
-    NativeTransaction, NativeTransactionVariant, SimulateEspaceTransactionInput,
-    SimulateNativeTransactionInput,
+    NativeEpochRef, NativeTransaction, NativeTransactionVariant, SimulateNativeTransactionInput,
 };
 
 use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;
