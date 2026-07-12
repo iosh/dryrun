@@ -1610,7 +1610,6 @@ dependencies = [
 name = "conflux-service"
 version = "0.1.0"
 dependencies = [
- "cfx-bytes",
  "cfx-types",
  "conflux-engine",
  "primitives",

@@ -1,7 +1,8 @@
 mod types;
 
 pub use types::{
-    AccessListItem, EpochRef, ExecutionFailure, ExecutionFailureCode, ExecutionStatus,
+    AccessListItem, NativeEpochRef, NativeExecution, NativeExecutionFailure,
+    NativeExecutionFailureCode, NativeExecutionStatus, NativeStateAnchor, NativeStorageChange,
     NativeTransaction, NativeTransactionVariant, SimulateNativeTransactionInput,
-    SimulateNativeTransactionOutput, SimulationExecution, StateAnchor, StorageChange,
+    SimulateNativeTransactionOutput,
 };

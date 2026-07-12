@@ -251,7 +251,7 @@ impl SimulateNativeTransactionResponse {
 
 impl NativeExecution {
     fn try_from_service(
-        execution: service_native::SimulationExecution,
+        execution: service_native::NativeExecution,
         network: Network,
     ) -> Result<Self, ResponseMappingError> {
         Ok(Self {
@@ -281,8 +281,8 @@ impl NativeExecution {
     }
 }
 
-impl From<service_native::StateAnchor> for NativeStateAnchor {
-    fn from(state: service_native::StateAnchor) -> Self {
+impl From<service_native::NativeStateAnchor> for NativeStateAnchor {
+    fn from(state: service_native::NativeStateAnchor) -> Self {
         Self {
             epoch_number: state.epoch_number.into(),
             pivot_hash: state.pivot_hash,
@@ -290,18 +290,18 @@ impl From<service_native::StateAnchor> for NativeStateAnchor {
     }
 }
 
-impl From<service_native::ExecutionStatus> for NativeSimulationStatus {
-    fn from(status: service_native::ExecutionStatus) -> Self {
+impl From<service_native::NativeExecutionStatus> for NativeSimulationStatus {
+    fn from(status: service_native::NativeExecutionStatus) -> Self {
         match status {
-            service_native::ExecutionStatus::Success => Self::Success,
-            service_native::ExecutionStatus::Failed => Self::Failed,
-            service_native::ExecutionStatus::NotExecuted => Self::NotExecuted,
+            service_native::NativeExecutionStatus::Success => Self::Success,
+            service_native::NativeExecutionStatus::Failed => Self::Failed,
+            service_native::NativeExecutionStatus::NotExecuted => Self::NotExecuted,
         }
     }
 }
 
-impl From<service_native::ExecutionFailure> for NativeExecutionFailure {
-    fn from(failure: service_native::ExecutionFailure) -> Self {
+impl From<service_native::NativeExecutionFailure> for NativeExecutionFailure {
+    fn from(failure: service_native::NativeExecutionFailure) -> Self {
         Self {
             code: failure.code.into(),
             message: failure.message,
@@ -310,44 +310,50 @@ impl From<service_native::ExecutionFailure> for NativeExecutionFailure {
     }
 }
 
-impl From<service_native::ExecutionFailureCode> for NativeExecutionFailureCode {
-    fn from(code: service_native::ExecutionFailureCode) -> Self {
+impl From<service_native::NativeExecutionFailureCode> for NativeExecutionFailureCode {
+    fn from(code: service_native::NativeExecutionFailureCode) -> Self {
         match code {
-            service_native::ExecutionFailureCode::ChainIdMismatch => Self::ChainIdMismatch,
-            service_native::ExecutionFailureCode::ZeroGasPrice => Self::ZeroGasPrice,
-            service_native::ExecutionFailureCode::PriorityFeeExceedsMaxFee => {
+            service_native::NativeExecutionFailureCode::ChainIdMismatch => Self::ChainIdMismatch,
+            service_native::NativeExecutionFailureCode::ZeroGasPrice => Self::ZeroGasPrice,
+            service_native::NativeExecutionFailureCode::PriorityFeeExceedsMaxFee => {
                 Self::PriorityFeeExceedsMaxFee
             }
-            service_native::ExecutionFailureCode::NonceTooLow => Self::NonceTooLow,
-            service_native::ExecutionFailureCode::NonceTooHigh => Self::NonceTooHigh,
-            service_native::ExecutionFailureCode::EpochHeightOutOfBound => {
+            service_native::NativeExecutionFailureCode::NonceTooLow => Self::NonceTooLow,
+            service_native::NativeExecutionFailureCode::NonceTooHigh => Self::NonceTooHigh,
+            service_native::NativeExecutionFailureCode::EpochHeightOutOfBound => {
                 Self::EpochHeightOutOfBound
             }
-            service_native::ExecutionFailureCode::FeeBelowBaseFee => Self::FeeBelowBaseFee,
-            service_native::ExecutionFailureCode::IntrinsicGasTooLow => Self::IntrinsicGasTooLow,
-            service_native::ExecutionFailureCode::InvalidRecipient => Self::InvalidRecipient,
-            service_native::ExecutionFailureCode::SenderWithCode => Self::SenderWithCode,
-            service_native::ExecutionFailureCode::SenderDoesNotExist => Self::SenderDoesNotExist,
-            service_native::ExecutionFailureCode::InsufficientFunds => Self::InsufficientFunds,
-            service_native::ExecutionFailureCode::SponsorBalanceInsufficient => {
+            service_native::NativeExecutionFailureCode::FeeBelowBaseFee => Self::FeeBelowBaseFee,
+            service_native::NativeExecutionFailureCode::IntrinsicGasTooLow => {
+                Self::IntrinsicGasTooLow
+            }
+            service_native::NativeExecutionFailureCode::InvalidRecipient => Self::InvalidRecipient,
+            service_native::NativeExecutionFailureCode::SenderWithCode => Self::SenderWithCode,
+            service_native::NativeExecutionFailureCode::SenderDoesNotExist => {
+                Self::SenderDoesNotExist
+            }
+            service_native::NativeExecutionFailureCode::InsufficientFunds => {
+                Self::InsufficientFunds
+            }
+            service_native::NativeExecutionFailureCode::SponsorBalanceInsufficient => {
                 Self::SponsorBalanceInsufficient
             }
-            service_native::ExecutionFailureCode::Revert => Self::Revert,
-            service_native::ExecutionFailureCode::OutOfGas => Self::OutOfGas,
-            service_native::ExecutionFailureCode::StorageBalanceInsufficient => {
+            service_native::NativeExecutionFailureCode::Revert => Self::Revert,
+            service_native::NativeExecutionFailureCode::OutOfGas => Self::OutOfGas,
+            service_native::NativeExecutionFailureCode::StorageBalanceInsufficient => {
                 Self::StorageBalanceInsufficient
             }
-            service_native::ExecutionFailureCode::StorageLimitExceeded => {
+            service_native::NativeExecutionFailureCode::StorageLimitExceeded => {
                 Self::StorageLimitExceeded
             }
-            service_native::ExecutionFailureCode::NonceOverflow => Self::NonceOverflow,
-            service_native::ExecutionFailureCode::VmError => Self::VmError,
+            service_native::NativeExecutionFailureCode::NonceOverflow => Self::NonceOverflow,
+            service_native::NativeExecutionFailureCode::VmError => Self::VmError,
         }
     }
 }
 
 fn map_native_storage_changes(
-    changes: Vec<service_native::StorageChange>,
+    changes: Vec<service_native::NativeStorageChange>,
     network: Network,
     field: &str,
 ) -> Result<Vec<NativeStorageChange>, ResponseMappingError> {

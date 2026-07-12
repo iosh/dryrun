@@ -2,6 +2,7 @@ pub mod config;
 mod error;
 pub mod espace;
 pub mod execution;
+pub mod native;
 mod simulation;
 pub mod state;
 mod transaction;
@@ -34,12 +35,10 @@ pub use espace::{
     EspaceExecutionFailureCode, EspaceExecutionStatus, EspaceSimulation, EspaceTransaction,
     EspaceTransactionVariant, SimulateEspaceTransactionInput, SimulatedBlock,
 };
-pub use simulation::{
+pub use native::{
     NativeExecution, NativeExecutionFailure, NativeExecutionFailureCode, NativeExecutionStatus,
-    NativeSimulation, NativeStateAnchor, NativeStorageChange,
-};
-pub use transaction::{
-    NativeEpochRef, NativeTransaction, NativeTransactionVariant, SimulateNativeTransactionInput,
+    NativeEpochRef, NativeSimulation, NativeStateAnchor, NativeStorageChange, NativeTransaction,
+    NativeTransactionVariant, SimulateNativeTransactionInput,
 };
 
 use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;

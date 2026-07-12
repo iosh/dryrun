@@ -29,7 +29,7 @@ impl ConfluxService {
         &self,
         input: native::SimulateNativeTransactionInput,
     ) -> Result<native::SimulateNativeTransactionOutput, ConfluxServiceError> {
-        let simulation = self.engine.simulate_native_transaction(input.into())?;
+        let simulation = self.engine.simulate_native_transaction(input)?;
 
         Ok(simulation.into())
     }
