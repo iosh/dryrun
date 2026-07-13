@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::sync::Arc;
 
 use cfx_executor::state::State;
 use cfx_internal_common::StateRootWithAuxInfo;
@@ -28,26 +25,10 @@ pub(crate) fn new_rpc_backed_state(
     State::new(db)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct CacheKey {
-    key_bytes: Vec<u8>,
-}
-
-#[derive(Debug, Clone)]
-enum CachedRead {
-    Present(Box<[u8]>),
-    // Only use for states proven missing, not unsupported or failed reads.
-    Absent,
-}
-
 pub(crate) struct RpcBackedStorage {
     state_point: ConfluxStatePoint,
     reader: RemoteStateReader,
     runtime_handle: Handle,
-    // Simulation writes shadow remote state.
-    overlay: Mutex<HashMap<Vec<u8>, CachedRead>>,
-    // Per-simulation remote read cache.
-    cache: Mutex<HashMap<CacheKey, CachedRead>>,
 }
 
 impl RpcBackedStorage {
@@ -60,8 +41,6 @@ impl RpcBackedStorage {
             state_point: state_point.clone(),
             reader: RemoteStateReader::new(state_point, provider),
             runtime_handle,
-            overlay: Mutex::new(HashMap::new()),
-            cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -105,50 +84,10 @@ impl RpcBackedStorage {
         tracing::warn!("{message}");
         StorageError::Msg(message)
     }
-
-    fn cache_key(&self, access_key: StorageKeyWithSpace<'_>) -> CacheKey {
-        CacheKey {
-            key_bytes: access_key.to_key_bytes(),
-        }
-    }
-
-    fn cached_read_to_result(read: CachedRead) -> Option<Box<[u8]>> {
-        match read {
-            CachedRead::Present(value) => Some(value),
-            CachedRead::Absent => None,
-        }
-    }
-
-    fn lock_error(name: &'static str) -> StorageError {
-        StorageError::Msg(format!("rpc-backed storage {name} mutex poisoned"))
-    }
 }
 
 impl StorageStateTrait for RpcBackedStorage {
     fn get(&self, access_key: StorageKeyWithSpace) -> StorageResult<Option<Box<[u8]>>> {
-        let key_bytes = access_key.to_key_bytes();
-        // Overlay writes shadow the remote state for this simulation.
-        if let Some(read) = self
-            .overlay
-            .lock()
-            .map_err(|_| Self::lock_error("overlay"))?
-            .get(&key_bytes)
-            .cloned()
-        {
-            return Ok(Self::cached_read_to_result(read));
-        }
-
-        let cache_key = self.cache_key(access_key);
-        if let Some(read) = self
-            .cache
-            .lock()
-            .map_err(|_| Self::lock_error("cache"))?
-            .get(&cache_key)
-            .cloned()
-        {
-            return Ok(Self::cached_read_to_result(read));
-        }
-
         // Before we can fetch anything from RPC, we need to understand which
         // semantic state item this raw storage key refers to.
         let item = match StateItem::from_storage_key(access_key) {
@@ -156,35 +95,15 @@ impl StorageStateTrait for RpcBackedStorage {
             Err(error) => return Err(self.unsupported_storage_key("get", access_key, error)),
         };
 
-        let value = self.runtime_handle.block_on(self.reader.read(&item))?;
-
-        let cached_read = match &value {
-            Some(bytes) => CachedRead::Present(bytes.clone()),
-            None => CachedRead::Absent,
-        };
-
-        self.cache
-            .lock()
-            .map_err(|_| Self::lock_error("cache"))?
-            .insert(cache_key, cached_read);
-
-        Ok(value)
+        self.runtime_handle.block_on(self.reader.read(&item))
     }
 
-    fn set(&mut self, access_key: StorageKeyWithSpace, value: Box<[u8]>) -> StorageResult<()> {
-        self.overlay
-            .lock()
-            .map_err(|_| Self::lock_error("overlay"))?
-            .insert(access_key.to_key_bytes(), CachedRead::Present(value));
-        Ok(())
+    fn set(&mut self, access_key: StorageKeyWithSpace, _value: Box<[u8]>) -> StorageResult<()> {
+        Err(self.unsupported("set", access_key))
     }
 
     fn delete(&mut self, access_key: StorageKeyWithSpace) -> StorageResult<()> {
-        self.overlay
-            .lock()
-            .map_err(|_| Self::lock_error("overlay"))?
-            .insert(access_key.to_key_bytes(), CachedRead::Absent);
-        Ok(())
+        Err(self.unsupported("delete", access_key))
     }
 
     fn delete_test_only(

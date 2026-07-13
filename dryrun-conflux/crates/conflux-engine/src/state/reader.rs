@@ -4,11 +4,15 @@ use cfx_parameters::staking::DRIPS_PER_STORAGE_COLLATERAL_UNIT;
 use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;
 use cfx_rpc_eth_types::BlockId as EthBlockId;
 use cfx_storage::{Error as StorageError, Result as StorageResult};
+use tokio::sync::OnceCell;
 
 use crate::state::{
     ConfluxStatePoint,
     native_internal::{NativeInternalStateItem, SponsorWhitelistStorageKey, decode_abi_bool},
     provider::{RemoteStateProvider, RemoteStateProviderError},
+    rpc_types::{
+        NativePoSEconomics, NativeStorageCollateralInfo, NativeSupplyInfo, NativeVoteParamsInfo,
+    },
     state_item::{EspaceStateItem, NativeStateItem, StateItem},
     state_value_encoding::{
         StateValueEncodingError, encode_espace_account, encode_espace_code,
@@ -26,6 +30,10 @@ pub(crate) struct RemoteStateReader {
     state_point: ConfluxStatePoint,
     native_epoch: CfxEpochNumber,
     provider: Arc<dyn RemoteStateProvider>,
+    native_supply_info_cache: OnceCell<NativeSupplyInfo>,
+    native_storage_collateral_info_cache: OnceCell<NativeStorageCollateralInfo>,
+    native_pos_economics_cache: OnceCell<NativePoSEconomics>,
+    native_vote_params_info_cache: OnceCell<NativeVoteParamsInfo>,
 }
 
 impl RemoteStateReader {
@@ -38,6 +46,10 @@ impl RemoteStateReader {
             state_point,
             native_epoch,
             provider,
+            native_supply_info_cache: OnceCell::new(),
+            native_storage_collateral_info_cache: OnceCell::new(),
+            native_pos_economics_cache: OnceCell::new(),
+            native_vote_params_info_cache: OnceCell::new(),
         }
     }
 
@@ -271,51 +283,31 @@ impl RemoteStateReader {
     }
 
     async fn fetch_native_total_issued(&self) -> StorageResult<StateRead> {
-        let supply_info = self
-            .provider
-            .get_native_supply_info(self.native_epoch())
-            .await
-            .map_err(|error| self.provider_error("get_native_supply_info", error))?;
+        let supply_info = self.native_supply_info().await?;
 
         Ok(Some(encode_native_u256(supply_info.total_issued)))
     }
 
     async fn fetch_native_total_staking(&self) -> StorageResult<StateRead> {
-        let supply_info = self
-            .provider
-            .get_native_supply_info(self.native_epoch())
-            .await
-            .map_err(|error| self.provider_error("get_native_supply_info", error))?;
+        let supply_info = self.native_supply_info().await?;
 
         Ok(Some(encode_native_u256(supply_info.total_staking)))
     }
 
     async fn fetch_native_total_evm_token(&self) -> StorageResult<StateRead> {
-        let supply_info = self
-            .provider
-            .get_native_supply_info(self.native_epoch())
-            .await
-            .map_err(|error| self.provider_error("get_native_supply_info", error))?;
+        let supply_info = self.native_supply_info().await?;
 
         Ok(Some(encode_native_u256(supply_info.total_espace_tokens)))
     }
 
     async fn fetch_native_total_storage(&self) -> StorageResult<StateRead> {
-        let supply_info = self
-            .provider
-            .get_native_supply_info(self.native_epoch())
-            .await
-            .map_err(|error| self.provider_error("get_native_supply_info", error))?;
+        let supply_info = self.native_supply_info().await?;
 
         Ok(Some(encode_native_u256(supply_info.total_collateral)))
     }
 
     async fn fetch_native_used_storage_points(&self) -> StorageResult<StateRead> {
-        let collateral_info = self
-            .provider
-            .get_native_collateral_info(self.native_epoch())
-            .await
-            .map_err(|error| self.provider_error("get_native_collateral_info", error))?;
+        let collateral_info = self.native_storage_collateral_info().await?;
 
         Ok(Some(encode_native_u256(
             collateral_info.used_storage_points * *DRIPS_PER_STORAGE_COLLATERAL_UNIT,
@@ -323,11 +315,7 @@ impl RemoteStateReader {
     }
 
     async fn fetch_native_converted_storage_points(&self) -> StorageResult<StateRead> {
-        let collateral_info = self
-            .provider
-            .get_native_collateral_info(self.native_epoch())
-            .await
-            .map_err(|error| self.provider_error("get_native_collateral_info", error))?;
+        let collateral_info = self.native_storage_collateral_info().await?;
 
         Ok(Some(encode_native_u256(
             collateral_info.converted_storage_points * *DRIPS_PER_STORAGE_COLLATERAL_UNIT,
@@ -335,11 +323,7 @@ impl RemoteStateReader {
     }
 
     async fn fetch_native_total_pos_staking(&self) -> StorageResult<StateRead> {
-        let pos_economics = self
-            .provider
-            .get_native_pos_economics(self.native_epoch())
-            .await
-            .map_err(|error| self.provider_error("get_native_pos_economics", error))?;
+        let pos_economics = self.native_pos_economics().await?;
 
         Ok(Some(encode_native_u256(
             pos_economics.total_pos_staking_tokens,
@@ -347,11 +331,7 @@ impl RemoteStateReader {
     }
 
     async fn fetch_native_distributable_pos_interest(&self) -> StorageResult<StateRead> {
-        let pos_economics = self
-            .provider
-            .get_native_pos_economics(self.native_epoch())
-            .await
-            .map_err(|error| self.provider_error("get_native_pos_economics", error))?;
+        let pos_economics = self.native_pos_economics().await?;
 
         Ok(Some(encode_native_u256(
             pos_economics.distributable_pos_interest,
@@ -359,11 +339,7 @@ impl RemoteStateReader {
     }
 
     async fn fetch_native_last_distribute_block(&self) -> StorageResult<StateRead> {
-        let pos_economics = self
-            .provider
-            .get_native_pos_economics(self.native_epoch())
-            .await
-            .map_err(|error| self.provider_error("get_native_pos_economics", error))?;
+        let pos_economics = self.native_pos_economics().await?;
 
         Ok(Some(encode_native_u256(U256::from(
             pos_economics.last_distribute_block.as_u64(),
@@ -371,11 +347,7 @@ impl RemoteStateReader {
     }
 
     async fn fetch_native_pow_base_reward(&self) -> StorageResult<StateRead> {
-        let vote_params = self
-            .provider
-            .get_native_vote_params(self.native_epoch())
-            .await
-            .map_err(|error| self.provider_error("get_native_vote_params", error))?;
+        let vote_params = self.native_vote_params_info().await?;
 
         Ok(Some(encode_native_u256(vote_params.pow_base_reward)))
     }
@@ -391,13 +363,53 @@ impl RemoteStateReader {
     }
 
     async fn fetch_native_base_fee_prop(&self) -> StorageResult<StateRead> {
-        let vote_params = self
-            .provider
-            .get_native_vote_params(self.native_epoch())
-            .await
-            .map_err(|error| self.provider_error("get_native_vote_params", error))?;
+        let vote_params = self.native_vote_params_info().await?;
 
         Ok(Some(encode_native_u256(vote_params.base_fee_share_prop)))
+    }
+
+    async fn native_supply_info(&self) -> StorageResult<&NativeSupplyInfo> {
+        self.native_supply_info_cache
+            .get_or_try_init(|| async {
+                self.provider
+                    .get_native_supply_info(self.native_epoch())
+                    .await
+                    .map_err(|error| self.provider_error("get_native_supply_info", error))
+            })
+            .await
+    }
+
+    async fn native_storage_collateral_info(&self) -> StorageResult<&NativeStorageCollateralInfo> {
+        self.native_storage_collateral_info_cache
+            .get_or_try_init(|| async {
+                self.provider
+                    .get_native_collateral_info(self.native_epoch())
+                    .await
+                    .map_err(|error| self.provider_error("get_native_collateral_info", error))
+            })
+            .await
+    }
+
+    async fn native_pos_economics(&self) -> StorageResult<&NativePoSEconomics> {
+        self.native_pos_economics_cache
+            .get_or_try_init(|| async {
+                self.provider
+                    .get_native_pos_economics(self.native_epoch())
+                    .await
+                    .map_err(|error| self.provider_error("get_native_pos_economics", error))
+            })
+            .await
+    }
+
+    async fn native_vote_params_info(&self) -> StorageResult<&NativeVoteParamsInfo> {
+        self.native_vote_params_info_cache
+            .get_or_try_init(|| async {
+                self.provider
+                    .get_native_vote_params(self.native_epoch())
+                    .await
+                    .map_err(|error| self.provider_error("get_native_vote_params", error))
+            })
+            .await
     }
 
     async fn fetch_espace_account(&self, address: Address) -> StorageResult<StateRead> {

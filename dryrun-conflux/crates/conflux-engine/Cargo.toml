@@ -27,5 +27,5 @@ keccak-hash = "0.5"
 rlp = "0.4"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 tracing = { workspace = true }
