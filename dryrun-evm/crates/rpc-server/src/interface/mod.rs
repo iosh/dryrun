@@ -1,9 +1,9 @@
-mod types;
+mod schema;
 mod validation;
 
-pub use types::{
+pub use schema::{
     AccessListItem, Asset, BlockRef, Change, Collection, Erc20AssetDisplay,
     Erc721CollectionDisplay, Erc1155CollectionDisplay, EvmSimulateTransactionRequest,
-    EvmSimulateTransactionResponse, Execution, ExecutionError, NativeAssetDisplay, NftTokenDisplay,
-    SimulateTransactionOptions, SimulatedBlock, SimulationStatus, Transaction,
+    EvmSimulateTransactionResponse, Execution, ExecutionFailure, ExecutionStatus,
+    NativeAssetDisplay, NftTokenDisplay, SimulateTransactionOptions, SimulatedBlock, Transaction,
 };

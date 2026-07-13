@@ -110,8 +110,8 @@ fn configure_relaxed_call_cfg(cfg: &mut CfgEnv) {
     cfg.disable_fee_charge = true;
 }
 
-// Auxiliary metadata lookups should observe the current local state without
-// being blocked by preview-only transaction validation rules.
+// Auxiliary metadata lookups observe the post-execution local state as
+// read-like calls, so they must not apply send-transaction validity or fees.
 fn configure_metadata_call_context<INSP>(evm: &mut MainnetAlloyEvm<INSP>) {
     configure_relaxed_call_cfg(&mut evm.ctx_mut().cfg);
 }
@@ -330,7 +330,7 @@ fn create_metadata_call_tx_env(
         kind: TxKind::Call(token_address),
         value: U256::ZERO,
         data,
-        nonce: transaction.nonce.unwrap_or(0).saturating_add(1),
+        nonce: transaction.nonce.saturating_add(1),
         chain_id: Some(execution_chain_id),
         access_list: RevmAccessList::default(),
         gas_priority_fee: None,

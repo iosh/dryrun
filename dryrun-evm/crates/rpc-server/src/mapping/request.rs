@@ -4,7 +4,7 @@ use alloy::primitives::U256;
 
 use crate::{errors::ValidationError, interface as rpc};
 
-use super::primitives::parse_u64_quantity;
+use super::shared::parse_u64_quantity;
 
 impl TryFrom<rpc::EvmSimulateTransactionRequest>
     for simulation_service::SimulateEvmTransactionInput
@@ -45,48 +45,77 @@ fn map_block_ref(block: rpc::BlockRef) -> Result<simulation_service::BlockRef, V
 fn map_transaction(
     transaction: rpc::Transaction,
 ) -> Result<simulation_service::EvmTransaction, ValidationError> {
+    let variant = map_transaction_variant(&transaction)?;
+
     Ok(simulation_service::EvmTransaction {
-        tx_type: infer_transaction_type(&transaction),
-        requested_chain_id: transaction.chain_id,
+        chain_id: transaction
+            .chain_id
+            .ok_or_else(|| ValidationError::invalid_params("`transaction.chainId` is required"))?,
         from: transaction.from,
         to: transaction.to,
-        nonce: transaction.nonce,
+        nonce: transaction
+            .nonce
+            .ok_or_else(|| ValidationError::invalid_params("`transaction.nonce` is required"))?,
         gas_limit: transaction.gas,
         value: transaction.value.unwrap_or(U256::ZERO),
         data: transaction.data.unwrap_or_default(),
-        access_list: transaction
-            .access_list
-            .unwrap_or_default()
-            .into_iter()
-            .map(convert_access_list_item)
-            .collect(),
-        gas_price: transaction.gas_price,
-        max_fee_per_gas: transaction.max_fee_per_gas,
-        max_priority_fee_per_gas: transaction.max_priority_fee_per_gas,
+        variant,
     })
 }
 
-fn infer_transaction_type(
-    transaction: &rpc::Transaction,
-) -> simulation_service::EvmTransactionType {
+fn infer_transaction_type(transaction: &rpc::Transaction) -> u8 {
     match transaction.tx_type {
-        Some(0x0) => simulation_service::EvmTransactionType::Legacy,
-        Some(0x1) => simulation_service::EvmTransactionType::AccessList,
-        Some(0x2) => simulation_service::EvmTransactionType::DynamicFee,
+        Some(tx_type @ 0x0..=0x2) => tx_type,
         None if transaction.max_fee_per_gas.is_some()
             || transaction.max_priority_fee_per_gas.is_some() =>
         {
-            simulation_service::EvmTransactionType::DynamicFee
+            0x2
         }
-        None if transaction
-            .access_list
-            .as_ref()
-            .is_some_and(|items| !items.is_empty()) =>
-        {
-            simulation_service::EvmTransactionType::AccessList
-        }
-        None => simulation_service::EvmTransactionType::Legacy,
+        None if transaction.access_list.as_ref().is_some() => 0x1,
+        None => 0x0,
         Some(_) => unreachable!("transaction type is already validated"),
+    }
+}
+
+fn map_transaction_variant(
+    transaction: &rpc::Transaction,
+) -> Result<simulation_service::EvmTransactionVariant, ValidationError> {
+    let tx_type = infer_transaction_type(&transaction);
+    let access_list = transaction
+        .access_list
+        .as_ref()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .map(convert_access_list_item)
+        .collect();
+
+    match tx_type {
+        0x0 => Ok(simulation_service::EvmTransactionVariant::Legacy {
+            gas_price: transaction.gas_price.ok_or_else(|| {
+                ValidationError::invalid_params("`transaction.gasPrice` is required for type `0x0`")
+            })?,
+        }),
+        0x1 => Ok(simulation_service::EvmTransactionVariant::Eip2930 {
+            gas_price: transaction.gas_price.ok_or_else(|| {
+                ValidationError::invalid_params("`transaction.gasPrice` is required for type `0x1`")
+            })?,
+            access_list,
+        }),
+        0x2 => Ok(simulation_service::EvmTransactionVariant::Eip1559 {
+            max_fee_per_gas: transaction.max_fee_per_gas.ok_or_else(|| {
+                ValidationError::invalid_params(
+                    "`transaction.maxFeePerGas` is required for type `0x2`",
+                )
+            })?,
+            max_priority_fee_per_gas: transaction.max_priority_fee_per_gas.ok_or_else(|| {
+                ValidationError::invalid_params(
+                    "`transaction.maxPriorityFeePerGas` is required for type `0x2`",
+                )
+            })?,
+            access_list,
+        }),
+        _ => unreachable!("transaction type is already validated"),
     }
 }
 
@@ -108,7 +137,7 @@ mod tests {
     use crate::interface as rpc;
 
     #[test]
-    fn request_maps_into_service_input_with_defaults() {
+    fn request_maps_into_final_service_transaction() {
         let request = rpc::EvmSimulateTransactionRequest {
             block: Some(rpc::BlockRef::Tag("latest".to_string())),
             options: None,
@@ -119,11 +148,11 @@ mod tests {
             request.try_into().expect("request should map");
         assert!(matches!(input.block, simulation_service::BlockRef::Latest));
         assert!(matches!(
-            input.transaction.tx_type,
-            simulation_service::EvmTransactionType::Legacy
+            input.transaction.variant,
+            simulation_service::EvmTransactionVariant::Legacy { gas_price: 1 }
         ));
-        assert_eq!(input.transaction.requested_chain_id, None);
-        assert_eq!(input.transaction.nonce, None);
+        assert_eq!(input.transaction.chain_id, 1);
+        assert_eq!(input.transaction.nonce, 0);
         assert_eq!(input.transaction.value, U256::ZERO);
         assert_eq!(input.transaction.data, Bytes::new());
     }
@@ -168,15 +197,15 @@ mod tests {
     fn sample_transaction() -> rpc::Transaction {
         rpc::Transaction {
             tx_type: None,
-            chain_id: None,
+            chain_id: Some(1),
             from: Address::from_str("0x1111111111111111111111111111111111111111").unwrap(),
             to: Some(Address::from_str("0x2222222222222222222222222222222222222222").unwrap()),
-            nonce: None,
+            nonce: Some(0),
             gas: 0x5208,
             value: None,
             data: None,
             access_list: None,
-            gas_price: None,
+            gas_price: Some(1),
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
         }

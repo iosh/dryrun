@@ -111,14 +111,16 @@ pub struct Execution {
     #[serde(with = "quantity")]
     pub chain_id: u64,
     pub block: SimulatedBlock,
-    pub status: SimulationStatus,
+    pub status: ExecutionStatus,
     #[serde(with = "quantity")]
     pub gas_used: u64,
     #[serde(with = "quantity")]
     pub gas_limit: u64,
+    pub fee: U256,
+    pub burnt_fee: U256,
     pub output: Bytes,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<ExecutionError>,
+    pub failure: Option<ExecutionFailure>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -131,14 +133,15 @@ pub struct SimulatedBlock {
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "UPPERCASE")]
-pub enum SimulationStatus {
+pub enum ExecutionStatus {
     Success,
     Failed,
+    NotExecuted,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct ExecutionError {
+pub struct ExecutionFailure {
     pub code: String,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]

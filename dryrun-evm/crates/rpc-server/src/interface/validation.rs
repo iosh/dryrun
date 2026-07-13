@@ -81,15 +81,6 @@ impl Transaction {
             ));
         }
 
-        if let (Some(max_fee), Some(max_priority)) =
-            (self.max_fee_per_gas, self.max_priority_fee_per_gas)
-            && max_priority > max_fee
-        {
-            return Err(ValidationError::invalid_params(
-                "`transaction.maxPriorityFeePerGas` cannot exceed `transaction.maxFeePerGas`",
-            ));
-        }
-
         match self.tx_type {
             Some(0x0) => {
                 if self

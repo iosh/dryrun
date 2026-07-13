@@ -129,6 +129,8 @@ fn execution_artifacts(
         status,
         gas_used: 21_000,
         gas_limit: 50_000,
+        fee: U256::ZERO,
+        burnt_fee: U256::ZERO,
         output: Bytes::new(),
         failure: None,
         observations,

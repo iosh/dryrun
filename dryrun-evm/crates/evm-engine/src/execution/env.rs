@@ -11,33 +11,12 @@ use revm::{
     primitives::{TxKind, hardfork::SpecId},
 };
 
-use crate::{AccessListItem, EvmEngineError, EvmTransaction, EvmTransactionType};
+use crate::{AccessListItem, EvmEngineError, EvmTransaction, EvmTransactionVariant};
 
 use super::provider::ResolvedExecutionBlock;
 
-pub(super) fn validate_requested_chain_id(
-    requested_chain_id: Option<u64>,
-    actual_chain_id: u64,
-) -> Result<(), EvmEngineError> {
-    if let Some(requested_chain_id) = requested_chain_id
-        && requested_chain_id != actual_chain_id
-    {
-        return Err(EvmEngineError::not_supported(format!(
-            "transaction.chainId does not match the execution chain: requested={requested_chain_id}, actual={actual_chain_id}",
-        )));
-    }
-
-    Ok(())
-}
-
-pub(super) fn create_cfg_env(
-    transaction: &EvmTransaction,
-    chain_id: u64,
-    spec_id: SpecId,
-) -> CfgEnv {
-    let mut cfg = CfgEnv::new_with_spec(spec_id).with_chain_id(chain_id);
-    configure_preview_cfg(&mut cfg, transaction);
-    cfg
+pub(super) fn create_cfg_env(chain_id: u64, spec_id: SpecId) -> CfgEnv {
+    CfgEnv::new_with_spec(spec_id).with_chain_id(chain_id)
 }
 
 pub(super) fn create_block_env(
@@ -94,81 +73,79 @@ pub(super) fn create_block_env(
     })
 }
 
-pub(super) fn create_tx_env(
-    transaction: &EvmTransaction,
-    chain_id: u64,
-) -> Result<TxEnv, EvmEngineError> {
-    match transaction.tx_type {
-        EvmTransactionType::Legacy => create_legacy_tx_env(transaction, chain_id),
-        EvmTransactionType::AccessList => Ok(create_access_list_tx_env(transaction, chain_id)),
-        EvmTransactionType::DynamicFee => Ok(create_dynamic_fee_tx_env(transaction, chain_id)),
+pub(super) fn create_tx_env(transaction: &EvmTransaction) -> Result<TxEnv, EvmEngineError> {
+    match &transaction.variant {
+        EvmTransactionVariant::Legacy { gas_price } => {
+            Ok(create_legacy_tx_env(transaction, *gas_price))
+        }
+        EvmTransactionVariant::Eip2930 {
+            gas_price,
+            access_list,
+        } => Ok(create_access_list_tx_env(
+            transaction,
+            *gas_price,
+            access_list,
+        )),
+        EvmTransactionVariant::Eip1559 {
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+            access_list,
+        } => Ok(create_dynamic_fee_tx_env(
+            transaction,
+            *max_fee_per_gas,
+            *max_priority_fee_per_gas,
+            access_list,
+        )),
     }
 }
 
-fn configure_preview_cfg(cfg: &mut CfgEnv, transaction: &EvmTransaction) {
-    cfg.disable_nonce_check = transaction.nonce.is_none();
-    cfg.disable_balance_check = true;
-    cfg.disable_eip3607 = true;
-    cfg.disable_base_fee = !transaction_has_explicit_fee_constraints(transaction);
-    cfg.disable_fee_charge = true;
-}
-
-fn transaction_has_explicit_fee_constraints(transaction: &EvmTransaction) -> bool {
-    transaction.gas_price.is_some()
-        || transaction.max_fee_per_gas.is_some()
-        || transaction.max_priority_fee_per_gas.is_some()
-}
-
-fn create_legacy_tx_env(
-    transaction: &EvmTransaction,
-    chain_id: u64,
-) -> Result<TxEnv, EvmEngineError> {
-    if !transaction.access_list.is_empty() {
-        return Err(EvmEngineError::internal(
-            "legacy transaction must not include access_list",
-        ));
-    }
-
-    Ok(base_tx_env(
+fn create_legacy_tx_env(transaction: &EvmTransaction, gas_price: u128) -> TxEnv {
+    base_tx_env(
         transaction,
         TransactionType::Legacy,
         MaterializedTxEnvValues {
-            effective_gas_price: transaction.gas_price.unwrap_or(0),
+            effective_gas_price: gas_price,
             gas_priority_fee: None,
-            nonce: materialize_preview_nonce(transaction),
-            chain_id,
+            nonce: transaction.nonce,
+            chain_id: transaction.chain_id,
             access_list: RevmAccessList::default(),
-        },
-    ))
-}
-
-fn create_access_list_tx_env(transaction: &EvmTransaction, chain_id: u64) -> TxEnv {
-    base_tx_env(
-        transaction,
-        TransactionType::Eip2930,
-        MaterializedTxEnvValues {
-            effective_gas_price: transaction.gas_price.unwrap_or(0),
-            gas_priority_fee: None,
-            nonce: materialize_preview_nonce(transaction),
-            chain_id,
-            access_list: map_access_list(&transaction.access_list),
         },
     )
 }
 
-fn create_dynamic_fee_tx_env(transaction: &EvmTransaction, chain_id: u64) -> TxEnv {
-    let (materialized_max_fee_per_gas, materialized_max_priority_fee_per_gas) =
-        materialize_preview_dynamic_fee(transaction);
+fn create_access_list_tx_env(
+    transaction: &EvmTransaction,
+    gas_price: u128,
+    access_list: &[AccessListItem],
+) -> TxEnv {
+    base_tx_env(
+        transaction,
+        TransactionType::Eip2930,
+        MaterializedTxEnvValues {
+            effective_gas_price: gas_price,
+            gas_priority_fee: None,
+            nonce: transaction.nonce,
+            chain_id: transaction.chain_id,
+            access_list: map_access_list(access_list),
+        },
+    )
+}
 
+fn create_dynamic_fee_tx_env(
+    transaction: &EvmTransaction,
+    max_fee_per_gas: u128,
+    max_priority_fee_per_gas: u128,
+    access_list: &[AccessListItem],
+) -> TxEnv {
     base_tx_env(
         transaction,
         TransactionType::Eip1559,
         MaterializedTxEnvValues {
-            effective_gas_price: materialized_max_fee_per_gas,
-            gas_priority_fee: Some(materialized_max_priority_fee_per_gas),
-            nonce: materialize_preview_nonce(transaction),
-            chain_id,
-            access_list: map_access_list(&transaction.access_list),
+            effective_gas_price: max_fee_per_gas,
+            gas_priority_fee: Some(max_priority_fee_per_gas),
+            nonce: transaction.nonce,
+            chain_id: transaction.chain_id,
+            access_list: map_access_list(access_list),
         },
     )
 }
@@ -179,10 +156,6 @@ struct MaterializedTxEnvValues {
     nonce: u64,
     chain_id: u64,
     access_list: RevmAccessList,
-}
-
-fn materialize_preview_nonce(transaction: &EvmTransaction) -> u64 {
-    transaction.nonce.unwrap_or(0)
 }
 
 fn base_tx_env(
@@ -208,22 +181,6 @@ fn base_tx_env(
     }
 }
 
-fn materialize_preview_dynamic_fee(transaction: &EvmTransaction) -> (u128, u128) {
-    match (
-        transaction.max_fee_per_gas,
-        transaction.max_priority_fee_per_gas,
-    ) {
-        (Some(max_fee_per_gas), Some(max_priority_fee_per_gas)) => {
-            (max_fee_per_gas, max_priority_fee_per_gas)
-        }
-        (Some(max_fee_per_gas), None) => (max_fee_per_gas, 0),
-        (None, Some(max_priority_fee_per_gas)) => {
-            (max_priority_fee_per_gas, max_priority_fee_per_gas)
-        }
-        (None, None) => (0, 0),
-    }
-}
-
 fn map_access_list(items: &[AccessListItem]) -> RevmAccessList {
     items
         .iter()
@@ -243,54 +200,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn create_legacy_tx_env_defaults_call_like_send_fields() {
+    fn create_legacy_tx_env_uses_final_transaction_fields() {
         let transaction = EvmTransaction {
-            tx_type: EvmTransactionType::Legacy,
-            requested_chain_id: None,
+            chain_id: Chain::mainnet().id(),
             from: Address::ZERO,
             to: Some(Address::repeat_byte(0x11)),
-            nonce: None,
+            nonce: 7,
             gas_limit: 21_000,
             value: U256::ZERO,
             data: Bytes::new(),
-            access_list: Vec::new(),
-            gas_price: None,
-            max_fee_per_gas: None,
-            max_priority_fee_per_gas: None,
+            variant: EvmTransactionVariant::Legacy { gas_price: 3 },
         };
 
-        let tx_env = create_tx_env(&transaction, Chain::mainnet().id()).expect("tx env");
+        let tx_env = create_tx_env(&transaction).expect("tx env");
 
-        assert_eq!(tx_env.gas_price, 0);
-        assert_eq!(tx_env.nonce, 0);
+        assert_eq!(tx_env.gas_price, 3);
+        assert_eq!(tx_env.nonce, 7);
         assert_eq!(tx_env.chain_id, Some(Chain::mainnet().id()));
     }
 
     #[test]
-    fn create_dynamic_fee_tx_env_materializes_missing_fee_fields() {
-        let mut transaction = EvmTransaction {
-            tx_type: EvmTransactionType::DynamicFee,
-            requested_chain_id: None,
+    fn create_dynamic_fee_tx_env_uses_final_transaction_fields() {
+        let transaction = EvmTransaction {
+            chain_id: Chain::mainnet().id(),
             from: Address::ZERO,
             to: Some(Address::repeat_byte(0x22)),
-            nonce: None,
+            nonce: 8,
             gas_limit: 21_000,
             value: U256::ZERO,
             data: Bytes::new(),
-            access_list: Vec::new(),
-            gas_price: None,
-            max_fee_per_gas: None,
-            max_priority_fee_per_gas: None,
+            variant: EvmTransactionVariant::Eip1559 {
+                max_fee_per_gas: 10,
+                max_priority_fee_per_gas: 7,
+                access_list: Vec::new(),
+            },
         };
 
-        let tx_env = create_tx_env(&transaction, Chain::mainnet().id()).expect("tx env");
-        assert_eq!(tx_env.gas_price, 0);
-        assert_eq!(tx_env.gas_priority_fee, Some(0));
-
-        transaction.max_priority_fee_per_gas = Some(7);
-
-        let tx_env = create_tx_env(&transaction, Chain::mainnet().id()).expect("tx env");
-        assert_eq!(tx_env.gas_price, 7);
+        let tx_env = create_tx_env(&transaction).expect("tx env");
+        assert_eq!(tx_env.gas_price, 10);
         assert_eq!(tx_env.gas_priority_fee, Some(7));
     }
 }

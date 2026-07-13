@@ -4,7 +4,7 @@ impl From<simulation_service::SimulateEvmTransactionOutput>
     for rpc::EvmSimulateTransactionResponse
 {
     fn from(output: simulation_service::SimulateEvmTransactionOutput) -> Self {
-        let simulation_service::SimulateEvmTransactionOutput { execution, changes } = output;
+        let (execution, changes) = output.into_parts();
 
         Self {
             execution: rpc::Execution {
@@ -13,8 +13,10 @@ impl From<simulation_service::SimulateEvmTransactionOutput>
                 status: execution.status.into(),
                 gas_used: execution.gas_used,
                 gas_limit: execution.gas_limit,
+                fee: execution.fee,
+                burnt_fee: execution.burnt_fee,
                 output: execution.output,
-                error: execution.failure.map(Into::into),
+                failure: execution.failure.map(Into::into),
             },
             changes: changes.into_iter().map(Into::into).collect(),
         }
@@ -30,21 +32,22 @@ impl From<simulation_service::SimulatedBlock> for rpc::SimulatedBlock {
     }
 }
 
-impl From<simulation_service::ExecutionStatus> for rpc::SimulationStatus {
+impl From<simulation_service::ExecutionStatus> for rpc::ExecutionStatus {
     fn from(status: simulation_service::ExecutionStatus) -> Self {
         match status {
             simulation_service::ExecutionStatus::Success => Self::Success,
             simulation_service::ExecutionStatus::Failed => Self::Failed,
+            simulation_service::ExecutionStatus::NotExecuted => Self::NotExecuted,
         }
     }
 }
 
-impl From<simulation_service::ExecutionFailure> for rpc::ExecutionError {
-    fn from(error: simulation_service::ExecutionFailure) -> Self {
+impl From<simulation_service::ExecutionFailure> for rpc::ExecutionFailure {
+    fn from(failure: simulation_service::ExecutionFailure) -> Self {
         Self {
-            code: error.code,
-            message: error.message,
-            reason: error.reason,
+            code: failure.code.as_str().to_string(),
+            message: failure.message,
+            reason: failure.reason,
         }
     }
 }
@@ -210,6 +213,8 @@ mod tests {
                 status: simulation_service::ExecutionStatus::Success,
                 gas_used: 0x5208,
                 gas_limit: 0x5300,
+                fee: U256::ZERO,
+                burnt_fee: U256::ZERO,
                 output: Bytes::from_str("0x0102").expect("bytes"),
                 failure: None,
             },
@@ -285,6 +290,8 @@ mod tests {
                 status: simulation_service::ExecutionStatus::Success,
                 gas_used: 21_000,
                 gas_limit: 50_000,
+                fee: U256::ZERO,
+                burnt_fee: U256::ZERO,
                 output: Bytes::new(),
                 failure: None,
             },
@@ -353,9 +360,11 @@ mod tests {
                 status: simulation_service::ExecutionStatus::Failed,
                 gas_used: 0x5208,
                 gas_limit: 0x5300,
+                fee: U256::ZERO,
+                burnt_fee: U256::ZERO,
                 output: Bytes::new(),
                 failure: Some(simulation_service::ExecutionFailure {
-                    code: "REVERT".to_string(),
+                    code: simulation_service::EvmExecutionFailureCode::Revert,
                     message: "execution reverted".to_string(),
                     reason: Some("insufficient output".to_string()),
                 }),
@@ -364,12 +373,15 @@ mod tests {
         };
 
         let response: rpc::EvmSimulateTransactionResponse = output.into();
-        assert_eq!(response.execution.status, rpc::SimulationStatus::Failed);
+        assert_eq!(response.execution.status, rpc::ExecutionStatus::Failed);
 
-        let error = response.execution.error.expect("expected execution error");
-        assert_eq!(error.code, "REVERT");
-        assert_eq!(error.message, "execution reverted");
-        assert_eq!(error.reason.as_deref(), Some("insufficient output"));
+        let failure = response
+            .execution
+            .failure
+            .expect("expected execution failure");
+        assert_eq!(failure.code, "REVERT");
+        assert_eq!(failure.message, "execution reverted");
+        assert_eq!(failure.reason.as_deref(), Some("insufficient output"));
     }
 
     #[test]
@@ -393,6 +405,8 @@ mod tests {
                 status: simulation_service::ExecutionStatus::Success,
                 gas_used: 21_000,
                 gas_limit: 50_000,
+                fee: U256::ZERO,
+                burnt_fee: U256::ZERO,
                 output: Bytes::new(),
                 failure: None,
             },

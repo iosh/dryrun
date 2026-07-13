@@ -4589,7 +4589,6 @@ dependencies = [
 name = "simulation-service"
 version = "0.1.0"
 dependencies = [
- "alloy-primitives",
  "evm-engine",
  "thiserror",
 ]

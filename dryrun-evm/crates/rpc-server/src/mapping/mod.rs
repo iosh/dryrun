@@ -1,3 +1,3 @@
-mod from_rpc;
-mod primitives;
-mod to_rpc;
+mod request;
+mod response;
+mod shared;

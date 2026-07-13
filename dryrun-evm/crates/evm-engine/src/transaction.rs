@@ -7,13 +7,6 @@ pub enum BlockRef {
     Hash(B256),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EvmTransactionType {
-    Legacy,
-    AccessList,
-    DynamicFee,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessListItem {
     pub address: Address,
@@ -22,18 +15,30 @@ pub struct AccessListItem {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmTransaction {
-    pub tx_type: EvmTransactionType,
-    pub requested_chain_id: Option<u64>,
+    pub chain_id: u64,
     pub from: Address,
     pub to: Option<Address>,
-    pub nonce: Option<u64>,
+    pub nonce: u64,
     pub gas_limit: u64,
     pub value: U256,
     pub data: Bytes,
-    pub access_list: Vec<AccessListItem>,
-    pub gas_price: Option<u128>,
-    pub max_fee_per_gas: Option<u128>,
-    pub max_priority_fee_per_gas: Option<u128>,
+    pub variant: EvmTransactionVariant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EvmTransactionVariant {
+    Legacy {
+        gas_price: u128,
+    },
+    Eip2930 {
+        gas_price: u128,
+        access_list: Vec<AccessListItem>,
+    },
+    Eip1559 {
+        max_fee_per_gas: u128,
+        max_priority_fee_per_gas: u128,
+        access_list: Vec<AccessListItem>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

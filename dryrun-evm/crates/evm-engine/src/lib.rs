@@ -15,10 +15,11 @@ pub use change::{
 pub use error::{EvmEngineError, EvmEngineInternalKind};
 use execution::simulate_execution;
 pub use simulation::{
-    EvmExecution, EvmExecutionFailure, EvmExecutionStatus, EvmSimulation, SimulatedBlock,
+    EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode, EvmExecutionStatus, EvmSimulation,
+    SimulatedBlock,
 };
 pub use transaction::{
-    AccessListItem, BlockRef, EvmExecutionInput, EvmTransaction, EvmTransactionType,
+    AccessListItem, BlockRef, EvmExecutionInput, EvmTransaction, EvmTransactionVariant,
 };
 
 #[derive(Debug, Clone)]

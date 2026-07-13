@@ -1,4 +1,4 @@
-use alloy_primitives::{B256, Bytes};
+use alloy_primitives::{B256, Bytes, U256};
 
 use crate::Change;
 
@@ -6,6 +6,7 @@ use crate::Change;
 pub enum EvmExecutionStatus {
     Success,
     Failed,
+    NotExecuted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,9 +17,58 @@ pub struct SimulatedBlock {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmExecutionFailure {
-    pub code: String,
+    pub code: EvmExecutionFailureCode,
     pub message: String,
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvmExecutionFailureCode {
+    Revert,
+    OutOfGas,
+    InvalidOpcode,
+    InvalidJump,
+    StackUnderflow,
+    StackOverflow,
+    ExecutionFailed,
+    NonceTooLow,
+    NonceTooHigh,
+    NonceOverflow,
+    InsufficientFunds,
+    PriorityFeeGreaterThanMaxFee,
+    GasPriceLessThanBaseFee,
+    GasLimitExceedsBlockGasLimit,
+    IntrinsicGasTooLow,
+    SenderHasCode,
+    InvalidChainId,
+    TransactionTypeNotSupported,
+    InvalidTransaction,
+}
+
+impl EvmExecutionFailureCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Revert => "REVERT",
+            Self::OutOfGas => "OUT_OF_GAS",
+            Self::InvalidOpcode => "INVALID_OPCODE",
+            Self::InvalidJump => "INVALID_JUMP",
+            Self::StackUnderflow => "STACK_UNDERFLOW",
+            Self::StackOverflow => "STACK_OVERFLOW",
+            Self::ExecutionFailed => "EXECUTION_FAILED",
+            Self::NonceTooLow => "NONCE_TOO_LOW",
+            Self::NonceTooHigh => "NONCE_TOO_HIGH",
+            Self::NonceOverflow => "NONCE_OVERFLOW",
+            Self::InsufficientFunds => "INSUFFICIENT_FUNDS",
+            Self::PriorityFeeGreaterThanMaxFee => "PRIORITY_FEE_GREATER_THAN_MAX_FEE",
+            Self::GasPriceLessThanBaseFee => "GAS_PRICE_LESS_THAN_BASE_FEE",
+            Self::GasLimitExceedsBlockGasLimit => "GAS_LIMIT_EXCEEDS_BLOCK_GAS_LIMIT",
+            Self::IntrinsicGasTooLow => "INTRINSIC_GAS_TOO_LOW",
+            Self::SenderHasCode => "SENDER_HAS_CODE",
+            Self::InvalidChainId => "INVALID_CHAIN_ID",
+            Self::TransactionTypeNotSupported => "TRANSACTION_TYPE_NOT_SUPPORTED",
+            Self::InvalidTransaction => "INVALID_TRANSACTION",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,14 +78,16 @@ pub struct EvmExecution {
     pub status: EvmExecutionStatus,
     pub gas_used: u64,
     pub gas_limit: u64,
+    pub fee: U256,
+    pub burnt_fee: U256,
     pub output: Bytes,
     pub failure: Option<EvmExecutionFailure>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmSimulation {
-    execution: EvmExecution,
-    changes: Vec<Change>,
+    pub execution: EvmExecution,
+    pub changes: Vec<Change>,
 }
 
 impl EvmSimulation {

@@ -6,7 +6,7 @@ mod provider;
 
 pub(crate) use self::artifacts::ExecutionArtifacts;
 use self::{
-    env::{create_block_env, create_cfg_env, create_tx_env, validate_requested_chain_id},
+    env::{create_block_env, create_cfg_env, create_tx_env},
     outcome::{build_execution_artifacts, build_invalid_transaction_artifacts, build_simulation},
     provider::{AlloyCacheDb, build_provider, create_database, resolve_execution_block},
 };
@@ -31,16 +31,15 @@ pub(crate) async fn simulate_execution(
     let EvmExecutionInput { block, transaction } = input;
     let provider = build_provider(rpc_url)?;
     let resolved_block = resolve_execution_block(&provider, &block).await?;
-    validate_requested_chain_id(transaction.requested_chain_id, resolved_block.chain_id)?;
     let db = create_database(&provider, &resolved_block)?;
     let spec_id = resolve_execution_spec_id(
         resolved_block.chain_id,
         resolved_block.block.number(),
         resolved_block.block.header.timestamp,
     )?;
-    let cfg_env = create_cfg_env(&transaction, resolved_block.chain_id, spec_id);
+    let cfg_env = create_cfg_env(resolved_block.chain_id, spec_id);
     let block_env = create_block_env(&resolved_block, spec_id)?;
-    let tx_env = create_tx_env(&transaction, resolved_block.chain_id)?;
+    let tx_env = create_tx_env(&transaction)?;
 
     execute_transaction(
         db,
@@ -73,7 +72,7 @@ fn execute_transaction(
             let observation_inspector = std::mem::take(&mut evm.inspector);
             let observations = observation_inspector.into_observations();
 
-            build_execution_artifacts(result, observations, resolved_block)
+            build_execution_artifacts(result, observations, resolved_block, transaction)
         }
         Err(EVMError::Transaction(error)) => {
             build_invalid_transaction_artifacts(resolved_block, transaction, error)
