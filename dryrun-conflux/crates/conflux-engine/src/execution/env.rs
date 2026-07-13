@@ -9,6 +9,7 @@ use cfx_statedb::Result as StateDbResult;
 use cfx_types::U256;
 use cfx_vm_types::{Env, Spec};
 use primitives::{BlockNumber, SignedTransaction};
+use tokio::runtime::Handle;
 
 use crate::state::{ConfluxStatePoint, RemoteStateProvider, new_rpc_backed_state};
 
@@ -17,8 +18,9 @@ use super::{ExecutionBlockContext, params::mainnet_common_params};
 pub fn build_rpc_backed_state(
     state_point: ConfluxStatePoint,
     provider: Arc<dyn RemoteStateProvider>,
+    runtime_handle: Handle,
 ) -> StateDbResult<State> {
-    new_rpc_backed_state(state_point, provider)
+    new_rpc_backed_state(state_point, provider, runtime_handle)
 }
 
 fn next_execution_block_number(pivot_block_number: BlockNumber) -> BlockNumber {

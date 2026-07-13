@@ -1583,6 +1583,7 @@ dependencies = [
 name = "conflux-engine"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "cfx-addr",
  "cfx-bytes",
  "cfx-executor",

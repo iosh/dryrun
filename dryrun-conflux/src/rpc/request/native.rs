@@ -67,9 +67,7 @@ fn map_native_epoch(
 ) -> Result<service_native::NativeEpochRef, ValidationError> {
     match epoch.unwrap_or(EpochNumber::LatestState) {
         EpochNumber::LatestState => Ok(service_native::NativeEpochRef::LatestState),
-        EpochNumber::Num(number) => {
-            Ok(service_native::NativeEpochRef::Number(number.as_u64()))
-        }
+        EpochNumber::Num(number) => Ok(service_native::NativeEpochRef::Number(number.as_u64())),
         _ => Err(ValidationError::not_supported(
             "`epoch` only supports `latest_state` or a hex epoch number",
         )),

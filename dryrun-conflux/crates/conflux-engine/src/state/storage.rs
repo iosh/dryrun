@@ -8,6 +8,7 @@ use cfx_internal_common::StateRootWithAuxInfo;
 use cfx_statedb::{Result as StateDbResult, StateDb};
 use cfx_storage::{Error as StorageError, MptKeyValue, Result as StorageResult, StorageStateTrait};
 use primitives::{EpochId, StorageKeyWithSpace};
+use tokio::runtime::Handle;
 
 use crate::state::{
     ConfluxStatePoint,
@@ -19,8 +20,9 @@ use crate::state::{
 pub(crate) fn new_rpc_backed_state(
     state_point: ConfluxStatePoint,
     provider: Arc<dyn RemoteStateProvider>,
+    runtime_handle: Handle,
 ) -> StateDbResult<State> {
-    let storage = RpcBackedStorage::new(state_point, provider);
+    let storage = RpcBackedStorage::new(state_point, provider, runtime_handle);
     let db = StateDb::new(Box::new(storage));
 
     State::new(db)
@@ -41,6 +43,7 @@ enum CachedRead {
 pub(crate) struct RpcBackedStorage {
     state_point: ConfluxStatePoint,
     reader: RemoteStateReader,
+    runtime_handle: Handle,
     // Simulation writes shadow remote state.
     overlay: Mutex<HashMap<Vec<u8>, CachedRead>>,
     // Per-simulation remote read cache.
@@ -48,10 +51,15 @@ pub(crate) struct RpcBackedStorage {
 }
 
 impl RpcBackedStorage {
-    fn new(state_point: ConfluxStatePoint, provider: Arc<dyn RemoteStateProvider>) -> Self {
+    fn new(
+        state_point: ConfluxStatePoint,
+        provider: Arc<dyn RemoteStateProvider>,
+        runtime_handle: Handle,
+    ) -> Self {
         Self {
             state_point: state_point.clone(),
             reader: RemoteStateReader::new(state_point, provider),
+            runtime_handle,
             overlay: Mutex::new(HashMap::new()),
             cache: Mutex::new(HashMap::new()),
         }
@@ -148,7 +156,7 @@ impl StorageStateTrait for RpcBackedStorage {
             Err(error) => return Err(self.unsupported_storage_key("get", access_key, error)),
         };
 
-        let value = self.reader.read(&item)?;
+        let value = self.runtime_handle.block_on(self.reader.read(&item))?;
 
         let cached_read = match &value {
             Some(bytes) => CachedRead::Present(bytes.clone()),

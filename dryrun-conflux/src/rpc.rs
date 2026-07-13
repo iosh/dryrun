@@ -35,6 +35,7 @@ pub fn build_rpc_module(
                     .simulate_espace_transaction(
                         request.try_into().map_err(ErrorObjectOwned::from)?,
                     )
+                    .await
                     .map_err(|error| map_service_error(&error))?;
 
                 Ok::<_, ErrorObjectOwned>(SimulateEspaceTransactionResponse::from(output))
@@ -56,6 +57,7 @@ pub fn build_rpc_module(
 
                 let output = service
                     .simulate_native_transaction(input)
+                    .await
                     .map_err(|error| map_service_error(&error))?;
 
                 SimulateNativeTransactionResponse::try_from_output(output, native_address_network)

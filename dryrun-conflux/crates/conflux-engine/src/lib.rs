@@ -10,9 +10,9 @@ use std::sync::Arc;
 use crate::{
     config::ConfluxConfig,
     espace::{
+        EspaceBlockRef, EspaceExecution, SimulateEspaceTransactionInput, SimulatedBlock,
         build_espace_execution, build_espace_not_executed, build_espace_transaction_input,
-        validate_espace_transaction, EspaceBlockRef, EspaceExecution, SimulateEspaceTransactionInput,
-        SimulatedBlock,
+        validate_espace_transaction,
     },
     execution::{
         DryRunTransactionInput, ExecutionBlockContext, ExecutionConsensusContext,
@@ -21,10 +21,10 @@ use crate::{
         execute_transaction,
     },
     native::{
-        build_native_execution, build_native_not_executed, build_native_transaction_input,
         NativeEpochRef, NativeExecution, NativeExecutionFailure, NativeExecutionFailureCode,
         NativeStateAnchor, NativeTransaction, NativeTransactionVariant,
-        SimulateNativeTransactionInput,
+        SimulateNativeTransactionInput, build_native_execution, build_native_not_executed,
+        build_native_transaction_input,
     },
     state::{
         ConfluxStateAnchor, ConfluxStatePoint, EspaceRpcBlock, HttpConfluxStateProvider,
@@ -52,19 +52,19 @@ impl ConfluxEngine {
         Self { config, provider }
     }
 
-    pub fn simulate_espace_transaction(
+    pub async fn simulate_espace_transaction(
         &self,
         input: SimulateEspaceTransactionInput,
     ) -> Result<EspaceExecution, ConfluxEngineError> {
+        let runtime_handle = current_runtime_handle()?;
         let SimulateEspaceTransactionInput { block, transaction } = input;
         let gas_limit = transaction.gas_limit;
-        let execution_context = self.resolve_espace_execution_context(&block)?;
+        let execution_context = self.resolve_espace_execution_context(&block).await?;
+        let chain_id = self.config.chain.evm_chain_id;
 
-        if let Err(failure) =
-            validate_espace_transaction(&transaction, self.config.chain.evm_chain_id)
-        {
+        if let Err(failure) = validate_espace_transaction(&transaction, chain_id) {
             return Ok(build_espace_not_executed(
-                self.config.chain.evm_chain_id,
+                chain_id,
                 execution_context.simulated_block,
                 gas_limit,
                 failure,
@@ -78,48 +78,53 @@ impl ConfluxEngine {
             transaction: DryRunTransactionInput::Espace(transaction),
         };
 
-        let mut state =
-            build_rpc_backed_state(execution_context.state_point, Arc::clone(&self.provider))
-                .map_err(|error| ConfluxEngineError::StateAccess {
-                    message: error.to_string(),
+        let provider = Arc::clone(&self.provider);
+        tokio::task::spawn_blocking(move || {
+            let mut state =
+                build_rpc_backed_state(execution_context.state_point, provider, runtime_handle)
+                    .map_err(|error| ConfluxEngineError::StateAccess {
+                        message: error.to_string(),
+                    })?;
+
+            let machine = build_mainnet_machine();
+
+            let outcome =
+                execute_transaction(&mut state, &machine, execution_input).map_err(|error| {
+                    ConfluxEngineError::StateAccess {
+                        message: error.to_string(),
+                    }
                 })?;
 
-        let machine = build_mainnet_machine();
-
-        let outcome =
-            execute_transaction(&mut state, &machine, execution_input).map_err(|error| {
-                ConfluxEngineError::ExecutionInternal {
-                    message: error.to_string(),
-                }
-            })?;
-
-        let execution = build_espace_execution(
-            self.config.chain.evm_chain_id,
-            execution_context.simulated_block,
-            gas_limit,
-            outcome,
-        )?;
-
-        Ok(execution)
+            build_espace_execution(
+                chain_id,
+                execution_context.simulated_block,
+                gas_limit,
+                outcome,
+            )
+        })
+        .await
+        .map_err(|error| ConfluxEngineError::ExecutionInternal {
+            message: format!("eSpace blocking execution task failed: {error}"),
+        })?
     }
 
-    pub fn simulate_native_transaction(
+    pub async fn simulate_native_transaction(
         &self,
         input: SimulateNativeTransactionInput,
     ) -> Result<NativeExecution, ConfluxEngineError> {
+        let runtime_handle = current_runtime_handle()?;
         let SimulateNativeTransactionInput { epoch, transaction } = input;
         let gas_limit = transaction.gas_limit;
-        let execution_context = self.resolve_native_execution_context(&epoch)?;
+        let execution_context = self.resolve_native_execution_context(&epoch).await?;
+        let chain_id = self.config.chain.native_chain_id;
         let state_anchor = NativeStateAnchor {
             epoch_number: execution_context.state_point.anchor().epoch_number(),
             pivot_hash: execution_context.state_point.anchor().pivot_hash(),
         };
 
-        if let Err(failure) =
-            validate_native_transaction(&transaction, self.config.chain.native_chain_id)
-        {
+        if let Err(failure) = validate_native_transaction(&transaction, chain_id) {
             return Ok(build_native_not_executed(
-                self.config.chain.native_chain_id,
+                chain_id,
                 state_anchor,
                 gas_limit,
                 failure,
@@ -133,41 +138,49 @@ impl ConfluxEngine {
             transaction: DryRunTransactionInput::Native(transaction),
         };
 
-        let mut state =
-            build_rpc_backed_state(execution_context.state_point, Arc::clone(&self.provider))
-                .map_err(|error| ConfluxEngineError::StateAccess {
-                    message: error.to_string(),
+        let provider = Arc::clone(&self.provider);
+        tokio::task::spawn_blocking(move || {
+            let mut state =
+                build_rpc_backed_state(execution_context.state_point, provider, runtime_handle)
+                    .map_err(|error| ConfluxEngineError::StateAccess {
+                        message: error.to_string(),
+                    })?;
+
+            let machine = build_mainnet_machine();
+
+            let outcome =
+                execute_transaction(&mut state, &machine, execution_input).map_err(|error| {
+                    ConfluxEngineError::StateAccess {
+                        message: error.to_string(),
+                    }
                 })?;
 
-        let machine = build_mainnet_machine();
-
-        let outcome =
-            execute_transaction(&mut state, &machine, execution_input).map_err(|error| {
-                ConfluxEngineError::StateAccess {
-                    message: error.to_string(),
-                }
-            })?;
-
-        Ok(build_native_execution(
-            self.config.chain.native_chain_id,
-            state_anchor,
-            gas_limit,
-            outcome,
-        ))
+            Ok(build_native_execution(
+                chain_id,
+                state_anchor,
+                gas_limit,
+                outcome,
+            ))
+        })
+        .await
+        .map_err(|error| ConfluxEngineError::ExecutionInternal {
+            message: format!("Native blocking execution task failed: {error}"),
+        })?
     }
 
-    fn resolve_espace_execution_context(
+    async fn resolve_espace_execution_context(
         &self,
         block: &EspaceBlockRef,
     ) -> Result<EspaceExecutionContext, ConfluxEngineError> {
         let espace_block = self
             .provider
-            .get_espace_block_by_number(espace_block_selector(block))?
+            .get_espace_block_by_number(espace_block_selector(block))
+            .await?
             .ok_or_else(|| ConfluxEngineError::BlockNotFound {
                 block: "eSpace block".to_string(),
             })?;
         let state_anchor = state_anchor_from_espace_block(&espace_block)?;
-        let native_pivot_block = self.resolve_native_pivot_block(state_anchor)?;
+        let native_pivot_block = self.resolve_native_pivot_block(state_anchor).await?;
 
         let simulated_block = SimulatedBlock {
             number: state_anchor.epoch_number(),
@@ -191,20 +204,21 @@ impl ConfluxEngine {
         })
     }
 
-    fn resolve_native_execution_context(
+    async fn resolve_native_execution_context(
         &self,
         epoch: &NativeEpochRef,
     ) -> Result<NativeExecutionContext, ConfluxEngineError> {
         let native_pivot_block = self
             .provider
-            .get_native_block_by_epoch_number(native_epoch_selector(epoch))?
+            .get_native_block_by_epoch_number(native_epoch_selector(epoch))
+            .await?
             .ok_or_else(|| ConfluxEngineError::BlockNotFound {
                 block: "native pivot block".to_string(),
             })?;
 
         let native_pivot = build_native_pivot_block_context(&native_pivot_block)?;
         let state_anchor = state_anchor_from_native_pivot(&native_pivot);
-        let espace_block = self.resolve_espace_block_for_anchor(state_anchor)?;
+        let espace_block = self.resolve_espace_block_for_anchor(state_anchor).await?;
         validate_same_state_anchor(state_anchor, state_anchor_from_espace_block(&espace_block)?)?;
         let espace = build_espace_block_context(&espace_block);
         let block_context = build_execution_block_context(
@@ -219,23 +233,25 @@ impl ConfluxEngine {
         })
     }
 
-    fn resolve_native_pivot_block(
+    async fn resolve_native_pivot_block(
         &self,
         anchor: ConfluxStateAnchor,
     ) -> Result<NativeRpcBlock, ConfluxEngineError> {
         self.provider
-            .get_native_block_by_epoch_number(native_epoch_from_anchor(anchor))?
+            .get_native_block_by_epoch_number(native_epoch_from_anchor(anchor))
+            .await?
             .ok_or_else(|| ConfluxEngineError::BlockNotFound {
                 block: "native pivot block".to_string(),
             })
     }
 
-    fn resolve_espace_block_for_anchor(
+    async fn resolve_espace_block_for_anchor(
         &self,
         anchor: ConfluxStateAnchor,
     ) -> Result<EspaceRpcBlock, ConfluxEngineError> {
         self.provider
-            .get_espace_block_by_number(anchor.espace_block())?
+            .get_espace_block_by_number(anchor.espace_block())
+            .await?
             .ok_or_else(|| ConfluxEngineError::BlockNotFound {
                 block: "eSpace block".to_string(),
             })
@@ -250,6 +266,12 @@ struct EspaceExecutionContext {
 struct NativeExecutionContext {
     block_context: ExecutionBlockContext,
     state_point: ConfluxStatePoint,
+}
+
+fn current_runtime_handle() -> Result<tokio::runtime::Handle, ConfluxEngineError> {
+    tokio::runtime::Handle::try_current().map_err(|error| ConfluxEngineError::ExecutionInternal {
+        message: format!("Conflux simulation requires a Tokio runtime: {error}"),
+    })
 }
 
 fn espace_block_selector(block: &EspaceBlockRef) -> EthBlockId {

@@ -8,6 +8,7 @@ edition = "2024"
 
 [workspace.dependencies]
 alloy = { version = "1", features = ["full"] }
+async-trait = "0.1"
 axum = "0.8"
 conflux-engine = { path = "crates/conflux-engine" }
 conflux-service = { path = "crates/conflux-service" }

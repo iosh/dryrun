@@ -16,20 +16,20 @@ impl ConfluxService {
         Self { engine }
     }
 
-    pub fn simulate_espace_transaction(
+    pub async fn simulate_espace_transaction(
         &self,
         input: espace::SimulateEspaceTransactionInput,
     ) -> Result<espace::SimulateEspaceTransactionOutput, ConfluxServiceError> {
-        let simulation = self.engine.simulate_espace_transaction(input)?;
+        let simulation = self.engine.simulate_espace_transaction(input).await?;
 
         Ok(simulation.into())
     }
 
-    pub fn simulate_native_transaction(
+    pub async fn simulate_native_transaction(
         &self,
         input: native::SimulateNativeTransactionInput,
     ) -> Result<native::SimulateNativeTransactionOutput, ConfluxServiceError> {
-        let simulation = self.engine.simulate_native_transaction(input)?;
+        let simulation = self.engine.simulate_native_transaction(input).await?;
 
         Ok(simulation.into())
     }

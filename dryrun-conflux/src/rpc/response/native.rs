@@ -5,7 +5,6 @@ use cfx_types::{Address, H256, U64, U256};
 use conflux_service::native as service_native;
 use serde::Serialize;
 
-
 #[derive(Debug, thiserror::Error)]
 #[error("failed to encode `{field}` as a Native address: {message}")]
 pub(in crate::rpc) struct ResponseMappingError {
