@@ -28,7 +28,7 @@ use crate::{
     },
     state::{
         ConfluxStateAnchor, ConfluxStatePoint, EspaceRpcBlock, HttpConfluxStateProvider,
-        NativeRpcBlock, RemoteStateProvider,
+        NativeRpcBlock, RemoteStateProvider, RemoteStateReader,
     },
 };
 use cfx_types::U256;
@@ -77,14 +77,17 @@ impl ConfluxEngine {
             block_context: execution_context.block_context,
             transaction: DryRunTransactionInput::Espace(transaction),
         };
+        let state_reader = self
+            .prepare_state_reader(execution_context.state_point)
+            .await?;
 
-        let provider = Arc::clone(&self.provider);
         tokio::task::spawn_blocking(move || {
             let mut state =
-                build_rpc_backed_state(execution_context.state_point, provider, runtime_handle)
-                    .map_err(|error| ConfluxEngineError::StateAccess {
+                build_rpc_backed_state(state_reader, runtime_handle).map_err(|error| {
+                    ConfluxEngineError::StateAccess {
                         message: error.to_string(),
-                    })?;
+                    }
+                })?;
 
             let machine = build_mainnet_machine();
 
@@ -137,14 +140,17 @@ impl ConfluxEngine {
             block_context: execution_context.block_context,
             transaction: DryRunTransactionInput::Native(transaction),
         };
+        let state_reader = self
+            .prepare_state_reader(execution_context.state_point)
+            .await?;
 
-        let provider = Arc::clone(&self.provider);
         tokio::task::spawn_blocking(move || {
             let mut state =
-                build_rpc_backed_state(execution_context.state_point, provider, runtime_handle)
-                    .map_err(|error| ConfluxEngineError::StateAccess {
+                build_rpc_backed_state(state_reader, runtime_handle).map_err(|error| {
+                    ConfluxEngineError::StateAccess {
                         message: error.to_string(),
-                    })?;
+                    }
+                })?;
 
             let machine = build_mainnet_machine();
 
@@ -166,6 +172,17 @@ impl ConfluxEngine {
         .map_err(|error| ConfluxEngineError::ExecutionInternal {
             message: format!("Native blocking execution task failed: {error}"),
         })?
+    }
+
+    async fn prepare_state_reader(
+        &self,
+        state_point: ConfluxStatePoint,
+    ) -> Result<RemoteStateReader, ConfluxEngineError> {
+        RemoteStateReader::prepare(state_point, Arc::clone(&self.provider))
+            .await
+            .map_err(|error| ConfluxEngineError::StateAccess {
+                message: error.to_string(),
+            })
     }
 
     async fn resolve_espace_execution_context(

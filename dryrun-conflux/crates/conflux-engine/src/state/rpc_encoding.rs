@@ -19,7 +19,6 @@ impl RpcStorageWord {
         if value.len() != 32 {
             return Err(RemoteStateProviderError::RpcDecode {
                 field: "cfx_getStorageAt",
-                value: format!("0x{}", hex::encode(value.as_ref())),
                 message: format!("expected 32 bytes, got {}", value.len()),
             });
         }
@@ -36,7 +35,6 @@ pub(crate) fn decode_rpc_bytes(
         .strip_prefix("0x")
         .ok_or_else(|| RemoteStateProviderError::RpcDecode {
             field,
-            value: value.clone(),
             message: "missing 0x prefix".to_owned(),
         })?;
 
@@ -46,7 +44,6 @@ pub(crate) fn decode_rpc_bytes(
 
     hex::decode(digits).map_err(|error| RemoteStateProviderError::RpcDecode {
         field,
-        value,
         message: error.to_string(),
     })
 }

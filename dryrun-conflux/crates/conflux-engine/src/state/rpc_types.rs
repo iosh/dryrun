@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use cfx_rpc_cfx_types::RpcAddress;
 use cfx_types::{H256, U64, U256};
 use serde::Deserialize;
@@ -31,6 +33,24 @@ pub struct NativePoSEconomics {
 pub struct NativeVoteParamsInfo {
     pub pow_base_reward: U256,
     pub base_fee_share_prop: U256,
+}
+
+#[derive(Debug, Clone)]
+pub struct NativeGlobalSnapshot {
+    pub interest_rate: U256,
+    pub accumulate_interest_rate: U256,
+    pub supply: NativeSupplyInfo,
+    pub collateral: NativeStorageCollateralInfo,
+    pub pos_economics: NativePoSEconomics,
+    pub vote_params: NativeVoteParamsInfo,
+    pub fee_burnt: U256,
+}
+
+#[derive(Debug, Clone)]
+pub struct EspaceAccountSnapshot {
+    pub balance: U256,
+    pub nonce: U256,
+    pub code: Arc<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

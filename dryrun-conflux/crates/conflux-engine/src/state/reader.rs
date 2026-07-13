@@ -1,18 +1,16 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use cfx_parameters::staking::DRIPS_PER_STORAGE_COLLATERAL_UNIT;
 use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;
 use cfx_rpc_eth_types::BlockId as EthBlockId;
 use cfx_storage::{Error as StorageError, Result as StorageResult};
-use tokio::sync::OnceCell;
+use tokio::sync::Mutex;
 
 use crate::state::{
     ConfluxStatePoint,
     native_internal::{NativeInternalStateItem, SponsorWhitelistStorageKey, decode_abi_bool},
     provider::{RemoteStateProvider, RemoteStateProviderError},
-    rpc_types::{
-        NativePoSEconomics, NativeStorageCollateralInfo, NativeSupplyInfo, NativeVoteParamsInfo,
-    },
+    rpc_types::{EspaceAccountSnapshot, NativeGlobalSnapshot},
     state_item::{EspaceStateItem, NativeStateItem, StateItem},
     state_value_encoding::{
         StateValueEncodingError, encode_espace_account, encode_espace_code,
@@ -30,27 +28,34 @@ pub(crate) struct RemoteStateReader {
     state_point: ConfluxStatePoint,
     native_epoch: CfxEpochNumber,
     provider: Arc<dyn RemoteStateProvider>,
-    native_supply_info_cache: OnceCell<NativeSupplyInfo>,
-    native_storage_collateral_info_cache: OnceCell<NativeStorageCollateralInfo>,
-    native_pos_economics_cache: OnceCell<NativePoSEconomics>,
-    native_vote_params_info_cache: OnceCell<NativeVoteParamsInfo>,
+    native_globals: NativeGlobalSnapshot,
+    espace_account_cache: Mutex<HashMap<Address, Arc<EspaceAccountSnapshot>>>,
 }
 
 impl RemoteStateReader {
-    pub(crate) fn new(
+    pub(crate) async fn prepare(
         state_point: ConfluxStatePoint,
         provider: Arc<dyn RemoteStateProvider>,
-    ) -> Self {
+    ) -> StorageResult<Self> {
         let native_epoch = state_point.native_epoch();
-        Self {
+        let native_globals = provider
+            .get_native_global_snapshot(native_epoch.clone())
+            .await
+            .map_err(|error| {
+                Self::provider_error_at(&state_point, "get_native_global_snapshot", error)
+            })?;
+
+        Ok(Self {
             state_point,
             native_epoch,
             provider,
-            native_supply_info_cache: OnceCell::new(),
-            native_storage_collateral_info_cache: OnceCell::new(),
-            native_pos_economics_cache: OnceCell::new(),
-            native_vote_params_info_cache: OnceCell::new(),
-        }
+            native_globals,
+            espace_account_cache: Mutex::new(HashMap::new()),
+        })
+    }
+
+    pub(crate) fn state_point(&self) -> &ConfluxStatePoint {
+        &self.state_point
     }
 
     pub(crate) async fn read(&self, item: &StateItem) -> StorageResult<StateRead> {
@@ -67,26 +72,53 @@ impl RemoteStateReader {
                 self.fetch_native_deposit_list(address).await
             }
             NativeStateItem::VoteList { address } => self.fetch_native_vote_list(address).await,
-            NativeStateItem::InterestRate => self.fetch_native_interest_rate().await,
-            NativeStateItem::AccumulateInterestRate => {
-                self.fetch_native_accumulate_interest_rate().await
+            NativeStateItem::InterestRate => {
+                Ok(Some(encode_native_u256(self.native_globals.interest_rate)))
             }
-            NativeStateItem::TotalIssued => self.fetch_native_total_issued().await,
-            NativeStateItem::TotalStaking => self.fetch_native_total_staking().await,
-            NativeStateItem::TotalEvmToken => self.fetch_native_total_evm_token().await,
-            NativeStateItem::TotalStorage => self.fetch_native_total_storage().await,
-            NativeStateItem::UsedStoragePoints => self.fetch_native_used_storage_points().await,
-            NativeStateItem::ConvertedStoragePoints => {
-                self.fetch_native_converted_storage_points().await
+            NativeStateItem::AccumulateInterestRate => Ok(Some(encode_native_u256(
+                self.native_globals.accumulate_interest_rate,
+            ))),
+            NativeStateItem::TotalIssued => Ok(Some(encode_native_u256(
+                self.native_globals.supply.total_issued,
+            ))),
+            NativeStateItem::TotalStaking => Ok(Some(encode_native_u256(
+                self.native_globals.supply.total_staking,
+            ))),
+            NativeStateItem::TotalEvmToken => Ok(Some(encode_native_u256(
+                self.native_globals.supply.total_espace_tokens,
+            ))),
+            NativeStateItem::TotalStorage => Ok(Some(encode_native_u256(
+                self.native_globals.supply.total_collateral,
+            ))),
+            NativeStateItem::UsedStoragePoints => Ok(Some(encode_native_u256(
+                self.native_globals.collateral.used_storage_points
+                    * *DRIPS_PER_STORAGE_COLLATERAL_UNIT,
+            ))),
+            NativeStateItem::ConvertedStoragePoints => Ok(Some(encode_native_u256(
+                self.native_globals.collateral.converted_storage_points
+                    * *DRIPS_PER_STORAGE_COLLATERAL_UNIT,
+            ))),
+            NativeStateItem::TotalPosStaking => Ok(Some(encode_native_u256(
+                self.native_globals.pos_economics.total_pos_staking_tokens,
+            ))),
+            NativeStateItem::DistributablePosInterest => Ok(Some(encode_native_u256(
+                self.native_globals.pos_economics.distributable_pos_interest,
+            ))),
+            NativeStateItem::LastDistributeBlock => Ok(Some(encode_native_u256(U256::from(
+                self.native_globals
+                    .pos_economics
+                    .last_distribute_block
+                    .as_u64(),
+            )))),
+            NativeStateItem::PowBaseReward => Ok(Some(encode_native_u256(
+                self.native_globals.vote_params.pow_base_reward,
+            ))),
+            NativeStateItem::TotalBurnt1559 => {
+                Ok(Some(encode_native_u256(self.native_globals.fee_burnt)))
             }
-            NativeStateItem::TotalPosStaking => self.fetch_native_total_pos_staking().await,
-            NativeStateItem::DistributablePosInterest => {
-                self.fetch_native_distributable_pos_interest().await
-            }
-            NativeStateItem::LastDistributeBlock => self.fetch_native_last_distribute_block().await,
-            NativeStateItem::PowBaseReward => self.fetch_native_pow_base_reward().await,
-            NativeStateItem::TotalBurnt1559 => self.fetch_native_total_burnt_1559().await,
-            NativeStateItem::BaseFeeProp => self.fetch_native_base_fee_prop().await,
+            NativeStateItem::BaseFeeProp => Ok(Some(encode_native_u256(
+                self.native_globals.vote_params.base_fee_share_prop,
+            ))),
             NativeStateItem::InternalContractStorage(item) => {
                 self.fetch_native_internal_storage(item).await
             }
@@ -117,6 +149,31 @@ impl RemoteStateReader {
 
     fn espace_block(&self) -> EthBlockId {
         self.state_point.espace_block()
+    }
+
+    async fn espace_account_snapshot(
+        &self,
+        address: Address,
+    ) -> StorageResult<Arc<EspaceAccountSnapshot>> {
+        if let Some(snapshot) = self
+            .espace_account_cache
+            .lock()
+            .await
+            .get(&address)
+            .cloned()
+        {
+            return Ok(snapshot);
+        }
+
+        let snapshot = Arc::new(
+            self.provider
+                .get_espace_account_snapshot(self.espace_block(), address)
+                .await
+                .map_err(|error| self.provider_error("get_espace_account_snapshot", error))?,
+        );
+        let mut cache = self.espace_account_cache.lock().await;
+
+        Ok(Arc::clone(cache.entry(address).or_insert_with(|| snapshot)))
     }
 
     async fn fetch_native_account(&self, address: Address) -> StorageResult<StateRead> {
@@ -262,178 +319,14 @@ impl RemoteStateReader {
         Ok(is_user_whitelisted.then_some(encode_native_storage_slot(U256::one())))
     }
 
-    async fn fetch_native_interest_rate(&self) -> StorageResult<StateRead> {
-        let value = self
-            .provider
-            .get_native_interest_rate(self.native_epoch())
-            .await
-            .map_err(|error| self.provider_error("get_native_interest_rate", error))?;
-
-        Ok(Some(encode_native_u256(value)))
-    }
-
-    async fn fetch_native_accumulate_interest_rate(&self) -> StorageResult<StateRead> {
-        let value = self
-            .provider
-            .get_native_accumulate_interest_rate(self.native_epoch())
-            .await
-            .map_err(|error| self.provider_error("get_native_accumulate_interest_rate", error))?;
-
-        Ok(Some(encode_native_u256(value)))
-    }
-
-    async fn fetch_native_total_issued(&self) -> StorageResult<StateRead> {
-        let supply_info = self.native_supply_info().await?;
-
-        Ok(Some(encode_native_u256(supply_info.total_issued)))
-    }
-
-    async fn fetch_native_total_staking(&self) -> StorageResult<StateRead> {
-        let supply_info = self.native_supply_info().await?;
-
-        Ok(Some(encode_native_u256(supply_info.total_staking)))
-    }
-
-    async fn fetch_native_total_evm_token(&self) -> StorageResult<StateRead> {
-        let supply_info = self.native_supply_info().await?;
-
-        Ok(Some(encode_native_u256(supply_info.total_espace_tokens)))
-    }
-
-    async fn fetch_native_total_storage(&self) -> StorageResult<StateRead> {
-        let supply_info = self.native_supply_info().await?;
-
-        Ok(Some(encode_native_u256(supply_info.total_collateral)))
-    }
-
-    async fn fetch_native_used_storage_points(&self) -> StorageResult<StateRead> {
-        let collateral_info = self.native_storage_collateral_info().await?;
-
-        Ok(Some(encode_native_u256(
-            collateral_info.used_storage_points * *DRIPS_PER_STORAGE_COLLATERAL_UNIT,
-        )))
-    }
-
-    async fn fetch_native_converted_storage_points(&self) -> StorageResult<StateRead> {
-        let collateral_info = self.native_storage_collateral_info().await?;
-
-        Ok(Some(encode_native_u256(
-            collateral_info.converted_storage_points * *DRIPS_PER_STORAGE_COLLATERAL_UNIT,
-        )))
-    }
-
-    async fn fetch_native_total_pos_staking(&self) -> StorageResult<StateRead> {
-        let pos_economics = self.native_pos_economics().await?;
-
-        Ok(Some(encode_native_u256(
-            pos_economics.total_pos_staking_tokens,
-        )))
-    }
-
-    async fn fetch_native_distributable_pos_interest(&self) -> StorageResult<StateRead> {
-        let pos_economics = self.native_pos_economics().await?;
-
-        Ok(Some(encode_native_u256(
-            pos_economics.distributable_pos_interest,
-        )))
-    }
-
-    async fn fetch_native_last_distribute_block(&self) -> StorageResult<StateRead> {
-        let pos_economics = self.native_pos_economics().await?;
-
-        Ok(Some(encode_native_u256(U256::from(
-            pos_economics.last_distribute_block.as_u64(),
-        ))))
-    }
-
-    async fn fetch_native_pow_base_reward(&self) -> StorageResult<StateRead> {
-        let vote_params = self.native_vote_params_info().await?;
-
-        Ok(Some(encode_native_u256(vote_params.pow_base_reward)))
-    }
-
-    async fn fetch_native_total_burnt_1559(&self) -> StorageResult<StateRead> {
-        let value = self
-            .provider
-            .get_native_fee_burnt(self.native_epoch())
-            .await
-            .map_err(|error| self.provider_error("get_native_fee_burnt", error))?;
-
-        Ok(Some(encode_native_u256(value)))
-    }
-
-    async fn fetch_native_base_fee_prop(&self) -> StorageResult<StateRead> {
-        let vote_params = self.native_vote_params_info().await?;
-
-        Ok(Some(encode_native_u256(vote_params.base_fee_share_prop)))
-    }
-
-    async fn native_supply_info(&self) -> StorageResult<&NativeSupplyInfo> {
-        self.native_supply_info_cache
-            .get_or_try_init(|| async {
-                self.provider
-                    .get_native_supply_info(self.native_epoch())
-                    .await
-                    .map_err(|error| self.provider_error("get_native_supply_info", error))
-            })
-            .await
-    }
-
-    async fn native_storage_collateral_info(&self) -> StorageResult<&NativeStorageCollateralInfo> {
-        self.native_storage_collateral_info_cache
-            .get_or_try_init(|| async {
-                self.provider
-                    .get_native_collateral_info(self.native_epoch())
-                    .await
-                    .map_err(|error| self.provider_error("get_native_collateral_info", error))
-            })
-            .await
-    }
-
-    async fn native_pos_economics(&self) -> StorageResult<&NativePoSEconomics> {
-        self.native_pos_economics_cache
-            .get_or_try_init(|| async {
-                self.provider
-                    .get_native_pos_economics(self.native_epoch())
-                    .await
-                    .map_err(|error| self.provider_error("get_native_pos_economics", error))
-            })
-            .await
-    }
-
-    async fn native_vote_params_info(&self) -> StorageResult<&NativeVoteParamsInfo> {
-        self.native_vote_params_info_cache
-            .get_or_try_init(|| async {
-                self.provider
-                    .get_native_vote_params(self.native_epoch())
-                    .await
-                    .map_err(|error| self.provider_error("get_native_vote_params", error))
-            })
-            .await
-    }
-
     async fn fetch_espace_account(&self, address: Address) -> StorageResult<StateRead> {
-        let block = self.espace_block();
+        let snapshot = self.espace_account_snapshot(address).await?;
 
-        let balance = self
-            .provider
-            .get_espace_balance(block, address)
-            .await
-            .map_err(|error| self.provider_error("get_espace_balance", error))?;
-
-        let nonce = self
-            .provider
-            .get_espace_transaction_count(block, address)
-            .await
-            .map_err(|error| self.provider_error("get_espace_transaction_count", error))?;
-
-        let code = self
-            .provider
-            .get_espace_code_at(block, address)
-            .await
-            .map_err(|error| self.provider_error("get_espace_code_at", error))?;
-
-        Ok(encode_espace_account(balance, nonce, code))
+        Ok(encode_espace_account(
+            snapshot.balance,
+            snapshot.nonce,
+            snapshot.code.as_ref(),
+        ))
     }
 
     async fn fetch_espace_storage_slot(
@@ -455,17 +348,13 @@ impl RemoteStateReader {
         address: Address,
         expected_code_hash: H256,
     ) -> StorageResult<StateRead> {
-        let code = self
-            .provider
-            .get_espace_code_at(self.espace_block(), address)
-            .await
-            .map_err(|error| self.provider_error("get_espace_code_at", error))?;
+        let snapshot = self.espace_account_snapshot(address).await?;
 
-        if code.is_empty() {
+        if snapshot.code.is_empty() {
             return Ok(None);
         }
 
-        encode_espace_code(expected_code_hash, code)
+        encode_espace_code(expected_code_hash, Arc::clone(&snapshot.code))
             .map(Some)
             .map_err(|error| self.encoding_error("encode_espace_code", error))
     }
@@ -475,10 +364,18 @@ impl RemoteStateReader {
         operation: &'static str,
         error: RemoteStateProviderError,
     ) -> StorageError {
+        Self::provider_error_at(&self.state_point, operation, error)
+    }
+
+    fn provider_error_at(
+        state_point: &ConfluxStatePoint,
+        operation: &'static str,
+        error: RemoteStateProviderError,
+    ) -> StorageError {
         let message = format!(
             "rpc-backed storage provider error: operation={operation}, state={:?},
               reason={error}",
-            self.state_point
+            state_point
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)

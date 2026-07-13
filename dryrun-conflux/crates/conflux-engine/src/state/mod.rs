@@ -16,12 +16,13 @@ pub use self::{
     http_provider::HttpConfluxStateProvider,
     provider::{RemoteStateProvider, RemoteStateProviderError},
     rpc_types::{
-        EspaceRpcBlock, NativePoSEconomics, NativeRpcAccount, NativeRpcBlock,
-        NativeStorageCollateralInfo, NativeSupplyInfo, NativeVoteParamsInfo,
+        EspaceAccountSnapshot, EspaceRpcBlock, NativeGlobalSnapshot, NativePoSEconomics,
+        NativeRpcAccount, NativeRpcBlock, NativeStorageCollateralInfo, NativeSupplyInfo,
+        NativeVoteParamsInfo,
     },
 };
 
-pub(crate) use self::storage::new_rpc_backed_state;
+pub(crate) use self::{reader::RemoteStateReader, storage::new_rpc_backed_state};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ConfluxStateAnchor {

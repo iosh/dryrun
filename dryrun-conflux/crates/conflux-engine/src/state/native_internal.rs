@@ -54,7 +54,6 @@ pub(crate) fn decode_abi_bool(
     if value.len() != ABI_WORD_BYTES {
         return Err(RemoteStateProviderError::RpcDecode {
             field,
-            value: format!("0x{}", hex::encode(&value)),
             message: format!("expected 32-byte ABI bool, got {} bytes", value.len()),
         });
     }
@@ -65,8 +64,7 @@ pub(crate) fn decode_abi_bool(
         value if value == U256::one() => Ok(true),
         _ => Err(RemoteStateProviderError::RpcDecode {
             field,
-            value: format!("0x{}", hex::encode(value)),
-            message: "invalid ABI bool value".to_owned(),
+            message: "expected ABI bool value 0 or 1".to_owned(),
         }),
     }
 }

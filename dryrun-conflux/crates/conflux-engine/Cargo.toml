@@ -26,6 +26,7 @@ cfx-rpc-eth-types = { git = "https://github.com/iosh/conflux-rust.git", branch =
 keccak-hash = "0.5"
 rlp = "0.4"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "2"
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 tracing = { workspace = true }

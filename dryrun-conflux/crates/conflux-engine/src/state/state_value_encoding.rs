@@ -168,9 +168,9 @@ pub(crate) fn encode_espace_storage_slot(value: U256) -> Box<[u8]> {
 // carries the expected hash, so verify the code bytes before encoding.
 pub(crate) fn encode_espace_code(
     expected_code_hash: H256,
-    code: Vec<u8>,
+    code: Arc<Vec<u8>>,
 ) -> Result<Box<[u8]>, StateValueEncodingError> {
-    let actual_code_hash = keccak(&code);
+    let actual_code_hash = keccak(code.as_ref());
     if actual_code_hash != expected_code_hash {
         return Err(StateValueEncodingError::CodeHashMismatch {
             expected: expected_code_hash,
@@ -179,7 +179,7 @@ pub(crate) fn encode_espace_code(
     }
 
     Ok(rlp::encode(&CodeInfo {
-        code: Arc::new(code),
+        code,
         owner: Address::zero(),
     })
     .to_vec()
@@ -189,7 +189,7 @@ pub(crate) fn encode_espace_code(
 pub(crate) fn encode_espace_account(
     balance: U256,
     nonce: U256,
-    code: Vec<u8>,
+    code: &[u8],
 ) -> Option<Box<[u8]>> {
     if balance.is_zero() && nonce.is_zero() && code.is_empty() {
         return None;
@@ -199,7 +199,7 @@ pub(crate) fn encode_espace_account(
         rlp::encode(&EthereumAccount {
             balance,
             nonce,
-            code_hash: keccak(&code),
+            code_hash: keccak(code),
         })
         .to_vec()
         .into_boxed_slice(),

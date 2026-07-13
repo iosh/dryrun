@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use cfx_executor::state::State;
 use cfx_internal_common::StateRootWithAuxInfo;
 use cfx_statedb::{Result as StateDbResult, StateDb};
@@ -9,17 +7,15 @@ use tokio::runtime::Handle;
 
 use crate::state::{
     ConfluxStatePoint,
-    provider::RemoteStateProvider,
     reader::RemoteStateReader,
     state_item::{StateItem, StateItemError},
 };
 
 pub(crate) fn new_rpc_backed_state(
-    state_point: ConfluxStatePoint,
-    provider: Arc<dyn RemoteStateProvider>,
+    reader: RemoteStateReader,
     runtime_handle: Handle,
 ) -> StateDbResult<State> {
-    let storage = RpcBackedStorage::new(state_point, provider, runtime_handle);
+    let storage = RpcBackedStorage::new(reader, runtime_handle);
     let db = StateDb::new(Box::new(storage));
 
     State::new(db)
@@ -32,14 +28,10 @@ pub(crate) struct RpcBackedStorage {
 }
 
 impl RpcBackedStorage {
-    fn new(
-        state_point: ConfluxStatePoint,
-        provider: Arc<dyn RemoteStateProvider>,
-        runtime_handle: Handle,
-    ) -> Self {
+    fn new(reader: RemoteStateReader, runtime_handle: Handle) -> Self {
         Self {
-            state_point: state_point.clone(),
-            reader: RemoteStateReader::new(state_point, provider),
+            state_point: reader.state_point().clone(),
+            reader,
             runtime_handle,
         }
     }

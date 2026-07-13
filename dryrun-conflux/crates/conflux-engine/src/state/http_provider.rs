@@ -1,14 +1,21 @@
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use cfx_rpc_cfx_types::{EpochNumber, RpcAddress, epoch_number::BlockHashOrEpochNumber};
 use cfx_rpc_eth_types::BlockId;
 use cfx_types::{Address, H256, U256};
 use jsonrpsee::{
-    core::{client::ClientT, traits::ToRpcParams},
+    core::{
+        client::{BatchEntry, BatchResponse, ClientT},
+        params::BatchRequestBuilder,
+        traits::ToRpcParams,
+    },
     http_client::{HttpClient, HttpClientBuilder},
     rpc_params,
 };
 use primitives::{DepositInfo, VoteStakeInfo};
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 
 use crate::{
     config::ConfluxConfig,
@@ -16,8 +23,9 @@ use crate::{
         provider::{RemoteStateProvider, RemoteStateProviderError},
         rpc_encoding::{RpcStorageWord, decode_rpc_bytes},
         rpc_types::{
-            EspaceRpcBlock, NativePoSEconomics, NativeRpcAccount, NativeRpcBlock,
-            NativeSponsorInfo, NativeStorageCollateralInfo, NativeSupplyInfo, NativeVoteParamsInfo,
+            EspaceAccountSnapshot, EspaceRpcBlock, NativeGlobalSnapshot, NativePoSEconomics,
+            NativeRpcAccount, NativeRpcBlock, NativeSponsorInfo, NativeStorageCollateralInfo,
+            NativeSupplyInfo, NativeVoteParamsInfo,
         },
     },
 };
@@ -82,6 +90,71 @@ impl HttpConfluxStateProvider {
                 message: error.to_string(),
             })
     }
+
+    async fn rpc_batch_request<'a>(
+        client: &HttpClient,
+        batch_name: &'static str,
+        batch: BatchRequestBuilder<'a>,
+    ) -> Result<BatchResponse<'a, Value>, RemoteStateProviderError> {
+        client
+            .batch_request(batch)
+            .await
+            .map_err(|error| RemoteStateProviderError::RpcRequest {
+                message: format!("{batch_name} batch request failed: {error}"),
+            })
+    }
+
+    fn insert_batch_request<'a, Params>(
+        batch: &mut BatchRequestBuilder<'a>,
+        method: &'a str,
+        params: Params,
+    ) -> Result<(), RemoteStateProviderError>
+    where
+        Params: ToRpcParams,
+    {
+        batch
+            .insert(method, params)
+            .map_err(|error| RemoteStateProviderError::RpcRequest {
+                message: format!("failed to encode {method} batch request params: {error}"),
+            })
+    }
+
+    fn decode_batch_result<'a, T>(
+        entries: &mut impl Iterator<Item = BatchEntry<'a, Value>>,
+        method: &'static str,
+    ) -> Result<T, RemoteStateProviderError>
+    where
+        T: DeserializeOwned,
+    {
+        let value = entries
+            .next()
+            .ok_or_else(|| RemoteStateProviderError::RpcRequest {
+                message: format!("missing {method} response in JSON-RPC batch"),
+            })?
+            .map_err(|error| RemoteStateProviderError::RpcRequest {
+                message: format!("{method} failed in JSON-RPC batch: {error}"),
+            })?;
+        serde_json::from_value(value).map_err(|error| RemoteStateProviderError::RpcDecode {
+            field: method,
+            message: error.to_string(),
+        })
+    }
+
+    fn validate_batch_len(
+        batch_name: &'static str,
+        expected: usize,
+        actual: usize,
+    ) -> Result<(), RemoteStateProviderError> {
+        if actual == expected {
+            return Ok(());
+        }
+
+        Err(RemoteStateProviderError::RpcRequest {
+            message: format!(
+                "unexpected {batch_name} batch response length: expected {expected}, got {actual}"
+            ),
+        })
+    }
 }
 
 #[async_trait]
@@ -107,93 +180,109 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
         Ok((!value.is_zero()).then_some(value))
     }
 
-    async fn get_espace_code_at(
+    async fn get_espace_account_snapshot(
         &self,
         block_number: BlockId,
         address: Address,
-    ) -> Result<Vec<u8>, RemoteStateProviderError> {
-        let value: String = self
-            .espace_rpc_request("eth_getCode", rpc_params![address, block_number])
-            .await?;
+    ) -> Result<EspaceAccountSnapshot, RemoteStateProviderError> {
+        const BATCH_NAME: &str = "eSpace account";
+        const BATCH_LEN: usize = 3;
 
-        decode_rpc_bytes(value, "eth_getCode")
-    }
-
-    async fn get_espace_balance(
-        &self,
-        block_number: BlockId,
-        address: Address,
-    ) -> Result<U256, RemoteStateProviderError> {
-        self.espace_rpc_request("eth_getBalance", rpc_params![address, block_number])
-            .await
-    }
-
-    async fn get_espace_transaction_count(
-        &self,
-        block_number: BlockId,
-        address: Address,
-    ) -> Result<U256, RemoteStateProviderError> {
-        self.espace_rpc_request(
+        let mut batch = BatchRequestBuilder::new();
+        Self::insert_batch_request(
+            &mut batch,
+            "eth_getBalance",
+            rpc_params![address, block_number],
+        )?;
+        Self::insert_batch_request(
+            &mut batch,
             "eth_getTransactionCount",
             rpc_params![address, block_number],
-        )
-        .await
+        )?;
+        Self::insert_batch_request(
+            &mut batch,
+            "eth_getCode",
+            rpc_params![address, block_number],
+        )?;
+
+        let response = Self::rpc_batch_request(&self.espace_client, BATCH_NAME, batch).await?;
+        Self::validate_batch_len(BATCH_NAME, BATCH_LEN, response.len())?;
+        let mut entries = response.into_iter();
+        let balance = Self::decode_batch_result(&mut entries, "eth_getBalance")?;
+        let nonce = Self::decode_batch_result(&mut entries, "eth_getTransactionCount")?;
+        let code: String = Self::decode_batch_result(&mut entries, "eth_getCode")?;
+
+        Ok(EspaceAccountSnapshot {
+            balance,
+            nonce,
+            code: Arc::new(decode_rpc_bytes(code, "eth_getCode")?),
+        })
     }
 
-    async fn get_native_interest_rate(
+    async fn get_native_global_snapshot(
         &self,
         epoch: EpochNumber,
-    ) -> Result<U256, RemoteStateProviderError> {
-        self.native_rpc_request("cfx_getInterestRate", rpc_params![epoch])
-            .await
-    }
+    ) -> Result<NativeGlobalSnapshot, RemoteStateProviderError> {
+        const BATCH_NAME: &str = "Native globals";
+        const BATCH_LEN: usize = 7;
 
-    async fn get_native_accumulate_interest_rate(
-        &self,
-        epoch: EpochNumber,
-    ) -> Result<U256, RemoteStateProviderError> {
-        self.native_rpc_request("cfx_getAccumulateInterestRate", rpc_params![epoch])
-            .await
-    }
+        let mut batch = BatchRequestBuilder::new();
+        Self::insert_batch_request(
+            &mut batch,
+            "cfx_getInterestRate",
+            rpc_params![epoch.clone()],
+        )?;
+        Self::insert_batch_request(
+            &mut batch,
+            "cfx_getAccumulateInterestRate",
+            rpc_params![epoch.clone()],
+        )?;
+        Self::insert_batch_request(&mut batch, "cfx_getSupplyInfo", rpc_params![epoch.clone()])?;
+        Self::insert_batch_request(
+            &mut batch,
+            "cfx_getCollateralInfo",
+            rpc_params![epoch.clone()],
+        )?;
+        Self::insert_batch_request(
+            &mut batch,
+            "cfx_getPoSEconomics",
+            rpc_params![epoch.clone()],
+        )?;
+        Self::insert_batch_request(
+            &mut batch,
+            "cfx_getParamsFromVote",
+            rpc_params![epoch.clone()],
+        )?;
+        Self::insert_batch_request(&mut batch, "cfx_getFeeBurnt", rpc_params![epoch])?;
 
-    async fn get_native_supply_info(
-        &self,
-        epoch: EpochNumber,
-    ) -> Result<NativeSupplyInfo, RemoteStateProviderError> {
-        self.native_rpc_request("cfx_getSupplyInfo", rpc_params![epoch])
-            .await
-    }
+        let response = Self::rpc_batch_request(&self.native_client, BATCH_NAME, batch).await?;
+        Self::validate_batch_len(BATCH_NAME, BATCH_LEN, response.len())?;
+        let mut entries = response.into_iter();
 
-    async fn get_native_collateral_info(
-        &self,
-        epoch: EpochNumber,
-    ) -> Result<NativeStorageCollateralInfo, RemoteStateProviderError> {
-        self.native_rpc_request("cfx_getCollateralInfo", rpc_params![epoch])
-            .await
-    }
-
-    async fn get_native_pos_economics(
-        &self,
-        epoch: EpochNumber,
-    ) -> Result<NativePoSEconomics, RemoteStateProviderError> {
-        self.native_rpc_request("cfx_getPoSEconomics", rpc_params![epoch])
-            .await
-    }
-
-    async fn get_native_vote_params(
-        &self,
-        epoch: EpochNumber,
-    ) -> Result<NativeVoteParamsInfo, RemoteStateProviderError> {
-        self.native_rpc_request("cfx_getParamsFromVote", rpc_params![epoch])
-            .await
-    }
-
-    async fn get_native_fee_burnt(
-        &self,
-        epoch: EpochNumber,
-    ) -> Result<U256, RemoteStateProviderError> {
-        self.native_rpc_request("cfx_getFeeBurnt", rpc_params![epoch])
-            .await
+        Ok(NativeGlobalSnapshot {
+            interest_rate: Self::decode_batch_result(&mut entries, "cfx_getInterestRate")?,
+            accumulate_interest_rate: Self::decode_batch_result(
+                &mut entries,
+                "cfx_getAccumulateInterestRate",
+            )?,
+            supply: Self::decode_batch_result::<NativeSupplyInfo>(
+                &mut entries,
+                "cfx_getSupplyInfo",
+            )?,
+            collateral: Self::decode_batch_result::<NativeStorageCollateralInfo>(
+                &mut entries,
+                "cfx_getCollateralInfo",
+            )?,
+            pos_economics: Self::decode_batch_result::<NativePoSEconomics>(
+                &mut entries,
+                "cfx_getPoSEconomics",
+            )?,
+            vote_params: Self::decode_batch_result::<NativeVoteParamsInfo>(
+                &mut entries,
+                "cfx_getParamsFromVote",
+            )?,
+            fee_burnt: Self::decode_batch_result(&mut entries, "cfx_getFeeBurnt")?,
+        })
     }
 
     async fn get_native_account(

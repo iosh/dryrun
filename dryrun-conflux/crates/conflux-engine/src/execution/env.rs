@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use cfx_executor::{
     machine::{Machine, VmFactory},
     state::State,
@@ -11,16 +9,15 @@ use cfx_vm_types::{Env, Spec};
 use primitives::{BlockNumber, SignedTransaction};
 use tokio::runtime::Handle;
 
-use crate::state::{ConfluxStatePoint, RemoteStateProvider, new_rpc_backed_state};
+use crate::state::{RemoteStateReader, new_rpc_backed_state};
 
 use super::{ExecutionBlockContext, params::mainnet_common_params};
 
-pub fn build_rpc_backed_state(
-    state_point: ConfluxStatePoint,
-    provider: Arc<dyn RemoteStateProvider>,
+pub(crate) fn build_rpc_backed_state(
+    reader: RemoteStateReader,
     runtime_handle: Handle,
 ) -> StateDbResult<State> {
-    new_rpc_backed_state(state_point, provider, runtime_handle)
+    new_rpc_backed_state(reader, runtime_handle)
 }
 
 fn next_execution_block_number(pivot_block_number: BlockNumber) -> BlockNumber {
