@@ -90,8 +90,11 @@ pub enum RemoteStateProviderError {
     #[error("remote state provider endpoint error: {message}")]
     InvalidEndpoint { message: String },
 
-    #[error("remote state rpc request failed: {message}")]
-    RpcRequest { message: String },
+    #[error("remote state rpc request failed: operation={operation}, reason={message}")]
+    RpcRequest {
+        operation: &'static str,
+        message: String,
+    },
 
     #[error("remote state rpc decode failed: field={field}, reason={message}")]
     RpcDecode {

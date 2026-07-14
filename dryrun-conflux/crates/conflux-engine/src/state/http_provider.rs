@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use cfx_rpc_cfx_types::{EpochNumber, RpcAddress, epoch_number::BlockHashOrEpochNumber};
@@ -66,12 +66,7 @@ impl HttpConfluxStateProvider {
         R: DeserializeOwned + Send,
         Params: ToRpcParams + Send,
     {
-        self.espace_client
-            .request(method, params)
-            .await
-            .map_err(|error| RemoteStateProviderError::RpcRequest {
-                message: error.to_string(),
-            })
+        Self::rpc_request(&self.espace_client, "espace", method, params).await
     }
 
     async fn native_rpc_request<R, Params>(
@@ -83,30 +78,64 @@ impl HttpConfluxStateProvider {
         R: DeserializeOwned + Send,
         Params: ToRpcParams + Send,
     {
-        self.native_client
-            .request(method, params)
-            .await
-            .map_err(|error| RemoteStateProviderError::RpcRequest {
-                message: error.to_string(),
-            })
+        Self::rpc_request(&self.native_client, "native", method, params).await
+    }
+
+    async fn rpc_request<R, Params>(
+        client: &HttpClient,
+        space: &'static str,
+        method: &'static str,
+        params: Params,
+    ) -> Result<R, RemoteStateProviderError>
+    where
+        R: DeserializeOwned + Send,
+        Params: ToRpcParams + Send,
+    {
+        let started_at = Instant::now();
+        let result = client.request(method, params).await;
+
+        tracing::debug!(
+            rpc_space = space,
+            rpc_method = method,
+            success = result.is_ok(),
+            elapsed_ms = started_at.elapsed().as_secs_f64() * 1_000.0,
+            "remote state RPC request completed"
+        );
+
+        result.map_err(|error| RemoteStateProviderError::RpcRequest {
+            operation: method,
+            message: error.to_string(),
+        })
     }
 
     async fn rpc_batch_request<'a>(
         client: &HttpClient,
+        space: &'static str,
         batch_name: &'static str,
+        batch_size: usize,
         batch: BatchRequestBuilder<'a>,
     ) -> Result<BatchResponse<'a, Value>, RemoteStateProviderError> {
-        client
-            .batch_request(batch)
-            .await
-            .map_err(|error| RemoteStateProviderError::RpcRequest {
-                message: format!("{batch_name} batch request failed: {error}"),
-            })
+        let started_at = Instant::now();
+        let result = client.batch_request(batch).await;
+
+        tracing::debug!(
+            rpc_space = space,
+            rpc_batch = batch_name,
+            batch_size,
+            success = result.is_ok(),
+            elapsed_ms = started_at.elapsed().as_secs_f64() * 1_000.0,
+            "remote state RPC batch completed"
+        );
+
+        result.map_err(|error| RemoteStateProviderError::RpcRequest {
+            operation: batch_name,
+            message: format!("JSON-RPC batch request failed: {error}"),
+        })
     }
 
     fn insert_batch_request<'a, Params>(
         batch: &mut BatchRequestBuilder<'a>,
-        method: &'a str,
+        method: &'static str,
         params: Params,
     ) -> Result<(), RemoteStateProviderError>
     where
@@ -115,7 +144,8 @@ impl HttpConfluxStateProvider {
         batch
             .insert(method, params)
             .map_err(|error| RemoteStateProviderError::RpcRequest {
-                message: format!("failed to encode {method} batch request params: {error}"),
+                operation: method,
+                message: format!("failed to encode JSON-RPC batch parameters: {error}"),
             })
     }
 
@@ -129,10 +159,12 @@ impl HttpConfluxStateProvider {
         let value = entries
             .next()
             .ok_or_else(|| RemoteStateProviderError::RpcRequest {
-                message: format!("missing {method} response in JSON-RPC batch"),
+                operation: method,
+                message: "missing response in JSON-RPC batch".to_string(),
             })?
             .map_err(|error| RemoteStateProviderError::RpcRequest {
-                message: format!("{method} failed in JSON-RPC batch: {error}"),
+                operation: method,
+                message: format!("request failed in JSON-RPC batch: {error}"),
             })?;
         serde_json::from_value(value).map_err(|error| RemoteStateProviderError::RpcDecode {
             field: method,
@@ -150,9 +182,8 @@ impl HttpConfluxStateProvider {
         }
 
         Err(RemoteStateProviderError::RpcRequest {
-            message: format!(
-                "unexpected {batch_name} batch response length: expected {expected}, got {actual}"
-            ),
+            operation: batch_name,
+            message: format!("unexpected batch response length: expected {expected}, got {actual}"),
         })
     }
 }
@@ -205,7 +236,9 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
             rpc_params![address, block_number],
         )?;
 
-        let response = Self::rpc_batch_request(&self.espace_client, BATCH_NAME, batch).await?;
+        let response =
+            Self::rpc_batch_request(&self.espace_client, "espace", BATCH_NAME, BATCH_LEN, batch)
+                .await?;
         Self::validate_batch_len(BATCH_NAME, BATCH_LEN, response.len())?;
         let mut entries = response.into_iter();
         let balance = Self::decode_batch_result(&mut entries, "eth_getBalance")?;
@@ -255,7 +288,9 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
         )?;
         Self::insert_batch_request(&mut batch, "cfx_getFeeBurnt", rpc_params![epoch])?;
 
-        let response = Self::rpc_batch_request(&self.native_client, BATCH_NAME, batch).await?;
+        let response =
+            Self::rpc_batch_request(&self.native_client, "native", BATCH_NAME, BATCH_LEN, batch)
+                .await?;
         Self::validate_batch_len(BATCH_NAME, BATCH_LEN, response.len())?;
         let mut entries = response.into_iter();
 
