@@ -8,7 +8,7 @@ services:
     restart: unless-stopped
     init: true
     volumes:
-      - ./dryrun-evm/env.toml:/app/env.toml:ro
+      - ./apps/dryrun-evm/env.toml:/app/env.toml:ro
     environment:
       APP_SERVER__HOST: 0.0.0.0
       APP_METRICS__ENABLED: "true"

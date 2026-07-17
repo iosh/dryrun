@@ -13,16 +13,16 @@ web-check:
     pnpm -C web check
 
 evm-check:
-    cargo check --manifest-path dryrun-evm/Cargo.toml --workspace
+    cargo check -p dryrun
 
 evm-run:
-    cd dryrun-evm && cargo run -p dryrun
+    cd apps/dryrun-evm && cargo run -p dryrun
 
 conflux-check:
-    cargo check --manifest-path dryrun-conflux/Cargo.toml
+    cargo check -p dryrun-conflux
 
 conflux-run:
-    cd dryrun-conflux && cargo run
+    cd apps/dryrun-conflux && cargo run -p dryrun-conflux
 
 check-server:
     just evm-check

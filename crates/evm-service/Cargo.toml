@@ -1,0 +1,8 @@
+[package]
+name = "evm-service"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+evm-engine = { workspace = true }
+thiserror = { workspace = true }

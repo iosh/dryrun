@@ -1,0 +1,56 @@
+[workspace]
+resolver = "3"
+members = [
+    "apps/dryrun-evm",
+    "apps/dryrun-conflux",
+    "crates/evm-engine",
+    "crates/evm-rpc",
+    "crates/evm-service",
+    "crates/conflux-engine",
+    "crates/conflux-service",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+evm-engine = { path = "crates/evm-engine" }
+evm-rpc = { path = "crates/evm-rpc" }
+evm-service = { path = "crates/evm-service" }
+conflux-engine = { path = "crates/conflux-engine" }
+conflux-service = { path = "crates/conflux-service" }
+
+jsonrpsee = "0.26"
+thiserror = "2"
+
+futures = "0.3"
+reqwest = { version = "0.12", features = ["json"] }
+tokio = "1"
+
+alloy = { version = "1", features = ["full"] }
+alloy-chains = "0.2"
+alloy-hardforks = "0.4"
+alloy-primitives = "1"
+revm = "36"
+
+async-trait = "0.1"
+cfx-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+cfx-bytes = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+cfx-addr = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+cfx-rpc-cfx-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+cfx-rpc-primitives = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+cfx-rpc-eth-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+primitives = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+config = "0.15"
+
+metrics = "0.24"
+metrics-exporter-prometheus = "0.18"
+axum = "0.8"
