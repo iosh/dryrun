@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use alloy_primitives::{Address, U256};
 
 use crate::{
@@ -7,67 +5,10 @@ use crate::{
     Erc721CollectionDisplay, MintChange, TransferChange,
 };
 
-use super::candidate::{ChangeCandidate, ChangeCandidateKind, Erc20AllowanceEvidence};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ContractKind {
-    Erc721,
-    Erc1155,
-    FungibleLike,
-    Unknown,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct Erc20Metadata {
-    pub(crate) name: Option<String>,
-    pub(crate) symbol: Option<String>,
-    pub(crate) decimals: Option<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct Erc721CollectionMetadata {
-    pub(crate) name: Option<String>,
-    pub(crate) symbol: Option<String>,
-}
-
-#[derive(Debug, Default)]
-pub(crate) struct CurrentChangeFacts {
-    contract_kinds: HashMap<Address, ContractKind>,
-    erc20_metadata: HashMap<Address, Erc20Metadata>,
-    erc721_collection_metadata: HashMap<Address, Erc721CollectionMetadata>,
-}
-
-impl CurrentChangeFacts {
-    pub(crate) fn new(
-        contract_kinds: HashMap<Address, ContractKind>,
-        erc20_metadata: HashMap<Address, Erc20Metadata>,
-        erc721_collection_metadata: HashMap<Address, Erc721CollectionMetadata>,
-    ) -> Self {
-        Self {
-            contract_kinds,
-            erc20_metadata,
-            erc721_collection_metadata,
-        }
-    }
-
-    fn contract_kind(&self, contract: Address) -> ContractKind {
-        self.contract_kinds
-            .get(&contract)
-            .copied()
-            .unwrap_or(ContractKind::Unknown)
-    }
-
-    fn erc20_metadata(&self, token: Address) -> Erc20Metadata {
-        self.erc20_metadata.get(&token).cloned().unwrap_or_default()
-    }
-
-    fn erc721_collection_metadata(&self, collection: Address) -> Erc721CollectionMetadata {
-        self.erc721_collection_metadata
-            .get(&collection)
-            .cloned()
-            .unwrap_or_default()
-    }
-}
+use super::{
+    candidate::{ChangeCandidate, ChangeCandidateKind, Erc20AllowanceEvidence},
+    current_facts::{ContractKind, CurrentChangeFacts, Erc20Metadata, Erc721CollectionMetadata},
+};
 
 pub(crate) fn build_current_changes(
     candidates: Vec<ChangeCandidate>,

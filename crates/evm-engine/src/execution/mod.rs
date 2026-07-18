@@ -24,8 +24,9 @@ use revm::{
     context_interface::{result::EVMError, transaction::Transaction},
 };
 
-pub(super) type MainnetAlloyEvm<INSP = ()> =
-    MainnetEvm<Context<BlockEnv, TxEnv, CfgEnv, AlloyCacheDb>, INSP>;
+pub(super) type MainnetEvmWithDb<DB, INSP = ()> =
+    MainnetEvm<Context<BlockEnv, TxEnv, CfgEnv, DB>, INSP>;
+pub(super) type MainnetAlloyEvm<INSP = ()> = MainnetEvmWithDb<AlloyCacheDb, INSP>;
 
 pub(crate) async fn simulate_execution(
     rpc_url: &str,

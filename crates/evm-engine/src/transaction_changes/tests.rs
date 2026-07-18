@@ -13,9 +13,10 @@ use super::{
         ChangeCandidate, ChangeCandidateKind, Erc20AllowanceEvidence, ObservationPosition,
     },
     collection::collect_candidates,
-    current_changes::{
-        ContractKind, CurrentChangeFacts, Erc20Metadata, Erc721CollectionMetadata,
-        build_current_changes,
+    current_changes::build_current_changes,
+    current_facts::{
+        ContractKind, CurrentChangeFacts, CurrentFactRequests, Erc20Metadata,
+        Erc721CollectionMetadata, Erc721CollectionMetadataRequest, derive_current_fact_requests,
     },
     error::TransactionChangesError,
     event_codec::SupportedEvent,
@@ -215,6 +216,112 @@ fn erc1155_transfer_batch_observation(
                 .abi_encode_sequence(),
         ),
     }
+}
+
+#[test]
+fn derives_deduplicated_current_fact_requests_in_first_candidate_order() {
+    let operator_only = Address::repeat_byte(0x01);
+    let operator_then_erc721 = Address::repeat_byte(0x02);
+    let erc20 = Address::repeat_byte(0x03);
+    let transfer_from_only = Address::repeat_byte(0x04);
+    let owner = Address::repeat_byte(0x05);
+    let operator = Address::repeat_byte(0x06);
+    let recipient = Address::repeat_byte(0x07);
+
+    let requests = derive_current_fact_requests(&[
+        candidate(
+            0,
+            0,
+            ChangeCandidateKind::OperatorApproval {
+                collection: operator_only,
+                owner,
+                operator,
+                approved: true,
+            },
+        ),
+        candidate(
+            1,
+            0,
+            ChangeCandidateKind::Erc20Transfer {
+                token: erc20,
+                from: owner,
+                to: recipient,
+                amount: U256::from(1_u64),
+            },
+        ),
+        candidate(
+            2,
+            0,
+            ChangeCandidateKind::OperatorApproval {
+                collection: operator_then_erc721,
+                owner,
+                operator,
+                approved: true,
+            },
+        ),
+        candidate(
+            3,
+            0,
+            ChangeCandidateKind::Erc20Allowance {
+                token: erc20,
+                owner,
+                spender: operator,
+                evidence: Erc20AllowanceEvidence::ApprovalEvent {
+                    value: U256::from(2_u64),
+                },
+            },
+        ),
+        candidate(
+            4,
+            0,
+            ChangeCandidateKind::Erc721Approval {
+                collection: operator_then_erc721,
+                owner,
+                approved_address: Some(operator),
+                token_id: U256::from(3_u64),
+            },
+        ),
+        candidate(
+            5,
+            0,
+            ChangeCandidateKind::Erc20Allowance {
+                token: transfer_from_only,
+                owner,
+                spender: operator,
+                evidence: Erc20AllowanceEvidence::TransferFromCall {
+                    amount: U256::from(4_u64),
+                },
+            },
+        ),
+        candidate(
+            6,
+            0,
+            ChangeCandidateKind::OperatorApproval {
+                collection: operator_only,
+                owner,
+                operator,
+                approved: false,
+            },
+        ),
+    ]);
+
+    assert_eq!(
+        requests,
+        CurrentFactRequests {
+            contract_kinds: vec![operator_only, operator_then_erc721],
+            erc20_metadata: vec![erc20],
+            erc721_collection_metadata: vec![
+                Erc721CollectionMetadataRequest {
+                    collection: operator_only,
+                    only_if_classified_as_erc721: true,
+                },
+                Erc721CollectionMetadataRequest {
+                    collection: operator_then_erc721,
+                    only_if_classified_as_erc721: false,
+                },
+            ],
+        }
+    );
 }
 
 #[test]
