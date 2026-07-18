@@ -1,11 +1,11 @@
 mod chain_spec;
 mod change;
-mod change_detection;
 mod change_observation;
 mod error;
 mod execution;
 mod simulation;
 mod transaction;
+mod transaction_changes;
 
 pub use change::{
     ApprovalChange, ApprovalForAllChange, Asset, BurnChange, Change, Collection, Erc20AssetDisplay,

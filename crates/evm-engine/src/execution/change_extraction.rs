@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::collections::HashMap;
 
 use alloy::{sol, sol_types::SolCall};
 use alloy_primitives::{Address, Bytes, FixedBytes, U256};
@@ -14,13 +14,13 @@ use revm::{
 };
 
 use crate::{
-    Change, EvmExecutionStatus, EvmTransaction,
-    change_detection::{
-        ChangeDetectionPipeline, ContractKind, DetectionSupport, Erc20Metadata,
-        Erc721CollectionMetadata,
+    Change, EvmEngineError, EvmExecutionStatus, EvmTransaction,
+    execution::{ExecutionArtifacts, MainnetAlloyEvm},
+    transaction_changes::{
+        ChangeCandidate, ChangeCandidateKind, ContractKind, CurrentChangeFacts,
+        Erc20AllowanceEvidence, Erc20Metadata, Erc721CollectionMetadata, build_current_changes,
+        collect_candidates,
     },
-    execution::ExecutionArtifacts,
-    execution::MainnetAlloyEvm,
 };
 
 const METADATA_CALL_GAS_LIMIT: u64 = 100_000;
@@ -42,64 +42,107 @@ sol! {
     }
 }
 
-static BUILTIN_CHANGE_DETECTION_PIPELINE: LazyLock<ChangeDetectionPipeline> =
-    LazyLock::new(ChangeDetectionPipeline::builtin);
+pub(super) fn collect_change_candidates(
+    artifacts: &ExecutionArtifacts,
+) -> Result<Vec<ChangeCandidate>, EvmEngineError> {
+    if !matches!(artifacts.status, EvmExecutionStatus::Success) {
+        return Ok(Vec::new());
+    }
 
-pub(super) fn extract_changes<INSP>(
+    collect_candidates(&artifacts.observations).map_err(|error| {
+        EvmEngineError::analysis_failed(format!("transaction changes failed: {error}"))
+    })
+}
+
+pub(super) fn build_changes<INSP>(
     evm: &mut MainnetAlloyEvm<INSP>,
     artifacts: &ExecutionArtifacts,
     transaction: &EvmTransaction,
+    candidates: Vec<ChangeCandidate>,
 ) -> Vec<Change> {
-    if !matches!(artifacts.status, EvmExecutionStatus::Success) {
+    if candidates.is_empty() {
         return Vec::new();
     }
 
     configure_metadata_call_context(evm);
-    let mut detection_support = ExecutionDetectionSupport {
-        evm,
-        transaction,
-        execution_chain_id: artifacts.chain_id,
-    };
+    let facts = load_current_change_facts(evm, transaction, artifacts.chain_id, &candidates);
 
-    BUILTIN_CHANGE_DETECTION_PIPELINE.extract_changes(artifacts, &mut detection_support)
+    build_current_changes(candidates, &facts)
 }
 
-struct ExecutionDetectionSupport<'a, INSP> {
-    evm: &'a mut MainnetAlloyEvm<INSP>,
-    transaction: &'a EvmTransaction,
+fn load_current_change_facts<INSP>(
+    evm: &mut MainnetAlloyEvm<INSP>,
+    transaction: &EvmTransaction,
     execution_chain_id: u64,
-}
+    candidates: &[ChangeCandidate],
+) -> CurrentChangeFacts {
+    let mut contract_kinds = HashMap::new();
+    let mut erc20_metadata = HashMap::new();
+    let mut erc721_collection_metadata = HashMap::new();
 
-impl<INSP> DetectionSupport for ExecutionDetectionSupport<'_, INSP> {
-    fn resolve_contract_kind(&mut self, contract_address: Address) -> ContractKind {
-        resolve_contract_kind(
-            self.evm,
-            self.transaction,
-            self.execution_chain_id,
-            contract_address,
-        )
+    for candidate in candidates {
+        match &candidate.kind {
+            ChangeCandidateKind::Erc20Transfer { token, .. }
+            | ChangeCandidateKind::Erc20Allowance {
+                token,
+                evidence: Erc20AllowanceEvidence::ApprovalEvent { .. },
+                ..
+            } => {
+                if !erc20_metadata.contains_key(token) {
+                    erc20_metadata.insert(
+                        *token,
+                        load_erc20_metadata(evm, transaction, execution_chain_id, *token),
+                    );
+                }
+            }
+            ChangeCandidateKind::Erc721Transfer { collection, .. }
+            | ChangeCandidateKind::Erc721Approval { collection, .. } => {
+                if !erc721_collection_metadata.contains_key(collection) {
+                    erc721_collection_metadata.insert(
+                        *collection,
+                        load_erc721_collection_metadata(
+                            evm,
+                            transaction,
+                            execution_chain_id,
+                            *collection,
+                        ),
+                    );
+                }
+            }
+            ChangeCandidateKind::OperatorApproval { collection, .. } => {
+                let kind = if let Some(kind) = contract_kinds.get(collection) {
+                    *kind
+                } else {
+                    let kind =
+                        resolve_contract_kind(evm, transaction, execution_chain_id, *collection);
+                    contract_kinds.insert(*collection, kind);
+                    kind
+                };
+
+                if kind == ContractKind::Erc721
+                    && !erc721_collection_metadata.contains_key(collection)
+                {
+                    erc721_collection_metadata.insert(
+                        *collection,
+                        load_erc721_collection_metadata(
+                            evm,
+                            transaction,
+                            execution_chain_id,
+                            *collection,
+                        ),
+                    );
+                }
+            }
+            ChangeCandidateKind::NativeTransfer { .. }
+            | ChangeCandidateKind::Erc1155Transfer { .. }
+            | ChangeCandidateKind::Erc20Allowance {
+                evidence: Erc20AllowanceEvidence::TransferFromCall { .. },
+                ..
+            } => {}
+        }
     }
 
-    fn load_erc20_metadata(&mut self, token_address: Address) -> Erc20Metadata {
-        load_erc20_metadata(
-            self.evm,
-            self.transaction,
-            self.execution_chain_id,
-            token_address,
-        )
-    }
-
-    fn load_erc721_collection_metadata(
-        &mut self,
-        contract_address: Address,
-    ) -> Erc721CollectionMetadata {
-        load_erc721_collection_metadata(
-            self.evm,
-            self.transaction,
-            self.execution_chain_id,
-            contract_address,
-        )
-    }
+    CurrentChangeFacts::new(contract_kinds, erc20_metadata, erc721_collection_metadata)
 }
 
 fn configure_relaxed_call_cfg(cfg: &mut CfgEnv) {

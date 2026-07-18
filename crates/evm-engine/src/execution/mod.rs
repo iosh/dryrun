@@ -7,6 +7,7 @@ mod provider;
 
 pub(crate) use self::artifacts::ExecutionArtifacts;
 use self::{
+    change_extraction::collect_change_candidates,
     env::{create_block_env, create_cfg_env, create_tx_env},
     fee_settlement::TransactionFeeSettlement,
     outcome::{build_execution_artifacts, build_invalid_transaction_artifacts, build_simulation},
@@ -72,7 +73,7 @@ fn execute_transaction(
         .modify_block_chained(|block| *block = block_env)
         .build_mainnet_with_inspector(ChangeObservationInspector::new());
 
-    let artifacts = match evm.inspect_tx(tx_env) {
+    let (artifacts, change_candidates) = match evm.inspect_tx(tx_env) {
         Ok(result_and_state) => {
             let result = result_and_state.result;
             let state = result_and_state.state;
@@ -84,14 +85,16 @@ fn execute_transaction(
 
             let artifacts =
                 build_execution_artifacts(result, observations, resolved_block, fee_settlement);
+            let change_candidates = collect_change_candidates(&artifacts)?;
 
             evm.commit(state);
 
-            artifacts
+            (artifacts, change_candidates)
         }
-        Err(EVMError::Transaction(error)) => {
-            build_invalid_transaction_artifacts(resolved_block, transaction, error)
-        }
+        Err(EVMError::Transaction(error)) => (
+            build_invalid_transaction_artifacts(resolved_block, transaction, error),
+            Vec::new(),
+        ),
         Err(EVMError::Header(error)) => {
             return Err(EvmEngineError::block_context_error(format!(
                 "engine header validation failed: {error}"
@@ -109,5 +112,10 @@ fn execute_transaction(
         }
     };
 
-    Ok(build_simulation(&mut evm, artifacts, transaction))
+    Ok(build_simulation(
+        &mut evm,
+        artifacts,
+        transaction,
+        change_candidates,
+    ))
 }

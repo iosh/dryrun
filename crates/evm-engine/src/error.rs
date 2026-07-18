@@ -10,6 +10,7 @@ pub enum EvmEngineInternalKind {
     BlockContext,
     StateAccess,
     Execution,
+    Analysis,
     Unexpected,
 }
 
@@ -24,6 +25,7 @@ impl EvmEngineInternalKind {
             Self::BlockContext => "block_context_error",
             Self::StateAccess => "state_access_error",
             Self::Execution => "engine_execution_error",
+            Self::Analysis => "analysis_failed",
             Self::Unexpected => "unexpected",
         }
     }
@@ -78,6 +80,10 @@ impl EvmEngineError {
         Self::internal_kind(EvmEngineInternalKind::Execution, details)
     }
 
+    pub fn analysis_failed(details: impl Into<String>) -> Self {
+        Self::internal_kind(EvmEngineInternalKind::Analysis, details)
+    }
+
     pub fn internal(details: impl Into<String>) -> Self {
         Self::internal_kind(EvmEngineInternalKind::Unexpected, details)
     }
@@ -122,6 +128,7 @@ mod tests {
             (EvmEngineInternalKind::BlockContext, "block_context_error"),
             (EvmEngineInternalKind::StateAccess, "state_access_error"),
             (EvmEngineInternalKind::Execution, "engine_execution_error"),
+            (EvmEngineInternalKind::Analysis, "analysis_failed"),
             (EvmEngineInternalKind::Unexpected, "unexpected"),
         ];
 

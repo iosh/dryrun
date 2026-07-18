@@ -5,10 +5,11 @@ use revm::context_interface::result::{ExecutionResult, HaltReason, InvalidTransa
 use crate::{
     EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode, EvmExecutionStatus, EvmSimulation,
     EvmTransaction, SimulatedBlock, change_observation::Observation,
+    transaction_changes::ChangeCandidate,
 };
 
 use super::{
-    ExecutionArtifacts, MainnetAlloyEvm, change_extraction::extract_changes,
+    ExecutionArtifacts, MainnetAlloyEvm, change_extraction::build_changes,
     fee_settlement::TransactionFeeSettlement, provider::ResolvedExecutionBlock,
 };
 
@@ -51,10 +52,9 @@ pub(super) fn build_simulation<INSP>(
     evm: &mut MainnetAlloyEvm<INSP>,
     artifacts: ExecutionArtifacts,
     transaction: &EvmTransaction,
+    candidates: Vec<ChangeCandidate>,
 ) -> EvmSimulation {
-    // Changes are derived after execution so detectors can work from the final,
-    // revert-filtered observation stream.
-    let changes = extract_changes(evm, &artifacts, transaction);
+    let changes = build_changes(evm, &artifacts, transaction, candidates);
 
     let ExecutionArtifacts {
         chain_id,
