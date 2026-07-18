@@ -1,12 +1,14 @@
 mod artifacts;
 mod change_extraction;
 mod env;
+mod fee_settlement;
 mod outcome;
 mod provider;
 
 pub(crate) use self::artifacts::ExecutionArtifacts;
 use self::{
     env::{create_block_env, create_cfg_env, create_tx_env},
+    fee_settlement::TransactionFeeSettlement,
     outcome::{build_execution_artifacts, build_invalid_transaction_artifacts, build_simulation},
     provider::{AlloyCacheDb, build_provider, create_database, resolve_execution_block},
 };
@@ -16,9 +18,9 @@ use crate::{
     chain_spec::resolve_execution_spec_id, change_observation::ChangeObservationInspector,
 };
 use revm::{
-    Context, InspectCommitEvm, MainBuilder, MainContext, MainnetEvm,
+    Context, ExecuteCommitEvm, InspectEvm, MainBuilder, MainContext, MainnetEvm,
     context::{BlockEnv, CfgEnv, TxEnv},
-    context_interface::result::EVMError,
+    context_interface::{result::EVMError, transaction::Transaction},
 };
 
 pub(super) type MainnetAlloyEvm<INSP = ()> =
@@ -59,6 +61,9 @@ fn execute_transaction(
     resolved_block: &provider::ResolvedExecutionBlock,
     transaction: &EvmTransaction,
 ) -> Result<EvmSimulation, EvmEngineError> {
+    let effective_gas_price = tx_env.effective_gas_price(block_env.basefee as u128);
+    let base_fee_per_gas = block_env.basefee;
+
     // Change observations are collected during execution so semantic detection
     // can reuse the same finalized state snapshot afterward.
     let mut evm = Context::mainnet()
@@ -67,12 +72,22 @@ fn execute_transaction(
         .modify_block_chained(|block| *block = block_env)
         .build_mainnet_with_inspector(ChangeObservationInspector::new());
 
-    let artifacts = match evm.inspect_tx_commit(tx_env) {
-        Ok(result) => {
+    let artifacts = match evm.inspect_tx(tx_env) {
+        Ok(result_and_state) => {
+            let result = result_and_state.result;
+            let state = result_and_state.state;
+
             let observation_inspector = std::mem::take(&mut evm.inspector);
             let observations = observation_inspector.into_observations();
+            let fee_settlement =
+                TransactionFeeSettlement::new(result.gas(), effective_gas_price, base_fee_per_gas)?;
 
-            build_execution_artifacts(result, observations, resolved_block, transaction)
+            let artifacts =
+                build_execution_artifacts(result, observations, resolved_block, fee_settlement);
+
+            evm.commit(state);
+
+            artifacts
         }
         Err(EVMError::Transaction(error)) => {
             build_invalid_transaction_artifacts(resolved_block, transaction, error)

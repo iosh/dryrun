@@ -1,23 +1,22 @@
-use alloy::consensus::BlockHeader;
 use alloy::sol_types::{Panic, Revert, SolError};
 use alloy_primitives::{Bytes, U256};
 use revm::context_interface::result::{ExecutionResult, HaltReason, InvalidTransaction};
 
 use crate::{
     EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode, EvmExecutionStatus, EvmSimulation,
-    EvmTransaction, EvmTransactionVariant, SimulatedBlock, change_observation::Observation,
+    EvmTransaction, SimulatedBlock, change_observation::Observation,
 };
 
 use super::{
     ExecutionArtifacts, MainnetAlloyEvm, change_extraction::extract_changes,
-    provider::ResolvedExecutionBlock,
+    fee_settlement::TransactionFeeSettlement, provider::ResolvedExecutionBlock,
 };
 
 pub(super) fn build_execution_artifacts(
     result: ExecutionResult<HaltReason>,
     observations: Vec<Observation>,
     resolved_block: &ResolvedExecutionBlock,
-    transaction: &EvmTransaction,
+    fee_settlement: TransactionFeeSettlement,
 ) -> ExecutionArtifacts {
     match result {
         ExecutionResult::Success { gas, output, .. } => ExecutionArtifacts {
@@ -26,18 +25,25 @@ pub(super) fn build_execution_artifacts(
             status: EvmExecutionStatus::Success,
             gas_used: gas.used(),
             gas_limit: gas.limit(),
-            fee: transaction_fee(transaction, resolved_block, gas.used()),
-            burnt_fee: burnt_fee(resolved_block, gas.used()),
+            fee_settlement: Some(fee_settlement),
             output: output.into_data(),
             failure: None,
             observations,
         },
-        ExecutionResult::Revert { gas, output, .. } => {
-            build_revert_artifacts(resolved_block, transaction, gas.used(), gas.limit(), output)
-        }
-        ExecutionResult::Halt { reason, gas, .. } => {
-            build_halt_artifacts(resolved_block, transaction, gas.used(), gas.limit(), reason)
-        }
+        ExecutionResult::Revert { gas, output, .. } => build_revert_artifacts(
+            resolved_block,
+            gas.used(),
+            gas.limit(),
+            output,
+            fee_settlement,
+        ),
+        ExecutionResult::Halt { reason, gas, .. } => build_halt_artifacts(
+            resolved_block,
+            gas.used(),
+            gas.limit(),
+            reason,
+            fee_settlement,
+        ),
     }
 }
 
@@ -56,12 +62,14 @@ pub(super) fn build_simulation<INSP>(
         status,
         gas_used,
         gas_limit,
-        fee,
-        burnt_fee,
+        fee_settlement,
         output,
         failure,
         ..
     } = artifacts;
+    let (fee, burnt_fee) = fee_settlement
+        .map(|settlement| (settlement.fee, settlement.burnt_fee))
+        .unwrap_or((U256::ZERO, U256::ZERO));
 
     EvmSimulation::new(
         EvmExecution {
@@ -90,8 +98,7 @@ pub(super) fn build_invalid_transaction_artifacts(
         status: EvmExecutionStatus::NotExecuted,
         gas_used: 0,
         gas_limit: transaction.gas_limit,
-        fee: U256::ZERO,
-        burnt_fee: U256::ZERO,
+        fee_settlement: None,
         output: Bytes::new(),
         failure: Some(build_invalid_transaction_failure(error)),
         observations: Vec::new(),
@@ -100,47 +107,47 @@ pub(super) fn build_invalid_transaction_artifacts(
 
 fn build_revert_artifacts(
     resolved_block: &ResolvedExecutionBlock,
-    transaction: &EvmTransaction,
     gas_used: u64,
     gas_limit: u64,
     output: Bytes,
+    fee_settlement: TransactionFeeSettlement,
 ) -> ExecutionArtifacts {
     let failure = build_revert_failure(&output);
 
     build_failed_artifacts(
         resolved_block,
-        transaction,
         gas_used,
         gas_limit,
         output,
         failure,
+        fee_settlement,
     )
 }
 
 fn build_halt_artifacts(
     resolved_block: &ResolvedExecutionBlock,
-    transaction: &EvmTransaction,
     gas_used: u64,
     gas_limit: u64,
     reason: HaltReason,
+    fee_settlement: TransactionFeeSettlement,
 ) -> ExecutionArtifacts {
     build_failed_artifacts(
         resolved_block,
-        transaction,
         gas_used,
         gas_limit,
         Bytes::new(),
         build_halt_failure(reason),
+        fee_settlement,
     )
 }
 
 fn build_failed_artifacts(
     resolved_block: &ResolvedExecutionBlock,
-    transaction: &EvmTransaction,
     gas_used: u64,
     gas_limit: u64,
     output: Bytes,
     failure: EvmExecutionFailure,
+    fee_settlement: TransactionFeeSettlement,
 ) -> ExecutionArtifacts {
     ExecutionArtifacts {
         chain_id: resolved_block.chain_id,
@@ -148,8 +155,7 @@ fn build_failed_artifacts(
         status: EvmExecutionStatus::Failed,
         gas_used,
         gas_limit,
-        fee: transaction_fee(transaction, resolved_block, gas_used),
-        burnt_fee: burnt_fee(resolved_block, gas_used),
+        fee_settlement: Some(fee_settlement),
         output,
         failure: Some(failure),
         observations: Vec::new(),
@@ -254,49 +260,6 @@ fn build_halt_failure(reason: HaltReason) -> EvmExecutionFailure {
         code,
         message: reason.to_string(),
         reason: None,
-    }
-}
-
-fn transaction_fee(
-    transaction: &EvmTransaction,
-    resolved_block: &ResolvedExecutionBlock,
-    gas_used: u64,
-) -> U256 {
-    U256::from(gas_used) * U256::from(effective_gas_price(transaction, resolved_block))
-}
-
-fn burnt_fee(resolved_block: &ResolvedExecutionBlock, gas_used: u64) -> U256 {
-    U256::from(gas_used)
-        * U256::from(
-            resolved_block
-                .block
-                .header
-                .base_fee_per_gas()
-                .unwrap_or_default(),
-        )
-}
-
-fn effective_gas_price(
-    transaction: &EvmTransaction,
-    resolved_block: &ResolvedExecutionBlock,
-) -> u128 {
-    match transaction.variant {
-        EvmTransactionVariant::Legacy { gas_price }
-        | EvmTransactionVariant::Eip2930 { gas_price, .. } => gas_price,
-        EvmTransactionVariant::Eip1559 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            ..
-        } => {
-            let base_fee = u128::from(
-                resolved_block
-                    .block
-                    .header
-                    .base_fee_per_gas()
-                    .unwrap_or_default(),
-            );
-            max_fee_per_gas.min(base_fee.saturating_add(max_priority_fee_per_gas))
-        }
     }
 }
 
