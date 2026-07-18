@@ -9,7 +9,7 @@ use crate::{
 };
 
 use super::{
-    ExecutionArtifacts, MainnetAlloyEvm, change_extraction::build_changes,
+    ExecutionArtifacts, MainnetAlloyEvm, change_extraction::build_transaction_changes,
     fee_settlement::TransactionFeeSettlement, provider::ResolvedExecutionBlock,
 };
 
@@ -54,7 +54,7 @@ pub(super) fn build_simulation<INSP>(
     transaction: &EvmTransaction,
     candidates: Vec<ChangeCandidate>,
 ) -> EvmSimulation {
-    let changes = build_changes(evm, &artifacts, transaction, candidates);
+    let changes = build_transaction_changes(evm, transaction, artifacts.chain_id, candidates);
 
     let ExecutionArtifacts {
         chain_id,

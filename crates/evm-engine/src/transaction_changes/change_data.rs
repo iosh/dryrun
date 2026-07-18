@@ -32,13 +32,13 @@ pub(crate) struct Erc721CollectionMetadataRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct CurrentFactRequests {
+pub(crate) struct ChangeDataRequests {
     pub(crate) contract_kinds: Vec<Address>,
     pub(crate) erc20_metadata: Vec<Address>,
     pub(crate) erc721_collection_metadata: Vec<Erc721CollectionMetadataRequest>,
 }
 
-pub(crate) fn derive_current_fact_requests(candidates: &[ChangeCandidate]) -> CurrentFactRequests {
+pub(crate) fn collect_change_data_requests(candidates: &[ChangeCandidate]) -> ChangeDataRequests {
     let explicit_erc721_collections = candidates
         .iter()
         .filter_map(|candidate| match candidate.kind {
@@ -48,7 +48,7 @@ pub(crate) fn derive_current_fact_requests(candidates: &[ChangeCandidate]) -> Cu
         })
         .collect::<HashSet<_>>();
 
-    let mut requests = CurrentFactRequests::default();
+    let mut requests = ChangeDataRequests::default();
     let mut seen_contract_kinds = HashSet::new();
     let mut seen_erc20_metadata = HashSet::new();
     let mut seen_erc721_metadata = HashSet::new();
@@ -104,13 +104,13 @@ pub(crate) fn derive_current_fact_requests(candidates: &[ChangeCandidate]) -> Cu
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct CurrentChangeFacts {
+pub(crate) struct ChangeData {
     contract_kinds: HashMap<Address, ContractKind>,
     erc20_metadata: HashMap<Address, Erc20Metadata>,
     erc721_collection_metadata: HashMap<Address, Erc721CollectionMetadata>,
 }
 
-impl CurrentChangeFacts {
+impl ChangeData {
     pub(crate) fn new(
         contract_kinds: HashMap<Address, ContractKind>,
         erc20_metadata: HashMap<Address, Erc20Metadata>,

@@ -12,12 +12,12 @@ use super::{
     candidate::{
         ChangeCandidate, ChangeCandidateKind, Erc20AllowanceEvidence, ObservationPosition,
     },
-    collection::collect_candidates,
-    current_changes::build_current_changes,
-    current_facts::{
-        ContractKind, CurrentChangeFacts, CurrentFactRequests, Erc20Metadata,
-        Erc721CollectionMetadata, Erc721CollectionMetadataRequest, derive_current_fact_requests,
+    change_data::{
+        ChangeData, ChangeDataRequests, ContractKind, Erc20Metadata, Erc721CollectionMetadata,
+        Erc721CollectionMetadataRequest, collect_change_data_requests,
     },
+    collection::collect_candidates,
+    current_changes::build_changes,
     error::TransactionChangesError,
     event_codec::SupportedEvent,
 };
@@ -219,7 +219,7 @@ fn erc1155_transfer_batch_observation(
 }
 
 #[test]
-fn derives_deduplicated_current_fact_requests_in_first_candidate_order() {
+fn collects_deduplicated_change_data_requests_in_candidate_order() {
     let operator_only = Address::repeat_byte(0x01);
     let operator_then_erc721 = Address::repeat_byte(0x02);
     let erc20 = Address::repeat_byte(0x03);
@@ -228,7 +228,7 @@ fn derives_deduplicated_current_fact_requests_in_first_candidate_order() {
     let operator = Address::repeat_byte(0x06);
     let recipient = Address::repeat_byte(0x07);
 
-    let requests = derive_current_fact_requests(&[
+    let requests = collect_change_data_requests(&[
         candidate(
             0,
             0,
@@ -307,7 +307,7 @@ fn derives_deduplicated_current_fact_requests_in_first_candidate_order() {
 
     assert_eq!(
         requests,
-        CurrentFactRequests {
+        ChangeDataRequests {
             contract_kinds: vec![operator_only, operator_then_erc721],
             erc20_metadata: vec![erc20],
             erc721_collection_metadata: vec![
@@ -597,7 +597,7 @@ fn builds_current_movement_changes_with_existing_public_semantics() {
         erc1155_transfer_single_observation(erc1155, operator, owner, Address::ZERO, 7, 3),
     ])
     .expect("movement candidates");
-    let facts = CurrentChangeFacts::new(
+    let data = ChangeData::new(
         HashMap::new(),
         HashMap::from([(
             erc20,
@@ -616,7 +616,7 @@ fn builds_current_movement_changes_with_existing_public_semantics() {
         )]),
     );
 
-    let changes = build_current_changes(candidates, &facts);
+    let changes = build_changes(candidates, &data);
 
     assert_eq!(
         changes,
@@ -743,7 +743,7 @@ fn builds_current_authorizations_without_emitting_unverified_transfer_from() {
             },
         ),
     ];
-    let facts = CurrentChangeFacts::new(
+    let data = ChangeData::new(
         HashMap::from([
             (erc721, ContractKind::Erc721),
             (erc1155, ContractKind::Erc1155),
@@ -765,7 +765,7 @@ fn builds_current_authorizations_without_emitting_unverified_transfer_from() {
         )]),
     );
 
-    let changes = build_current_changes(candidates, &facts);
+    let changes = build_changes(candidates, &data);
 
     assert_eq!(
         changes,

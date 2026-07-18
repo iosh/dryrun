@@ -7,20 +7,17 @@ use crate::{
 
 use super::{
     candidate::{ChangeCandidate, ChangeCandidateKind, Erc20AllowanceEvidence},
-    current_facts::{ContractKind, CurrentChangeFacts, Erc20Metadata, Erc721CollectionMetadata},
+    change_data::{ChangeData, ContractKind, Erc20Metadata, Erc721CollectionMetadata},
 };
 
-pub(crate) fn build_current_changes(
-    candidates: Vec<ChangeCandidate>,
-    facts: &CurrentChangeFacts,
-) -> Vec<Change> {
+pub(crate) fn build_changes(candidates: Vec<ChangeCandidate>, data: &ChangeData) -> Vec<Change> {
     candidates
         .into_iter()
-        .filter_map(|candidate| build_current_change(candidate.kind, facts))
+        .filter_map(|candidate| build_change(candidate.kind, data))
         .collect()
 }
 
-fn build_current_change(kind: ChangeCandidateKind, facts: &CurrentChangeFacts) -> Option<Change> {
+fn build_change(kind: ChangeCandidateKind, data: &ChangeData) -> Option<Change> {
     match kind {
         ChangeCandidateKind::NativeTransfer { from, to, amount } => Some(
             classify_standard_transfer(Asset::Native { display: None }, from, to, Some(amount)),
@@ -31,7 +28,7 @@ fn build_current_change(kind: ChangeCandidateKind, facts: &CurrentChangeFacts) -
             to,
             amount,
         } => Some(classify_standard_transfer(
-            erc20_asset(token, facts.erc20_metadata(token)),
+            erc20_asset(token, data.erc20_metadata(token)),
             from,
             to,
             Some(amount),
@@ -45,7 +42,7 @@ fn build_current_change(kind: ChangeCandidateKind, facts: &CurrentChangeFacts) -
             erc721_asset(
                 collection,
                 token_id,
-                facts.erc721_collection_metadata(collection),
+                data.erc721_collection_metadata(collection),
             ),
             from,
             to,
@@ -69,7 +66,7 @@ fn build_current_change(kind: ChangeCandidateKind, facts: &CurrentChangeFacts) -
             spender,
             evidence: Erc20AllowanceEvidence::ApprovalEvent { value },
         } => Some(Change::Approval(ApprovalChange {
-            asset: erc20_asset(token, facts.erc20_metadata(token)),
+            asset: erc20_asset(token, data.erc20_metadata(token)),
             owner,
             spender,
             amount: Some(value),
@@ -87,7 +84,7 @@ fn build_current_change(kind: ChangeCandidateKind, facts: &CurrentChangeFacts) -
             asset: erc721_asset(
                 collection,
                 token_id,
-                facts.erc721_collection_metadata(collection),
+                data.erc721_collection_metadata(collection),
             ),
             owner,
             spender: approved_address.unwrap_or(Address::ZERO),
@@ -98,11 +95,11 @@ fn build_current_change(kind: ChangeCandidateKind, facts: &CurrentChangeFacts) -
             owner,
             operator,
             approved,
-        } => match facts.contract_kind(collection) {
+        } => match data.contract_kind(collection) {
             ContractKind::Erc721 => Some(Change::ApprovalForAll(ApprovalForAllChange {
                 collection: erc721_collection(
                     collection,
-                    facts.erc721_collection_metadata(collection),
+                    data.erc721_collection_metadata(collection),
                 ),
                 owner,
                 operator,
