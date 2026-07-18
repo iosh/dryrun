@@ -3,14 +3,12 @@ use alloy_primitives::{Bytes, U256};
 use revm::context_interface::result::{ExecutionResult, HaltReason, InvalidTransaction};
 
 use crate::{
-    EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode, EvmExecutionStatus, EvmSimulation,
-    EvmTransaction, SimulatedBlock, change_observation::Observation,
-    transaction_changes::ChangeCandidate,
+    Change, EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode, EvmExecutionStatus,
+    EvmSimulation, EvmTransaction, SimulatedBlock, change_observation::Observation,
 };
 
 use super::{
-    ExecutionArtifacts, MainnetAlloyEvm, change_extraction::build_transaction_changes,
-    fee_settlement::TransactionFeeSettlement, provider::ResolvedExecutionBlock,
+    ExecutionArtifacts, fee_settlement::TransactionFeeSettlement, provider::ResolvedExecutionBlock,
 };
 
 pub(super) fn build_execution_artifacts(
@@ -48,14 +46,10 @@ pub(super) fn build_execution_artifacts(
     }
 }
 
-pub(super) fn build_simulation<INSP>(
-    evm: &mut MainnetAlloyEvm<INSP>,
+pub(super) fn build_simulation(
     artifacts: ExecutionArtifacts,
-    transaction: &EvmTransaction,
-    candidates: Vec<ChangeCandidate>,
+    changes: Vec<Change>,
 ) -> EvmSimulation {
-    let changes = build_transaction_changes(evm, transaction, artifacts.chain_id, candidates);
-
     let ExecutionArtifacts {
         chain_id,
         block,

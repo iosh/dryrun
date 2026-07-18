@@ -1,19 +1,19 @@
 use alloy_primitives::{Address, U256};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct ObservationPosition {
-    pub(crate) observation_index: usize,
-    pub(crate) item_index: usize,
+pub(super) struct ObservationPosition {
+    pub(super) observation_index: usize,
+    pub(super) item_index: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ChangeCandidate {
-    pub(crate) position: ObservationPosition,
-    pub(crate) kind: ChangeCandidateKind,
+    pub(super) position: ObservationPosition,
+    pub(super) kind: ChangeCandidateKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ChangeCandidateKind {
+pub(super) enum ChangeCandidateKind {
     NativeTransfer {
         from: Address,
         to: Address,
@@ -59,7 +59,7 @@ pub(crate) enum ChangeCandidateKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Erc20AllowanceEvidence {
+pub(super) enum Erc20AllowanceEvidence {
     ApprovalEvent { value: U256 },
     TransferFromCall { amount: U256 },
 }

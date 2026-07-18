@@ -1,9 +1,7 @@
 use crate::{
     Change, EvmEngineError, EvmExecutionStatus, EvmTransaction,
     execution::{ExecutionArtifacts, MainnetAlloyEvm, contract_reads::load_change_data},
-    transaction_changes::{
-        ChangeCandidate, build_changes, collect_candidates, collect_change_data_requests,
-    },
+    transaction_changes::{ChangeCandidate, ChangeDataRequests, build_changes, collect_candidates},
 };
 
 pub(super) fn collect_change_candidates(
@@ -23,12 +21,12 @@ pub(super) fn build_transaction_changes<INSP>(
     transaction: &EvmTransaction,
     chain_id: u64,
     candidates: Vec<ChangeCandidate>,
+    requests: ChangeDataRequests,
 ) -> Vec<Change> {
     if candidates.is_empty() {
         return Vec::new();
     }
 
-    let requests = collect_change_data_requests(&candidates);
     let data = load_change_data(evm, transaction, chain_id, requests);
 
     build_changes(candidates, &data)

@@ -7,9 +7,9 @@ mod outcome;
 mod provider;
 mod read_call;
 
-pub(crate) use self::artifacts::ExecutionArtifacts;
+use self::artifacts::ExecutionArtifacts;
 use self::{
-    change_extraction::collect_change_candidates,
+    change_extraction::{build_transaction_changes, collect_change_candidates},
     env::{create_block_env, create_cfg_env, create_tx_env},
     fee_settlement::TransactionFeeSettlement,
     outcome::{build_execution_artifacts, build_invalid_transaction_artifacts, build_simulation},
@@ -18,7 +18,9 @@ use self::{
 
 use crate::{
     EvmEngineError, EvmExecutionInput, EvmSimulation, EvmTransaction,
-    chain_spec::resolve_execution_spec_id, change_observation::ChangeObservationInspector,
+    chain_spec::resolve_execution_spec_id,
+    change_observation::ChangeObservationInspector,
+    transaction_changes::{ChangeDataRequests, collect_change_data_requests},
 };
 use revm::{
     Context, ExecuteCommitEvm, InspectEvm, MainBuilder, MainContext, MainnetEvm,
@@ -68,15 +70,15 @@ fn execute_transaction(
     let effective_gas_price = tx_env.effective_gas_price(block_env.basefee as u128);
     let base_fee_per_gas = block_env.basefee;
 
-    // Change observations are collected during execution so semantic detection
-    // can reuse the same finalized state snapshot afterward.
+    // Change observations are collected during execution so candidates and
+    // their data requests can be derived before committing transaction state.
     let mut evm = Context::mainnet()
         .with_db(db)
         .modify_cfg_chained(|cfg| *cfg = cfg_env)
         .modify_block_chained(|block| *block = block_env)
         .build_mainnet_with_inspector(ChangeObservationInspector::new());
 
-    let (artifacts, change_candidates) = match evm.inspect_tx(tx_env) {
+    let (artifacts, change_candidates, change_data_requests) = match evm.inspect_tx(tx_env) {
         Ok(result_and_state) => {
             let result = result_and_state.result;
             let state = result_and_state.state;
@@ -89,14 +91,16 @@ fn execute_transaction(
             let artifacts =
                 build_execution_artifacts(result, observations, resolved_block, fee_settlement);
             let change_candidates = collect_change_candidates(&artifacts)?;
+            let change_data_requests = collect_change_data_requests(&change_candidates);
 
             evm.commit(state);
 
-            (artifacts, change_candidates)
+            (artifacts, change_candidates, change_data_requests)
         }
         Err(EVMError::Transaction(error)) => (
             build_invalid_transaction_artifacts(resolved_block, transaction, error),
             Vec::new(),
+            ChangeDataRequests::default(),
         ),
         Err(EVMError::Header(error)) => {
             return Err(EvmEngineError::block_context_error(format!(
@@ -115,10 +119,13 @@ fn execute_transaction(
         }
     };
 
-    Ok(build_simulation(
+    let changes = build_transaction_changes(
         &mut evm,
-        artifacts,
         transaction,
+        artifacts.chain_id,
         change_candidates,
-    ))
+        change_data_requests,
+    );
+
+    Ok(build_simulation(artifacts, changes))
 }

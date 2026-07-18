@@ -1,7 +1,7 @@
 use alloy_primitives::{Address, Bytes, U256};
 use revm::{
     Database, ExecuteEvm,
-    context::{CfgEnv, TxEnv},
+    context::TxEnv,
     context_interface::{
         result::ExecutionResult,
         transaction::{AccessList as RevmAccessList, TransactionType},
@@ -26,7 +26,16 @@ where
     let original_cfg = evm.ctx().cfg.clone();
     let original_tx = evm.ctx().tx.clone();
 
-    relax_read_call_validation(&mut evm.ctx_mut().cfg);
+    {
+        // Read calls are local probes rather than sendable transactions.
+        let cfg = &mut evm.ctx_mut().cfg;
+        cfg.disable_nonce_check = true;
+        cfg.disable_balance_check = true;
+        cfg.disable_eip3607 = true;
+        cfg.disable_base_fee = true;
+        cfg.disable_fee_charge = true;
+    }
+
     let output = operation(evm);
 
     evm.ctx_mut().cfg = original_cfg;
@@ -54,15 +63,6 @@ where
         ExecutionResult::Success { output, .. } => Some(output.into_data()),
         ExecutionResult::Revert { .. } | ExecutionResult::Halt { .. } => None,
     }
-}
-
-// Read calls must not apply send-transaction validity checks or fees.
-fn relax_read_call_validation(cfg: &mut CfgEnv) {
-    cfg.disable_nonce_check = true;
-    cfg.disable_balance_check = true;
-    cfg.disable_eip3607 = true;
-    cfg.disable_base_fee = true;
-    cfg.disable_fee_charge = true;
 }
 
 fn build_read_call_tx(
