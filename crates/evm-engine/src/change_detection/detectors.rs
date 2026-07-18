@@ -23,17 +23,37 @@ impl ObservationDetector for NativeTransferDetector {
         observation: &Observation,
         _context: &mut DetectionContext<'_>,
     ) -> DetectionOutcome {
-        let Observation::NativeTransfer { from, to, amount } = observation else {
+        let Some((from, to, amount)) = native_transfer_parts(observation) else {
             return DetectionOutcome::NotHandled;
         };
 
         DetectionOutcome::handled(Change::Transfer(TransferChange {
             asset: Asset::Native { display: None },
-            from: *from,
-            to: *to,
-            amount: Some(*amount),
+            from,
+            to,
+            amount: Some(amount),
         }))
     }
+}
+
+fn native_transfer_parts(observation: &Observation) -> Option<(Address, Address, U256)> {
+    let (from, to, amount) = match observation {
+        Observation::Call {
+            caller,
+            target,
+            value,
+            ..
+        } => (*caller, *target, *value),
+        Observation::CreateTransfer { from, to, amount } => (*from, *to, *amount),
+        Observation::SelfDestruct {
+            contract,
+            target,
+            amount,
+        } => (*contract, *target, *amount),
+        Observation::Log { .. } => return None,
+    };
+
+    (!amount.is_zero()).then_some((from, to, amount))
 }
 
 pub(super) struct StandardTransferDetector;

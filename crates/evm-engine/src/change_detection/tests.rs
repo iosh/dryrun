@@ -140,6 +140,16 @@ fn address(value: &str) -> Address {
     Address::from_str(value).expect("address")
 }
 
+fn call_observation(caller: Address, target: Address, value: u64) -> Observation {
+    Observation::Call {
+        caller,
+        target,
+        value: U256::from(value),
+        input_len: 0,
+        input_prefix: Bytes::new(),
+    }
+}
+
 fn indexed_address(address: Address) -> B256 {
     address.into_word()
 }
@@ -463,11 +473,11 @@ fn returns_empty_for_failed_execution() {
 
     let changes = extract_changes(
         crate::EvmExecutionStatus::Failed,
-        vec![Observation::NativeTransfer {
-            from: Address::ZERO,
-            to: Address::repeat_byte(0x11),
-            amount: U256::from(1_u64),
-        }],
+        vec![call_observation(
+            Address::ZERO,
+            Address::repeat_byte(0x11),
+            1,
+        )],
         &mut support,
     );
 
@@ -488,11 +498,7 @@ fn maps_native_and_erc20_transfers_in_observed_order() {
 
     let changes = successful_changes(
         vec![
-            Observation::NativeTransfer {
-                from: native_from,
-                to: native_to,
-                amount: U256::from(1_u64),
-            },
+            call_observation(native_from, native_to, 1),
             erc20_transfer_observation(token, token_from, token_to, U256::from(2_u64)),
         ],
         &mut support,
@@ -505,6 +511,55 @@ fn maps_native_and_erc20_transfers_in_observed_order() {
             erc20_transfer_change(token, token_from, token_to, 2),
         ]
     );
+}
+
+#[test]
+fn maps_create_and_selfdestruct_sources_to_existing_native_changes() {
+    let creator = address("0x1111111111111111111111111111111111111111");
+    let created = address("0x2222222222222222222222222222222222222222");
+    let contract = address("0x3333333333333333333333333333333333333333");
+    let beneficiary = address("0x4444444444444444444444444444444444444444");
+    let mut support = TestSupport::new();
+
+    let changes = successful_changes(
+        vec![
+            Observation::CreateTransfer {
+                from: creator,
+                to: created,
+                amount: U256::from(1_u64),
+            },
+            Observation::SelfDestruct {
+                contract,
+                target: beneficiary,
+                amount: U256::from(2_u64),
+            },
+        ],
+        &mut support,
+    );
+
+    assert_eq!(
+        changes,
+        vec![
+            native_transfer_change(creator, created, 1),
+            native_transfer_change(contract, beneficiary, 2),
+        ]
+    );
+}
+
+#[test]
+fn does_not_map_zero_value_call_to_native_change() {
+    let mut support = TestSupport::new();
+
+    let changes = successful_changes(
+        vec![call_observation(
+            Address::repeat_byte(0x11),
+            Address::repeat_byte(0x22),
+            0,
+        )],
+        &mut support,
+    );
+
+    assert!(changes.is_empty());
 }
 
 #[test]
