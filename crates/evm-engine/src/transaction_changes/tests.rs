@@ -26,6 +26,7 @@ use super::{
     },
     collection::collect_candidates,
     current_changes::build_changes,
+    erc20::{check_erc20_allowances, check_erc20_movements},
     error::TransactionChangesError,
     event_codec::SupportedEvent,
     native_balance::check_native_balances,
@@ -79,6 +80,44 @@ fn native_candidate(
     )
 }
 
+fn erc20_movement_candidate(
+    observation_index: usize,
+    token: Address,
+    from: Address,
+    to: Address,
+    amount: U256,
+) -> ChangeCandidate {
+    candidate(
+        observation_index,
+        0,
+        ChangeCandidateKind::Erc20Transfer {
+            token,
+            from,
+            to,
+            amount,
+        },
+    )
+}
+
+fn erc20_allowance_candidate(
+    observation_index: usize,
+    token: Address,
+    owner: Address,
+    spender: Address,
+    evidence: Erc20AllowanceEvidence,
+) -> ChangeCandidate {
+    candidate(
+        observation_index,
+        0,
+        ChangeCandidateKind::Erc20Allowance {
+            token,
+            owner,
+            spender,
+            evidence,
+        },
+    )
+}
+
 fn token_state_values(contract: Address, standards: CollectionStandards) -> TokenStateValues {
     let mut values = TokenStateValues::default();
     values
@@ -86,6 +125,35 @@ fn token_state_values(contract: Address, standards: CollectionStandards) -> Toke
         .insert(contract, B256::repeat_byte(0x11));
     values.collection_standards.insert(contract, standards);
     values
+}
+
+fn erc20_state_values<const N: usize>(
+    token: Address,
+    balances: [(Address, U256); N],
+    total_supply: Option<U256>,
+) -> TokenStateValues {
+    let mut values = TokenStateValues::default();
+
+    for (account, balance) in balances {
+        values
+            .erc20_balances
+            .insert(Erc20BalanceKey { token, account }, balance);
+    }
+
+    if let Some(total_supply) = total_supply {
+        values.erc20_total_supplies.insert(token, total_supply);
+    }
+
+    values
+}
+
+fn erc20_allowance_state_values<const N: usize>(
+    allowances: [(Erc20AllowanceKey, U256); N],
+) -> TokenStateValues {
+    TokenStateValues {
+        erc20_allowances: HashMap::from(allowances),
+        ..TokenStateValues::default()
+    }
 }
 
 fn indexed_address(address: Address) -> B256 {
@@ -439,6 +507,269 @@ fn collects_deduplicated_token_state_keys_in_candidate_order() {
             }],
         }
     );
+}
+
+#[test]
+fn reconciles_ordered_erc20_movements_and_total_supply() {
+    let token = Address::repeat_byte(0x01);
+    let alice = Address::repeat_byte(0x02);
+    let bob = Address::repeat_byte(0x03);
+    let candidates = [
+        erc20_movement_candidate(0, token, alice, alice, U256::from(30_u64)),
+        erc20_movement_candidate(1, token, alice, bob, U256::from(40_u64)),
+        erc20_movement_candidate(2, token, Address::ZERO, alice, U256::from(10_u64)),
+        erc20_movement_candidate(3, token, bob, Address::ZERO, U256::from(5_u64)),
+        erc20_movement_candidate(4, token, alice, bob, U256::ZERO),
+    ];
+    let keys = collect_token_state_keys(&candidates);
+    let before = erc20_state_values(
+        token,
+        [(alice, U256::from(100_u64)), (bob, U256::ZERO)],
+        Some(U256::from(100_u64)),
+    );
+    let after = erc20_state_values(
+        token,
+        [(alice, U256::from(70_u64)), (bob, U256::from(35_u64))],
+        Some(U256::from(105_u64)),
+    );
+
+    assert_eq!(
+        check_erc20_movements(&candidates, &keys, &before, &after),
+        Ok(())
+    );
+}
+
+#[test]
+fn rejects_impossible_erc20_movement_paths() {
+    let token = Address::repeat_byte(0x01);
+    let alice = Address::repeat_byte(0x02);
+    let bob = Address::repeat_byte(0x03);
+
+    let zero_to_zero = [erc20_movement_candidate(
+        0,
+        token,
+        Address::ZERO,
+        Address::ZERO,
+        U256::from(1_u64),
+    )];
+    let zero_to_zero_keys = collect_token_state_keys(&zero_to_zero);
+    assert!(matches!(
+        check_erc20_movements(
+            &zero_to_zero,
+            &zero_to_zero_keys,
+            &TokenStateValues::default(),
+            &TokenStateValues::default(),
+        ),
+        Err(TransactionChangesError::Erc20TransferBetweenZeroAddresses {
+            token: invalid_token,
+            amount,
+        }) if invalid_token == token && amount == U256::from(1_u64)
+    ));
+
+    let underflow = [erc20_movement_candidate(
+        0,
+        token,
+        alice,
+        bob,
+        U256::from(6_u64),
+    )];
+    let underflow_keys = collect_token_state_keys(&underflow);
+    let before = erc20_state_values(token, [(alice, U256::from(5_u64)), (bob, U256::ZERO)], None);
+    assert!(matches!(
+        check_erc20_movements(&underflow, &underflow_keys, &before, &before),
+        Err(TransactionChangesError::Erc20BalanceUnderflow {
+            token: underflow_token,
+            account,
+            balance,
+            amount,
+        }) if underflow_token == token
+            && account == alice
+            && balance == U256::from(5_u64)
+            && amount == U256::from(6_u64)
+    ));
+}
+
+#[test]
+fn rejects_erc20_post_state_that_does_not_match_replay() {
+    let token = Address::repeat_byte(0x01);
+    let alice = Address::repeat_byte(0x02);
+    let bob = Address::repeat_byte(0x03);
+
+    let transfer = [erc20_movement_candidate(
+        0,
+        token,
+        alice,
+        bob,
+        U256::from(4_u64),
+    )];
+    let transfer_keys = collect_token_state_keys(&transfer);
+    let before = erc20_state_values(
+        token,
+        [(alice, U256::from(10_u64)), (bob, U256::ZERO)],
+        None,
+    );
+    let wrong_balances = erc20_state_values(
+        token,
+        [(alice, U256::from(7_u64)), (bob, U256::from(4_u64))],
+        None,
+    );
+    assert!(matches!(
+        check_erc20_movements(&transfer, &transfer_keys, &before, &wrong_balances),
+        Err(TransactionChangesError::Erc20BalanceMismatch {
+            token: mismatch_token,
+            account,
+            replayed_balance,
+            after_balance,
+        }) if mismatch_token == token
+            && account == alice
+            && replayed_balance == U256::from(6_u64)
+            && after_balance == U256::from(7_u64)
+    ));
+
+    let mint = [erc20_movement_candidate(
+        0,
+        token,
+        Address::ZERO,
+        alice,
+        U256::from(5_u64),
+    )];
+    let mint_keys = collect_token_state_keys(&mint);
+    let before = erc20_state_values(token, [(alice, U256::ZERO)], Some(U256::from(100_u64)));
+    let wrong_supply = erc20_state_values(
+        token,
+        [(alice, U256::from(5_u64))],
+        Some(U256::from(106_u64)),
+    );
+    assert!(matches!(
+        check_erc20_movements(&mint, &mint_keys, &before, &wrong_supply),
+        Err(TransactionChangesError::Erc20TotalSupplyMismatch {
+            token: mismatch_token,
+            replayed_total_supply,
+            after_total_supply,
+        }) if mismatch_token == token
+            && replayed_total_supply == U256::from(105_u64)
+            && after_total_supply == U256::from(106_u64)
+    ));
+}
+
+#[test]
+fn uses_last_evidence_to_check_erc20_allowances() {
+    let token = Address::repeat_byte(0x01);
+    let alice = Address::repeat_byte(0x02);
+    let bob = Address::repeat_byte(0x03);
+    let spender = Address::repeat_byte(0x04);
+    let alice_key = Erc20AllowanceKey {
+        token,
+        owner: alice,
+        spender,
+    };
+    let bob_key = Erc20AllowanceKey {
+        token,
+        owner: bob,
+        spender,
+    };
+    let candidates = [
+        erc20_allowance_candidate(
+            0,
+            token,
+            alice,
+            spender,
+            Erc20AllowanceEvidence::ApprovalEvent {
+                value: U256::from(60_u64),
+            },
+        ),
+        erc20_allowance_candidate(
+            1,
+            token,
+            bob,
+            spender,
+            Erc20AllowanceEvidence::ApprovalEvent {
+                value: U256::from(20_u64),
+            },
+        ),
+        erc20_allowance_candidate(
+            2,
+            token,
+            alice,
+            spender,
+            Erc20AllowanceEvidence::ApprovalEvent {
+                value: U256::from(70_u64),
+            },
+        ),
+        erc20_allowance_candidate(
+            3,
+            token,
+            bob,
+            spender,
+            Erc20AllowanceEvidence::TransferFromCall {
+                amount: U256::from(5_u64),
+            },
+        ),
+    ];
+    let keys = collect_token_state_keys(&candidates);
+    let before = erc20_allowance_state_values([
+        (alice_key, U256::from(10_u64)),
+        (bob_key, U256::from(20_u64)),
+    ]);
+    let after = erc20_allowance_state_values([
+        (alice_key, U256::from(70_u64)),
+        (bob_key, U256::from(19_u64)),
+    ]);
+
+    assert_eq!(
+        check_erc20_allowances(&candidates, &keys, &before, &after),
+        Ok(())
+    );
+}
+
+#[test]
+fn rejects_erc20_allowance_when_last_approval_disagrees_with_after_state() {
+    let token = Address::repeat_byte(0x01);
+    let owner = Address::repeat_byte(0x02);
+    let spender = Address::repeat_byte(0x03);
+    let key = Erc20AllowanceKey {
+        token,
+        owner,
+        spender,
+    };
+    let candidates = [
+        erc20_allowance_candidate(
+            0,
+            token,
+            owner,
+            spender,
+            Erc20AllowanceEvidence::TransferFromCall {
+                amount: U256::from(5_u64),
+            },
+        ),
+        erc20_allowance_candidate(
+            1,
+            token,
+            owner,
+            spender,
+            Erc20AllowanceEvidence::ApprovalEvent {
+                value: U256::from(30_u64),
+            },
+        ),
+    ];
+    let keys = collect_token_state_keys(&candidates);
+    let before = erc20_allowance_state_values([(key, U256::from(40_u64))]);
+    let after = erc20_allowance_state_values([(key, U256::from(29_u64))]);
+
+    assert!(matches!(
+        check_erc20_allowances(&candidates, &keys, &before, &after),
+        Err(TransactionChangesError::Erc20ApprovalValueMismatch {
+            token: mismatch_token,
+            owner: mismatch_owner,
+            spender: mismatch_spender,
+            event_value,
+            after_allowance,
+        }) if mismatch_token == token
+            && mismatch_owner == owner
+            && mismatch_spender == spender
+            && event_value == U256::from(30_u64)
+            && after_allowance == U256::from(29_u64)
+    ));
 }
 
 #[test]

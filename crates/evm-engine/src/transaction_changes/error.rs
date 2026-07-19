@@ -61,6 +61,117 @@ pub(crate) enum TransactionChangesError {
         value: &'static str,
     },
 
+    #[error("ERC-20 {state} balance for {account} in token {token} is missing")]
+    Erc20BalanceMissing {
+        token: Address,
+        account: Address,
+        state: &'static str,
+    },
+
+    #[error(
+        "ERC-20 balance underflow for {account} in token {token}: \
+       balance {balance}, cannot subtract {amount}"
+    )]
+    Erc20BalanceUnderflow {
+        token: Address,
+        account: Address,
+        balance: U256,
+        amount: U256,
+    },
+
+    #[error(
+        "ERC-20 balance overflow for {account} in token {token}: \
+       balance {balance}, cannot add {amount}"
+    )]
+    Erc20BalanceOverflow {
+        token: Address,
+        account: Address,
+        balance: U256,
+        amount: U256,
+    },
+    #[error("ERC-20 {state} total supply for token {token} is missing")]
+    Erc20TotalSupplyMissing { token: Address, state: &'static str },
+
+    #[error(
+        "ERC-20 total supply underflow for token {token}: \
+       total supply {total_supply}, cannot subtract {amount}"
+    )]
+    Erc20TotalSupplyUnderflow {
+        token: Address,
+        total_supply: U256,
+        amount: U256,
+    },
+
+    #[error(
+        "ERC-20 total supply overflow for token {token}: \
+       total supply {total_supply}, cannot add {amount}"
+    )]
+    Erc20TotalSupplyOverflow {
+        token: Address,
+        total_supply: U256,
+        amount: U256,
+    },
+
+    #[error(
+        "ERC-20 transfer for token {token} uses the zero address as both \
+       sender and recipient for amount {amount}"
+    )]
+    Erc20TransferBetweenZeroAddresses { token: Address, amount: U256 },
+
+    #[error(
+        "ERC-20 balance mismatch for {account} in token {token}: \
+       replayed {replayed_balance}, after state {after_balance}"
+    )]
+    Erc20BalanceMismatch {
+        token: Address,
+        account: Address,
+        replayed_balance: U256,
+        after_balance: U256,
+    },
+
+    #[error(
+        "ERC-20 total supply mismatch for token {token}: \
+       replayed {replayed_total_supply}, after state {after_total_supply}"
+    )]
+    Erc20TotalSupplyMismatch {
+        token: Address,
+        replayed_total_supply: U256,
+        after_total_supply: U256,
+    },
+
+    #[error(
+        "ERC-20 {state} allowance for owner {owner} and spender {spender} \
+       in token {token} is missing"
+    )]
+    Erc20AllowanceMissing {
+        token: Address,
+        owner: Address,
+        spender: Address,
+        state: &'static str,
+    },
+
+    #[error(
+        "ERC-20 allowance evidence for owner {owner} and spender {spender} \
+       in token {token} is missing"
+    )]
+    Erc20AllowanceEvidenceMissing {
+        token: Address,
+        owner: Address,
+        spender: Address,
+    },
+
+    #[error(
+        "ERC-20 approval value mismatch for owner {owner} and spender {spender} \
+       in token {token}: event value {event_value}, after state {after_allowance}"
+    )]
+    Erc20ApprovalValueMismatch {
+        token: Address,
+        owner: Address,
+        spender: Address,
+        event_value: U256,
+        after_allowance: U256,
+    },
+
     #[error(
         "token contract {contract} runtime code changed from \
        {before_code_hash} to {after_code_hash}"

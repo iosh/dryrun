@@ -2,6 +2,7 @@ mod candidate;
 mod change_data;
 mod collection;
 mod current_changes;
+mod erc20;
 mod error;
 mod event_codec;
 mod native_balance;
@@ -15,6 +16,7 @@ pub(crate) use change_data::{
 };
 pub(crate) use collection::collect_candidates;
 pub(crate) use current_changes::build_changes;
+pub(crate) use erc20::check_erc20_changes;
 pub(crate) use native_balance::check_native_balances;
 pub(crate) use token_contract::check_token_contracts;
 pub(crate) use token_state::{
