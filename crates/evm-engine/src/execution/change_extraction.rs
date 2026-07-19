@@ -64,6 +64,26 @@ pub(super) fn check_erc721_changes(
         .map_err(map_transaction_changes_error)
 }
 
+pub(super) fn check_erc1155_movements(
+    candidates: &[ChangeCandidate],
+    keys: &TokenStateKeys,
+    before: &TokenStateValues,
+    after: &TokenStateValues,
+) -> Result<(), EvmEngineError> {
+    transaction_changes::check_erc1155_movements(candidates, keys, before, after)
+        .map_err(map_transaction_changes_error)
+}
+
+pub(super) fn check_operator_approvals(
+    candidates: &[ChangeCandidate],
+    keys: &TokenStateKeys,
+    before: &TokenStateValues,
+    after: &TokenStateValues,
+) -> Result<(), EvmEngineError> {
+    transaction_changes::check_operator_approvals(candidates, keys, before, after)
+        .map_err(map_transaction_changes_error)
+}
+
 pub(super) fn check_token_contracts(
     candidates: &[ChangeCandidate],
     keys: &TokenStateKeys,

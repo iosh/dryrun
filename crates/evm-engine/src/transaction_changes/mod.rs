@@ -2,11 +2,13 @@ mod candidate;
 mod change_data;
 mod collection;
 mod current_changes;
+mod erc1155;
 mod erc20;
 mod erc721;
 mod error;
 mod event_codec;
 mod native_balance;
+mod operator_approval;
 mod token_contract;
 mod token_state;
 
@@ -19,7 +21,9 @@ pub(crate) use collection::collect_candidates;
 pub(crate) use current_changes::build_changes;
 pub(crate) use erc20::check_erc20_changes;
 pub(crate) use erc721::check_erc721_changes;
+pub(crate) use erc1155::check_erc1155_movements;
 pub(crate) use native_balance::check_native_balances;
+pub(crate) use operator_approval::check_operator_approvals;
 pub(crate) use token_contract::check_token_contracts;
 pub(crate) use token_state::{
     CollectionStandards, Erc721TokenKey, Erc721TokenState, TokenStateKeys, TokenStateValues,

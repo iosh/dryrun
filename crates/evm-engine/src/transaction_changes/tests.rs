@@ -1,4 +1,6 @@
+mod erc1155;
 mod erc721;
+mod operator_approval;
 
 use std::collections::HashMap;
 

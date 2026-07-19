@@ -228,6 +228,93 @@ pub(crate) enum TransactionChangesError {
     },
 
     #[error(
+        "ERC-1155 {state} balance for {account} and token {token_id} \
+         in collection {collection} is missing"
+    )]
+    Erc1155BalanceMissing {
+        collection: Address,
+        account: Address,
+        token_id: U256,
+        state: &'static str,
+    },
+
+    #[error(
+        "ERC-1155 balance underflow for {account} and token {token_id} \
+         in collection {collection}: cannot subtract {amount}"
+    )]
+    Erc1155BalanceUnderflow {
+        collection: Address,
+        account: Address,
+        token_id: U256,
+        amount: U256,
+    },
+
+    #[error(
+        "ERC-1155 balance overflow for {account} and token {token_id} \
+         in collection {collection}: cannot add {amount}"
+    )]
+    Erc1155BalanceOverflow {
+        collection: Address,
+        account: Address,
+        token_id: U256,
+        amount: U256,
+    },
+
+    #[error(
+        "ERC-1155 transfer for token {token_id} in collection {collection} uses the zero address \
+         as both sender and recipient for amount {amount}"
+    )]
+    Erc1155TransferBetweenZeroAddresses {
+        collection: Address,
+        token_id: U256,
+        amount: U256,
+    },
+
+    #[error(
+        "ERC-1155 balance mismatch for {account} and token {token_id} in collection {collection}: \
+         replayed {replayed_balance} does not match after state"
+    )]
+    Erc1155BalanceMismatch {
+        collection: Address,
+        account: Address,
+        token_id: U256,
+        replayed_balance: U256,
+    },
+
+    #[error(
+        "{state} operator approval for owner {owner} and operator {operator} \
+         in collection {collection} is missing"
+    )]
+    OperatorApprovalMissing {
+        collection: Address,
+        owner: Address,
+        operator: Address,
+        state: &'static str,
+    },
+
+    #[error(
+        "operator approval evidence for owner {owner} and operator {operator} \
+         in collection {collection} is missing"
+    )]
+    OperatorApprovalEvidenceMissing {
+        collection: Address,
+        owner: Address,
+        operator: Address,
+    },
+
+    #[error(
+        "operator approval mismatch for owner {owner} and operator {operator} \
+         in collection {collection}: event value {event_approved}, after state {after_approved}"
+    )]
+    OperatorApprovalValueMismatch {
+        collection: Address,
+        owner: Address,
+        operator: Address,
+        event_approved: bool,
+        after_approved: bool,
+    },
+
+    #[error(
         "token contract {contract} runtime code changed from \
        {before_code_hash} to {after_code_hash}"
     )]

@@ -12,7 +12,8 @@ use self::artifacts::ExecutionArtifacts;
 use self::{
     change_extraction::{
         build_transaction_changes, check_erc20_changes, check_erc721_changes,
-        check_native_balances, check_token_contracts, collect_change_candidates,
+        check_erc1155_movements, check_native_balances, check_operator_approvals,
+        check_token_contracts, collect_change_candidates,
     },
     env::{create_block_env, create_cfg_env, create_tx_env},
     fee_settlement::TransactionFeeSettlement,
@@ -146,6 +147,20 @@ fn execute_transaction(
             )?;
 
             check_erc721_changes(
+                &change_candidates,
+                &token_state_keys,
+                &before_token_state,
+                &after_token_state,
+            )?;
+
+            check_erc1155_movements(
+                &change_candidates,
+                &token_state_keys,
+                &before_token_state,
+                &after_token_state,
+            )?;
+
+            check_operator_approvals(
                 &change_candidates,
                 &token_state_keys,
                 &before_token_state,
