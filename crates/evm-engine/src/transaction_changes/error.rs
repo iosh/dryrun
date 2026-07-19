@@ -21,4 +21,37 @@ pub(crate) enum TransactionChangesError {
         contract: Address,
         amount: U256,
     },
+
+    #[error("native account {address} is missing from transaction state")]
+    NativeAccountMissing { address: Address },
+
+    #[error(
+        "native balance underflow for {address}: \
+           balance {balance}, cannot subtract {amount}"
+    )]
+    NativeBalanceUnderflow {
+        address: Address,
+        balance: U256,
+        amount: U256,
+    },
+
+    #[error(
+        "native balance overflow for {address}: \
+           balance {balance}, cannot add {amount}"
+    )]
+    NativeBalanceOverflow {
+        address: Address,
+        balance: U256,
+        amount: U256,
+    },
+
+    #[error(
+        "native balance mismatch for {address}: \
+           replayed {replayed_balance}, transaction state {state_balance}"
+    )]
+    NativeBalanceMismatch {
+        address: Address,
+        replayed_balance: U256,
+        state_balance: U256,
+    },
 }

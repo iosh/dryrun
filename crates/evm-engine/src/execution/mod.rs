@@ -9,7 +9,9 @@ mod read_call;
 
 use self::artifacts::ExecutionArtifacts;
 use self::{
-    change_extraction::{build_transaction_changes, collect_change_candidates},
+    change_extraction::{
+        build_transaction_changes, check_native_balances, collect_change_candidates,
+    },
     env::{create_block_env, create_cfg_env, create_tx_env},
     fee_settlement::TransactionFeeSettlement,
     outcome::{build_execution_artifacts, build_invalid_transaction_artifacts, build_simulation},
@@ -69,9 +71,11 @@ fn execute_transaction(
 ) -> Result<EvmSimulation, EvmEngineError> {
     let effective_gas_price = tx_env.effective_gas_price(block_env.basefee as u128);
     let base_fee_per_gas = block_env.basefee;
+    let caller = tx_env.caller;
+    let beneficiary = block_env.beneficiary;
 
-    // Change observations are collected during execution so candidates and
-    // their data requests can be derived before committing transaction state.
+    // Change observations are collected during execution so candidates,
+    // data requests, and native balances can be checked before committing state.
     let mut evm = Context::mainnet()
         .with_db(db)
         .modify_cfg_chained(|cfg| *cfg = cfg_env)
@@ -88,10 +92,21 @@ fn execute_transaction(
             let fee_settlement =
                 TransactionFeeSettlement::new(result.gas(), effective_gas_price, base_fee_per_gas)?;
 
-            let artifacts =
-                build_execution_artifacts(result, observations, resolved_block, fee_settlement);
+            let artifacts = build_execution_artifacts(
+                result,
+                observations,
+                resolved_block,
+                fee_settlement.clone(),
+            );
             let change_candidates = collect_change_candidates(&artifacts)?;
             let change_data_requests = collect_change_data_requests(&change_candidates);
+            check_native_balances(
+                &state,
+                &change_candidates,
+                caller,
+                beneficiary,
+                &fee_settlement,
+            )?;
 
             evm.commit(state);
 
