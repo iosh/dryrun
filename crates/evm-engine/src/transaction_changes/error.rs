@@ -172,6 +172,61 @@ pub(crate) enum TransactionChangesError {
         after_allowance: U256,
     },
 
+    #[error("ERC-721 {state} state for token {token_id} in collection {collection} is missing")]
+    Erc721TokenStateMissing {
+        collection: Address,
+        token_id: U256,
+        state: &'static str,
+    },
+
+    #[error("ERC-721 candidate for token {token_id} in collection {collection} is missing")]
+    Erc721CandidateMissing { collection: Address, token_id: U256 },
+
+    #[error(
+        "ERC-721 movement for token {token_id} in collection {collection} from {from} to {to} \
+         is invalid for current owner {current_owner:?}"
+    )]
+    Erc721MovementInvalid {
+        collection: Address,
+        token_id: U256,
+        from: Address,
+        to: Address,
+        current_owner: Option<Address>,
+    },
+
+    #[error(
+        "ERC-721 approval for token {token_id} in collection {collection} by owner {event_owner} \
+         is invalid for current owner {current_owner:?}"
+    )]
+    Erc721ApprovalInvalid {
+        collection: Address,
+        token_id: U256,
+        event_owner: Address,
+        current_owner: Option<Address>,
+    },
+
+    #[error(
+        "ERC-721 owner mismatch for token {token_id} in collection {collection}: replayed \
+         {replayed_owner:?}, after state {after_owner:?}"
+    )]
+    Erc721OwnerMismatch {
+        collection: Address,
+        token_id: U256,
+        replayed_owner: Option<Address>,
+        after_owner: Option<Address>,
+    },
+
+    #[error(
+        "ERC-721 approval mismatch for token {token_id} in collection {collection}: replayed \
+         {replayed_approved_address:?}, after state {after_approved_address:?}"
+    )]
+    Erc721ApprovalMismatch {
+        collection: Address,
+        token_id: U256,
+        replayed_approved_address: Option<Address>,
+        after_approved_address: Option<Address>,
+    },
+
     #[error(
         "token contract {contract} runtime code changed from \
        {before_code_hash} to {after_code_hash}"

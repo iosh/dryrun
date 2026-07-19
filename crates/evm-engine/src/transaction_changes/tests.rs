@@ -1,3 +1,5 @@
+mod erc721;
+
 use std::collections::HashMap;
 
 use alloy::sol_types::SolValue;
