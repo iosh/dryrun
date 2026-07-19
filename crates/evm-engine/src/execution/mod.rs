@@ -24,11 +24,8 @@ use self::{
 
 use crate::{
     EvmEngineError, EvmExecutionInput, EvmSimulation, EvmTransaction,
-    chain_spec::resolve_execution_spec_id,
-    change_observation::ChangeObservationInspector,
-    transaction_changes::{
-        ChangeDataRequests, collect_change_data_requests, collect_token_state_keys,
-    },
+    chain_spec::resolve_execution_spec_id, change_observation::ChangeObservationInspector,
+    transaction_changes::collect_token_state_keys,
 };
 use revm::{
     Context, ExecuteCommitEvm, InspectEvm, MainBuilder, MainContext, MainnetEvm,
@@ -88,7 +85,7 @@ fn execute_transaction(
         .modify_block_chained(|block| *block = block_env)
         .build_mainnet_with_inspector(ChangeObservationInspector::new());
 
-    let (artifacts, change_candidates, change_data_requests) = match evm.inspect_tx(tx_env) {
+    let (artifacts, positioned_changes) = match evm.inspect_tx(tx_env) {
         Ok(result_and_state) => {
             let result = result_and_state.result;
             let state = result_and_state.state;
@@ -105,10 +102,9 @@ fn execute_transaction(
                 fee_settlement.clone(),
             );
             let change_candidates = collect_change_candidates(&artifacts)?;
-            let change_data_requests = collect_change_data_requests(&change_candidates);
             let token_state_keys = collect_token_state_keys(&change_candidates);
 
-            check_native_balances(
+            let mut positioned_changes = check_native_balances(
                 &state,
                 &change_candidates,
                 caller,
@@ -139,40 +135,39 @@ fn execute_transaction(
                 &after_token_state,
             )?;
 
-            check_erc20_changes(
+            positioned_changes.extend(check_erc20_changes(
                 &change_candidates,
                 &token_state_keys,
                 &before_token_state,
                 &after_token_state,
-            )?;
+            )?);
 
-            check_erc721_changes(
+            positioned_changes.extend(check_erc721_changes(
                 &change_candidates,
                 &token_state_keys,
                 &before_token_state,
                 &after_token_state,
-            )?;
+            )?);
 
-            check_erc1155_movements(
+            positioned_changes.extend(check_erc1155_movements(
                 &change_candidates,
                 &token_state_keys,
                 &before_token_state,
                 &after_token_state,
-            )?;
+            )?);
 
-            check_operator_approvals(
+            positioned_changes.extend(check_operator_approvals(
                 &change_candidates,
                 &token_state_keys,
                 &before_token_state,
                 &after_token_state,
-            )?;
+            )?);
 
-            (artifacts, change_candidates, change_data_requests)
+            (artifacts, positioned_changes)
         }
         Err(EVMError::Transaction(error)) => (
             build_invalid_transaction_artifacts(resolved_block, transaction, error),
             Vec::new(),
-            ChangeDataRequests::default(),
         ),
         Err(EVMError::Header(error)) => {
             return Err(EvmEngineError::block_context_error(format!(
@@ -195,8 +190,7 @@ fn execute_transaction(
         &mut evm,
         transaction,
         artifacts.chain_id,
-        change_candidates,
-        change_data_requests,
+        positioned_changes,
     );
 
     Ok(build_simulation(artifacts, changes))

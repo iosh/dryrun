@@ -6,13 +6,11 @@ use evm_engine::EvmEngine;
 
 pub use error::SimulationServiceError;
 pub use evm_engine::{
-    AccessListItem, ApprovalChange, ApprovalForAllChange, Asset, BlockRef, BurnChange, Change,
-    Collection, Erc20AssetDisplay, Erc721CollectionDisplay, Erc1155CollectionDisplay,
+    AccessListItem, BlockRef, Change, Erc20Metadata, Erc721CollectionMetadata,
     EvmExecution as SimulationExecution, EvmExecutionFailure as ExecutionFailure,
     EvmExecutionFailureCode, EvmExecutionInput as SimulateEvmTransactionInput,
     EvmExecutionStatus as ExecutionStatus, EvmSimulation as SimulateEvmTransactionOutput,
-    EvmTransaction, EvmTransactionVariant, MintChange, NativeAssetDisplay, NftTokenDisplay,
-    SimulatedBlock, TransferChange,
+    EvmTransaction, EvmTransactionVariant, NativeMetadata, SimulatedBlock,
 };
 
 #[derive(Debug, Clone)]

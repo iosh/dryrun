@@ -1,6 +1,9 @@
 use alloy_primitives::{Address, U256};
 
+use crate::Change;
+
 use super::super::{
+    PositionedChange,
     candidate::{ChangeCandidate, ChangeCandidateKind, ObservationPosition},
     erc1155::check_erc1155_movements,
     error::TransactionChangesError,
@@ -60,7 +63,7 @@ fn run_check(
     candidates: &[ChangeCandidate],
     before: &TokenStateValues,
     after: &TokenStateValues,
-) -> Result<(), TransactionChangesError> {
+) -> Result<Vec<PositionedChange>, TransactionChangesError> {
     check_erc1155_movements(
         candidates,
         &collect_token_state_keys(candidates),
@@ -81,14 +84,18 @@ fn reconciles_ordered_mint_transfer_self_transfer_and_burn() {
         movement(3, collection, Address::ZERO, alice, 1, 3),
     ];
 
-    assert_eq!(
-        run_check(
-            &candidates,
-            &state_values(collection, [(alice, 1, 10), (bob, 1, 1)]),
-            &state_values(collection, [(alice, 1, 9), (bob, 1, 3)]),
-        ),
-        Ok(())
-    );
+    let changes = run_check(
+        &candidates,
+        &state_values(collection, [(alice, 1, 10), (bob, 1, 1)]),
+        &state_values(collection, [(alice, 1, 9), (bob, 1, 3)]),
+    )
+    .expect("ERC-1155 movements should reconcile");
+
+    assert_eq!(changes.len(), 4);
+    assert!(matches!(changes[0].change, Change::Erc1155Transfer { .. }));
+    assert!(matches!(changes[1].change, Change::Erc1155Transfer { .. }));
+    assert!(matches!(changes[2].change, Change::Erc1155Burn { .. }));
+    assert!(matches!(changes[3].change, Change::Erc1155Mint { .. }));
 }
 
 #[test]
@@ -124,11 +131,11 @@ fn accepts_zero_amount_between_zero_addresses_only() {
 
     assert_eq!(
         run_check(
-            &[movement(0, collection, Address::ZERO, Address::ZERO, 1, 0,)],
+            &[movement(0, collection, Address::ZERO, Address::ZERO, 1, 0)],
             &empty,
             &empty,
         ),
-        Ok(())
+        Ok(Vec::new())
     );
 
     assert!(matches!(

@@ -4,10 +4,8 @@ use alloy::{sol, sol_types::SolCall};
 use alloy_primitives::{Address, FixedBytes};
 
 use crate::{
-    EvmTransaction,
-    transaction_changes::{
-        ChangeData, ChangeDataRequests, ContractKind, Erc20Metadata, Erc721CollectionMetadata,
-    },
+    Erc20Metadata, Erc721CollectionMetadata, EvmTransaction, NativeMetadata,
+    transaction_changes::{ChangeMetadata, ChangeMetadataRequests},
 };
 
 use super::{
@@ -15,9 +13,7 @@ use super::{
     read_call::{execute_optional_read_call, with_read_call_context},
 };
 
-const ERC721_INTERFACE_ID: [u8; 4] = [0x80, 0xac, 0x58, 0xcd];
 const ERC721_METADATA_INTERFACE_ID: [u8; 4] = [0x5b, 0x5e, 0x13, 0x9f];
-const ERC1155_INTERFACE_ID: [u8; 4] = [0xd9, 0xb6, 0x7a, 0x26];
 
 sol! {
     contract IERC20Metadata {
@@ -36,92 +32,58 @@ sol! {
     }
 }
 
-pub(super) fn load_change_data<INSP>(
+pub(super) fn load_change_metadata<INSP>(
     evm: &mut MainnetAlloyEvm<INSP>,
     transaction: &EvmTransaction,
     chain_id: u64,
-    requests: ChangeDataRequests,
-) -> ChangeData {
+    requests: ChangeMetadataRequests,
+) -> ChangeMetadata {
+    let native = native_metadata(chain_id);
+
+    if requests.erc20_contracts.is_empty() && requests.erc721_collections.is_empty() {
+        return ChangeMetadata::new(native, HashMap::new(), HashMap::new());
+    }
+
     with_read_call_context(evm, |evm| {
-        read_change_data(evm, transaction, chain_id, requests)
+        read_change_metadata(evm, transaction, chain_id, native, requests)
     })
 }
 
-fn read_change_data<INSP>(
+fn read_change_metadata<INSP>(
     evm: &mut MainnetAlloyEvm<INSP>,
     transaction: &EvmTransaction,
     chain_id: u64,
-    requests: ChangeDataRequests,
-) -> ChangeData {
-    let ChangeDataRequests {
-        contract_kinds: contracts_to_classify,
-        erc20_metadata: erc20_tokens,
-        erc721_collection_metadata: erc721_metadata_requests,
-    } = requests;
+    native: NativeMetadata,
+    requests: ChangeMetadataRequests,
+) -> ChangeMetadata {
+    let mut erc20 = HashMap::new();
+    let mut erc721 = HashMap::new();
 
-    let mut contract_kinds = HashMap::new();
-    let mut erc20_metadata = HashMap::new();
-    let mut erc721_collection_metadata = HashMap::new();
-
-    for contract in contracts_to_classify {
-        contract_kinds.insert(
+    for contract in requests.erc20_contracts {
+        erc20.insert(
             contract,
-            classify_contract(evm, transaction, chain_id, contract),
+            read_erc20_metadata(evm, transaction, chain_id, contract),
         );
     }
 
-    for token in erc20_tokens {
-        erc20_metadata.insert(
-            token,
-            read_erc20_metadata(evm, transaction, chain_id, token),
+    for collection in requests.erc721_collections {
+        erc721.insert(
+            collection,
+            read_erc721_collection_metadata(evm, transaction, chain_id, collection),
         );
     }
 
-    for metadata_request in erc721_metadata_requests {
-        if metadata_request.only_if_classified_as_erc721
-            && contract_kinds.get(&metadata_request.collection) != Some(&ContractKind::Erc721)
-        {
-            continue;
-        }
-
-        erc721_collection_metadata.insert(
-            metadata_request.collection,
-            read_erc721_collection_metadata(
-                evm,
-                transaction,
-                chain_id,
-                metadata_request.collection,
-            ),
-        );
-    }
-
-    ChangeData::new(contract_kinds, erc20_metadata, erc721_collection_metadata)
+    ChangeMetadata::new(native, erc20, erc721)
 }
 
-fn classify_contract<INSP>(
-    evm: &mut MainnetAlloyEvm<INSP>,
-    transaction: &EvmTransaction,
-    chain_id: u64,
-    contract: Address,
-) -> ContractKind {
-    // ERC20 has no standard ERC165 interface id, so this is a best-effort
-    // NFT-vs-fungible classification rather than a strict proof.
-    let supports_erc721 =
-        read_interface_support(evm, transaction, chain_id, contract, ERC721_INTERFACE_ID);
-    if supports_erc721 == Some(true) {
-        return ContractKind::Erc721;
-    }
-
-    let supports_erc1155 =
-        read_interface_support(evm, transaction, chain_id, contract, ERC1155_INTERFACE_ID);
-    if supports_erc1155 == Some(true) {
-        return ContractKind::Erc1155;
-    }
-
-    if supports_erc721.is_none() && supports_erc1155.is_none() {
-        ContractKind::Unknown
-    } else {
-        ContractKind::FungibleLike
+fn native_metadata(chain_id: u64) -> NativeMetadata {
+    match chain_id {
+        1 => NativeMetadata {
+            name: Some("Ether".to_string()),
+            symbol: Some("ETH".to_string()),
+            decimals: Some(18),
+        },
+        _ => NativeMetadata::default(),
     }
 }
 
@@ -129,13 +91,13 @@ fn read_erc20_metadata<INSP>(
     evm: &mut MainnetAlloyEvm<INSP>,
     transaction: &EvmTransaction,
     chain_id: u64,
-    token: Address,
+    contract: Address,
 ) -> Erc20Metadata {
     // Contract metadata is optional. Individual read failures leave only that field absent.
     Erc20Metadata {
-        name: read_erc20_name(evm, transaction, chain_id, token),
-        symbol: read_erc20_symbol(evm, transaction, chain_id, token),
-        decimals: read_erc20_decimals(evm, transaction, chain_id, token),
+        name: read_erc20_name(evm, transaction, chain_id, contract),
+        symbol: read_erc20_symbol(evm, transaction, chain_id, contract),
+        decimals: read_erc20_decimals(evm, transaction, chain_id, contract),
     }
 }
 
@@ -189,13 +151,13 @@ fn read_erc20_name<INSP>(
     evm: &mut MainnetAlloyEvm<INSP>,
     transaction: &EvmTransaction,
     chain_id: u64,
-    token: Address,
+    contract: Address,
 ) -> Option<String> {
     let output = execute_optional_read_call(
         evm,
         transaction,
         chain_id,
-        token,
+        contract,
         IERC20Metadata::nameCall {}.abi_encode().into(),
     )?;
 
@@ -206,13 +168,13 @@ fn read_erc20_symbol<INSP>(
     evm: &mut MainnetAlloyEvm<INSP>,
     transaction: &EvmTransaction,
     chain_id: u64,
-    token: Address,
+    contract: Address,
 ) -> Option<String> {
     let output = execute_optional_read_call(
         evm,
         transaction,
         chain_id,
-        token,
+        contract,
         IERC20Metadata::symbolCall {}.abi_encode().into(),
     )?;
 
@@ -223,13 +185,13 @@ fn read_erc20_decimals<INSP>(
     evm: &mut MainnetAlloyEvm<INSP>,
     transaction: &EvmTransaction,
     chain_id: u64,
-    token: Address,
+    contract: Address,
 ) -> Option<u8> {
     let output = execute_optional_read_call(
         evm,
         transaction,
         chain_id,
-        token,
+        contract,
         IERC20Metadata::decimalsCall {}.abi_encode().into(),
     )?;
 

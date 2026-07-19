@@ -14,20 +14,23 @@ use revm::{
     state::{Account, AccountInfo, EvmState},
 };
 
-use crate::change_observation::{ChangeObservationInspector, Observation};
+use crate::{
+    Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata,
+    change_observation::{ChangeObservationInspector, Observation},
+};
 
 use super::{
     candidate::{
         ChangeCandidate, ChangeCandidateKind, Erc20AllowanceEvidence, ObservationPosition,
     },
-    change_data::{
-        ChangeDataRequests, Erc721CollectionMetadataRequest, collect_change_data_requests,
-    },
+    change_metadata::{ChangeMetadata, ChangeMetadataRequests, collect_change_metadata_requests},
+    changes::{build_changes, sort_changes_by_position},
     collection::collect_candidates,
     erc20::{check_erc20_allowances, check_erc20_movements},
     error::TransactionChangesError,
     event_codec::SupportedEvent,
     native_balance::check_native_balances,
+    positioned_change::PositionedChange,
     token_contract::check_token_contracts,
     token_state::{
         CollectionStandards, Erc20AllowanceKey, Erc20BalanceKey, Erc721TokenKey, Erc1155BalanceKey,
@@ -337,109 +340,109 @@ fn erc1155_transfer_batch_observation(
 }
 
 #[test]
-fn collects_deduplicated_change_data_requests_in_candidate_order() {
-    let operator_only = Address::repeat_byte(0x01);
-    let operator_then_erc721 = Address::repeat_byte(0x02);
+fn sorts_changes_and_collects_metadata_requests_in_change_order() {
+    let erc721 = Address::repeat_byte(0x01);
+    let second_erc721 = Address::repeat_byte(0x02);
     let erc20 = Address::repeat_byte(0x03);
-    let transfer_from_only = Address::repeat_byte(0x04);
-    let owner = Address::repeat_byte(0x05);
-    let operator = Address::repeat_byte(0x06);
-    let recipient = Address::repeat_byte(0x07);
-
-    let requests = collect_change_data_requests(&[
-        candidate(
-            0,
-            0,
-            ChangeCandidateKind::OperatorApproval {
-                collection: operator_only,
+    let owner = Address::repeat_byte(0x04);
+    let recipient = Address::repeat_byte(0x05);
+    let mut changes = vec![
+        PositionedChange::new(
+            ObservationPosition {
+                observation_index: 2,
+                item_index: 0,
+            },
+            Change::Erc721OperatorApproval {
+                contract_address: erc721,
                 owner,
-                operator,
-                approved: true,
+                operator: recipient,
+                approved_before: false,
+                approved_after: true,
+                metadata: Erc721CollectionMetadata::default(),
             },
         ),
-        candidate(
-            1,
-            0,
-            ChangeCandidateKind::Erc20Transfer {
-                token: erc20,
+        PositionedChange::new(
+            ObservationPosition {
+                observation_index: 0,
+                item_index: 0,
+            },
+            Change::Erc20Transfer {
+                contract_address: erc20,
                 from: owner,
                 to: recipient,
-                amount: U256::from(1_u64),
+                raw_amount: U256::from(1_u64),
+                metadata: Erc20Metadata::default(),
             },
         ),
-        candidate(
-            2,
-            0,
-            ChangeCandidateKind::OperatorApproval {
-                collection: operator_then_erc721,
+        PositionedChange::new(
+            ObservationPosition {
+                observation_index: 1,
+                item_index: 0,
+            },
+            Change::Erc721Transfer {
+                contract_address: second_erc721,
+                from: owner,
+                to: recipient,
+                token_id: U256::from(2_u64),
+                metadata: Erc721CollectionMetadata::default(),
+            },
+        ),
+        PositionedChange::new(
+            ObservationPosition {
+                observation_index: 3,
+                item_index: 0,
+            },
+            Change::Erc20Allowance {
+                contract_address: erc20,
                 owner,
-                operator,
-                approved: true,
+                spender: recipient,
+                raw_amount_before: U256::ZERO,
+                raw_amount_after: U256::from(3_u64),
+                metadata: Erc20Metadata::default(),
             },
         ),
-        candidate(
-            3,
-            0,
-            ChangeCandidateKind::Erc20Allowance {
-                token: erc20,
-                owner,
-                spender: operator,
-                evidence: Erc20AllowanceEvidence::ApprovalEvent {
-                    value: U256::from(2_u64),
-                },
-            },
-        ),
-        candidate(
-            4,
-            0,
-            ChangeCandidateKind::Erc721Approval {
-                collection: operator_then_erc721,
-                owner,
-                approved_address: Some(operator),
-                token_id: U256::from(3_u64),
-            },
-        ),
-        candidate(
-            5,
-            0,
-            ChangeCandidateKind::Erc20Allowance {
-                token: transfer_from_only,
-                owner,
-                spender: operator,
-                evidence: Erc20AllowanceEvidence::TransferFromCall {
-                    amount: U256::from(4_u64),
-                },
-            },
-        ),
-        candidate(
-            6,
-            0,
-            ChangeCandidateKind::OperatorApproval {
-                collection: operator_only,
-                owner,
-                operator,
-                approved: false,
-            },
-        ),
-    ]);
+    ];
+
+    sort_changes_by_position(&mut changes);
+    let requests = collect_change_metadata_requests(&changes);
 
     assert_eq!(
         requests,
-        ChangeDataRequests {
-            contract_kinds: vec![operator_only, operator_then_erc721],
-            erc20_metadata: vec![erc20],
-            erc721_collection_metadata: vec![
-                Erc721CollectionMetadataRequest {
-                    collection: operator_only,
-                    only_if_classified_as_erc721: true,
-                },
-                Erc721CollectionMetadataRequest {
-                    collection: operator_then_erc721,
-                    only_if_classified_as_erc721: false,
-                },
-            ],
+        ChangeMetadataRequests {
+            erc20_contracts: vec![erc20],
+            erc721_collections: vec![second_erc721, erc721],
         }
     );
+
+    let metadata = ChangeMetadata::new(
+        NativeMetadata::default(),
+        [(
+            erc20,
+            Erc20Metadata {
+                name: None,
+                symbol: Some("TOK".to_string()),
+                decimals: Some(6),
+            },
+        )]
+        .into_iter()
+        .collect(),
+        HashMap::new(),
+    );
+    let changes = build_changes(changes, &metadata);
+
+    assert!(matches!(
+        &changes[0],
+        Change::Erc20Transfer {
+            metadata: Erc20Metadata {
+                symbol: Some(symbol),
+                decimals: Some(6),
+                ..
+            },
+            ..
+        } if symbol == "TOK"
+    ));
+    assert!(matches!(changes[1], Change::Erc721Transfer { .. }));
+    assert!(matches!(changes[2], Change::Erc721OperatorApproval { .. }));
 }
 
 #[test]
@@ -531,9 +534,42 @@ fn reconciles_ordered_erc20_movements_and_total_supply() {
         Some(U256::from(105_u64)),
     );
 
+    let changes = check_erc20_movements(&candidates, &keys, &before, &after)
+        .expect("ERC-20 movements should reconcile");
+
     assert_eq!(
-        check_erc20_movements(&candidates, &keys, &before, &after),
-        Ok(())
+        changes
+            .into_iter()
+            .map(|positioned_change| positioned_change.change)
+            .collect::<Vec<_>>(),
+        vec![
+            Change::Erc20Transfer {
+                contract_address: token,
+                from: alice,
+                to: alice,
+                raw_amount: U256::from(30_u64),
+                metadata: Erc20Metadata::default(),
+            },
+            Change::Erc20Transfer {
+                contract_address: token,
+                from: alice,
+                to: bob,
+                raw_amount: U256::from(40_u64),
+                metadata: Erc20Metadata::default(),
+            },
+            Change::Erc20Mint {
+                contract_address: token,
+                to: alice,
+                raw_amount: U256::from(10_u64),
+                metadata: Erc20Metadata::default(),
+            },
+            Change::Erc20Burn {
+                contract_address: token,
+                from: bob,
+                raw_amount: U256::from(5_u64),
+                metadata: Erc20Metadata::default(),
+            },
+        ]
     );
 }
 
@@ -714,10 +750,38 @@ fn uses_last_evidence_to_check_erc20_allowances() {
         (bob_key, U256::from(19_u64)),
     ]);
 
-    assert_eq!(
-        check_erc20_allowances(&candidates, &keys, &before, &after),
-        Ok(())
-    );
+    let changes = check_erc20_allowances(&candidates, &keys, &before, &after)
+        .expect("ERC-20 allowances should reconcile");
+
+    assert_eq!(changes.len(), 2);
+    assert!(matches!(
+        changes[0].change,
+        Change::Erc20Allowance {
+            contract_address,
+            owner,
+            spender: change_spender,
+            raw_amount_before,
+            raw_amount_after,
+            ..
+        } if contract_address == token
+            && owner == alice
+            && change_spender == spender
+            && raw_amount_before == U256::from(10_u64)
+            && raw_amount_after == U256::from(70_u64)
+    ));
+    assert_eq!(changes[0].position.observation_index, 2);
+    assert!(matches!(
+        changes[1].change,
+        Change::Erc20Allowance {
+            owner,
+            raw_amount_before,
+            raw_amount_after,
+            ..
+        } if owner == bob
+            && raw_amount_before == U256::from(20_u64)
+            && raw_amount_after == U256::from(19_u64)
+    ));
+    assert_eq!(changes[1].position.observation_index, 3);
 }
 
 #[test]

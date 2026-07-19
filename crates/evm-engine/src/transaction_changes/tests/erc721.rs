@@ -1,6 +1,9 @@
 use alloy_primitives::{Address, U256};
 
+use crate::Change;
+
 use super::super::{
+    PositionedChange,
     candidate::{ChangeCandidate, ChangeCandidateKind, ObservationPosition},
     erc721::check_erc721_changes,
     error::TransactionChangesError,
@@ -90,7 +93,7 @@ fn run_check<const B: usize, const A: usize>(
     candidates: &[ChangeCandidate],
     before: [(u64, Erc721TokenState); B],
     after: [(u64, Erc721TokenState); A],
-) -> Result<(), TransactionChangesError> {
+) -> Result<Vec<PositionedChange>, TransactionChangesError> {
     check_erc721_changes(
         candidates,
         &collect_token_state_keys(candidates),
@@ -111,18 +114,43 @@ fn reconciles_ordered_movements_and_approvals() {
         approval(2, collection, bob, Some(operator), 2),
     ];
 
-    assert_eq!(
-        run_check(
-            collection,
-            &candidates,
-            [
-                (1, present(alice, Some(operator))),
-                (2, present(alice, None)),
-            ],
-            [(1, present(alice, None)), (2, present(bob, Some(operator))),],
-        ),
-        Ok(())
-    );
+    let changes = run_check(
+        collection,
+        &candidates,
+        [
+            (1, present(alice, Some(operator))),
+            (2, present(alice, None)),
+        ],
+        [(1, present(alice, None)), (2, present(bob, Some(operator)))],
+    )
+    .expect("ERC-721 changes should reconcile");
+
+    assert_eq!(changes.len(), 4);
+    assert!(matches!(
+        &changes[0].change,
+        Change::Erc721Transfer {
+            from,
+            to,
+            token_id,
+            ..
+        } if from == &alice && to == &alice && token_id == &U256::from(1_u64)
+    ));
+    assert!(matches!(
+        &changes[2].change,
+        Change::Erc721TokenApproval {
+            approved_address_before: Some(before),
+            approved_address_after: None,
+            ..
+        } if before == &operator
+    ));
+    assert!(matches!(
+        &changes[3].change,
+        Change::Erc721TokenApproval {
+            approved_address_before: None,
+            approved_address_after: Some(after),
+            ..
+        } if after == &operator
+    ));
 }
 
 #[test]
@@ -139,15 +167,19 @@ fn reconciles_mint_burn_and_remint_path() {
         movement(4, collection, bob, Address::ZERO, 1),
     ];
 
-    assert_eq!(
-        run_check(
-            collection,
-            &candidates,
-            [(1, Erc721TokenState::OwnerOfReverted)],
-            [(1, Erc721TokenState::OwnerOfReverted)],
-        ),
-        Ok(())
-    );
+    let changes = run_check(
+        collection,
+        &candidates,
+        [(1, Erc721TokenState::OwnerOfReverted)],
+        [(1, Erc721TokenState::OwnerOfReverted)],
+    )
+    .expect("mint, burn, and remint should reconcile");
+
+    assert_eq!(changes.len(), 4);
+    assert!(matches!(changes[0].change, Change::Erc721Mint { .. }));
+    assert!(matches!(changes[1].change, Change::Erc721Burn { .. }));
+    assert!(matches!(changes[2].change, Change::Erc721Mint { .. }));
+    assert!(matches!(changes[3].change, Change::Erc721Burn { .. }));
 }
 
 #[test]

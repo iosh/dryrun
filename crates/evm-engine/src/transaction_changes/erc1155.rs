@@ -4,7 +4,10 @@ use std::collections::HashMap;
 
 use alloy_primitives::{Address, U256};
 
+use crate::Change;
+
 use super::{
+    PositionedChange,
     candidate::{ChangeCandidate, ChangeCandidateKind},
     error::TransactionChangesError,
     token_state::{Erc1155BalanceKey, TokenStateKeys, TokenStateValues},
@@ -15,7 +18,7 @@ pub(crate) fn check_erc1155_movements(
     keys: &TokenStateKeys,
     before: &TokenStateValues,
     after: &TokenStateValues,
-) -> Result<(), TransactionChangesError> {
+) -> Result<Vec<PositionedChange>, TransactionChangesError> {
     let replayed_balances = replay_erc1155_movements(candidates, before)?;
 
     for &key in &keys.erc1155_balances {
@@ -32,7 +35,53 @@ pub(crate) fn check_erc1155_movements(
         }
     }
 
-    Ok(())
+    Ok(candidates
+        .iter()
+        .filter_map(erc1155_movement_change)
+        .collect())
+}
+
+fn erc1155_movement_change(candidate: &ChangeCandidate) -> Option<PositionedChange> {
+    let ChangeCandidateKind::Erc1155Transfer {
+        collection,
+        from,
+        to,
+        token_id,
+        amount,
+    } = candidate.kind
+    else {
+        return None;
+    };
+
+    if amount.is_zero() {
+        return None;
+    }
+
+    let change = if from == Address::ZERO {
+        Change::Erc1155Mint {
+            contract_address: collection,
+            to,
+            token_id,
+            raw_amount: amount,
+        }
+    } else if to == Address::ZERO {
+        Change::Erc1155Burn {
+            contract_address: collection,
+            from,
+            token_id,
+            raw_amount: amount,
+        }
+    } else {
+        Change::Erc1155Transfer {
+            contract_address: collection,
+            from,
+            to,
+            token_id,
+            raw_amount: amount,
+        }
+    };
+
+    Some(PositionedChange::new(candidate.position, change))
 }
 
 fn replay_erc1155_movements(

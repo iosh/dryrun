@@ -3,7 +3,10 @@ use std::collections::HashMap;
 use alloy_primitives::{Address, U256};
 use revm::state::EvmState;
 
+use crate::{Change, NativeMetadata};
+
 use super::{
+    PositionedChange,
     candidate::{ChangeCandidate, ChangeCandidateKind},
     error::TransactionChangesError,
 };
@@ -16,11 +19,12 @@ pub(crate) fn check_native_balances(
     gas_precharge: U256,
     caller_refund: U256,
     beneficiary_reward: U256,
-) -> Result<(), TransactionChangesError> {
+) -> Result<Vec<PositionedChange>, TransactionChangesError> {
     let mut balances = state
         .iter()
         .map(|(address, account)| (*address, account.original_info.balance))
         .collect::<HashMap<_, _>>();
+    let mut changes = Vec::new();
 
     decrease_balance(&mut balances, caller, gas_precharge)?;
 
@@ -31,6 +35,18 @@ pub(crate) fn check_native_balances(
 
         decrease_balance(&mut balances, from, amount)?;
         increase_balance(&mut balances, to, amount)?;
+
+        if !amount.is_zero() {
+            changes.push(PositionedChange::new(
+                candidate.position,
+                Change::NativeTransfer {
+                    from,
+                    to,
+                    raw_amount: amount,
+                    metadata: NativeMetadata::default(),
+                },
+            ));
+        }
     }
 
     increase_balance(&mut balances, caller, caller_refund)?;
@@ -57,7 +73,7 @@ pub(crate) fn check_native_balances(
         }
     }
 
-    Ok(())
+    Ok(changes)
 }
 
 fn decrease_balance(

@@ -2,16 +2,26 @@
 
 use std::collections::HashMap;
 
+use alloy_primitives::{Address, U256};
+
+use crate::{Change, Erc20Metadata};
+
 use super::{
+    PositionedChange,
     candidate::{ChangeCandidate, ChangeCandidateKind, Erc20AllowanceEvidence},
     error::TransactionChangesError,
     token_state::{Erc20AllowanceKey, Erc20BalanceKey, TokenStateKeys, TokenStateValues},
 };
-use alloy_primitives::{Address, U256};
 
 struct Erc20Replay {
     balances: HashMap<Erc20BalanceKey, U256>,
     total_supplies: HashMap<Address, U256>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PositionedAllowanceEvidence {
+    position: super::candidate::ObservationPosition,
+    evidence: Erc20AllowanceEvidence,
 }
 
 pub(crate) fn check_erc20_changes(
@@ -19,11 +29,11 @@ pub(crate) fn check_erc20_changes(
     keys: &TokenStateKeys,
     before: &TokenStateValues,
     after: &TokenStateValues,
-) -> Result<(), TransactionChangesError> {
-    check_erc20_movements(candidates, keys, before, after)?;
-    check_erc20_allowances(candidates, keys, before, after)?;
+) -> Result<Vec<PositionedChange>, TransactionChangesError> {
+    let mut changes = check_erc20_movements(candidates, keys, before, after)?;
+    changes.extend(check_erc20_allowances(candidates, keys, before, after)?);
 
-    Ok(())
+    Ok(changes)
 }
 
 pub(crate) fn check_erc20_movements(
@@ -31,7 +41,7 @@ pub(crate) fn check_erc20_movements(
     keys: &TokenStateKeys,
     before: &TokenStateValues,
     after: &TokenStateValues,
-) -> Result<(), TransactionChangesError> {
+) -> Result<Vec<PositionedChange>, TransactionChangesError> {
     let replayed = replay_erc20_movements(candidates, before)?;
 
     for &key in &keys.erc20_balances {
@@ -85,7 +95,10 @@ pub(crate) fn check_erc20_movements(
         }
     }
 
-    Ok(())
+    Ok(candidates
+        .iter()
+        .filter_map(erc20_movement_change)
+        .collect())
 }
 
 pub(crate) fn check_erc20_allowances(
@@ -93,11 +106,12 @@ pub(crate) fn check_erc20_allowances(
     keys: &TokenStateKeys,
     before: &TokenStateValues,
     after: &TokenStateValues,
-) -> Result<(), TransactionChangesError> {
+) -> Result<Vec<PositionedChange>, TransactionChangesError> {
     let evidence_by_allowance = collect_last_allowance_evidence(candidates);
+    let mut changes = Vec::new();
 
     for &key in &keys.erc20_allowances {
-        allowance_value(before, key, "before")?;
+        let before_allowance = allowance_value(before, key, "before")?;
         let after_allowance = allowance_value(after, key, "after")?;
 
         let evidence = evidence_by_allowance.get(&key).copied().ok_or(
@@ -108,7 +122,7 @@ pub(crate) fn check_erc20_allowances(
             },
         )?;
 
-        match evidence {
+        match evidence.evidence {
             Erc20AllowanceEvidence::ApprovalEvent { value } if value != after_allowance => {
                 return Err(TransactionChangesError::Erc20ApprovalValueMismatch {
                     token: key.token,
@@ -121,9 +135,23 @@ pub(crate) fn check_erc20_allowances(
             Erc20AllowanceEvidence::ApprovalEvent { .. }
             | Erc20AllowanceEvidence::TransferFromCall { .. } => {}
         }
+
+        if before_allowance != after_allowance {
+            changes.push(PositionedChange::new(
+                evidence.position,
+                Change::Erc20Allowance {
+                    contract_address: key.token,
+                    owner: key.owner,
+                    spender: key.spender,
+                    raw_amount_before: before_allowance,
+                    raw_amount_after: after_allowance,
+                    metadata: Erc20Metadata::default(),
+                },
+            ));
+        }
     }
 
-    Ok(())
+    Ok(changes)
 }
 
 fn allowance_value(
@@ -143,7 +171,7 @@ fn allowance_value(
 
 fn collect_last_allowance_evidence(
     candidates: &[ChangeCandidate],
-) -> HashMap<Erc20AllowanceKey, Erc20AllowanceEvidence> {
+) -> HashMap<Erc20AllowanceKey, PositionedAllowanceEvidence> {
     let mut evidence_by_allowance = HashMap::new();
 
     for candidate in candidates {
@@ -163,11 +191,57 @@ fn collect_last_allowance_evidence(
                 owner,
                 spender,
             },
-            evidence,
+            PositionedAllowanceEvidence {
+                position: candidate.position,
+                evidence,
+            },
         );
     }
 
     evidence_by_allowance
+}
+
+fn erc20_movement_change(candidate: &ChangeCandidate) -> Option<PositionedChange> {
+    let ChangeCandidateKind::Erc20Transfer {
+        token,
+        from,
+        to,
+        amount,
+    } = candidate.kind
+    else {
+        return None;
+    };
+
+    if amount.is_zero() {
+        return None;
+    }
+
+    let metadata = Erc20Metadata::default();
+    let change = if from == Address::ZERO {
+        Change::Erc20Mint {
+            contract_address: token,
+            to,
+            raw_amount: amount,
+            metadata,
+        }
+    } else if to == Address::ZERO {
+        Change::Erc20Burn {
+            contract_address: token,
+            from,
+            raw_amount: amount,
+            metadata,
+        }
+    } else {
+        Change::Erc20Transfer {
+            contract_address: token,
+            from,
+            to,
+            raw_amount: amount,
+            metadata,
+        }
+    };
+
+    Some(PositionedChange::new(candidate.position, change))
 }
 
 fn replay_erc20_movements(

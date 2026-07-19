@@ -7,11 +7,7 @@ mod simulation;
 mod transaction;
 mod transaction_changes;
 
-pub use change::{
-    ApprovalChange, ApprovalForAllChange, Asset, BurnChange, Change, Collection, Erc20AssetDisplay,
-    Erc721CollectionDisplay, Erc1155CollectionDisplay, MintChange, NativeAssetDisplay,
-    NftTokenDisplay, TransferChange,
-};
+pub use change::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
 pub use error::{EvmEngineError, EvmEngineInternalKind};
 use execution::simulate_execution;
 pub use simulation::{
