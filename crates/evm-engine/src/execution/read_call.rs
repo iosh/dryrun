@@ -3,7 +3,7 @@ use revm::{
     Database, ExecuteEvm,
     context::TxEnv,
     context_interface::{
-        result::ExecutionResult,
+        result::{EVMError, ExecutionResult, HaltReason},
         transaction::{AccessList as RevmAccessList, TransactionType},
     },
     handler::EvmTr,
@@ -15,6 +15,13 @@ use crate::EvmTransaction;
 use super::MainnetEvmWithDb;
 
 const READ_CALL_GAS_LIMIT: u64 = 100_000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ReadCallOutcome {
+    Success(Bytes),
+    Revert(Bytes),
+    Halt(HaltReason),
+}
 
 pub(super) fn with_read_call_context<DB, INSP, T>(
     evm: &mut MainnetEvmWithDb<DB, INSP>,
@@ -44,9 +51,27 @@ where
     output
 }
 
-// Executes a read-like call against the current in-memory state. The returned
-// state is intentionally discarded instead of being committed.
 pub(super) fn execute_read_call<DB, INSP>(
+    evm: &mut MainnetEvmWithDb<DB, INSP>,
+    transaction: &EvmTransaction,
+    chain_id: u64,
+    target: Address,
+    data: Bytes,
+) -> Result<ReadCallOutcome, EVMError<DB::Error>>
+where
+    DB: Database,
+{
+    let tx = build_read_call_tx(transaction, chain_id, target, data);
+    let result = evm.transact(tx)?.result;
+
+    Ok(match result {
+        ExecutionResult::Success { output, .. } => ReadCallOutcome::Success(output.into_data()),
+        ExecutionResult::Revert { output, .. } => ReadCallOutcome::Revert(output),
+        ExecutionResult::Halt { reason, .. } => ReadCallOutcome::Halt(reason),
+    })
+}
+
+pub(super) fn execute_optional_read_call<DB, INSP>(
     evm: &mut MainnetEvmWithDb<DB, INSP>,
     transaction: &EvmTransaction,
     chain_id: u64,
@@ -56,12 +81,9 @@ pub(super) fn execute_read_call<DB, INSP>(
 where
     DB: Database,
 {
-    let tx = build_read_call_tx(transaction, chain_id, target, data);
-    let result = evm.transact(tx).ok()?.result;
-
-    match result {
-        ExecutionResult::Success { output, .. } => Some(output.into_data()),
-        ExecutionResult::Revert { .. } | ExecutionResult::Halt { .. } => None,
+    match execute_read_call(evm, transaction, chain_id, target, data).ok()? {
+        ReadCallOutcome::Success(output) => Some(output),
+        ReadCallOutcome::Revert(_) | ReadCallOutcome::Halt(_) => None,
     }
 }
 
@@ -105,7 +127,9 @@ mod tests {
 
     use crate::{EvmTransaction, EvmTransactionVariant};
 
-    use super::{execute_read_call, with_read_call_context};
+    use super::{
+        ReadCallOutcome, execute_optional_read_call, execute_read_call, with_read_call_context,
+    };
 
     #[test]
     fn restores_read_call_context_without_committing_state() {
@@ -167,7 +191,7 @@ mod tests {
             assert!(evm.ctx().cfg.disable_base_fee);
             assert!(evm.ctx().cfg.disable_fee_charge);
 
-            execute_read_call(evm, &transaction, 1, contract, Bytes::new())
+            execute_optional_read_call(evm, &transaction, 1, contract, Bytes::new())
         });
 
         assert_eq!(output, Some(Bytes::new()));
@@ -182,5 +206,60 @@ mod tests {
             .expect("contract storage");
 
         assert_eq!(stored_value, U256::ZERO);
+    }
+
+    #[test]
+    fn preserves_revert_and_halt_outcomes() {
+        let caller = Address::repeat_byte(0x01);
+        let revert_contract = Address::repeat_byte(0x02);
+        let halt_contract = Address::repeat_byte(0x03);
+
+        let mut db = InMemoryDB::default();
+        db.insert_account_info(
+            caller,
+            AccountInfo::default().with_balance(U256::from(1_000_000_000_u64)),
+        );
+        db.insert_account_info(
+            revert_contract,
+            AccountInfo::default().with_code(Bytecode::new_raw(Bytes::from(vec![
+                opcode::PUSH1,
+                0x00,
+                opcode::PUSH1,
+                0x00,
+                opcode::REVERT,
+            ]))),
+        );
+        db.insert_account_info(
+            halt_contract,
+            AccountInfo::default()
+                .with_code(Bytecode::new_raw(Bytes::from_static(&[opcode::INVALID]))),
+        );
+
+        let mut evm = Context::mainnet().with_db(db).build_mainnet();
+        let transaction = EvmTransaction {
+            chain_id: 1,
+            from: caller,
+            to: Some(revert_contract),
+            nonce: 0,
+            gas_limit: 21_000,
+            value: U256::ZERO,
+            data: Bytes::new(),
+            variant: EvmTransactionVariant::Legacy { gas_price: 0 },
+        };
+
+        let (revert, halt) = with_read_call_context(&mut evm, |evm| {
+            let revert = execute_read_call(evm, &transaction, 1, revert_contract, Bytes::new())
+                .expect("revert outcome");
+            let halt = execute_read_call(evm, &transaction, 1, halt_contract, Bytes::new())
+                .expect("halt outcome");
+
+            (revert, halt)
+        });
+
+        assert!(matches!(
+            revert,
+            ReadCallOutcome::Revert(output) if output.is_empty()
+        ));
+        assert!(matches!(halt, ReadCallOutcome::Halt(_)));
     }
 }

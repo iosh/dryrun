@@ -6,23 +6,28 @@ mod fee_settlement;
 mod outcome;
 mod provider;
 mod read_call;
+mod token_state_reads;
 
 use self::artifacts::ExecutionArtifacts;
 use self::{
     change_extraction::{
-        build_transaction_changes, check_native_balances, collect_change_candidates,
+        build_transaction_changes, check_native_balances, check_token_contracts,
+        collect_change_candidates,
     },
     env::{create_block_env, create_cfg_env, create_tx_env},
     fee_settlement::TransactionFeeSettlement,
     outcome::{build_execution_artifacts, build_invalid_transaction_artifacts, build_simulation},
     provider::{AlloyCacheDb, build_provider, create_database, resolve_execution_block},
+    token_state_reads::read_token_state_values,
 };
 
 use crate::{
     EvmEngineError, EvmExecutionInput, EvmSimulation, EvmTransaction,
     chain_spec::resolve_execution_spec_id,
     change_observation::ChangeObservationInspector,
-    transaction_changes::{ChangeDataRequests, collect_change_data_requests},
+    transaction_changes::{
+        ChangeDataRequests, collect_change_data_requests, collect_token_state_keys,
+    },
 };
 use revm::{
     Context, ExecuteCommitEvm, InspectEvm, MainBuilder, MainContext, MainnetEvm,
@@ -74,8 +79,8 @@ fn execute_transaction(
     let caller = tx_env.caller;
     let beneficiary = block_env.beneficiary;
 
-    // Change observations are collected during execution so candidates,
-    // data requests, and native balances can be checked before committing state.
+    // Change observations are collected during execution so candidates and
+    // pre-state facts can be checked before committing the transaction state.
     let mut evm = Context::mainnet()
         .with_db(db)
         .modify_cfg_chained(|cfg| *cfg = cfg_env)
@@ -100,6 +105,8 @@ fn execute_transaction(
             );
             let change_candidates = collect_change_candidates(&artifacts)?;
             let change_data_requests = collect_change_data_requests(&change_candidates);
+            let token_state_keys = collect_token_state_keys(&change_candidates);
+
             check_native_balances(
                 &state,
                 &change_candidates,
@@ -108,7 +115,28 @@ fn execute_transaction(
                 &fee_settlement,
             )?;
 
+            let before_token_state = read_token_state_values(
+                &mut evm,
+                transaction,
+                artifacts.chain_id,
+                &token_state_keys,
+            )?;
+
             evm.commit(state);
+
+            let after_token_state = read_token_state_values(
+                &mut evm,
+                transaction,
+                artifacts.chain_id,
+                &token_state_keys,
+            )?;
+
+            check_token_contracts(
+                &change_candidates,
+                &token_state_keys,
+                &before_token_state,
+                &after_token_state,
+            )?;
 
             (artifacts, change_candidates, change_data_requests)
         }

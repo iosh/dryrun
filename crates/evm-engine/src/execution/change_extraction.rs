@@ -10,7 +10,8 @@ use crate::{
         fee_settlement::TransactionFeeSettlement,
     },
     transaction_changes::{
-        self, ChangeCandidate, ChangeDataRequests, build_changes, collect_candidates,
+        self, ChangeCandidate, ChangeDataRequests, TokenStateKeys, TokenStateValues, build_changes,
+        collect_candidates,
     },
 };
 
@@ -41,6 +42,16 @@ pub(super) fn check_native_balances(
         fee_settlement.beneficiary_reward,
     )
     .map_err(map_transaction_changes_error)
+}
+
+pub(super) fn check_token_contracts(
+    candidates: &[ChangeCandidate],
+    keys: &TokenStateKeys,
+    before: &TokenStateValues,
+    after: &TokenStateValues,
+) -> Result<(), EvmEngineError> {
+    transaction_changes::check_token_contracts(candidates, keys, before, after)
+        .map_err(map_transaction_changes_error)
 }
 
 pub(super) fn build_transaction_changes<INSP>(

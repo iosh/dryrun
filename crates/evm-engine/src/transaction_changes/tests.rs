@@ -29,6 +29,11 @@ use super::{
     error::TransactionChangesError,
     event_codec::SupportedEvent,
     native_balance::check_native_balances,
+    token_contract::check_token_contracts,
+    token_state::{
+        CollectionStandards, Erc20AllowanceKey, Erc20BalanceKey, Erc721TokenKey, Erc1155BalanceKey,
+        OperatorApprovalKey, TokenStateKeys, TokenStateValues, collect_token_state_keys,
+    },
 };
 
 fn candidate(
@@ -72,6 +77,15 @@ fn native_candidate(
         0,
         ChangeCandidateKind::NativeTransfer { from, to, amount },
     )
+}
+
+fn token_state_values(contract: Address, standards: CollectionStandards) -> TokenStateValues {
+    let mut values = TokenStateValues::default();
+    values
+        .contract_code_hashes
+        .insert(contract, B256::repeat_byte(0x11));
+    values.collection_standards.insert(contract, standards);
+    values
 }
 
 fn indexed_address(address: Address) -> B256 {
@@ -360,6 +374,239 @@ fn collects_deduplicated_change_data_requests_in_candidate_order() {
             ],
         }
     );
+}
+
+#[test]
+fn collects_deduplicated_token_state_keys_in_candidate_order() {
+    let erc20 = Address::repeat_byte(0x01);
+    let erc721 = Address::repeat_byte(0x02);
+    let erc1155 = Address::repeat_byte(0x03);
+    let owner = Address::repeat_byte(0x04);
+    let recipient = Address::repeat_byte(0x05);
+    let spender = Address::repeat_byte(0x06);
+    let operator = Address::repeat_byte(0x07);
+    let erc721_token_id = U256::from(11_u64);
+    let erc1155_token_id = U256::from(12_u64);
+
+    let candidates = collect_candidates(&[
+        call_observation(owner, recipient, 1),
+        erc20_transfer_observation(erc20, owner, recipient, 2),
+        erc20_transfer_observation(erc20, owner, Address::ZERO, 3),
+        erc20_approval_observation(erc20, owner, spender, 4),
+        erc721_transfer_observation(erc721, owner, recipient, 11),
+        erc721_approval_observation(erc721, owner, spender, 11),
+        erc1155_transfer_single_observation(erc1155, operator, Address::ZERO, recipient, 12, 5),
+        approval_for_all_observation(erc1155, owner, operator, U256::from(1_u64)),
+    ])
+    .expect("token state candidates");
+
+    let keys = collect_token_state_keys(&candidates);
+
+    assert_eq!(
+        keys,
+        TokenStateKeys {
+            token_contracts: vec![erc20, erc721, erc1155],
+            collection_standards: vec![erc721, erc1155],
+            erc20_balances: vec![
+                Erc20BalanceKey {
+                    token: erc20,
+                    account: owner,
+                },
+                Erc20BalanceKey {
+                    token: erc20,
+                    account: recipient,
+                },
+            ],
+            erc20_total_supplies: vec![erc20],
+            erc20_allowances: vec![Erc20AllowanceKey {
+                token: erc20,
+                owner,
+                spender,
+            }],
+            erc721_tokens: vec![Erc721TokenKey {
+                collection: erc721,
+                token_id: erc721_token_id,
+            }],
+            erc1155_balances: vec![Erc1155BalanceKey {
+                collection: erc1155,
+                account: recipient,
+                token_id: erc1155_token_id,
+            }],
+            operator_approvals: vec![OperatorApprovalKey {
+                collection: erc1155,
+                owner,
+                operator,
+            }],
+        }
+    );
+}
+
+#[test]
+fn requires_token_code_and_collection_standards_to_remain_stable() {
+    let collection = Address::repeat_byte(0x01);
+    let owner = Address::repeat_byte(0x02);
+    let recipient = Address::repeat_byte(0x03);
+    let candidates = [candidate(
+        0,
+        0,
+        ChangeCandidateKind::Erc721Transfer {
+            collection,
+            from: owner,
+            to: recipient,
+            token_id: U256::from(1_u64),
+        },
+    )];
+    let keys = collect_token_state_keys(&candidates);
+    let before = token_state_values(
+        collection,
+        CollectionStandards {
+            supports_erc721: true,
+            supports_erc1155: false,
+        },
+    );
+    let mut after = before.clone();
+
+    assert_eq!(
+        check_token_contracts(&candidates, &keys, &before, &after),
+        Ok(())
+    );
+
+    after
+        .contract_code_hashes
+        .insert(collection, B256::repeat_byte(0x22));
+    assert!(matches!(
+        check_token_contracts(&candidates, &keys, &before, &after),
+        Err(TransactionChangesError::TokenContractCodeChanged {
+            contract,
+            ..
+        }) if contract == collection
+    ));
+
+    after = before.clone();
+    after.collection_standards.insert(
+        collection,
+        CollectionStandards {
+            supports_erc721: false,
+            supports_erc1155: true,
+        },
+    );
+    assert!(matches!(
+        check_token_contracts(&candidates, &keys, &before, &after),
+        Err(TransactionChangesError::CollectionStandardsChanged {
+            collection: changed_collection,
+            ..
+        }) if changed_collection == collection
+    ));
+}
+
+#[test]
+fn requires_supported_and_unambiguous_collection_standards() {
+    let collection = Address::repeat_byte(0x01);
+    let owner = Address::repeat_byte(0x02);
+    let recipient = Address::repeat_byte(0x03);
+    let operator = Address::repeat_byte(0x04);
+    let erc721_candidates = [candidate(
+        0,
+        0,
+        ChangeCandidateKind::Erc721Transfer {
+            collection,
+            from: owner,
+            to: recipient,
+            token_id: U256::from(1_u64),
+        },
+    )];
+    let erc721_keys = collect_token_state_keys(&erc721_candidates);
+
+    let supports_both = token_state_values(
+        collection,
+        CollectionStandards {
+            supports_erc721: true,
+            supports_erc1155: true,
+        },
+    );
+    assert_eq!(
+        check_token_contracts(
+            &erc721_candidates,
+            &erc721_keys,
+            &supports_both,
+            &supports_both,
+        ),
+        Ok(())
+    );
+
+    let erc1155_only = token_state_values(
+        collection,
+        CollectionStandards {
+            supports_erc721: false,
+            supports_erc1155: true,
+        },
+    );
+    assert!(matches!(
+        check_token_contracts(
+            &erc721_candidates,
+            &erc721_keys,
+            &erc1155_only,
+            &erc1155_only,
+        ),
+        Err(TransactionChangesError::CollectionStandardNotSupported {
+            collection: unsupported_collection,
+            standard: "ERC-721",
+        }) if unsupported_collection == collection
+    ));
+
+    let operator_candidates = [candidate(
+        0,
+        0,
+        ChangeCandidateKind::OperatorApproval {
+            collection,
+            owner,
+            operator,
+            approved: true,
+        },
+    )];
+    let operator_keys = collect_token_state_keys(&operator_candidates);
+
+    for standards in [
+        CollectionStandards {
+            supports_erc721: true,
+            supports_erc1155: false,
+        },
+        CollectionStandards {
+            supports_erc721: false,
+            supports_erc1155: true,
+        },
+    ] {
+        let values = token_state_values(collection, standards);
+        assert_eq!(
+            check_token_contracts(&operator_candidates, &operator_keys, &values, &values,),
+            Ok(())
+        );
+    }
+
+    for standards in [
+        CollectionStandards {
+            supports_erc721: false,
+            supports_erc1155: false,
+        },
+        CollectionStandards {
+            supports_erc721: true,
+            supports_erc1155: true,
+        },
+    ] {
+        let values = token_state_values(collection, standards);
+        assert!(matches!(
+            check_token_contracts(
+                &operator_candidates,
+                &operator_keys,
+                &values,
+                &values,
+            ),
+            Err(TransactionChangesError::OperatorApprovalStandardAmbiguous {
+                collection: ambiguous_collection,
+                ..
+            }) if ambiguous_collection == collection
+        ));
+    }
 }
 
 #[test]

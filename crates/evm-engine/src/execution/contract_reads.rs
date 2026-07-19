@@ -12,7 +12,7 @@ use crate::{
 
 use super::{
     MainnetAlloyEvm,
-    read_call::{execute_read_call, with_read_call_context},
+    read_call::{execute_optional_read_call, with_read_call_context},
 };
 
 const ERC721_INTERFACE_ID: [u8; 4] = [0x80, 0xac, 0x58, 0xcd];
@@ -170,7 +170,7 @@ fn read_interface_support<INSP>(
     contract: Address,
     interface_id: [u8; 4],
 ) -> Option<bool> {
-    let output = execute_read_call(
+    let output = execute_optional_read_call(
         evm,
         transaction,
         chain_id,
@@ -191,7 +191,7 @@ fn read_erc20_name<INSP>(
     chain_id: u64,
     token: Address,
 ) -> Option<String> {
-    let output = execute_read_call(
+    let output = execute_optional_read_call(
         evm,
         transaction,
         chain_id,
@@ -208,7 +208,7 @@ fn read_erc20_symbol<INSP>(
     chain_id: u64,
     token: Address,
 ) -> Option<String> {
-    let output = execute_read_call(
+    let output = execute_optional_read_call(
         evm,
         transaction,
         chain_id,
@@ -225,7 +225,7 @@ fn read_erc20_decimals<INSP>(
     chain_id: u64,
     token: Address,
 ) -> Option<u8> {
-    let output = execute_read_call(
+    let output = execute_optional_read_call(
         evm,
         transaction,
         chain_id,
@@ -242,7 +242,7 @@ fn read_erc721_name<INSP>(
     chain_id: u64,
     collection: Address,
 ) -> Option<String> {
-    let output = execute_read_call(
+    let output = execute_optional_read_call(
         evm,
         transaction,
         chain_id,
@@ -259,7 +259,7 @@ fn read_erc721_symbol<INSP>(
     chain_id: u64,
     collection: Address,
 ) -> Option<String> {
-    let output = execute_read_call(
+    let output = execute_optional_read_call(
         evm,
         transaction,
         chain_id,
