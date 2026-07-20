@@ -1,4 +1,7 @@
-use std::{collections::HashSet, sync::LazyLock};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::LazyLock,
+};
 
 use crate::change_observation::Observation;
 use alloy_primitives::{Address, U256, keccak256};
@@ -18,16 +21,25 @@ static TRANSFER_FROM_SELECTOR: LazyLock<[u8; 4]> = LazyLock::new(|| {
     [hash[0], hash[1], hash[2], hash[3]]
 });
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ValueCall {
+    from: Address,
+    to: Address,
+    amount: U256,
+}
+
 pub(crate) fn collect_candidates(
     observations: &[Observation],
 ) -> Result<Vec<ChangeCandidate>, TransactionChangesError> {
     let (decoded_events, erc20_transfer_tokens) = decode_observations(observations)?;
 
     let mut candidates = Vec::new();
+    let mut value_calls = HashMap::new();
 
     for (observation_index, (observation, decoded_event)) in
         observations.iter().zip(decoded_events).enumerate()
     {
+        record_value_call(observation, &mut value_calls);
         append_native_candidate(observation_index, observation, &mut candidates)?;
 
         append_transfer_from_candidate(
@@ -37,11 +49,48 @@ pub(crate) fn collect_candidates(
             &mut candidates,
         );
         if let Some(event) = decoded_event {
-            append_event_candidates(observation_index, event, &mut candidates);
+            append_event_candidates(observation_index, event, &mut value_calls, &mut candidates);
         }
     }
 
     Ok(candidates)
+}
+
+fn record_value_call(observation: &Observation, value_calls: &mut HashMap<ValueCall, usize>) {
+    let Observation::Call {
+        caller,
+        target,
+        value,
+        ..
+    } = observation
+    else {
+        return;
+    };
+
+    if value.is_zero() {
+        return;
+    }
+
+    *value_calls
+        .entry(ValueCall {
+            from: *caller,
+            to: *target,
+            amount: *value,
+        })
+        .or_default() += 1;
+}
+
+fn consume_value_call(value_calls: &mut HashMap<ValueCall, usize>, call: ValueCall) -> bool {
+    let Some(count) = value_calls.get_mut(&call) else {
+        return false;
+    };
+
+    if *count == 0 {
+        return false;
+    }
+
+    *count -= 1;
+    true
 }
 
 fn decode_observations(
@@ -177,6 +226,7 @@ fn append_native_candidate(
 fn append_event_candidates(
     observation_index: usize,
     event: DecodedEvent,
+    value_calls: &mut HashMap<ValueCall, usize>,
     candidates: &mut Vec<ChangeCandidate>,
 ) {
     let mut push = |item_index, kind| {
@@ -197,13 +247,63 @@ fn append_event_candidates(
             amount,
         } => push(
             0,
-            ChangeCandidateKind::Erc20Transfer {
+            ChangeCandidateKind::Erc20Movement {
                 token,
                 from,
                 to,
                 amount,
             },
         ),
+
+        DecodedEvent::WrappedNativeDeposit {
+            token,
+            account,
+            amount,
+        } => {
+            if consume_value_call(
+                value_calls,
+                ValueCall {
+                    from: account,
+                    to: token,
+                    amount,
+                },
+            ) {
+                push(
+                    0,
+                    ChangeCandidateKind::Erc20Movement {
+                        token,
+                        from: Address::ZERO,
+                        to: account,
+                        amount,
+                    },
+                );
+            }
+        }
+
+        DecodedEvent::WrappedNativeWithdrawal {
+            token,
+            account,
+            amount,
+        } => {
+            if consume_value_call(
+                value_calls,
+                ValueCall {
+                    from: token,
+                    to: account,
+                    amount,
+                },
+            ) {
+                push(
+                    0,
+                    ChangeCandidateKind::Erc20Movement {
+                        token,
+                        from: account,
+                        to: Address::ZERO,
+                        amount,
+                    },
+                );
+            }
+        }
 
         DecodedEvent::Erc721Transfer {
             collection,

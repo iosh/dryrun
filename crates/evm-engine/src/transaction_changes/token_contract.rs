@@ -93,7 +93,7 @@ pub(crate) fn check_token_contracts(
             }
 
             ChangeCandidateKind::NativeTransfer { .. }
-            | ChangeCandidateKind::Erc20Transfer { .. }
+            | ChangeCandidateKind::Erc20Movement { .. }
             | ChangeCandidateKind::Erc20Allowance { .. } => {}
         }
     }

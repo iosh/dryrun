@@ -16,6 +16,9 @@ static TRANSFER_SINGLE_TOPIC0: LazyLock<B256> =
     LazyLock::new(|| keccak256("TransferSingle(address,address,address,uint256,uint256)"));
 static TRANSFER_BATCH_TOPIC0: LazyLock<B256> =
     LazyLock::new(|| keccak256("TransferBatch(address,address,address,uint256[],uint256[])"));
+static DEPOSIT_TOPIC0: LazyLock<B256> = LazyLock::new(|| keccak256("Deposit(address,uint256)"));
+static WITHDRAWAL_TOPIC0: LazyLock<B256> =
+    LazyLock::new(|| keccak256("Withdrawal(address,uint256)"));
 
 pub(super) fn decode_event(
     observation: &Observation,
@@ -43,6 +46,26 @@ pub(super) fn decode_event(
         decode_transfer_single_event(*address, topics, data)?
     } else if *topic0 == *TRANSFER_BATCH_TOPIC0 {
         decode_transfer_batch_event(*address, topics, data)?
+    } else if *topic0 == *DEPOSIT_TOPIC0 {
+        let Some((account, amount)) = decode_wrapped_native_event(topics, data) else {
+            return Ok(None);
+        };
+
+        DecodedEvent::WrappedNativeDeposit {
+            token: *address,
+            account,
+            amount,
+        }
+    } else if *topic0 == *WITHDRAWAL_TOPIC0 {
+        let Some((account, amount)) = decode_wrapped_native_event(topics, data) else {
+            return Ok(None);
+        };
+
+        DecodedEvent::WrappedNativeWithdrawal {
+            token: *address,
+            account,
+            amount,
+        }
     } else {
         return Ok(None);
     };
@@ -56,6 +79,16 @@ pub(super) enum DecodedEvent {
         token: Address,
         from: Address,
         to: Address,
+        amount: U256,
+    },
+    WrappedNativeDeposit {
+        token: Address,
+        account: Address,
+        amount: U256,
+    },
+    WrappedNativeWithdrawal {
+        token: Address,
+        account: Address,
         amount: U256,
     },
     Erc721Transfer {
@@ -165,14 +198,29 @@ fn decode_transfer_event(
 }
 
 fn indexed_address(topic: &B256, event: SupportedEvent) -> Result<Address, EventCodecError> {
-    if topic.as_slice()[..12].iter().any(|byte| *byte != 0) {
-        return Err(EventCodecError::malformed(
-            event,
-            "indexed address is not zero padded",
-        ));
+    canonical_indexed_address(topic).ok_or(EventCodecError::malformed(
+        event,
+        "indexed address is not zero padded",
+    ))
+}
+
+fn decode_wrapped_native_event(topics: &[B256], data: &[u8]) -> Option<(Address, U256)> {
+    if topics.len() != 2 || data.len() != 32 {
+        return None;
     }
 
-    Ok(Address::from_word(*topic))
+    Some((
+        canonical_indexed_address(&topics[1])?,
+        U256::from_be_slice(data),
+    ))
+}
+
+fn canonical_indexed_address(topic: &B256) -> Option<Address> {
+    if topic.as_slice()[..12].iter().any(|byte| *byte != 0) {
+        return None;
+    }
+
+    Some(Address::from_word(*topic))
 }
 
 fn decode_approval_event(

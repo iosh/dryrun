@@ -19,7 +19,7 @@ pub(super) enum ChangeCandidateKind {
         to: Address,
         amount: U256,
     },
-    Erc20Transfer {
+    Erc20Movement {
         token: Address,
         from: Address,
         to: Address,

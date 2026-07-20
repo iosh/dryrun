@@ -91,7 +91,7 @@ fn erc20_movement_candidate(
     candidate(
         observation_index,
         0,
-        ChangeCandidateKind::Erc20Transfer {
+        ChangeCandidateKind::Erc20Movement {
             token,
             from,
             to,
@@ -192,6 +192,19 @@ fn erc20_transfer_observation(
             indexed_address(from),
             indexed_address(to),
         ],
+        data: Bytes::from(U256::from(amount).to_be_bytes_vec()),
+    }
+}
+
+fn weth9_event_observation(
+    token: Address,
+    signature: &str,
+    account: Address,
+    amount: u64,
+) -> Observation {
+    Observation::Log {
+        address: token,
+        topics: vec![event_topic(signature), indexed_address(account)],
         data: Bytes::from(U256::from(amount).to_be_bytes_vec()),
     }
 }
@@ -569,6 +582,30 @@ fn reconciles_ordered_erc20_movements_and_total_supply() {
                 raw_amount: U256::from(5_u64),
                 metadata: Erc20Metadata::default(),
             },
+        ]
+    );
+}
+
+#[test]
+fn collects_only_value_backed_weth9_movements() {
+    let weth = Address::repeat_byte(0x01);
+    let account = Address::repeat_byte(0x02);
+    let candidates = collect_candidates(&[
+        call_observation(account, weth, 5),
+        weth9_event_observation(weth, "Deposit(address,uint256)", account, 5),
+        call_observation(weth, account, 2),
+        weth9_event_observation(weth, "Withdrawal(address,uint256)", account, 2),
+        weth9_event_observation(weth, "Deposit(address,uint256)", account, 5),
+    ])
+    .expect("WETH9 candidates");
+
+    assert_eq!(
+        candidates,
+        vec![
+            native_candidate(0, account, weth, U256::from(5_u64)),
+            erc20_movement_candidate(1, weth, Address::ZERO, account, U256::from(5_u64)),
+            native_candidate(2, weth, account, U256::from(2_u64)),
+            erc20_movement_candidate(3, weth, account, Address::ZERO, U256::from(2_u64)),
         ]
     );
 }
@@ -1087,7 +1124,7 @@ fn keeps_zero_amount_erc20_and_erc1155_movements_as_candidates() {
             candidate(
                 0,
                 0,
-                ChangeCandidateKind::Erc20Transfer {
+                ChangeCandidateKind::Erc20Movement {
                     token: erc20,
                     from,
                     to,
@@ -1196,7 +1233,7 @@ fn requires_same_target_erc20_transfer_evidence_for_transfer_from_candidate() {
             candidate(
                 2,
                 0,
-                ChangeCandidateKind::Erc20Transfer {
+                ChangeCandidateKind::Erc20Movement {
                     token,
                     from: owner,
                     to: recipient,

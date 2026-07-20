@@ -94,7 +94,7 @@ pub(crate) fn collect_token_state_keys(candidates: &[ChangeCandidate]) -> TokenS
         match candidate.kind {
             ChangeCandidateKind::NativeTransfer { .. } => {}
 
-            ChangeCandidateKind::Erc20Transfer {
+            ChangeCandidateKind::Erc20Movement {
                 token, from, to, ..
             } => {
                 keys.token_contracts.push(token);

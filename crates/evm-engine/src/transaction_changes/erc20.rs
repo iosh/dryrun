@@ -202,7 +202,7 @@ fn collect_last_allowance_evidence(
 }
 
 fn erc20_movement_change(candidate: &ChangeCandidate) -> Option<PositionedChange> {
-    let ChangeCandidateKind::Erc20Transfer {
+    let ChangeCandidateKind::Erc20Movement {
         token,
         from,
         to,
@@ -252,7 +252,7 @@ fn replay_erc20_movements(
     let mut total_supplies = before.erc20_total_supplies.clone();
 
     for candidate in candidates {
-        let ChangeCandidateKind::Erc20Transfer {
+        let ChangeCandidateKind::Erc20Movement {
             token,
             from,
             to,
