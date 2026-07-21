@@ -3,8 +3,7 @@ use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 
 use super::{
     super::{
-        candidate::{ChangeCandidateKind, Erc20AllowanceEvidence},
-        collection::collect_candidates,
+        candidate::{ChangeCandidateKind, Erc20AllowanceEvidence, collect_candidates},
         error::TransactionChangesError,
         event_codec::SupportedEvent,
         observation::Observation,

@@ -5,10 +5,10 @@ use alloy_primitives::{Address, U256};
 use crate::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
 
 use super::super::{
+    PositionedChange, build_changes,
     candidate::ObservationPosition,
-    change_metadata::{ChangeMetadata, ChangeMetadataRequests, collect_change_metadata_requests},
-    changes::{build_changes, sort_changes_by_position},
-    positioned_change::PositionedChange,
+    metadata::{ChangeMetadata, ChangeMetadataRequests, collect_change_metadata_requests},
+    sort_changes_by_position,
 };
 
 fn positioned(observation_index: usize, change: Change) -> PositionedChange {

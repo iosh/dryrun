@@ -9,8 +9,8 @@ use revm::{
 
 use super::{
     super::{
-        collection::collect_candidates, error::TransactionChangesError,
-        native_balance::check_native_balances, observation::ChangeObservationInspector,
+        candidate::collect_candidates, error::TransactionChangesError,
+        native::check_native_balances, observation::ChangeObservationInspector,
     },
     support::native_candidate,
 };
