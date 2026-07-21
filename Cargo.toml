@@ -8,6 +8,7 @@ members = [
     "crates/evm-service",
     "crates/conflux-engine",
     "crates/conflux-service",
+    "crates/simulation-tasks",
 ]
 
 [workspace.package]
@@ -20,6 +21,7 @@ evm-rpc = { path = "crates/evm-rpc" }
 evm-service = { path = "crates/evm-service" }
 conflux-engine = { path = "crates/conflux-engine" }
 conflux-service = { path = "crates/conflux-service" }
+simulation-tasks = { path = "crates/simulation-tasks" }
 
 jsonrpsee = "0.26"
 thiserror = "2"
@@ -27,6 +29,7 @@ thiserror = "2"
 futures = "0.3"
 reqwest = { version = "0.12", features = ["json"] }
 tokio = "1"
+tokio-util = "0.7"
 
 alloy = { version = "1", features = ["full"] }
 alloy-chains = "0.2"

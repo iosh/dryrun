@@ -1,0 +1,12 @@
+[package]
+name = "simulation-tasks"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros"] }
