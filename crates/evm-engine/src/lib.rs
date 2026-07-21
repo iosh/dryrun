@@ -11,7 +11,7 @@ pub use change::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata
 pub use error::{EvmEngineError, EvmEngineInternalKind};
 use execution::simulate_execution;
 pub use simulation::{
-    EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode, EvmExecutionStatus, EvmSimulation,
+    EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode, EvmExecutionOutcome, EvmSimulation,
     SimulatedBlock,
 };
 pub use transaction::{

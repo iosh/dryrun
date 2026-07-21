@@ -13,7 +13,6 @@ mod positioned_change;
 mod token_contract;
 mod token_state;
 
-pub(crate) use candidate::ChangeCandidate;
 pub(crate) use change_metadata::{
     ChangeMetadata, ChangeMetadataRequests, collect_change_metadata_requests,
 };
@@ -22,6 +21,7 @@ pub(crate) use collection::collect_candidates;
 pub(crate) use erc20::check_erc20_changes;
 pub(crate) use erc721::check_erc721_changes;
 pub(crate) use erc1155::check_erc1155_movements;
+pub(crate) use error::TransactionChangesError;
 pub(crate) use native_balance::check_native_balances;
 pub(crate) use operator_approval::check_operator_approvals;
 pub(crate) use positioned_change::PositionedChange;

@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::transaction_changes::TransactionChangesError;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvmEngineInternalKind {
     Config,
@@ -110,6 +112,12 @@ impl EvmEngineError {
             kind,
             details: details.into(),
         }
+    }
+}
+
+impl From<TransactionChangesError> for EvmEngineError {
+    fn from(error: TransactionChangesError) -> Self {
+        Self::analysis_failed(format!("transaction changes failed: {error}"))
     }
 }
 

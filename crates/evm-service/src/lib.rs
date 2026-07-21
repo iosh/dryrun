@@ -9,7 +9,7 @@ pub use evm_engine::{
     AccessListItem, BlockRef, Change, Erc20Metadata, Erc721CollectionMetadata,
     EvmExecution as SimulationExecution, EvmExecutionFailure as ExecutionFailure,
     EvmExecutionFailureCode, EvmExecutionInput as SimulateEvmTransactionInput,
-    EvmExecutionStatus as ExecutionStatus, EvmSimulation as SimulateEvmTransactionOutput,
+    EvmExecutionOutcome as ExecutionOutcome, EvmSimulation as SimulateEvmTransactionOutput,
     EvmTransaction, EvmTransactionVariant, NativeMetadata, SimulatedBlock,
 };
 

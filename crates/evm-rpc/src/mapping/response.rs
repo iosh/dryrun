@@ -1,20 +1,66 @@
+use alloy::primitives::{Bytes, U256};
+
 use crate::interface as rpc;
 
 impl From<evm_service::SimulateEvmTransactionOutput> for rpc::EvmSimulateTransactionResponse {
     fn from(output: evm_service::SimulateEvmTransactionOutput) -> Self {
         let (execution, changes) = output.into_parts();
+        let evm_service::SimulationExecution {
+            chain_id,
+            block,
+            gas_limit,
+            outcome,
+        } = execution;
+
+        let (status, gas_used, fee, burnt_fee, output, failure) = match outcome {
+            evm_service::ExecutionOutcome::Success {
+                gas_used,
+                fee,
+                burnt_fee,
+                output,
+            } => (
+                rpc::ExecutionStatus::Success,
+                gas_used,
+                fee,
+                burnt_fee,
+                output,
+                None,
+            ),
+            evm_service::ExecutionOutcome::Failed {
+                gas_used,
+                fee,
+                burnt_fee,
+                output,
+                failure,
+            } => (
+                rpc::ExecutionStatus::Failed,
+                gas_used,
+                fee,
+                burnt_fee,
+                output,
+                Some(failure.into()),
+            ),
+            evm_service::ExecutionOutcome::NotExecuted { failure } => (
+                rpc::ExecutionStatus::NotExecuted,
+                0,
+                U256::ZERO,
+                U256::ZERO,
+                Bytes::new(),
+                Some(failure.into()),
+            ),
+        };
 
         Self {
             execution: rpc::Execution {
-                chain_id: execution.chain_id,
-                block: execution.block.into(),
-                status: execution.status.into(),
-                gas_used: execution.gas_used,
-                gas_limit: execution.gas_limit,
-                fee: execution.fee,
-                burnt_fee: execution.burnt_fee,
-                output: execution.output,
-                failure: execution.failure.map(Into::into),
+                chain_id,
+                block: block.into(),
+                status,
+                gas_used,
+                gas_limit,
+                fee,
+                burnt_fee,
+                output,
+                failure,
             },
             changes: changes.into_iter().map(Into::into).collect(),
         }
@@ -26,16 +72,6 @@ impl From<evm_service::SimulatedBlock> for rpc::SimulatedBlock {
         Self {
             number: block.number,
             hash: block.hash,
-        }
-    }
-}
-
-impl From<evm_service::ExecutionStatus> for rpc::ExecutionStatus {
-    fn from(status: evm_service::ExecutionStatus) -> Self {
-        match status {
-            evm_service::ExecutionStatus::Success => Self::Success,
-            evm_service::ExecutionStatus::Failed => Self::Failed,
-            evm_service::ExecutionStatus::NotExecuted => Self::NotExecuted,
         }
     }
 }
@@ -302,13 +338,13 @@ mod tests {
                 number: 0x1234,
                 hash: B256::repeat_byte(0xaa),
             },
-            status: evm_service::ExecutionStatus::Success,
-            gas_used: 0x5208,
             gas_limit: 0x5300,
-            fee: U256::ZERO,
-            burnt_fee: U256::ZERO,
-            output: Bytes::new(),
-            failure: None,
+            outcome: evm_service::ExecutionOutcome::Success {
+                gas_used: 0x5208,
+                fee: U256::ZERO,
+                burnt_fee: U256::ZERO,
+                output: Bytes::new(),
+            },
         }
     }
 
@@ -452,12 +488,17 @@ mod tests {
     fn failed_service_output_maps_error_into_execution() {
         let output = evm_service::SimulateEvmTransactionOutput {
             execution: evm_service::SimulationExecution {
-                status: evm_service::ExecutionStatus::Failed,
-                failure: Some(evm_service::ExecutionFailure {
-                    code: evm_service::EvmExecutionFailureCode::Revert,
-                    message: "execution reverted".to_string(),
-                    reason: Some("insufficient output".to_string()),
-                }),
+                outcome: evm_service::ExecutionOutcome::Failed {
+                    gas_used: 0x5208,
+                    fee: U256::ZERO,
+                    burnt_fee: U256::ZERO,
+                    output: Bytes::new(),
+                    failure: evm_service::ExecutionFailure {
+                        code: evm_service::EvmExecutionFailureCode::Revert,
+                        message: "execution reverted".to_string(),
+                        reason: Some("insufficient output".to_string()),
+                    },
+                },
                 ..successful_execution()
             },
             changes: Vec::new(),
@@ -473,5 +514,39 @@ mod tests {
         assert_eq!(failure.code, "REVERT");
         assert_eq!(failure.message, "execution reverted");
         assert_eq!(failure.reason.as_deref(), Some("insufficient output"));
+    }
+
+    #[test]
+    fn not_executed_outcome_maps_wire_zero_values() {
+        let output = evm_service::SimulateEvmTransactionOutput {
+            execution: evm_service::SimulationExecution {
+                outcome: evm_service::ExecutionOutcome::NotExecuted {
+                    failure: evm_service::ExecutionFailure {
+                        code: evm_service::EvmExecutionFailureCode::InsufficientFunds,
+                        message: "insufficient funds".to_string(),
+                        reason: None,
+                    },
+                },
+                ..successful_execution()
+            },
+            changes: Vec::new(),
+        };
+
+        let response: rpc::EvmSimulateTransactionResponse = output.into();
+
+        assert_eq!(response.execution.status, rpc::ExecutionStatus::NotExecuted);
+        assert_eq!(response.execution.gas_used, 0);
+        assert_eq!(response.execution.gas_limit, 0x5300);
+        assert_eq!(response.execution.fee, U256::ZERO);
+        assert_eq!(response.execution.burnt_fee, U256::ZERO);
+        assert!(response.execution.output.is_empty());
+        assert_eq!(
+            response
+                .execution
+                .failure
+                .expect("expected execution failure")
+                .code,
+            "INSUFFICIENT_FUNDS"
+        );
     }
 }

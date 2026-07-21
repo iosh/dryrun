@@ -1,42 +1,39 @@
 use alloy::sol_types::{Panic, Revert, SolError};
-use alloy_primitives::{Bytes, U256};
+use alloy_primitives::Bytes;
 use revm::context_interface::result::{ExecutionResult, HaltReason, InvalidTransaction};
 
 use crate::{
-    Change, EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode, EvmExecutionStatus,
-    EvmSimulation, EvmTransaction, SimulatedBlock, change_observation::Observation,
+    EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode, EvmExecutionOutcome,
+    EvmTransaction, SimulatedBlock,
 };
 
-use super::{
-    ExecutionArtifacts, fee_settlement::TransactionFeeSettlement, provider::ResolvedExecutionBlock,
-};
+use super::{fee_settlement::TransactionFeeSettlement, provider::ResolvedExecutionBlock};
 
-pub(super) fn build_execution_artifacts(
+pub(super) fn build_execution(
     result: ExecutionResult<HaltReason>,
-    observations: Vec<Observation>,
     resolved_block: &ResolvedExecutionBlock,
-    fee_settlement: TransactionFeeSettlement,
-) -> ExecutionArtifacts {
+    fee_settlement: &TransactionFeeSettlement,
+) -> EvmExecution {
     match result {
-        ExecutionResult::Success { gas, output, .. } => ExecutionArtifacts {
+        ExecutionResult::Success { gas, output, .. } => EvmExecution {
             chain_id: resolved_block.chain_id,
             block: simulated_block(resolved_block),
-            status: EvmExecutionStatus::Success,
-            gas_used: gas.used(),
             gas_limit: gas.limit(),
-            fee_settlement: Some(fee_settlement),
-            output: output.into_data(),
-            failure: None,
-            observations,
+            outcome: EvmExecutionOutcome::Success {
+                gas_used: gas.used(),
+                fee: fee_settlement.fee,
+                burnt_fee: fee_settlement.burnt_fee,
+                output: output.into_data(),
+            },
         },
-        ExecutionResult::Revert { gas, output, .. } => build_revert_artifacts(
+        ExecutionResult::Revert { gas, output, .. } => build_revert_execution(
             resolved_block,
             gas.used(),
             gas.limit(),
             output,
             fee_settlement,
         ),
-        ExecutionResult::Halt { reason, gas, .. } => build_halt_artifacts(
+        ExecutionResult::Halt { reason, gas, .. } => build_halt_execution(
             resolved_block,
             gas.used(),
             gas.limit(),
@@ -46,69 +43,31 @@ pub(super) fn build_execution_artifacts(
     }
 }
 
-pub(super) fn build_simulation(
-    artifacts: ExecutionArtifacts,
-    changes: Vec<Change>,
-) -> EvmSimulation {
-    let ExecutionArtifacts {
-        chain_id,
-        block,
-        status,
-        gas_used,
-        gas_limit,
-        fee_settlement,
-        output,
-        failure,
-        ..
-    } = artifacts;
-    let (fee, burnt_fee) = fee_settlement
-        .map(|settlement| (settlement.fee, settlement.burnt_fee))
-        .unwrap_or((U256::ZERO, U256::ZERO));
-
-    EvmSimulation::new(
-        EvmExecution {
-            chain_id,
-            block,
-            status,
-            gas_used,
-            gas_limit,
-            fee,
-            burnt_fee,
-            output,
-            failure,
-        },
-        changes,
-    )
-}
-
-pub(super) fn build_invalid_transaction_artifacts(
+pub(super) fn build_not_executed(
     resolved_block: &ResolvedExecutionBlock,
     transaction: &EvmTransaction,
     error: InvalidTransaction,
-) -> ExecutionArtifacts {
-    ExecutionArtifacts {
+) -> EvmExecution {
+    EvmExecution {
         chain_id: resolved_block.chain_id,
         block: simulated_block(resolved_block),
-        status: EvmExecutionStatus::NotExecuted,
-        gas_used: 0,
         gas_limit: transaction.gas_limit,
-        fee_settlement: None,
-        output: Bytes::new(),
-        failure: Some(build_invalid_transaction_failure(error)),
-        observations: Vec::new(),
+        outcome: EvmExecutionOutcome::NotExecuted {
+            failure: build_invalid_transaction_failure(error),
+        },
     }
 }
 
-fn build_revert_artifacts(
+fn build_revert_execution(
     resolved_block: &ResolvedExecutionBlock,
     gas_used: u64,
     gas_limit: u64,
     output: Bytes,
-    fee_settlement: TransactionFeeSettlement,
-) -> ExecutionArtifacts {
+    fee_settlement: &TransactionFeeSettlement,
+) -> EvmExecution {
     let failure = build_revert_failure(&output);
 
-    build_failed_artifacts(
+    build_failed_execution(
         resolved_block,
         gas_used,
         gas_limit,
@@ -118,14 +77,14 @@ fn build_revert_artifacts(
     )
 }
 
-fn build_halt_artifacts(
+fn build_halt_execution(
     resolved_block: &ResolvedExecutionBlock,
     gas_used: u64,
     gas_limit: u64,
     reason: HaltReason,
-    fee_settlement: TransactionFeeSettlement,
-) -> ExecutionArtifacts {
-    build_failed_artifacts(
+    fee_settlement: &TransactionFeeSettlement,
+) -> EvmExecution {
+    build_failed_execution(
         resolved_block,
         gas_used,
         gas_limit,
@@ -135,24 +94,25 @@ fn build_halt_artifacts(
     )
 }
 
-fn build_failed_artifacts(
+fn build_failed_execution(
     resolved_block: &ResolvedExecutionBlock,
     gas_used: u64,
     gas_limit: u64,
     output: Bytes,
     failure: EvmExecutionFailure,
-    fee_settlement: TransactionFeeSettlement,
-) -> ExecutionArtifacts {
-    ExecutionArtifacts {
+    fee_settlement: &TransactionFeeSettlement,
+) -> EvmExecution {
+    EvmExecution {
         chain_id: resolved_block.chain_id,
         block: simulated_block(resolved_block),
-        status: EvmExecutionStatus::Failed,
-        gas_used,
         gas_limit,
-        fee_settlement: Some(fee_settlement),
-        output,
-        failure: Some(failure),
-        observations: Vec::new(),
+        outcome: EvmExecutionOutcome::Failed {
+            gas_used,
+            fee: fee_settlement.fee,
+            burnt_fee: fee_settlement.burnt_fee,
+            output,
+            failure,
+        },
     }
 }
 
