@@ -18,11 +18,11 @@ use self::{
 use crate::{
     EvmEngineError, EvmExecutionInput, EvmSimulation, EvmTransaction,
     chain_spec::resolve_execution_spec_id,
-    change_observation::ChangeObservationInspector,
-    transaction_changes::{
-        build_changes, check_erc20_changes, check_erc721_changes, check_erc1155_movements,
-        check_native_balances, check_operator_approvals, check_token_contracts, collect_candidates,
-        collect_change_metadata_requests, collect_token_state_keys, sort_changes_by_position,
+    changes::{
+        ChangeObservationInspector, build_changes, check_erc20_changes, check_erc721_changes,
+        check_erc1155_movements, check_native_balances, check_operator_approvals,
+        check_token_contracts, collect_candidates, collect_change_metadata_requests,
+        collect_token_state_keys, sort_changes_by_position,
     },
 };
 use revm::{

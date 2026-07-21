@@ -14,10 +14,7 @@ use revm::{
     state::{Account, AccountInfo, EvmState},
 };
 
-use crate::{
-    Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata,
-    change_observation::{ChangeObservationInspector, Observation},
-};
+use crate::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
 
 use super::{
     candidate::{
@@ -30,6 +27,7 @@ use super::{
     error::TransactionChangesError,
     event_codec::SupportedEvent,
     native_balance::check_native_balances,
+    observation::{ChangeObservationInspector, Observation},
     positioned_change::PositionedChange,
     token_contract::check_token_contracts,
     token_state::{

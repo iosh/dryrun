@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use crate::transaction_changes::TransactionChangesError;
+use crate::changes::TransactionChangesError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvmEngineInternalKind {

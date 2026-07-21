@@ -3,7 +3,6 @@ use std::{
     sync::LazyLock,
 };
 
-use crate::change_observation::Observation;
 use alloy_primitives::{Address, U256, keccak256};
 
 use super::{
@@ -12,6 +11,7 @@ use super::{
     },
     error::TransactionChangesError,
     event_codec::{DecodedEvent, decode_event},
+    observation::Observation,
 };
 
 const TRANSFER_FROM_INPUT_LEN: usize = 100;

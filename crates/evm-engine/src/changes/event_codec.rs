@@ -4,7 +4,7 @@ use alloy::sol_types::SolValue;
 use alloy_primitives::{Address, B256, U256, keccak256};
 use thiserror::Error;
 
-use crate::change_observation::Observation;
+use super::observation::Observation;
 
 static TRANSFER_TOPIC0: LazyLock<B256> =
     LazyLock::new(|| keccak256("Transfer(address,address,uint256)"));

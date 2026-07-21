@@ -4,7 +4,7 @@ use revm::{Database, context_interface::result::EVMError, handler::EvmTr};
 
 use crate::{
     EvmEngineError, EvmTransaction,
-    transaction_changes::{
+    changes::{
         CollectionStandards, Erc721TokenKey, Erc721TokenState, TokenStateKeys, TokenStateValues,
     },
 };
@@ -394,7 +394,7 @@ mod tests {
 
     use crate::{
         EvmTransaction, EvmTransactionVariant,
-        transaction_changes::{
+        changes::{
             CollectionStandards, Erc20AllowanceKey, Erc20BalanceKey, Erc721TokenKey,
             Erc721TokenState, Erc1155BalanceKey, OperatorApprovalKey, TokenStateKeys,
         },

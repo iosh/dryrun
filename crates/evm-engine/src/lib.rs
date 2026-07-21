@@ -1,11 +1,10 @@
 mod chain_spec;
 mod change;
-mod change_observation;
+mod changes;
 mod error;
 mod execution;
 mod simulation;
 mod transaction;
-mod transaction_changes;
 
 pub use change::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
 pub use error::{EvmEngineError, EvmEngineInternalKind};

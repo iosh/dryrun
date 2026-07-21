@@ -5,7 +5,7 @@ use alloy_primitives::{Address, FixedBytes};
 
 use crate::{
     Erc20Metadata, Erc721CollectionMetadata, EvmTransaction, NativeMetadata,
-    transaction_changes::{ChangeMetadata, ChangeMetadataRequests},
+    changes::{ChangeMetadata, ChangeMetadataRequests},
 };
 
 use super::{
