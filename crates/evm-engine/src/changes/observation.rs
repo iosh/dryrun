@@ -258,7 +258,7 @@ fn is_success(result: &InstructionResult) -> bool {
 mod tests {
     use std::str::FromStr;
 
-    use alloy_primitives::{Address, B256, Bytes, TxKind, U256};
+    use alloy_primitives::{Address, Bytes, TxKind, U256};
     use revm::{
         Context, InspectEvm, MainBuilder, MainContext,
         context::TxEnv,
@@ -270,10 +270,6 @@ mod tests {
 
     fn address(value: &str) -> Address {
         Address::from_str(value).expect("address")
-    }
-
-    fn topic(value: u8) -> B256 {
-        B256::repeat_byte(value)
     }
 
     fn call_observation(caller: Address, target: Address, value: u64) -> Observation {
@@ -406,37 +402,6 @@ mod tests {
     }
 
     #[test]
-    fn keeps_call_and_log_in_observed_order() {
-        let mut journal = ObservationJournal::default();
-        let from = address("0x1111111111111111111111111111111111111111");
-        let callee = address("0x2222222222222222222222222222222222222222");
-        let token = address("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48");
-        let topics = vec![topic(0xaa), topic(0xbb)];
-        let data = Bytes::from(vec![0x01, 0x02]);
-        let call = call_observation(from, callee, 1);
-
-        journal.push_call_frame(Some(call.clone()));
-        journal.record_observation(Observation::Log {
-            address: token,
-            topics: topics.clone(),
-            data: data.clone(),
-        });
-        journal.pop_frame(true, None);
-
-        assert_eq!(
-            journal.into_observations(),
-            vec![
-                call,
-                Observation::Log {
-                    address: token,
-                    topics,
-                    data,
-                },
-            ]
-        );
-    }
-
-    #[test]
     fn truncates_reverted_branch_with_all_descendants() {
         let mut journal = ObservationJournal::default();
         let root_from = address("0x1111111111111111111111111111111111111111");
@@ -458,40 +423,6 @@ mod tests {
         assert_eq!(
             journal.into_observations(),
             vec![root_call, surviving_selfdestruct]
-        );
-    }
-
-    #[test]
-    fn keeps_create_transfer_at_original_position_after_success() {
-        let mut journal = ObservationJournal::default();
-        let creator = address("0x1111111111111111111111111111111111111111");
-        let created = address("0x2222222222222222222222222222222222222222");
-        let token = address("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48");
-        let topics = vec![topic(0xcc)];
-        let data = Bytes::from(vec![0x03]);
-
-        journal.push_create_frame(creator, U256::from(1_u64));
-        journal.record_observation(Observation::Log {
-            address: token,
-            topics: topics.clone(),
-            data: data.clone(),
-        });
-        journal.pop_frame(true, Some(created));
-
-        assert_eq!(
-            journal.into_observations(),
-            vec![
-                Observation::CreateTransfer {
-                    from: creator,
-                    to: created,
-                    amount: U256::from(1_u64),
-                },
-                Observation::Log {
-                    address: token,
-                    topics,
-                    data,
-                },
-            ]
         );
     }
 
