@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Instant};
 
 use async_trait::async_trait;
+use cfx_addr::Network;
 use cfx_rpc_cfx_types::{EpochNumber, RpcAddress, epoch_number::BlockHashOrEpochNumber};
 use cfx_rpc_eth_types::BlockId;
 use cfx_types::{Address, H256, U256};
@@ -17,41 +18,42 @@ use primitives::{DepositInfo, VoteStakeInfo};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use crate::{
-    config::ConfluxConfig,
-    state::{
-        provider::{RemoteStateProvider, RemoteStateProviderError},
-        rpc_encoding::{RpcStorageWord, decode_rpc_bytes},
-        rpc_types::{
-            EspaceAccountSnapshot, EspaceRpcBlock, NativeGlobalSnapshot, NativePoSEconomics,
-            NativeRpcAccount, NativeRpcBlock, NativeSponsorInfo, NativeStorageCollateralInfo,
-            NativeSupplyInfo, NativeVoteParamsInfo,
-        },
+use crate::state::{
+    provider::{RemoteStateProvider, RemoteStateProviderError},
+    rpc_encoding::{RpcStorageWord, decode_rpc_bytes},
+    rpc_types::{
+        EspaceAccountSnapshot, EspaceRpcBlock, NativeGlobalSnapshot, NativePoSEconomics,
+        NativeRpcAccount, NativeRpcBlock, NativeSponsorInfo, NativeStorageCollateralInfo,
+        NativeSupplyInfo, NativeVoteParamsInfo,
     },
 };
 
 pub struct HttpConfluxStateProvider {
-    config: ConfluxConfig,
+    native_address_network: Network,
     espace_client: HttpClient,
     native_client: HttpClient,
 }
 
 impl HttpConfluxStateProvider {
-    pub fn new(config: ConfluxConfig) -> Result<Self, RemoteStateProviderError> {
+    pub fn new(
+        espace_url: &str,
+        native_url: &str,
+        native_address_network: Network,
+    ) -> Result<Self, RemoteStateProviderError> {
         let espace_client = HttpClientBuilder::default()
-            .build(&config.rpc.evm_url)
+            .build(espace_url)
             .map_err(|error| RemoteStateProviderError::InvalidEndpoint {
                 message: format!("invalid eSpace rpc url or http client config: {error}"),
             })?;
 
         let native_client = HttpClientBuilder::default()
-            .build(&config.rpc.native_url)
+            .build(native_url)
             .map_err(|error| RemoteStateProviderError::InvalidEndpoint {
                 message: format!("invalid native rpc url or http client config: {error}"),
             })?;
 
         Ok(Self {
-            config,
+            native_address_network,
             espace_client,
             native_client,
         })
@@ -325,7 +327,7 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
         epoch: EpochNumber,
         address: Address,
     ) -> Result<NativeRpcAccount, RemoteStateProviderError> {
-        let address = RpcAddress::try_from_h160(address, self.config.chain.native_address_network)
+        let address = RpcAddress::try_from_h160(address, self.native_address_network)
             .map_err(|error| RemoteStateProviderError::AddressEncoding { message: error })?;
 
         self.native_rpc_request("cfx_getAccount", rpc_params![address, epoch])
@@ -337,7 +339,7 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
         epoch: EpochNumber,
         address: Address,
     ) -> Result<Vec<DepositInfo>, RemoteStateProviderError> {
-        let address = RpcAddress::try_from_h160(address, self.config.chain.native_address_network)
+        let address = RpcAddress::try_from_h160(address, self.native_address_network)
             .map_err(|error| RemoteStateProviderError::AddressEncoding { message: error })?;
 
         self.native_rpc_request("cfx_getDepositList", rpc_params![address, epoch])
@@ -349,7 +351,7 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
         epoch: EpochNumber,
         address: Address,
     ) -> Result<Vec<VoteStakeInfo>, RemoteStateProviderError> {
-        let address = RpcAddress::try_from_h160(address, self.config.chain.native_address_network)
+        let address = RpcAddress::try_from_h160(address, self.native_address_network)
             .map_err(|error| RemoteStateProviderError::AddressEncoding { message: error })?;
 
         self.native_rpc_request("cfx_getVoteList", rpc_params![address, epoch])
@@ -361,7 +363,7 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
         epoch: EpochNumber,
         address: Address,
     ) -> Result<NativeSponsorInfo, RemoteStateProviderError> {
-        let address = RpcAddress::try_from_h160(address, self.config.chain.native_address_network)
+        let address = RpcAddress::try_from_h160(address, self.native_address_network)
             .map_err(|error| RemoteStateProviderError::AddressEncoding { message: error })?;
 
         self.native_rpc_request("cfx_getSponsorInfo", rpc_params![address, epoch])
@@ -373,7 +375,7 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
         epoch: EpochNumber,
         address: Address,
     ) -> Result<Vec<u8>, RemoteStateProviderError> {
-        let address = RpcAddress::try_from_h160(address, self.config.chain.native_address_network)
+        let address = RpcAddress::try_from_h160(address, self.native_address_network)
             .map_err(|error| RemoteStateProviderError::AddressEncoding { message: error })?;
         let epoch = BlockHashOrEpochNumber::EpochNumber(epoch);
 
@@ -390,7 +392,7 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
         address: Address,
         slot: H256,
     ) -> Result<Option<U256>, RemoteStateProviderError> {
-        let address = RpcAddress::try_from_h160(address, self.config.chain.native_address_network)
+        let address = RpcAddress::try_from_h160(address, self.native_address_network)
             .map_err(|error| RemoteStateProviderError::AddressEncoding { message: error })?;
         let slot = U256::from_big_endian(slot.as_bytes());
         let epoch = BlockHashOrEpochNumber::EpochNumber(epoch);
@@ -408,7 +410,7 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
         to: Address,
         data: Vec<u8>,
     ) -> Result<Vec<u8>, RemoteStateProviderError> {
-        let to = RpcAddress::try_from_h160(to, self.config.chain.native_address_network)
+        let to = RpcAddress::try_from_h160(to, self.native_address_network)
             .map_err(|error| RemoteStateProviderError::AddressEncoding { message: error })?;
         let epoch = BlockHashOrEpochNumber::EpochNumber(epoch);
         let request = NativeCallRequest {

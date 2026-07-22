@@ -8,7 +8,7 @@ pub mod state;
 use std::sync::Arc;
 
 use crate::{
-    config::ConfluxConfig,
+    config::ConfluxChainConfig,
     espace::{
         EspaceBlockRef, EspaceExecution, SimulateEspaceTransactionInput, SimulatedBlock,
         build_espace_execution, build_espace_not_executed, build_espace_transaction_input,
@@ -27,8 +27,8 @@ use crate::{
         build_native_transaction_input,
     },
     state::{
-        ConfluxStateAnchor, ConfluxStatePoint, EspaceRpcBlock, HttpConfluxStateProvider,
-        NativeRpcBlock, RemoteStateProvider, RemoteStateReader,
+        ConfluxStateAnchor, ConfluxStatePoint, EspaceRpcBlock, NativeRpcBlock, RemoteStateProvider,
+        RemoteStateReader,
     },
 };
 use cfx_types::U256;
@@ -38,18 +38,13 @@ use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;
 use cfx_rpc_eth_types::BlockId as EthBlockId;
 
 pub struct ConfluxEngine {
-    config: ConfluxConfig,
+    chain: ConfluxChainConfig,
     provider: Arc<dyn RemoteStateProvider>,
 }
 
 impl ConfluxEngine {
-    pub fn new(config: ConfluxConfig) -> Result<Self, ConfluxEngineError> {
-        let provider = Arc::new(HttpConfluxStateProvider::new(config.clone())?);
-        Ok(Self { config, provider })
-    }
-
-    pub fn with_provider(config: ConfluxConfig, provider: Arc<dyn RemoteStateProvider>) -> Self {
-        Self { config, provider }
+    pub fn new(chain: ConfluxChainConfig, provider: Arc<dyn RemoteStateProvider>) -> Self {
+        Self { chain, provider }
     }
 
     pub async fn simulate_espace_transaction(
@@ -60,7 +55,7 @@ impl ConfluxEngine {
         let SimulateEspaceTransactionInput { block, transaction } = input;
         let gas_limit = transaction.gas_limit;
         let execution_context = self.resolve_espace_execution_context(&block).await?;
-        let chain_id = self.config.chain.evm_chain_id;
+        let chain_id = self.chain.evm_chain_id;
 
         if let Err(failure) = validate_espace_transaction(&transaction, chain_id) {
             return Ok(build_espace_not_executed(
@@ -119,7 +114,7 @@ impl ConfluxEngine {
         let SimulateNativeTransactionInput { epoch, transaction } = input;
         let gas_limit = transaction.gas_limit;
         let execution_context = self.resolve_native_execution_context(&epoch).await?;
-        let chain_id = self.config.chain.native_chain_id;
+        let chain_id = self.chain.native_chain_id;
         let state_anchor = NativeStateAnchor {
             epoch_number: execution_context.state_point.anchor().epoch_number(),
             pivot_hash: execution_context.state_point.anchor().pivot_hash(),
