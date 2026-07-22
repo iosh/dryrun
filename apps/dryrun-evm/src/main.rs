@@ -49,11 +49,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let simulation_tasks = create_simulation_task_set(&app_config.simulation)?;
-    let (ethereum_provider, chain_id) = create_ethereum_provider(&app_config.ethereum).await?;
+    let ethereum_provider = create_ethereum_provider(&app_config.ethereum).await?;
     let evm_engine = Arc::new(EvmEngine::new(
         ethereum_provider.clone(),
         tokio::runtime::Handle::current(),
-        chain_id,
     ));
     let simulation_service = Arc::new(SimulationService::new(
         ethereum_provider,
@@ -115,9 +114,7 @@ fn create_simulation_task_set(config: &SimulationConfig) -> Result<SimulationTas
     ))
 }
 
-async fn create_ethereum_provider(
-    config: &EthereumConfig,
-) -> Result<(DynProvider, u64), Box<dyn Error>> {
+async fn create_ethereum_provider(config: &EthereumConfig) -> Result<DynProvider, Box<dyn Error>> {
     if config.request_timeout_seconds == 0 {
         return Err(
             startup_error("ethereum.request_timeout_seconds must be greater than zero").into(),
@@ -137,16 +134,8 @@ async fn create_ethereum_provider(
     let provider = ProviderBuilder::new()
         .connect_reqwest(client, rpc_url)
         .erased();
-    let chain_id = provider.get_chain_id().await?;
 
-    if chain_id != 1 {
-        return Err(startup_error(format!(
-            "Ethereum RPC chain ID must be 1, received {chain_id}"
-        ))
-        .into());
-    }
-
-    Ok((provider, chain_id))
+    Ok(provider)
 }
 
 fn startup_error(message: impl Into<String>) -> io::Error {

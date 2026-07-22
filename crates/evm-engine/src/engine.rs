@@ -1,4 +1,5 @@
 use alloy::providers::DynProvider;
+use alloy_chains::Chain;
 use tokio::runtime::Handle;
 
 use crate::{EvmEngineError, EvmExecutionInput, EvmSimulation, execution::simulate_execution};
@@ -11,11 +12,11 @@ pub struct EvmEngine {
 }
 
 impl EvmEngine {
-    pub fn new(provider: DynProvider, runtime_handle: Handle, chain_id: u64) -> Self {
+    pub fn new(provider: DynProvider, runtime_handle: Handle) -> Self {
         Self {
             provider,
             runtime_handle,
-            chain_id,
+            chain_id: Chain::mainnet().id(),
         }
     }
 
