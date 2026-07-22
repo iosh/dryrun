@@ -7,4 +7,6 @@ edition = { workspace = true }
 cfx-types = { workspace = true }
 conflux-engine = { workspace = true }
 primitives = { workspace = true }
+simulation-tasks = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }

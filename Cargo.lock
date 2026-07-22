@@ -2273,7 +2273,9 @@ dependencies = [
  "cfx-types",
  "conflux-engine",
  "primitives",
+ "simulation-tasks",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -2947,6 +2949,7 @@ dependencies = [
  "jsonrpsee",
  "serde",
  "serde_json",
+ "simulation-tasks",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

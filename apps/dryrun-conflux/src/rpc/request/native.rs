@@ -137,7 +137,7 @@ fn map_native_transaction(
         nonce,
         gas_limit,
         value: value.unwrap_or_default(),
-        data: data.unwrap_or_default().into_vec().into(),
+        data: data.unwrap_or_default().into_vec(),
         storage_limit,
         epoch_height,
         chain_id,

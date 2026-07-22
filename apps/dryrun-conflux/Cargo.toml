@@ -14,6 +14,7 @@ cfx-types = { workspace = true }
 conflux-engine = { workspace = true }
 conflux-service = { workspace = true }
 jsonrpsee = { workspace = true, features = ["server"] }
+simulation-tasks = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }

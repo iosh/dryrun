@@ -4,23 +4,33 @@ pub mod native;
 use std::sync::Arc;
 
 use conflux_engine::ConfluxEngine;
+use simulation_tasks::{SimulationTaskError, SimulationTaskSet};
 use thiserror::Error;
+use tokio::task::JoinError;
 
 #[derive(Clone)]
 pub struct ConfluxService {
     engine: Arc<ConfluxEngine>,
+    simulation_tasks: SimulationTaskSet,
 }
 
 impl ConfluxService {
-    pub fn new(engine: Arc<ConfluxEngine>) -> Self {
-        Self { engine }
+    pub fn new(engine: Arc<ConfluxEngine>, simulation_tasks: SimulationTaskSet) -> Self {
+        Self {
+            engine,
+            simulation_tasks,
+        }
     }
 
     pub async fn simulate_espace_transaction(
         &self,
         input: espace::SimulateEspaceTransactionInput,
     ) -> Result<espace::SimulateEspaceTransactionOutput, ConfluxServiceError> {
-        let simulation = self.engine.simulate_espace_transaction(input).await?;
+        let engine = Arc::clone(&self.engine);
+        let simulation = self
+            .simulation_tasks
+            .run(move || async move { engine.simulate_espace_transaction(input).await })
+            .await??;
 
         Ok(simulation.into())
     }
@@ -29,7 +39,11 @@ impl ConfluxService {
         &self,
         input: native::SimulateNativeTransactionInput,
     ) -> Result<native::SimulateNativeTransactionOutput, ConfluxServiceError> {
-        let simulation = self.engine.simulate_native_transaction(input).await?;
+        let engine = Arc::clone(&self.engine);
+        let simulation = self
+            .simulation_tasks
+            .run(move || async move { engine.simulate_native_transaction(input).await })
+            .await??;
 
         Ok(simulation.into())
     }
@@ -43,6 +57,18 @@ pub enum ConfluxServiceError {
     #[error("unsupported request: {message}")]
     NotSupported { message: String },
 
+    #[error("simulation task set is closed")]
+    TaskSetClosed,
+
+    #[error("timed out waiting for simulation capacity")]
+    AdmissionTimedOut,
+
+    #[error("simulation attempt task failed")]
+    AttemptTask {
+        #[source]
+        source: JoinError,
+    },
+
     #[error(transparent)]
     Engine(#[from] conflux_engine::ConfluxEngineError),
 }
@@ -51,12 +77,20 @@ impl ConfluxServiceError {
     pub fn kind_code(&self) -> Option<&'static str> {
         match self {
             Self::InvalidRequest { .. } | Self::NotSupported { .. } => None,
+            Self::TaskSetClosed => Some("task_set_closed"),
+            Self::AdmissionTimedOut => Some("admission_timed_out"),
+            Self::AttemptTask { .. } => Some("attempt_task_error"),
             Self::Engine(error) => Some(engine_error_kind(error)),
         }
     }
 
     pub fn details(&self) -> String {
-        self.to_string()
+        match self {
+            Self::TaskSetClosed => "simulation task set is closed".to_owned(),
+            Self::AdmissionTimedOut => "timed out waiting for simulation capacity".to_owned(),
+            Self::AttemptTask { .. } => "simulation attempt task failed".to_owned(),
+            _ => self.to_string(),
+        }
     }
 
     pub fn is_invalid_request(&self) -> bool {
@@ -65,6 +99,16 @@ impl ConfluxServiceError {
 
     pub fn is_not_supported(&self) -> bool {
         matches!(self, Self::NotSupported { .. })
+    }
+}
+
+impl From<SimulationTaskError> for ConfluxServiceError {
+    fn from(error: SimulationTaskError) -> Self {
+        match error {
+            SimulationTaskError::Closed => Self::TaskSetClosed,
+            SimulationTaskError::AdmissionTimedOut => Self::AdmissionTimedOut,
+            SimulationTaskError::TaskFailed { source } => Self::AttemptTask { source },
+        }
     }
 }
 
