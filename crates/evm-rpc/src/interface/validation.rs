@@ -29,9 +29,9 @@ impl BlockRef {
     pub(crate) fn validate(&self) -> Result<(), ValidationError> {
         match self {
             Self::Tag(value) => match value.as_str() {
-                "latest" => Ok(()),
-                "pending" | "safe" | "finalized" => Err(ValidationError::not_supported(
-                    "`block` only supports `latest` or a hex block number",
+                "latest" | "safe" | "finalized" => Ok(()),
+                "pending" | "earliest" => Err(ValidationError::not_supported(
+                    "`block` supports `latest`, `safe`, `finalized`, or a hex block number",
                 )),
                 value if B256::from_str(value).is_ok() => Err(ValidationError::not_supported(
                     "`block` does not support block hash selectors",

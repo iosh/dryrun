@@ -11,12 +11,12 @@ use self::{
     fee_settlement::TransactionFeeSettlement,
     metadata_reads::load_change_metadata,
     outcome::{build_execution, build_not_executed},
-    provider::{AlloyCacheDb, build_provider, create_database, resolve_execution_block},
+    provider::{AlloyCacheDb, create_database},
     token_state_reads::read_token_state_values,
 };
 
 use crate::{
-    EvmEngineError, EvmExecutionInput, EvmSimulation, EvmTransaction,
+    EvmEngineError, EvmExecutionInput, EvmSimulation, EvmTransaction, ResolvedBlock,
     chain_spec::resolve_execution_spec_id,
     changes::{
         ChangeObservationInspector, build_changes, check_erc20_changes, check_erc721_changes,
@@ -25,6 +25,7 @@ use crate::{
         collect_token_state_keys, sort_changes_by_position,
     },
 };
+use alloy::providers::DynProvider;
 use revm::{
     Context, ExecuteCommitEvm, InspectEvm, MainBuilder, MainContext, MainnetEvm,
     context::{BlockEnv, CfgEnv, TxEnv},
@@ -33,25 +34,27 @@ use revm::{
         transaction::Transaction,
     },
 };
+use tokio::runtime::Handle;
 
 pub(super) type MainnetEvmWithDb<DB, INSP = ()> =
     MainnetEvm<Context<BlockEnv, TxEnv, CfgEnv, DB>, INSP>;
 pub(super) type MainnetAlloyEvm<INSP = ()> = MainnetEvmWithDb<AlloyCacheDb, INSP>;
 
-pub(crate) async fn simulate_execution(
-    rpc_url: &str,
+pub(crate) fn simulate_execution(
+    provider: &DynProvider,
+    runtime_handle: &Handle,
+    chain_id: u64,
     input: EvmExecutionInput,
 ) -> Result<EvmSimulation, EvmEngineError> {
     let EvmExecutionInput { block, transaction } = input;
-    let provider = build_provider(rpc_url)?;
-    let resolved_block = resolve_execution_block(&provider, &block).await?;
-    let db = create_database(&provider, &resolved_block)?;
+    let resolved_block = block;
+    let db = create_database(provider, runtime_handle, &resolved_block);
     let spec_id = resolve_execution_spec_id(
-        resolved_block.chain_id,
-        resolved_block.block.number(),
-        resolved_block.block.header.timestamp,
+        chain_id,
+        resolved_block.number(),
+        resolved_block.header().timestamp,
     )?;
-    let cfg_env = create_cfg_env(resolved_block.chain_id, spec_id);
+    let cfg_env = create_cfg_env(chain_id, spec_id);
     let block_env = create_block_env(&resolved_block, spec_id)?;
     let tx_env = create_tx_env(&transaction)?;
 
@@ -60,6 +63,7 @@ pub(crate) async fn simulate_execution(
         cfg_env,
         block_env,
         tx_env,
+        chain_id,
         &resolved_block,
         &transaction,
     )
@@ -70,7 +74,8 @@ fn execute_transaction(
     cfg_env: CfgEnv,
     block_env: BlockEnv,
     tx_env: TxEnv,
-    resolved_block: &provider::ResolvedExecutionBlock,
+    chain_id: u64,
+    resolved_block: &ResolvedBlock,
     transaction: &EvmTransaction,
 ) -> Result<EvmSimulation, EvmEngineError> {
     let effective_gas_price = tx_env.effective_gas_price(block_env.basefee as u128);
@@ -102,7 +107,7 @@ fn execute_transaction(
                 Vec::new()
             };
             let token_state_keys = collect_token_state_keys(&change_candidates);
-            let execution = build_execution(result, resolved_block, &fee_settlement);
+            let execution = build_execution(result, chain_id, resolved_block, &fee_settlement);
 
             let mut positioned_changes = check_native_balances(
                 &state,
@@ -114,21 +119,13 @@ fn execute_transaction(
                 fee_settlement.beneficiary_reward,
             )?;
 
-            let before_token_state = read_token_state_values(
-                &mut evm,
-                transaction,
-                resolved_block.chain_id,
-                &token_state_keys,
-            )?;
+            let before_token_state =
+                read_token_state_values(&mut evm, transaction, chain_id, &token_state_keys)?;
 
             evm.commit(state);
 
-            let after_token_state = read_token_state_values(
-                &mut evm,
-                transaction,
-                resolved_block.chain_id,
-                &token_state_keys,
-            )?;
+            let after_token_state =
+                read_token_state_values(&mut evm, transaction, chain_id, &token_state_keys)?;
 
             check_token_contracts(
                 &change_candidates,
@@ -168,7 +165,7 @@ fn execute_transaction(
             (execution, positioned_changes)
         }
         Err(EVMError::Transaction(error)) => (
-            build_not_executed(resolved_block, transaction, error),
+            build_not_executed(chain_id, resolved_block, transaction, error),
             Vec::new(),
         ),
         Err(EVMError::Header(error)) => {
@@ -193,8 +190,7 @@ fn execute_transaction(
     } else {
         sort_changes_by_position(&mut positioned_changes);
         let requests = collect_change_metadata_requests(&positioned_changes);
-        let metadata =
-            load_change_metadata(&mut evm, transaction, resolved_block.chain_id, requests);
+        let metadata = load_change_metadata(&mut evm, transaction, chain_id, requests);
 
         build_changes(positioned_changes, &metadata)
     };

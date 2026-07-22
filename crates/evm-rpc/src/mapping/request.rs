@@ -20,21 +20,25 @@ impl TryFrom<rpc::EvmSimulateTransactionRequest> for evm_service::SimulateEvmTra
             block: block
                 .map(map_block_ref)
                 .transpose()?
-                .unwrap_or(evm_service::BlockRef::Latest),
+                .unwrap_or(evm_service::BlockSelector::Latest),
             transaction: map_transaction(transaction)?,
         })
     }
 }
 
-fn map_block_ref(block: rpc::BlockRef) -> Result<evm_service::BlockRef, ValidationError> {
+fn map_block_ref(block: rpc::BlockRef) -> Result<evm_service::BlockSelector, ValidationError> {
     match block {
         rpc::BlockRef::Tag(value) => match value.as_str() {
-            "latest" => Ok(evm_service::BlockRef::Latest),
-            value => Ok(evm_service::BlockRef::Number(parse_u64_quantity(
+            "latest" => Ok(evm_service::BlockSelector::Latest),
+            "safe" => Ok(evm_service::BlockSelector::Safe),
+            "finalized" => Ok(evm_service::BlockSelector::Finalized),
+            value => Ok(evm_service::BlockSelector::Number(parse_u64_quantity(
                 value, "block",
             )?)),
         },
-        rpc::BlockRef::Hash(selector) => Ok(evm_service::BlockRef::Hash(selector.block_hash)),
+        rpc::BlockRef::Hash(_) => Err(ValidationError::not_supported(
+            "`block.blockHash` is not supported yet",
+        )),
     }
 }
 
@@ -76,7 +80,7 @@ fn infer_transaction_type(transaction: &rpc::Transaction) -> u8 {
 fn map_transaction_variant(
     transaction: &rpc::Transaction,
 ) -> Result<evm_service::EvmTransactionVariant, ValidationError> {
-    let tx_type = infer_transaction_type(&transaction);
+    let tx_type = infer_transaction_type(transaction);
     let access_list = transaction
         .access_list
         .as_ref()
@@ -142,7 +146,7 @@ mod tests {
 
         let input: evm_service::SimulateEvmTransactionInput =
             request.try_into().expect("request should map");
-        assert!(matches!(input.block, evm_service::BlockRef::Latest));
+        assert!(matches!(input.block, evm_service::BlockSelector::Latest));
         assert!(matches!(
             input.transaction.variant,
             evm_service::EvmTransactionVariant::Legacy { gas_price: 1 }
@@ -164,7 +168,29 @@ mod tests {
         let input: evm_service::SimulateEvmTransactionInput =
             request.try_into().expect("request should map");
 
-        assert!(matches!(input.block, evm_service::BlockRef::Number(0x1234)));
+        assert!(matches!(
+            input.block,
+            evm_service::BlockSelector::Number(0x1234)
+        ));
+    }
+
+    #[test]
+    fn safe_and_finalized_block_tags_map_into_service_input() {
+        for (tag, expected_selector) in [
+            ("safe", evm_service::BlockSelector::Safe),
+            ("finalized", evm_service::BlockSelector::Finalized),
+        ] {
+            let request = rpc::EvmSimulateTransactionRequest {
+                block: Some(rpc::BlockRef::Tag(tag.to_string())),
+                options: None,
+                transaction: sample_transaction(),
+            };
+
+            let input: evm_service::SimulateEvmTransactionInput =
+                request.try_into().expect("request should map");
+
+            assert_eq!(input.block, expected_selector);
+        }
     }
 
     #[test]

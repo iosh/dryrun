@@ -13,17 +13,17 @@ use revm::{
 
 use crate::{AccessListItem, EvmEngineError, EvmTransaction, EvmTransactionVariant};
 
-use super::provider::ResolvedExecutionBlock;
+use crate::ResolvedBlock;
 
 pub(super) fn create_cfg_env(chain_id: u64, spec_id: SpecId) -> CfgEnv {
     CfgEnv::new_with_spec(spec_id).with_chain_id(chain_id)
 }
 
 pub(super) fn create_block_env(
-    resolved_block: &ResolvedExecutionBlock,
+    resolved_block: &ResolvedBlock,
     spec_id: SpecId,
 ) -> Result<BlockEnv, EvmEngineError> {
-    let header = &resolved_block.block.header;
+    let header = resolved_block.header();
 
     let basefee = if spec_id.is_enabled_in(SpecId::LONDON) {
         header.base_fee_per_gas().ok_or_else(|| {
@@ -61,7 +61,7 @@ pub(super) fn create_block_env(
     };
 
     Ok(BlockEnv {
-        number: U256::from(resolved_block.block.number()),
+        number: U256::from(resolved_block.number()),
         beneficiary: header.beneficiary(),
         timestamp: U256::from(header.timestamp()),
         gas_limit: header.gas_limit(),

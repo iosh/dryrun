@@ -1,13 +1,6 @@
 use alloy_primitives::{Address, B256, Bytes, U256};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BlockRef {
-    Latest,
-    Number(u64),
-    Hash(B256),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessListItem {
     pub address: Address,
     pub storage_keys: Vec<B256>,
@@ -43,6 +36,6 @@ pub enum EvmTransactionVariant {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmExecutionInput {
-    pub block: BlockRef,
+    pub block: crate::ResolvedBlock,
     pub transaction: EvmTransaction,
 }

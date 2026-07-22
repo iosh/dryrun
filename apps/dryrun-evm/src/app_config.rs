@@ -5,6 +5,7 @@ use serde::Deserialize;
 pub struct AppConfig {
     pub server: ServerConfig,
     pub ethereum: EthereumConfig,
+    pub simulation: SimulationConfig,
     pub tracing: TracingConfig,
     pub metrics: MetricsConfig,
 }
@@ -12,6 +13,13 @@ pub struct AppConfig {
 #[derive(Debug, Deserialize)]
 pub struct EthereumConfig {
     pub rpc_url: String,
+    pub request_timeout_seconds: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SimulationConfig {
+    pub max_concurrent: usize,
+    pub admission_timeout_seconds: u64,
 }
 
 #[derive(Debug, Deserialize)]

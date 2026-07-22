@@ -7,6 +7,7 @@ edition = { workspace = true }
 evm-engine = { workspace = true }
 evm-rpc = { workspace = true }
 evm-service = { workspace = true }
+simulation-tasks = { workspace = true }
 jsonrpsee = { workspace = true, features = ["server"] }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
@@ -15,3 +16,5 @@ metrics-exporter-prometheus = { workspace = true }
 axum = { workspace = true }
 serde = { workspace = true }
 config = { workspace = true }
+alloy = { workspace = true }
+reqwest = { workspace = true }

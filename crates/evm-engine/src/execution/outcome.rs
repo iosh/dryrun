@@ -7,16 +7,18 @@ use crate::{
     EvmTransaction, SimulatedBlock,
 };
 
-use super::{fee_settlement::TransactionFeeSettlement, provider::ResolvedExecutionBlock};
+use super::fee_settlement::TransactionFeeSettlement;
+use crate::ResolvedBlock;
 
 pub(super) fn build_execution(
     result: ExecutionResult<HaltReason>,
-    resolved_block: &ResolvedExecutionBlock,
+    chain_id: u64,
+    resolved_block: &ResolvedBlock,
     fee_settlement: &TransactionFeeSettlement,
 ) -> EvmExecution {
     match result {
         ExecutionResult::Success { gas, output, .. } => EvmExecution {
-            chain_id: resolved_block.chain_id,
+            chain_id,
             block: simulated_block(resolved_block),
             gas_limit: gas.limit(),
             outcome: EvmExecutionOutcome::Success {
@@ -27,6 +29,7 @@ pub(super) fn build_execution(
             },
         },
         ExecutionResult::Revert { gas, output, .. } => build_revert_execution(
+            chain_id,
             resolved_block,
             gas.used(),
             gas.limit(),
@@ -34,6 +37,7 @@ pub(super) fn build_execution(
             fee_settlement,
         ),
         ExecutionResult::Halt { reason, gas, .. } => build_halt_execution(
+            chain_id,
             resolved_block,
             gas.used(),
             gas.limit(),
@@ -44,12 +48,13 @@ pub(super) fn build_execution(
 }
 
 pub(super) fn build_not_executed(
-    resolved_block: &ResolvedExecutionBlock,
+    chain_id: u64,
+    resolved_block: &ResolvedBlock,
     transaction: &EvmTransaction,
     error: InvalidTransaction,
 ) -> EvmExecution {
     EvmExecution {
-        chain_id: resolved_block.chain_id,
+        chain_id,
         block: simulated_block(resolved_block),
         gas_limit: transaction.gas_limit,
         outcome: EvmExecutionOutcome::NotExecuted {
@@ -59,7 +64,8 @@ pub(super) fn build_not_executed(
 }
 
 fn build_revert_execution(
-    resolved_block: &ResolvedExecutionBlock,
+    chain_id: u64,
+    resolved_block: &ResolvedBlock,
     gas_used: u64,
     gas_limit: u64,
     output: Bytes,
@@ -68,6 +74,7 @@ fn build_revert_execution(
     let failure = build_revert_failure(&output);
 
     build_failed_execution(
+        chain_id,
         resolved_block,
         gas_used,
         gas_limit,
@@ -78,13 +85,15 @@ fn build_revert_execution(
 }
 
 fn build_halt_execution(
-    resolved_block: &ResolvedExecutionBlock,
+    chain_id: u64,
+    resolved_block: &ResolvedBlock,
     gas_used: u64,
     gas_limit: u64,
     reason: HaltReason,
     fee_settlement: &TransactionFeeSettlement,
 ) -> EvmExecution {
     build_failed_execution(
+        chain_id,
         resolved_block,
         gas_used,
         gas_limit,
@@ -95,7 +104,8 @@ fn build_halt_execution(
 }
 
 fn build_failed_execution(
-    resolved_block: &ResolvedExecutionBlock,
+    chain_id: u64,
+    resolved_block: &ResolvedBlock,
     gas_used: u64,
     gas_limit: u64,
     output: Bytes,
@@ -103,7 +113,7 @@ fn build_failed_execution(
     fee_settlement: &TransactionFeeSettlement,
 ) -> EvmExecution {
     EvmExecution {
-        chain_id: resolved_block.chain_id,
+        chain_id,
         block: simulated_block(resolved_block),
         gas_limit,
         outcome: EvmExecutionOutcome::Failed {
@@ -116,10 +126,10 @@ fn build_failed_execution(
     }
 }
 
-fn simulated_block(resolved_block: &ResolvedExecutionBlock) -> SimulatedBlock {
+fn simulated_block(resolved_block: &ResolvedBlock) -> SimulatedBlock {
     SimulatedBlock {
-        number: resolved_block.block.number(),
-        hash: resolved_block.block.hash(),
+        number: resolved_block.number(),
+        hash: resolved_block.hash(),
     }
 }
 

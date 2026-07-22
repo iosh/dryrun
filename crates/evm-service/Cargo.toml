@@ -5,4 +5,7 @@ edition = { workspace = true }
 
 [dependencies]
 evm-engine = { workspace = true }
+simulation-tasks = { workspace = true }
 thiserror = { workspace = true }
+alloy = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
