@@ -7,14 +7,14 @@ use serde::Serialize;
 
 #[derive(Debug, thiserror::Error)]
 #[error("failed to encode `{field}` as a Core Space address: {message}")]
-pub(in crate::rpc) struct ResponseMappingError {
+pub(crate) struct ResponseMappingError {
     field: String,
     message: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub(in crate::rpc) struct SimulateCoreSpaceTransactionResponse {
+pub(crate) struct SimulateCoreSpaceTransactionResponse {
     execution: CoreSpaceExecution,
 }
 
@@ -92,7 +92,7 @@ enum CoreSpaceExecutionFailureCode {
 }
 
 impl SimulateCoreSpaceTransactionResponse {
-    pub(in crate::rpc) fn try_from_output(
+    pub(crate) fn try_from_output(
         output: service_core_space::SimulateCoreSpaceTransactionOutput,
         network: Network,
     ) -> Result<Self, ResponseMappingError> {

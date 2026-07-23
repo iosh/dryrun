@@ -5,7 +5,7 @@ use serde::Serialize;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub(in crate::rpc) struct SimulateEspaceTransactionResponse {
+pub(crate) struct SimulateEspaceTransactionResponse {
     execution: Execution,
 }
 

@@ -5,20 +5,11 @@ edition = { workspace = true }
 
 [dependencies]
 axum = { workspace = true }
-cfx-addr = { workspace = true }
-cfx-bytes = { workspace = true }
-cfx-rpc-cfx-types = { workspace = true }
-cfx-rpc-eth-types = { workspace = true }
-cfx-rpc-primitives = { workspace = true }
-cfx-types = { workspace = true }
 conflux-engine = { workspace = true }
+conflux-rpc = { workspace = true }
 conflux-service = { workspace = true }
 jsonrpsee = { workspace = true, features = ["server"] }
 simulation-tasks = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = { workspace = true }
-hex = "0.4"

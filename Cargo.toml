@@ -7,6 +7,7 @@ members = [
     "crates/evm-rpc",
     "crates/evm-service",
     "crates/conflux-engine",
+    "crates/conflux-rpc",
     "crates/conflux-service",
     "crates/simulation-tasks",
 ]
@@ -20,6 +21,7 @@ evm-engine = { path = "crates/evm-engine" }
 evm-rpc = { path = "crates/evm-rpc" }
 evm-service = { path = "crates/evm-service" }
 conflux-engine = { path = "crates/conflux-engine" }
+conflux-rpc = { path = "crates/conflux-rpc" }
 conflux-service = { path = "crates/conflux-service" }
 simulation-tasks = { path = "crates/simulation-tasks" }
 

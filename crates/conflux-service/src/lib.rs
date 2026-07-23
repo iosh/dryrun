@@ -51,12 +51,6 @@ impl ConfluxService {
 
 #[derive(Debug, Error)]
 pub enum ConfluxServiceError {
-    #[error("invalid request: {message}")]
-    InvalidRequest { message: String },
-
-    #[error("unsupported request: {message}")]
-    NotSupported { message: String },
-
     #[error("simulation task set is closed")]
     TaskSetClosed,
 
@@ -74,13 +68,12 @@ pub enum ConfluxServiceError {
 }
 
 impl ConfluxServiceError {
-    pub fn kind_code(&self) -> Option<&'static str> {
+    pub fn kind_code(&self) -> &'static str {
         match self {
-            Self::InvalidRequest { .. } | Self::NotSupported { .. } => None,
-            Self::TaskSetClosed => Some("task_set_closed"),
-            Self::AdmissionTimedOut => Some("admission_timed_out"),
-            Self::AttemptTask { .. } => Some("attempt_task_error"),
-            Self::Engine(error) => Some(engine_error_kind(error)),
+            Self::TaskSetClosed => "task_set_closed",
+            Self::AdmissionTimedOut => "admission_timed_out",
+            Self::AttemptTask { .. } => "attempt_task_error",
+            Self::Engine(error) => engine_error_kind(error),
         }
     }
 
@@ -91,14 +84,6 @@ impl ConfluxServiceError {
             Self::AttemptTask { .. } => "simulation attempt task failed".to_owned(),
             _ => self.to_string(),
         }
-    }
-
-    pub fn is_invalid_request(&self) -> bool {
-        matches!(self, Self::InvalidRequest { .. })
-    }
-
-    pub fn is_not_supported(&self) -> bool {
-        matches!(self, Self::NotSupported { .. })
     }
 }
 

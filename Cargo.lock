@@ -2267,6 +2267,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "conflux-rpc"
+version = "0.1.0"
+dependencies = [
+ "cfx-addr",
+ "cfx-bytes",
+ "cfx-rpc-cfx-types",
+ "cfx-rpc-eth-types",
+ "cfx-rpc-primitives",
+ "cfx-types",
+ "conflux-service",
+ "hex",
+ "jsonrpsee",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "conflux-service"
 version = "0.1.0"
 dependencies = [
@@ -2937,20 +2955,11 @@ name = "dryrun-conflux"
 version = "0.1.0"
 dependencies = [
  "axum",
- "cfx-addr",
- "cfx-bytes",
- "cfx-rpc-cfx-types",
- "cfx-rpc-eth-types",
- "cfx-rpc-primitives",
- "cfx-types",
  "conflux-engine",
+ "conflux-rpc",
  "conflux-service",
- "hex",
  "jsonrpsee",
- "serde",
- "serde_json",
  "simulation-tasks",
- "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",

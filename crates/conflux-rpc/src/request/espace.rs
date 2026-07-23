@@ -8,11 +8,11 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::shared::u256_to_u32_quantity;
-use crate::rpc::error::ValidationError;
+use crate::error::ValidationError;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(in crate::rpc) struct SimulateEspaceTransactionRequest {
+pub(crate) struct SimulateEspaceTransactionRequest {
     transaction: TransactionRequest,
     #[serde(default)]
     block: Option<BlockRef>,

@@ -1,6 +1,6 @@
 use cfx_types::U256;
 
-use crate::rpc::error::ValidationError;
+use crate::error::ValidationError;
 
 pub(super) fn u256_to_u64_quantity(value: U256, field: &str) -> Result<u64, ValidationError> {
     if value > U256::from(u64::MAX) {

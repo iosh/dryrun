@@ -1,6 +1,7 @@
 use std::{env, error::Error, io, net::SocketAddr, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use conflux_engine::{ConfluxEngine, config::ConfluxChainConfig, state::HttpConfluxStateProvider};
+use conflux_rpc::build_rpc_module;
 use conflux_service::ConfluxService;
 use jsonrpsee::server::Server;
 use simulation_tasks::SimulationTaskSet;
@@ -8,7 +9,6 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 mod health;
-mod rpc;
 
 const DEFAULT_RPC_LISTEN_ADDR: &str = "127.0.0.1:8547";
 const DEFAULT_HEALTH_LISTEN_ADDR: &str = "127.0.0.1:9001";
@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     )?);
     let engine = Arc::new(ConfluxEngine::new(app_config.chain, provider));
     let service = Arc::new(ConfluxService::new(engine, simulation_tasks.clone()));
-    let module = rpc::build_rpc_module(service, core_space_address_network);
+    let module = build_rpc_module(service, core_space_address_network);
 
     let health_addr = health_listen_addr()?;
     let _health_handle = health::start_health_server(health_addr).await?;

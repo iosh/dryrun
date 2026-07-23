@@ -6,11 +6,11 @@ use conflux_service::core_space as service_core_space;
 use serde::Deserialize;
 
 use super::shared::{u256_to_u32_quantity, u256_to_u64_quantity};
-use crate::rpc::error::ValidationError;
+use crate::error::ValidationError;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(in crate::rpc) struct SimulateCoreSpaceTransactionRequest {
+pub(crate) struct SimulateCoreSpaceTransactionRequest {
     transaction: CoreSpaceTransactionRequest,
     #[serde(default)]
     epoch: Option<EpochNumber>,
@@ -51,7 +51,7 @@ enum CoreSpaceTransactionType {
 }
 
 impl SimulateCoreSpaceTransactionRequest {
-    pub(in crate::rpc) fn try_into_service_input(
+    pub(crate) fn try_into_service_input(
         self,
         expected_network: Network,
     ) -> Result<service_core_space::SimulateCoreSpaceTransactionInput, ValidationError> {

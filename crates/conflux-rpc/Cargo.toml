@@ -1,0 +1,18 @@
+[package]
+name = "conflux-rpc"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+cfx-addr = { workspace = true }
+cfx-bytes = { workspace = true }
+cfx-rpc-cfx-types = { workspace = true }
+cfx-rpc-eth-types = { workspace = true }
+cfx-rpc-primitives = { workspace = true }
+cfx-types = { workspace = true }
+conflux-service = { workspace = true }
+hex = "0.4"
+jsonrpsee = { workspace = true, features = ["server"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
