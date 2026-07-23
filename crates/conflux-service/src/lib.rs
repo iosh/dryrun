@@ -1,5 +1,5 @@
+pub mod core_space;
 pub mod espace;
-pub mod native;
 
 use std::sync::Arc;
 
@@ -35,14 +35,14 @@ impl ConfluxService {
         Ok(simulation.into())
     }
 
-    pub async fn simulate_native_transaction(
+    pub async fn simulate_core_space_transaction(
         &self,
-        input: native::SimulateNativeTransactionInput,
-    ) -> Result<native::SimulateNativeTransactionOutput, ConfluxServiceError> {
+        input: core_space::SimulateCoreSpaceTransactionInput,
+    ) -> Result<core_space::SimulateCoreSpaceTransactionOutput, ConfluxServiceError> {
         let engine = Arc::clone(&self.engine);
         let simulation = self
             .simulation_tasks
-            .run(move || async move { engine.simulate_native_transaction(input).await })
+            .run(move || async move { engine.simulate_core_space_transaction(input).await })
             .await??;
 
         Ok(simulation.into())

@@ -1,5 +1,5 @@
+mod core_space;
 mod espace;
-mod native;
 
+pub(in crate::rpc) use core_space::SimulateCoreSpaceTransactionResponse;
 pub(in crate::rpc) use espace::SimulateEspaceTransactionResponse;
-pub(in crate::rpc) use native::SimulateNativeTransactionResponse;

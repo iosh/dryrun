@@ -4,8 +4,8 @@ use primitives::{DepositInfo, VoteStakeInfo};
 use thiserror::Error;
 
 use crate::state::rpc_types::{
-    EspaceAccountSnapshot, EspaceRpcBlock, NativeGlobalSnapshot, NativeRpcAccount, NativeRpcBlock,
-    NativeSponsorInfo,
+    CoreSpaceGlobalSnapshot, CoreSpaceRpcAccount, CoreSpaceRpcBlock, CoreSpaceSponsorInfo,
+    EspaceAccountSnapshot, EspaceRpcBlock,
 };
 use cfx_rpc_cfx_types::EpochNumber;
 use cfx_rpc_eth_types::BlockId;
@@ -25,59 +25,59 @@ pub trait RemoteStateProvider: Send + Sync {
         address: Address,
     ) -> Result<EspaceAccountSnapshot, RemoteStateProviderError>;
 
-    async fn get_native_global_snapshot(
+    async fn get_core_space_global_snapshot(
         &self,
         epoch: EpochNumber,
-    ) -> Result<NativeGlobalSnapshot, RemoteStateProviderError>;
+    ) -> Result<CoreSpaceGlobalSnapshot, RemoteStateProviderError>;
 
-    async fn get_native_account(
+    async fn get_core_space_account(
         &self,
         epoch: EpochNumber,
         address: Address,
-    ) -> Result<NativeRpcAccount, RemoteStateProviderError>;
+    ) -> Result<CoreSpaceRpcAccount, RemoteStateProviderError>;
 
-    async fn get_native_deposit_list(
+    async fn get_core_space_deposit_list(
         &self,
         epoch: EpochNumber,
         address: Address,
     ) -> Result<Vec<DepositInfo>, RemoteStateProviderError>;
 
-    async fn get_native_vote_list(
+    async fn get_core_space_vote_list(
         &self,
         epoch: EpochNumber,
         address: Address,
     ) -> Result<Vec<VoteStakeInfo>, RemoteStateProviderError>;
 
-    async fn get_native_sponsor_info(
+    async fn get_core_space_sponsor_info(
         &self,
         epoch: EpochNumber,
         address: Address,
-    ) -> Result<NativeSponsorInfo, RemoteStateProviderError>;
+    ) -> Result<CoreSpaceSponsorInfo, RemoteStateProviderError>;
 
-    async fn get_native_code_at(
+    async fn get_core_space_code_at(
         &self,
         epoch: EpochNumber,
         address: Address,
     ) -> Result<Vec<u8>, RemoteStateProviderError>;
 
-    async fn get_native_storage_at(
+    async fn get_core_space_storage_at(
         &self,
         epoch: EpochNumber,
         address: Address,
         slot: H256,
     ) -> Result<Option<U256>, RemoteStateProviderError>;
 
-    async fn call_native(
+    async fn call_core_space(
         &self,
         epoch: EpochNumber,
         to: Address,
         data: Vec<u8>,
     ) -> Result<Vec<u8>, RemoteStateProviderError>;
 
-    async fn get_native_block_by_epoch_number(
+    async fn get_core_space_block_by_epoch_number(
         &self,
         epoch_number: EpochNumber,
-    ) -> Result<Option<NativeRpcBlock>, RemoteStateProviderError>;
+    ) -> Result<Option<CoreSpaceRpcBlock>, RemoteStateProviderError>;
 
     async fn get_espace_block_by_number(
         &self,

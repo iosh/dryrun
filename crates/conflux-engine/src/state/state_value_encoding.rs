@@ -12,7 +12,7 @@ use primitives::{
     storage::StorageValue,
 };
 
-use crate::state::rpc_types::NativeSponsorInfo;
+use crate::state::rpc_types::CoreSpaceSponsorInfo;
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub(crate) enum StateValueEncodingError {
@@ -20,11 +20,11 @@ pub(crate) enum StateValueEncodingError {
     CodeHashMismatch { expected: H256, actual: H256 },
 }
 
-pub(crate) fn encode_native_u256(value: U256) -> Box<[u8]> {
+pub(crate) fn encode_core_space_u256(value: U256) -> Box<[u8]> {
     rlp::encode(&value).to_vec().into_boxed_slice()
 }
 
-pub(crate) fn encode_native_basic_account(
+pub(crate) fn encode_core_space_basic_account(
     balance: U256,
     nonce: U256,
     staking_balance: U256,
@@ -53,7 +53,7 @@ pub(crate) fn encode_native_basic_account(
     )
 }
 
-pub(crate) fn encode_native_contract_account(
+pub(crate) fn encode_core_space_contract_account(
     balance: U256,
     nonce: U256,
     code_hash: H256,
@@ -61,9 +61,9 @@ pub(crate) fn encode_native_contract_account(
     collateral_for_storage: U256,
     accumulated_interest_return: U256,
     admin: Address,
-    sponsor_info: NativeSponsorInfo,
+    sponsor_info: CoreSpaceSponsorInfo,
 ) -> Option<Box<[u8]>> {
-    let sponsor_info = native_sponsor_info_from_rpc(sponsor_info);
+    let sponsor_info = core_space_sponsor_info_from_rpc(sponsor_info);
 
     if balance.is_zero()
         && nonce.is_zero()
@@ -93,11 +93,11 @@ pub(crate) fn encode_native_contract_account(
     )
 }
 
-pub(crate) fn should_encode_native_contract_account(address: Address, code_hash: H256) -> bool {
+pub(crate) fn should_encode_core_space_contract_account(address: Address, code_hash: H256) -> bool {
     (code_hash != KECCAK_EMPTY && !code_hash.is_zero()) || address.is_contract_address()
 }
 
-pub(crate) fn encode_native_code(
+pub(crate) fn encode_core_space_code(
     expected_code_hash: H256,
     owner: Address,
     code: Vec<u8>,
@@ -118,7 +118,7 @@ pub(crate) fn encode_native_code(
     .into_boxed_slice())
 }
 
-pub(crate) fn encode_native_deposit_list(deposits: Vec<DepositInfo>) -> Option<Box<[u8]>> {
+pub(crate) fn encode_core_space_deposit_list(deposits: Vec<DepositInfo>) -> Option<Box<[u8]>> {
     if deposits.is_empty() {
         return None;
     }
@@ -130,7 +130,7 @@ pub(crate) fn encode_native_deposit_list(deposits: Vec<DepositInfo>) -> Option<B
     )
 }
 
-pub(crate) fn encode_native_vote_list(votes: Vec<VoteStakeInfo>) -> Option<Box<[u8]>> {
+pub(crate) fn encode_core_space_vote_list(votes: Vec<VoteStakeInfo>) -> Option<Box<[u8]>> {
     if votes.is_empty() {
         return None;
     }
@@ -142,13 +142,13 @@ pub(crate) fn encode_native_vote_list(votes: Vec<VoteStakeInfo>) -> Option<Box<[
     )
 }
 
-pub(crate) fn encode_native_storage_slot(value: U256) -> Box<[u8]> {
+pub(crate) fn encode_core_space_storage_slot(value: U256) -> Box<[u8]> {
     rlp::encode(&StorageValue { value, owner: None })
         .to_vec()
         .into_boxed_slice()
 }
 
-fn native_sponsor_info_from_rpc(info: NativeSponsorInfo) -> SponsorInfo {
+fn core_space_sponsor_info_from_rpc(info: CoreSpaceSponsorInfo) -> SponsorInfo {
     let unused = info.available_storage_points * *DRIPS_PER_STORAGE_COLLATERAL_UNIT;
     let used = info.used_storage_points * *DRIPS_PER_STORAGE_COLLATERAL_UNIT;
 

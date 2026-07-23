@@ -8,7 +8,7 @@ use primitives::{
     },
 };
 
-use crate::execution::NativeTransactionInput;
+use crate::execution::CoreSpaceTransactionInput;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccessListItem {
@@ -17,13 +17,13 @@ pub struct AccessListItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NativeEpochRef {
+pub enum CoreSpaceEpochRef {
     LatestState,
     Number(u64),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NativeTransactionVariant {
+pub enum CoreSpaceTransactionVariant {
     Cip155 {
         gas_price: U256,
     },
@@ -39,7 +39,7 @@ pub enum NativeTransactionVariant {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NativeTransaction {
+pub struct CoreSpaceTransaction {
     pub from: Address,
     pub to: Option<Address>,
     pub nonce: U256,
@@ -49,24 +49,26 @@ pub struct NativeTransaction {
     pub storage_limit: u64,
     pub epoch_height: u64,
     pub chain_id: u32,
-    pub variant: NativeTransactionVariant,
+    pub variant: CoreSpaceTransactionVariant,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SimulateNativeTransactionInput {
-    pub epoch: NativeEpochRef,
-    pub transaction: NativeTransaction,
+pub struct SimulateCoreSpaceTransactionInput {
+    pub epoch: CoreSpaceEpochRef,
+    pub transaction: CoreSpaceTransaction,
 }
 
-pub(crate) fn build_native_transaction_input(input: NativeTransaction) -> NativeTransactionInput {
+pub(crate) fn build_core_space_transaction_input(
+    input: CoreSpaceTransaction,
+) -> CoreSpaceTransactionInput {
     let sender = input.from;
-    let tx = build_typed_native_transaction(input);
+    let tx = build_typed_core_space_transaction(input);
 
-    NativeTransactionInput { tx, sender }
+    CoreSpaceTransactionInput { tx, sender }
 }
 
-fn build_typed_native_transaction(input: NativeTransaction) -> TypedNativeTransaction {
-    let NativeTransaction {
+fn build_typed_core_space_transaction(input: CoreSpaceTransaction) -> TypedNativeTransaction {
+    let CoreSpaceTransaction {
         to,
         nonce,
         gas_limit,
@@ -82,7 +84,7 @@ fn build_typed_native_transaction(input: NativeTransaction) -> TypedNativeTransa
     let action = action_from_to(to);
 
     match variant {
-        NativeTransactionVariant::Cip155 { gas_price } => {
+        CoreSpaceTransactionVariant::Cip155 { gas_price } => {
             TypedNativeTransaction::Cip155(PrimitiveNativeTransaction {
                 nonce,
                 gas_price,
@@ -95,7 +97,7 @@ fn build_typed_native_transaction(input: NativeTransaction) -> TypedNativeTransa
                 data,
             })
         }
-        NativeTransactionVariant::Cip2930 {
+        CoreSpaceTransactionVariant::Cip2930 {
             gas_price,
             access_list,
         } => TypedNativeTransaction::Cip2930(Cip2930Transaction {
@@ -110,7 +112,7 @@ fn build_typed_native_transaction(input: NativeTransaction) -> TypedNativeTransa
             data,
             access_list: map_access_list(access_list),
         }),
-        NativeTransactionVariant::Cip1559 {
+        CoreSpaceTransactionVariant::Cip1559 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             access_list,

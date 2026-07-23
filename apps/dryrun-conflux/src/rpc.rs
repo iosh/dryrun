@@ -10,16 +10,16 @@ use jsonrpsee::{RpcModule, types::ErrorObjectOwned};
 
 use self::{
     error::{invalid_params, map_service_error, response_mapping_error},
-    request::{SimulateEspaceTransactionRequest, SimulateNativeTransactionRequest},
-    response::{SimulateEspaceTransactionResponse, SimulateNativeTransactionResponse},
+    request::{SimulateCoreSpaceTransactionRequest, SimulateEspaceTransactionRequest},
+    response::{SimulateCoreSpaceTransactionResponse, SimulateEspaceTransactionResponse},
 };
 
 const METHOD_SIMULATE_ESPACE_TRANSACTION: &str = "dryrun_conflux_espace_simulateTransaction";
-const METHOD_SIMULATE_NATIVE_TRANSACTION: &str = "dryrun_conflux_native_simulateTransaction";
+const METHOD_SIMULATE_CORE_SPACE_TRANSACTION: &str = "dryrun_conflux_coreSpace_simulateTransaction";
 
 pub fn build_rpc_module(
     service: Arc<ConfluxService>,
-    native_address_network: Network,
+    core_space_address_network: Network,
 ) -> RpcModule<Arc<ConfluxService>> {
     let mut module = RpcModule::new(service);
 
@@ -45,23 +45,26 @@ pub fn build_rpc_module(
 
     module
         .register_async_method(
-            METHOD_SIMULATE_NATIVE_TRANSACTION,
+            METHOD_SIMULATE_CORE_SPACE_TRANSACTION,
             move |params, service, _| async move {
                 let request = params
-                    .parse::<SimulateNativeTransactionRequest>()
+                    .parse::<SimulateCoreSpaceTransactionRequest>()
                     .map_err(|error| invalid_params(error.to_string()))?;
 
                 let input = request
-                    .try_into_service_input(native_address_network)
+                    .try_into_service_input(core_space_address_network)
                     .map_err(ErrorObjectOwned::from)?;
 
                 let output = service
-                    .simulate_native_transaction(input)
+                    .simulate_core_space_transaction(input)
                     .await
                     .map_err(|error| map_service_error(&error))?;
 
-                SimulateNativeTransactionResponse::try_from_output(output, native_address_network)
-                    .map_err(|error| response_mapping_error(error.to_string()))
+                SimulateCoreSpaceTransactionResponse::try_from_output(
+                    output,
+                    core_space_address_network,
+                )
+                .map_err(|error| response_mapping_error(error.to_string()))
             },
         )
         .expect("RPC method names must be unique");

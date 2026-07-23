@@ -8,15 +8,18 @@ use tokio::sync::Mutex;
 
 use crate::state::{
     ConfluxStatePoint,
-    native_internal::{NativeInternalStateItem, SponsorWhitelistStorageKey, decode_abi_bool},
+    core_space_internal::{
+        CoreSpaceInternalStateItem, SponsorWhitelistStorageKey, decode_abi_bool,
+    },
     provider::{RemoteStateProvider, RemoteStateProviderError},
-    rpc_types::{EspaceAccountSnapshot, NativeGlobalSnapshot},
-    state_item::{EspaceStateItem, NativeStateItem, StateItem},
+    rpc_types::{CoreSpaceGlobalSnapshot, EspaceAccountSnapshot},
+    state_item::{CoreSpaceStateItem, EspaceStateItem, StateItem},
     state_value_encoding::{
-        StateValueEncodingError, encode_espace_account, encode_espace_code,
-        encode_espace_storage_slot, encode_native_basic_account, encode_native_code,
-        encode_native_contract_account, encode_native_deposit_list, encode_native_storage_slot,
-        encode_native_u256, encode_native_vote_list, should_encode_native_contract_account,
+        StateValueEncodingError, encode_core_space_basic_account, encode_core_space_code,
+        encode_core_space_contract_account, encode_core_space_deposit_list,
+        encode_core_space_storage_slot, encode_core_space_u256, encode_core_space_vote_list,
+        encode_espace_account, encode_espace_code, encode_espace_storage_slot,
+        should_encode_core_space_contract_account,
     },
 };
 use cfx_types::{Address, H256, U256};
@@ -26,9 +29,9 @@ type StateRead = Option<RawStateValue>;
 
 pub(crate) struct RemoteStateReader {
     state_point: ConfluxStatePoint,
-    native_epoch: CfxEpochNumber,
+    core_space_epoch: CfxEpochNumber,
     provider: Arc<dyn RemoteStateProvider>,
-    native_globals: NativeGlobalSnapshot,
+    core_space_globals: CoreSpaceGlobalSnapshot,
     espace_account_cache: Mutex<HashMap<Address, Arc<EspaceAccountSnapshot>>>,
 }
 
@@ -37,19 +40,19 @@ impl RemoteStateReader {
         state_point: ConfluxStatePoint,
         provider: Arc<dyn RemoteStateProvider>,
     ) -> StorageResult<Self> {
-        let native_epoch = state_point.native_epoch();
-        let native_globals = provider
-            .get_native_global_snapshot(native_epoch.clone())
+        let core_space_epoch = state_point.core_space_epoch();
+        let core_space_globals = provider
+            .get_core_space_global_snapshot(core_space_epoch.clone())
             .await
             .map_err(|error| {
-                Self::provider_error_at(&state_point, "get_native_global_snapshot", error)
+                Self::provider_error_at(&state_point, "get_core_space_global_snapshot", error)
             })?;
 
         Ok(Self {
             state_point,
-            native_epoch,
+            core_space_epoch,
             provider,
-            native_globals,
+            core_space_globals,
             espace_account_cache: Mutex::new(HashMap::new()),
         })
     }
@@ -60,73 +63,81 @@ impl RemoteStateReader {
 
     pub(crate) async fn read(&self, item: &StateItem) -> StorageResult<StateRead> {
         match item {
-            StateItem::Native(item) => self.read_native(*item).await,
+            StateItem::CoreSpace(item) => self.read_core_space(*item).await,
             StateItem::Espace(item) => self.read_espace(*item).await,
         }
     }
 
-    async fn read_native(&self, item: NativeStateItem) -> StorageResult<StateRead> {
+    async fn read_core_space(&self, item: CoreSpaceStateItem) -> StorageResult<StateRead> {
         match item {
-            NativeStateItem::Account { address } => self.fetch_native_account(address).await,
-            NativeStateItem::DepositList { address } => {
-                self.fetch_native_deposit_list(address).await
+            CoreSpaceStateItem::Account { address } => self.fetch_core_space_account(address).await,
+            CoreSpaceStateItem::DepositList { address } => {
+                self.fetch_core_space_deposit_list(address).await
             }
-            NativeStateItem::VoteList { address } => self.fetch_native_vote_list(address).await,
-            NativeStateItem::InterestRate => {
-                Ok(Some(encode_native_u256(self.native_globals.interest_rate)))
+            CoreSpaceStateItem::VoteList { address } => {
+                self.fetch_core_space_vote_list(address).await
             }
-            NativeStateItem::AccumulateInterestRate => Ok(Some(encode_native_u256(
-                self.native_globals.accumulate_interest_rate,
+            CoreSpaceStateItem::InterestRate => Ok(Some(encode_core_space_u256(
+                self.core_space_globals.interest_rate,
             ))),
-            NativeStateItem::TotalIssued => Ok(Some(encode_native_u256(
-                self.native_globals.supply.total_issued,
+            CoreSpaceStateItem::AccumulateInterestRate => Ok(Some(encode_core_space_u256(
+                self.core_space_globals.accumulate_interest_rate,
             ))),
-            NativeStateItem::TotalStaking => Ok(Some(encode_native_u256(
-                self.native_globals.supply.total_staking,
+            CoreSpaceStateItem::TotalIssued => Ok(Some(encode_core_space_u256(
+                self.core_space_globals.supply.total_issued,
             ))),
-            NativeStateItem::TotalEvmToken => Ok(Some(encode_native_u256(
-                self.native_globals.supply.total_espace_tokens,
+            CoreSpaceStateItem::TotalStaking => Ok(Some(encode_core_space_u256(
+                self.core_space_globals.supply.total_staking,
             ))),
-            NativeStateItem::TotalStorage => Ok(Some(encode_native_u256(
-                self.native_globals.supply.total_collateral,
+            CoreSpaceStateItem::TotalEvmToken => Ok(Some(encode_core_space_u256(
+                self.core_space_globals.supply.total_espace_tokens,
             ))),
-            NativeStateItem::UsedStoragePoints => Ok(Some(encode_native_u256(
-                self.native_globals.collateral.used_storage_points
+            CoreSpaceStateItem::TotalStorage => Ok(Some(encode_core_space_u256(
+                self.core_space_globals.supply.total_collateral,
+            ))),
+            CoreSpaceStateItem::UsedStoragePoints => Ok(Some(encode_core_space_u256(
+                self.core_space_globals.collateral.used_storage_points
                     * *DRIPS_PER_STORAGE_COLLATERAL_UNIT,
             ))),
-            NativeStateItem::ConvertedStoragePoints => Ok(Some(encode_native_u256(
-                self.native_globals.collateral.converted_storage_points
+            CoreSpaceStateItem::ConvertedStoragePoints => Ok(Some(encode_core_space_u256(
+                self.core_space_globals.collateral.converted_storage_points
                     * *DRIPS_PER_STORAGE_COLLATERAL_UNIT,
             ))),
-            NativeStateItem::TotalPosStaking => Ok(Some(encode_native_u256(
-                self.native_globals.pos_economics.total_pos_staking_tokens,
-            ))),
-            NativeStateItem::DistributablePosInterest => Ok(Some(encode_native_u256(
-                self.native_globals.pos_economics.distributable_pos_interest,
-            ))),
-            NativeStateItem::LastDistributeBlock => Ok(Some(encode_native_u256(U256::from(
-                self.native_globals
+            CoreSpaceStateItem::TotalPosStaking => Ok(Some(encode_core_space_u256(
+                self.core_space_globals
                     .pos_economics
-                    .last_distribute_block
-                    .as_u64(),
-            )))),
-            NativeStateItem::PowBaseReward => Ok(Some(encode_native_u256(
-                self.native_globals.vote_params.pow_base_reward,
+                    .total_pos_staking_tokens,
             ))),
-            NativeStateItem::TotalBurnt1559 => {
-                Ok(Some(encode_native_u256(self.native_globals.fee_burnt)))
-            }
-            NativeStateItem::BaseFeeProp => Ok(Some(encode_native_u256(
-                self.native_globals.vote_params.base_fee_share_prop,
+            CoreSpaceStateItem::DistributablePosInterest => Ok(Some(encode_core_space_u256(
+                self.core_space_globals
+                    .pos_economics
+                    .distributable_pos_interest,
             ))),
-            NativeStateItem::InternalContractStorage(item) => {
-                self.fetch_native_internal_storage(item).await
+            CoreSpaceStateItem::LastDistributeBlock => {
+                Ok(Some(encode_core_space_u256(U256::from(
+                    self.core_space_globals
+                        .pos_economics
+                        .last_distribute_block
+                        .as_u64(),
+                ))))
             }
-            NativeStateItem::StorageSlot { address, slot } => {
-                self.fetch_native_storage_slot(address, slot).await
+            CoreSpaceStateItem::PowBaseReward => Ok(Some(encode_core_space_u256(
+                self.core_space_globals.vote_params.pow_base_reward,
+            ))),
+            CoreSpaceStateItem::TotalBurnt1559 => Ok(Some(encode_core_space_u256(
+                self.core_space_globals.fee_burnt,
+            ))),
+            CoreSpaceStateItem::BaseFeeProp => Ok(Some(encode_core_space_u256(
+                self.core_space_globals.vote_params.base_fee_share_prop,
+            ))),
+            CoreSpaceStateItem::InternalContractStorage(item) => {
+                self.fetch_core_space_internal_storage(item).await
             }
-            NativeStateItem::Code { address, code_hash } => {
-                self.fetch_native_code(address, code_hash).await
+            CoreSpaceStateItem::StorageSlot { address, slot } => {
+                self.fetch_core_space_storage_slot(address, slot).await
+            }
+            CoreSpaceStateItem::Code { address, code_hash } => {
+                self.fetch_core_space_code(address, code_hash).await
             }
         }
     }
@@ -143,8 +154,8 @@ impl RemoteStateReader {
         }
     }
 
-    fn native_epoch(&self) -> CfxEpochNumber {
-        self.native_epoch.clone()
+    fn core_space_epoch(&self) -> CfxEpochNumber {
+        self.core_space_epoch.clone()
     }
 
     fn espace_block(&self) -> EthBlockId {
@@ -176,21 +187,21 @@ impl RemoteStateReader {
         Ok(Arc::clone(cache.entry(address).or_insert_with(|| snapshot)))
     }
 
-    async fn fetch_native_account(&self, address: Address) -> StorageResult<StateRead> {
+    async fn fetch_core_space_account(&self, address: Address) -> StorageResult<StateRead> {
         let account = self
             .provider
-            .get_native_account(self.native_epoch(), address)
+            .get_core_space_account(self.core_space_epoch(), address)
             .await
-            .map_err(|error| self.provider_error("get_native_account", error))?;
+            .map_err(|error| self.provider_error("get_core_space_account", error))?;
 
-        if should_encode_native_contract_account(address, account.code_hash) {
+        if should_encode_core_space_contract_account(address, account.code_hash) {
             let sponsor_info = self
                 .provider
-                .get_native_sponsor_info(self.native_epoch(), address)
+                .get_core_space_sponsor_info(self.core_space_epoch(), address)
                 .await
-                .map_err(|error| self.provider_error("get_native_sponsor_info", error))?;
+                .map_err(|error| self.provider_error("get_core_space_sponsor_info", error))?;
 
-            return Ok(encode_native_contract_account(
+            return Ok(encode_core_space_contract_account(
                 account.balance,
                 account.nonce,
                 account.code_hash,
@@ -202,7 +213,7 @@ impl RemoteStateReader {
             ));
         }
 
-        Ok(encode_native_basic_account(
+        Ok(encode_core_space_basic_account(
             account.balance,
             account.nonce,
             account.staking_balance,
@@ -211,88 +222,88 @@ impl RemoteStateReader {
         ))
     }
 
-    async fn fetch_native_deposit_list(&self, address: Address) -> StorageResult<StateRead> {
+    async fn fetch_core_space_deposit_list(&self, address: Address) -> StorageResult<StateRead> {
         let deposits = self
             .provider
-            .get_native_deposit_list(self.native_epoch(), address)
+            .get_core_space_deposit_list(self.core_space_epoch(), address)
             .await
-            .map_err(|error| self.provider_error("get_native_deposit_list", error))?;
+            .map_err(|error| self.provider_error("get_core_space_deposit_list", error))?;
 
-        Ok(encode_native_deposit_list(deposits))
+        Ok(encode_core_space_deposit_list(deposits))
     }
 
-    async fn fetch_native_vote_list(&self, address: Address) -> StorageResult<StateRead> {
+    async fn fetch_core_space_vote_list(&self, address: Address) -> StorageResult<StateRead> {
         let votes = self
             .provider
-            .get_native_vote_list(self.native_epoch(), address)
+            .get_core_space_vote_list(self.core_space_epoch(), address)
             .await
-            .map_err(|error| self.provider_error("get_native_vote_list", error))?;
+            .map_err(|error| self.provider_error("get_core_space_vote_list", error))?;
 
-        Ok(encode_native_vote_list(votes))
+        Ok(encode_core_space_vote_list(votes))
     }
 
-    async fn fetch_native_storage_slot(
+    async fn fetch_core_space_storage_slot(
         &self,
         address: Address,
         slot: H256,
     ) -> StorageResult<StateRead> {
         let value = self
             .provider
-            .get_native_storage_at(self.native_epoch(), address, slot)
+            .get_core_space_storage_at(self.core_space_epoch(), address, slot)
             .await
-            .map_err(|error| self.provider_error("get_native_storage_at", error))?;
+            .map_err(|error| self.provider_error("get_core_space_storage_at", error))?;
 
-        Ok(value.map(encode_native_storage_slot))
+        Ok(value.map(encode_core_space_storage_slot))
     }
 
-    async fn fetch_native_code(
+    async fn fetch_core_space_code(
         &self,
         address: Address,
         expected_code_hash: H256,
     ) -> StorageResult<StateRead> {
         let code = self
             .provider
-            .get_native_code_at(self.native_epoch(), address)
+            .get_core_space_code_at(self.core_space_epoch(), address)
             .await
-            .map_err(|error| self.provider_error("get_native_code_at", error))?;
+            .map_err(|error| self.provider_error("get_core_space_code_at", error))?;
 
         if code.is_empty() {
             return Ok(None);
         }
 
-        encode_native_code(expected_code_hash, address, code)
+        encode_core_space_code(expected_code_hash, address, code)
             .map(Some)
-            .map_err(|error| self.encoding_error("encode_native_code", error))
+            .map_err(|error| self.encoding_error("encode_core_space_code", error))
     }
 
-    async fn fetch_native_internal_storage(
+    async fn fetch_core_space_internal_storage(
         &self,
-        item: NativeInternalStateItem,
+        item: CoreSpaceInternalStateItem,
     ) -> StorageResult<StateRead> {
         match item {
-            NativeInternalStateItem::SponsorWhitelist(key) => {
-                self.fetch_native_sponsor_whitelist_storage(key).await
+            CoreSpaceInternalStateItem::SponsorWhitelist(key) => {
+                self.fetch_core_space_sponsor_whitelist_storage(key).await
             }
         }
     }
 
-    async fn fetch_native_sponsor_whitelist_storage(
+    async fn fetch_core_space_sponsor_whitelist_storage(
         &self,
         key: SponsorWhitelistStorageKey,
     ) -> StorageResult<StateRead> {
         let is_all_whitelisted = self
             .provider
-            .call_native(
-                self.native_epoch(),
+            .call_core_space(
+                self.core_space_epoch(),
                 key.control_contract_address(),
                 key.is_all_whitelisted_call_data(),
             )
             .await
             .and_then(|value| decode_abi_bool(value, "cfx_call"))
-            .map_err(|error| self.provider_error("call_native_sponsor_whitelist", error))?;
+            .map_err(|error| self.provider_error("call_core_space_sponsor_whitelist", error))?;
 
         if key.is_all_whitelist_key() {
-            return Ok(is_all_whitelisted.then_some(encode_native_storage_slot(U256::one())));
+            return Ok(is_all_whitelisted.then_some(encode_core_space_storage_slot(U256::one())));
         }
 
         // The raw user key is only read after the all-whitelist key is zero.
@@ -307,16 +318,16 @@ impl RemoteStateReader {
 
         let is_user_whitelisted = self
             .provider
-            .call_native(
-                self.native_epoch(),
+            .call_core_space(
+                self.core_space_epoch(),
                 key.control_contract_address(),
                 key.is_user_whitelisted_call_data(),
             )
             .await
             .and_then(|value| decode_abi_bool(value, "cfx_call"))
-            .map_err(|error| self.provider_error("call_native_sponsor_whitelist", error))?;
+            .map_err(|error| self.provider_error("call_core_space_sponsor_whitelist", error))?;
 
-        Ok(is_user_whitelisted.then_some(encode_native_storage_slot(U256::one())))
+        Ok(is_user_whitelisted.then_some(encode_core_space_storage_slot(U256::one())))
     }
 
     async fn fetch_espace_account(&self, address: Address) -> StorageResult<StateRead> {

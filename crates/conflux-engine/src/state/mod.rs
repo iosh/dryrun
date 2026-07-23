@@ -1,5 +1,5 @@
+mod core_space_internal;
 mod http_provider;
-mod native_internal;
 mod provider;
 mod reader;
 mod rpc_encoding;
@@ -16,9 +16,9 @@ pub use self::{
     http_provider::HttpConfluxStateProvider,
     provider::{RemoteStateProvider, RemoteStateProviderError},
     rpc_types::{
-        EspaceAccountSnapshot, EspaceRpcBlock, NativeGlobalSnapshot, NativePoSEconomics,
-        NativeRpcAccount, NativeRpcBlock, NativeStorageCollateralInfo, NativeSupplyInfo,
-        NativeVoteParamsInfo,
+        CoreSpaceGlobalSnapshot, CoreSpacePoSEconomics, CoreSpaceRpcAccount, CoreSpaceRpcBlock,
+        CoreSpaceStorageCollateralInfo, CoreSpaceSupplyInfo, CoreSpaceVoteParamsInfo,
+        EspaceAccountSnapshot, EspaceRpcBlock,
     },
 };
 
@@ -50,7 +50,7 @@ impl ConfluxStateAnchor {
         EthBlockId::Num(self.epoch_number)
     }
 
-    pub(crate) fn native_epoch(&self) -> CfxEpochNumber {
+    pub(crate) fn core_space_epoch(&self) -> CfxEpochNumber {
         CfxEpochNumber::Num(U64::from(self.epoch_number))
     }
 }
@@ -73,7 +73,7 @@ impl ConfluxStatePoint {
         self.anchor.espace_block()
     }
 
-    pub(crate) fn native_epoch(&self) -> CfxEpochNumber {
-        self.anchor.native_epoch()
+    pub(crate) fn core_space_epoch(&self) -> CfxEpochNumber {
+        self.anchor.core_space_epoch()
     }
 }

@@ -10,7 +10,7 @@ const IS_ALL_WHITELISTED_SELECTOR: [u8; 4] = [0x79, 0xb4, 0x7f, 0xaa];
 const IS_WHITELISTED_SELECTOR: [u8; 4] = [0xb6, 0xb3, 0x52, 0x72];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NativeInternalStateItem {
+pub(crate) enum CoreSpaceInternalStateItem {
     SponsorWhitelist(SponsorWhitelistStorageKey),
 }
 
@@ -67,17 +67,17 @@ pub(crate) fn decode_abi_bool(
     }
 }
 
-pub(crate) fn parse_native_internal_storage(
+pub(crate) fn parse_core_space_internal_storage(
     address: Address,
     storage_key: &[u8],
-) -> Option<NativeInternalStateItem> {
+) -> Option<CoreSpaceInternalStateItem> {
     // cfx_getStorageAt only accepts 32-byte positions, while this whitelist
     // key is contract + user. Handle it through the internal contract API.
     if address == SPONSOR_WHITELIST_CONTROL_CONTRACT_ADDRESS
         && storage_key.len() == SPONSOR_WHITELIST_KEY_BYTES
     {
         let (contract, user) = storage_key.split_at(ADDRESS_BYTES);
-        return Some(NativeInternalStateItem::SponsorWhitelist(
+        return Some(CoreSpaceInternalStateItem::SponsorWhitelist(
             SponsorWhitelistStorageKey {
                 contract: Address::from_slice(contract),
                 user: Address::from_slice(user),

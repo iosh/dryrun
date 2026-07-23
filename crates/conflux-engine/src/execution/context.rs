@@ -2,9 +2,9 @@ use cfx_types::{Address, H256, SpaceMap, U256};
 use primitives::BlockNumber;
 use thiserror::Error;
 
-use crate::state::{EspaceRpcBlock, NativeRpcBlock};
+use crate::state::{CoreSpaceRpcBlock, EspaceRpcBlock};
 
-// Used by Native Context / PoS internal contracts. Upstream derives these
+// Used by Core Space Context / PoS internal contracts. Upstream derives these
 // values from a pivot block's PoS reference; ordinary eSpace execution does not
 // depend on them, so the RPC-backed path keeps them optional until that
 // resolution is implemented.
@@ -14,24 +14,24 @@ pub struct ExecutionConsensusContext {
     pub finalized_epoch: Option<u64>,
 }
 
-// Native and eSpace base fees come from different public RPC block views.
+// Core Space and eSpace base fees come from different public RPC block views.
 #[derive(Debug, Clone, Copy)]
 pub struct ExecutionBaseFees {
-    pub native_base_fee_per_gas: Option<U256>,
+    pub core_space_base_fee_per_gas: Option<U256>,
     pub espace_base_fee_per_gas: Option<U256>,
 }
 
 impl ExecutionBaseFees {
     pub fn into_space_map(self) -> SpaceMap<U256> {
         SpaceMap::new(
-            self.native_base_fee_per_gas.unwrap_or(U256::zero()),
+            self.core_space_base_fee_per_gas.unwrap_or(U256::zero()),
             self.espace_base_fee_per_gas.unwrap_or(U256::zero()),
         )
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct NativePivotBlockContext {
+pub struct CoreSpacePivotBlockContext {
     pub(crate) block_number: BlockNumber,
     pub(crate) epoch_height: u64,
     pub(crate) author: Address,
@@ -58,16 +58,16 @@ pub struct ExecutionBlockContext {
 
 #[derive(Debug, Error)]
 pub enum ExecutionBlockContextError {
-    #[error("native pivot block is missing blockNumber")]
+    #[error("Core Space pivot block is missing blockNumber")]
     MissingBlockNumber,
-    #[error("native pivot block {field} exceeds u64: {value:?}")]
+    #[error("Core Space pivot block {field} exceeds u64: {value:?}")]
     U64Overflow { field: &'static str, value: U256 },
 }
 
-pub fn build_native_pivot_block_context(
-    block: &NativeRpcBlock,
-) -> Result<NativePivotBlockContext, ExecutionBlockContextError> {
-    Ok(NativePivotBlockContext {
+pub fn build_core_space_pivot_block_context(
+    block: &CoreSpaceRpcBlock,
+) -> Result<CoreSpacePivotBlockContext, ExecutionBlockContextError> {
+    Ok(CoreSpacePivotBlockContext {
         block_number: required_block_number(block.block_number)?,
         epoch_height: u256_to_u64(block.height, "height")?,
         author: block.miner.hex_address,
@@ -84,7 +84,7 @@ pub fn build_espace_block_context(block: &EspaceRpcBlock) -> EspaceBlockContext 
 }
 
 pub fn build_execution_block_context(
-    pivot: &NativePivotBlockContext,
+    pivot: &CoreSpacePivotBlockContext,
     espace: &EspaceBlockContext,
     consensus: ExecutionConsensusContext,
 ) -> ExecutionBlockContext {
@@ -96,7 +96,7 @@ pub fn build_execution_block_context(
         epoch_hash: pivot.hash,
         consensus,
         base_fees: ExecutionBaseFees {
-            native_base_fee_per_gas: pivot.base_fee_per_gas,
+            core_space_base_fee_per_gas: pivot.base_fee_per_gas,
             espace_base_fee_per_gas: espace.base_fee_per_gas,
         },
     }

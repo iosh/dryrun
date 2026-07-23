@@ -1,14 +1,20 @@
 pub mod config;
+pub mod core_space;
 mod error;
 pub mod espace;
 pub mod execution;
-pub mod native;
 pub mod state;
 
 use std::sync::Arc;
 
 use crate::{
     config::ConfluxChainConfig,
+    core_space::{
+        CoreSpaceEpochRef, CoreSpaceExecution, CoreSpaceExecutionFailure,
+        CoreSpaceExecutionFailureCode, CoreSpaceStateAnchor, CoreSpaceTransaction,
+        CoreSpaceTransactionVariant, SimulateCoreSpaceTransactionInput, build_core_space_execution,
+        build_core_space_not_executed, build_core_space_transaction_input,
+    },
     espace::{
         EspaceBlockRef, EspaceExecution, SimulateEspaceTransactionInput, SimulatedBlock,
         build_espace_execution, build_espace_not_executed, build_espace_transaction_input,
@@ -16,19 +22,13 @@ use crate::{
     },
     execution::{
         DryRunTransactionInput, ExecutionBlockContext, ExecutionConsensusContext,
-        TransactionExecutionInput, build_espace_block_context, build_execution_block_context,
-        build_mainnet_machine, build_native_pivot_block_context, build_rpc_backed_state,
-        execute_transaction,
-    },
-    native::{
-        NativeEpochRef, NativeExecution, NativeExecutionFailure, NativeExecutionFailureCode,
-        NativeStateAnchor, NativeTransaction, NativeTransactionVariant,
-        SimulateNativeTransactionInput, build_native_execution, build_native_not_executed,
-        build_native_transaction_input,
+        TransactionExecutionInput, build_core_space_pivot_block_context,
+        build_espace_block_context, build_execution_block_context, build_mainnet_machine,
+        build_rpc_backed_state, execute_transaction,
     },
     state::{
-        ConfluxStateAnchor, ConfluxStatePoint, EspaceRpcBlock, NativeRpcBlock, RemoteStateProvider,
-        RemoteStateReader,
+        ConfluxStateAnchor, ConfluxStatePoint, CoreSpaceRpcBlock, EspaceRpcBlock,
+        RemoteStateProvider, RemoteStateReader,
     },
 };
 use cfx_types::U256;
@@ -106,22 +106,22 @@ impl ConfluxEngine {
         })?
     }
 
-    pub async fn simulate_native_transaction(
+    pub async fn simulate_core_space_transaction(
         &self,
-        input: SimulateNativeTransactionInput,
-    ) -> Result<NativeExecution, ConfluxEngineError> {
+        input: SimulateCoreSpaceTransactionInput,
+    ) -> Result<CoreSpaceExecution, ConfluxEngineError> {
         let runtime_handle = current_runtime_handle()?;
-        let SimulateNativeTransactionInput { epoch, transaction } = input;
+        let SimulateCoreSpaceTransactionInput { epoch, transaction } = input;
         let gas_limit = transaction.gas_limit;
-        let execution_context = self.resolve_native_execution_context(&epoch).await?;
-        let chain_id = self.chain.native_chain_id;
-        let state_anchor = NativeStateAnchor {
+        let execution_context = self.resolve_core_space_execution_context(&epoch).await?;
+        let chain_id = self.chain.core_space_chain_id;
+        let state_anchor = CoreSpaceStateAnchor {
             epoch_number: execution_context.state_point.anchor().epoch_number(),
             pivot_hash: execution_context.state_point.anchor().pivot_hash(),
         };
 
-        if let Err(failure) = validate_native_transaction(&transaction, chain_id) {
-            return Ok(build_native_not_executed(
+        if let Err(failure) = validate_core_space_transaction(&transaction, chain_id) {
+            return Ok(build_core_space_not_executed(
                 chain_id,
                 state_anchor,
                 gas_limit,
@@ -129,11 +129,11 @@ impl ConfluxEngine {
             ));
         }
 
-        let transaction = build_native_transaction_input(transaction);
+        let transaction = build_core_space_transaction_input(transaction);
 
         let execution_input = TransactionExecutionInput {
             block_context: execution_context.block_context,
-            transaction: DryRunTransactionInput::Native(transaction),
+            transaction: DryRunTransactionInput::CoreSpace(transaction),
         };
         let state_reader = self
             .prepare_state_reader(execution_context.state_point)
@@ -156,7 +156,7 @@ impl ConfluxEngine {
                     }
                 })?;
 
-            Ok(build_native_execution(
+            Ok(build_core_space_execution(
                 chain_id,
                 state_anchor,
                 gas_limit,
@@ -165,7 +165,7 @@ impl ConfluxEngine {
         })
         .await
         .map_err(|error| ConfluxEngineError::ExecutionInternal {
-            message: format!("Native blocking execution task failed: {error}"),
+            message: format!("Core Space blocking execution task failed: {error}"),
         })?
     }
 
@@ -192,19 +192,22 @@ impl ConfluxEngine {
                 block: "eSpace block".to_string(),
             })?;
         let state_anchor = state_anchor_from_espace_block(&espace_block)?;
-        let native_pivot_block = self.resolve_native_pivot_block(state_anchor).await?;
+        let core_space_pivot_block = self.resolve_core_space_pivot_block(state_anchor).await?;
 
         let simulated_block = SimulatedBlock {
             number: state_anchor.epoch_number(),
             hash: espace_block.hash,
         };
 
-        let native_pivot = build_native_pivot_block_context(&native_pivot_block)?;
-        validate_same_state_anchor(state_anchor, state_anchor_from_native_pivot(&native_pivot))?;
+        let core_space_pivot = build_core_space_pivot_block_context(&core_space_pivot_block)?;
+        validate_same_state_anchor(
+            state_anchor,
+            state_anchor_from_core_space_pivot(&core_space_pivot),
+        )?;
         let espace = build_espace_block_context(&espace_block);
 
         let block_context = build_execution_block_context(
-            &native_pivot,
+            &core_space_pivot,
             &espace,
             ExecutionConsensusContext::default(),
         );
@@ -216,44 +219,44 @@ impl ConfluxEngine {
         })
     }
 
-    async fn resolve_native_execution_context(
+    async fn resolve_core_space_execution_context(
         &self,
-        epoch: &NativeEpochRef,
-    ) -> Result<NativeExecutionContext, ConfluxEngineError> {
-        let native_pivot_block = self
+        epoch: &CoreSpaceEpochRef,
+    ) -> Result<CoreSpaceExecutionContext, ConfluxEngineError> {
+        let core_space_pivot_block = self
             .provider
-            .get_native_block_by_epoch_number(native_epoch_selector(epoch))
+            .get_core_space_block_by_epoch_number(core_space_epoch_selector(epoch))
             .await?
             .ok_or_else(|| ConfluxEngineError::BlockNotFound {
-                block: "native pivot block".to_string(),
+                block: "Core Space pivot block".to_string(),
             })?;
 
-        let native_pivot = build_native_pivot_block_context(&native_pivot_block)?;
-        let state_anchor = state_anchor_from_native_pivot(&native_pivot);
+        let core_space_pivot = build_core_space_pivot_block_context(&core_space_pivot_block)?;
+        let state_anchor = state_anchor_from_core_space_pivot(&core_space_pivot);
         let espace_block = self.resolve_espace_block_for_anchor(state_anchor).await?;
         validate_same_state_anchor(state_anchor, state_anchor_from_espace_block(&espace_block)?)?;
         let espace = build_espace_block_context(&espace_block);
         let block_context = build_execution_block_context(
-            &native_pivot,
+            &core_space_pivot,
             &espace,
             ExecutionConsensusContext::default(),
         );
 
-        Ok(NativeExecutionContext {
+        Ok(CoreSpaceExecutionContext {
             block_context,
             state_point: ConfluxStatePoint::from_anchor(state_anchor),
         })
     }
 
-    async fn resolve_native_pivot_block(
+    async fn resolve_core_space_pivot_block(
         &self,
         anchor: ConfluxStateAnchor,
-    ) -> Result<NativeRpcBlock, ConfluxEngineError> {
+    ) -> Result<CoreSpaceRpcBlock, ConfluxEngineError> {
         self.provider
-            .get_native_block_by_epoch_number(native_epoch_from_anchor(anchor))
+            .get_core_space_block_by_epoch_number(core_space_epoch_from_anchor(anchor))
             .await?
             .ok_or_else(|| ConfluxEngineError::BlockNotFound {
-                block: "native pivot block".to_string(),
+                block: "Core Space pivot block".to_string(),
             })
     }
 
@@ -275,7 +278,7 @@ struct EspaceExecutionContext {
     simulated_block: SimulatedBlock,
 }
 
-struct NativeExecutionContext {
+struct CoreSpaceExecutionContext {
     block_context: ExecutionBlockContext,
     state_point: ConfluxStatePoint,
 }
@@ -293,14 +296,14 @@ fn espace_block_selector(block: &EspaceBlockRef) -> EthBlockId {
     }
 }
 
-fn native_epoch_selector(epoch: &NativeEpochRef) -> CfxEpochNumber {
+fn core_space_epoch_selector(epoch: &CoreSpaceEpochRef) -> CfxEpochNumber {
     match epoch {
-        NativeEpochRef::LatestState => CfxEpochNumber::LatestState,
-        NativeEpochRef::Number(number) => CfxEpochNumber::Num((*number).into()),
+        CoreSpaceEpochRef::LatestState => CfxEpochNumber::LatestState,
+        CoreSpaceEpochRef::Number(number) => CfxEpochNumber::Num((*number).into()),
     }
 }
 
-fn native_epoch_from_anchor(anchor: ConfluxStateAnchor) -> CfxEpochNumber {
+fn core_space_epoch_from_anchor(anchor: ConfluxStateAnchor) -> CfxEpochNumber {
     CfxEpochNumber::Num(anchor.epoch_number().into())
 }
 
@@ -313,8 +316,8 @@ fn state_anchor_from_espace_block(
     ))
 }
 
-fn state_anchor_from_native_pivot(
-    pivot: &execution::NativePivotBlockContext,
+fn state_anchor_from_core_space_pivot(
+    pivot: &execution::CoreSpacePivotBlockContext,
 ) -> ConfluxStateAnchor {
     ConfluxStateAnchor::new(pivot.epoch_height, pivot.hash)
 }
@@ -330,13 +333,13 @@ fn validate_same_state_anchor(
     Ok(())
 }
 
-fn validate_native_transaction(
-    transaction: &NativeTransaction,
+fn validate_core_space_transaction(
+    transaction: &CoreSpaceTransaction,
     expected_chain_id: u32,
-) -> Result<(), NativeExecutionFailure> {
+) -> Result<(), CoreSpaceExecutionFailure> {
     if transaction.chain_id != expected_chain_id {
-        return Err(NativeExecutionFailure {
-            code: NativeExecutionFailureCode::ChainIdMismatch,
+        return Err(CoreSpaceExecutionFailure {
+            code: CoreSpaceExecutionFailureCode::ChainIdMismatch,
             message: format!(
                 "transaction chain id {} does not match engine chain id {}",
                 transaction.chain_id, expected_chain_id
@@ -346,32 +349,32 @@ fn validate_native_transaction(
     }
 
     match &transaction.variant {
-        NativeTransactionVariant::Cip155 { gas_price }
-        | NativeTransactionVariant::Cip2930 { gas_price, .. } => {
+        CoreSpaceTransactionVariant::Cip155 { gas_price }
+        | CoreSpaceTransactionVariant::Cip2930 { gas_price, .. } => {
             if gas_price.is_zero() {
-                return Err(NativeExecutionFailure {
-                    code: NativeExecutionFailureCode::ZeroGasPrice,
+                return Err(CoreSpaceExecutionFailure {
+                    code: CoreSpaceExecutionFailureCode::ZeroGasPrice,
                     message: "transaction gas price must be greater than zero".to_string(),
                     reason: None,
                 });
             }
         }
-        NativeTransactionVariant::Cip1559 {
+        CoreSpaceTransactionVariant::Cip1559 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             ..
         } => {
             if max_fee_per_gas.is_zero() {
-                return Err(NativeExecutionFailure {
-                    code: NativeExecutionFailureCode::ZeroGasPrice,
+                return Err(CoreSpaceExecutionFailure {
+                    code: CoreSpaceExecutionFailureCode::ZeroGasPrice,
                     message: "transaction max fee per gas must be greater than zero".to_string(),
                     reason: None,
                 });
             }
 
             if max_priority_fee_per_gas > max_fee_per_gas {
-                return Err(NativeExecutionFailure {
-                    code: NativeExecutionFailureCode::PriorityFeeExceedsMaxFee,
+                return Err(CoreSpaceExecutionFailure {
+                    code: CoreSpaceExecutionFailureCode::PriorityFeeExceedsMaxFee,
                     message: format!(
                         "max priority fee per gas {} exceeds max fee per gas {}",
                         max_priority_fee_per_gas, max_fee_per_gas

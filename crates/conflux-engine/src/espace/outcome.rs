@@ -111,7 +111,7 @@ fn build_espace_drop_failure(
         TxDropError::InvalidRecipientAddress(address) => {
             Err(ConfluxEngineError::ExecutionInternal {
                 message: format!(
-                    "eSpace execution returned Native-only invalid recipient: \
+                    "eSpace execution returned Core Space-specific invalid recipient: \
                        {address:?}"
                 ),
             })
@@ -141,13 +141,15 @@ fn build_espace_repack_failure(
         )),
         ToRepackError::EpochHeightOutOfBound { .. } => Err(ConfluxEngineError::ExecutionInternal {
             message: format!(
-                "eSpace execution returned Native-only epoch validation error: \
+                "eSpace execution returned Core Space-specific epoch validation error: \
                        {error:?}"
             ),
         }),
         ToRepackError::NotEnoughCashFromSponsor { .. } => {
             Err(ConfluxEngineError::ExecutionInternal {
-                message: format!("eSpace execution returned Native-only sponsor error: {error:?}"),
+                message: format!(
+                    "eSpace execution returned Core Space-specific sponsor error: {error:?}"
+                ),
             })
         }
     }
@@ -202,7 +204,9 @@ fn build_espace_vm_failure(
         }),
         vm::Error::NotEnoughBalanceForStorage { .. } | vm::Error::ExceedStorageLimit => {
             Err(ConfluxEngineError::ExecutionInternal {
-                message: format!("eSpace execution returned Native-only storage error: {error}"),
+                message: format!(
+                    "eSpace execution returned Core Space-specific storage error: {error}"
+                ),
             })
         }
         vm::Error::BadJumpDestination { .. }

@@ -7,7 +7,7 @@ use primitives::{
 #[derive(Debug, Clone)]
 pub enum DryRunTransactionInput {
     Espace(EspaceTransactionInput),
-    Native(NativeTransactionInput),
+    CoreSpace(CoreSpaceTransactionInput),
 }
 
 #[derive(Debug, Clone)]
@@ -17,7 +17,7 @@ pub struct EspaceTransactionInput {
 }
 
 #[derive(Debug, Clone)]
-pub struct NativeTransactionInput {
+pub struct CoreSpaceTransactionInput {
     pub tx: TypedNativeTransaction,
     pub sender: Address,
 }
@@ -30,7 +30,7 @@ pub fn signed_transaction_for_dryrun(input: DryRunTransactionInput) -> SignedTra
             // upstream's RPC fake signature path to bind the eSpace sender.
             input.tx.fake_sign_rpc(input.sender.with_evm_space())
         }
-        DryRunTransactionInput::Native(input) => {
+        DryRunTransactionInput::CoreSpace(input) => {
             input.tx.fake_sign_rpc(input.sender.with_native_space())
         }
     }

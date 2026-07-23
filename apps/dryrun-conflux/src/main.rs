@@ -16,7 +16,7 @@ const DEFAULT_HEALTH_LISTEN_ADDR: &str = "127.0.0.1:9001";
 struct ConfluxAppConfig {
     chain: ConfluxChainConfig,
     espace_rpc_url: String,
-    native_rpc_url: String,
+    core_space_rpc_url: String,
 }
 
 #[tokio::main]
@@ -26,15 +26,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let app_config = conflux_config()?;
     let simulation_tasks = create_simulation_task_set()?;
-    let native_address_network = app_config.chain.native_address_network;
+    let core_space_address_network = app_config.chain.core_space_address_network;
     let provider = Arc::new(HttpConfluxStateProvider::new(
         &app_config.espace_rpc_url,
-        &app_config.native_rpc_url,
-        native_address_network,
+        &app_config.core_space_rpc_url,
+        core_space_address_network,
     )?);
     let engine = Arc::new(ConfluxEngine::new(app_config.chain, provider));
     let service = Arc::new(ConfluxService::new(engine, simulation_tasks.clone()));
-    let module = rpc::build_rpc_module(service, native_address_network);
+    let module = rpc::build_rpc_module(service, core_space_address_network);
 
     let health_addr = health_listen_addr()?;
     let _health_handle = health::start_health_server(health_addr).await?;
@@ -57,7 +57,7 @@ fn conflux_config() -> Result<ConfluxAppConfig, Box<dyn Error>> {
     Ok(ConfluxAppConfig {
         chain: ConfluxChainConfig::mainnet(),
         espace_rpc_url: required_env("DRYRUN_CONFLUX_ESPACE_RPC_URL")?,
-        native_rpc_url: required_env("DRYRUN_CONFLUX_NATIVE_RPC_URL")?,
+        core_space_rpc_url: required_env("DRYRUN_CONFLUX_CORE_SPACE_RPC_URL")?,
     })
 }
 
