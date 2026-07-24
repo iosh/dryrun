@@ -6,9 +6,6 @@ use crate::interface::{
 
 #[rpc(server)]
 pub trait DryrunRpc {
-    #[method(name = "health")]
-    async fn health(&self) -> RpcResult<String>;
-
     #[method(name = "dryrun_evm_simulateTransaction", param_kind = map)]
     async fn dryrun_evm_simulate_transaction(
         &self,

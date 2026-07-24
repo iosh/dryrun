@@ -1,40 +1,20 @@
 services:
-  dryrun-evm:
+  dryrun:
     build:
       context: .
       dockerfile: Dockerfile
-      target: evm-runtime
-    image: dryrun-evm:local
+      target: runtime
+    image: dryrun:local
     restart: unless-stopped
     init: true
     volumes:
-      - ./apps/dryrun-evm/env.toml:/app/env.toml:ro
+      - ./env.toml:/app/env.toml:ro
     environment:
       APP_SERVER__HOST: 0.0.0.0
       APP_METRICS__ENABLED: "true"
       APP_METRICS__LISTEN_ADDRESS: 0.0.0.0:9000
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    security_opt:
-      - no-new-privileges:true
-
-  dryrun-conflux:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: conflux-runtime
-    image: dryrun-conflux:local
-    restart: unless-stopped
-    init: true
-    environment:
-      DRYRUN_CONFLUX_LISTEN_ADDR: 0.0.0.0:8547
-      DRYRUN_CONFLUX_HEALTH_LISTEN_ADDR: 0.0.0.0:9001
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9001/health"]
+      test: ["CMD-SHELL", "curl --fail --silent --show-error --request POST --header 'content-type: application/json' --data '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"dryrun_health\",\"params\":[]}' http://127.0.0.1:8080/ | grep -q '\"result\":\"ok\"'"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -50,7 +30,7 @@ services:
     image: dryrun-web:local
     restart: unless-stopped
     depends_on:
-      - dryrun-evm
+      - dryrun
     ports:
       - "80:80"
     security_opt:

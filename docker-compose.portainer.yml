@@ -1,10 +1,10 @@
 services:
-  dryrun-evm:
+  dryrun:
     build:
       context: .
       dockerfile: Dockerfile
-      target: evm-runtime
-    image: dryrun-evm:prod
+      target: runtime
+    image: dryrun:prod
     restart: unless-stopped
     init: true
     environment:
@@ -13,30 +13,13 @@ services:
       APP_TRACING__LEVEL: info
       APP_TRACING__FORMAT: json
       APP_ETHEREUM__RPC_URL: ${APP_ETHEREUM__RPC_URL:?set APP_ETHEREUM__RPC_URL in Portainer}
+      APP_CONFLUX__ESPACE_RPC_URL: ${APP_CONFLUX__ESPACE_RPC_URL:?set APP_CONFLUX__ESPACE_RPC_URL in Portainer}
+      APP_CONFLUX__CORE_SPACE_RPC_URL: ${APP_CONFLUX__CORE_SPACE_RPC_URL:?set APP_CONFLUX__CORE_SPACE_RPC_URL in Portainer}
+      APP_SIMULATION__MAX_CONCURRENT: "4"
       APP_METRICS__ENABLED: "true"
       APP_METRICS__LISTEN_ADDRESS: 127.0.0.1:9000
     healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
-    security_opt:
-      - no-new-privileges:true
-
-  dryrun-conflux:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: conflux-runtime
-    image: dryrun-conflux:prod
-    restart: unless-stopped
-    init: true
-    environment:
-      DRYRUN_CONFLUX_LISTEN_ADDR: 0.0.0.0:8547
-      DRYRUN_CONFLUX_HEALTH_LISTEN_ADDR: 0.0.0.0:9001
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9001/health"]
+      test: ["CMD-SHELL", "curl --fail --silent --show-error --request POST --header 'content-type: application/json' --data '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"dryrun_health\",\"params\":[]}' http://127.0.0.1:8080/ | grep -q '\"result\":\"ok\"'"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -53,7 +36,7 @@ services:
     restart: unless-stopped
     init: true
     depends_on:
-      - dryrun-evm
+      - dryrun
     labels:
       traefik.enable: "true"
       traefik.docker.network: ${TRAEFIK_NETWORK}

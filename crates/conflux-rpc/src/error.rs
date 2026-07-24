@@ -81,25 +81,3 @@ pub(super) fn response_mapping_error(details: impl Into<String>) -> ErrorObjectO
 pub(super) fn map_service_error(error: &ConfluxServiceError) -> ErrorObjectOwned {
     internal_error(Some(error.kind_code()), error.details())
 }
-
-#[cfg(test)]
-mod tests {
-    use conflux_service::ConfluxServiceError;
-    use serde_json::to_value;
-
-    use super::map_service_error;
-
-    #[test]
-    fn admission_timeout_keeps_the_internal_rpc_error_shape() {
-        let error = map_service_error(&ConfluxServiceError::AdmissionTimedOut);
-        let value = to_value(error).expect("RPC error should serialize");
-
-        assert_eq!(value["code"], -32603);
-        assert_eq!(value["message"], "Internal error");
-        assert_eq!(value["data"]["subkind"], "admission_timed_out");
-        assert_eq!(
-            value["data"]["details"],
-            "timed out waiting for simulation capacity"
-        );
-    }
-}

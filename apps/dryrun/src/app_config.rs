@@ -5,6 +5,7 @@ use serde::Deserialize;
 pub struct AppConfig {
     pub server: ServerConfig,
     pub ethereum: EthereumConfig,
+    pub conflux: ConfluxConfig,
     pub simulation: SimulationConfig,
     pub tracing: TracingConfig,
     pub metrics: MetricsConfig,
@@ -13,13 +14,17 @@ pub struct AppConfig {
 #[derive(Debug, Deserialize)]
 pub struct EthereumConfig {
     pub rpc_url: String,
-    pub request_timeout_seconds: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ConfluxConfig {
+    pub espace_rpc_url: String,
+    pub core_space_rpc_url: String,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct SimulationConfig {
     pub max_concurrent: usize,
-    pub admission_timeout_seconds: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -28,7 +33,7 @@ pub struct TracingConfig {
     pub format: LogFormat,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Clone, Copy, Debug, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum LogFormat {
     #[default]

@@ -12,25 +12,17 @@ web-build:
 web-check:
     pnpm -C web check
 
-evm-check:
+server-check:
     cargo check -p dryrun
 
-evm-run:
-    cd apps/dryrun-evm && cargo run -p dryrun
-
-conflux-check:
-    cargo check -p dryrun-conflux
-
-conflux-run:
-    cd apps/dryrun-conflux && cargo run -p dryrun-conflux
+server-run:
+    cargo run -p dryrun
 
 check-server:
-    just evm-check
-    just conflux-check
+    just server-check
 
 check:
-    just evm-check
-    just conflux-check
+    just server-check
     just web-check
 
 compose-up:

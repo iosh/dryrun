@@ -6,13 +6,9 @@ COPY Cargo.toml Cargo.lock ./
 COPY apps ./apps
 COPY crates ./crates
 
-FROM rust-workspace AS evm-builder
+FROM rust-workspace AS app-builder
 
 RUN cargo build --locked --release -p dryrun
-
-FROM rust-workspace AS conflux-builder
-
-RUN cargo build --locked --release -p dryrun-conflux
 
 FROM debian:bookworm-slim AS runtime-base
 
@@ -25,23 +21,14 @@ WORKDIR /app
 
 USER appuser
 
-FROM runtime-base AS evm-runtime
+FROM runtime-base AS runtime
 
-COPY --from=evm-builder /app/target/release/dryrun /usr/local/bin/dryrun
+COPY --from=app-builder /app/target/release/dryrun /usr/local/bin/dryrun
 
 EXPOSE 8080
 EXPOSE 9000
 
 CMD ["dryrun"]
-
-FROM runtime-base AS conflux-runtime
-
-COPY --from=conflux-builder /app/target/release/dryrun-conflux /usr/local/bin/dryrun-conflux
-
-EXPOSE 8547
-EXPOSE 9001
-
-CMD ["dryrun-conflux"]
 
 FROM node:24-alpine AS web-builder
 

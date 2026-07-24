@@ -54,9 +54,6 @@ pub enum ConfluxServiceError {
     #[error("simulation task set is closed")]
     TaskSetClosed,
 
-    #[error("timed out waiting for simulation capacity")]
-    AdmissionTimedOut,
-
     #[error("simulation attempt task failed")]
     AttemptTask {
         #[source]
@@ -71,7 +68,6 @@ impl ConfluxServiceError {
     pub fn kind_code(&self) -> &'static str {
         match self {
             Self::TaskSetClosed => "task_set_closed",
-            Self::AdmissionTimedOut => "admission_timed_out",
             Self::AttemptTask { .. } => "attempt_task_error",
             Self::Engine(error) => engine_error_kind(error),
         }
@@ -80,7 +76,6 @@ impl ConfluxServiceError {
     pub fn details(&self) -> String {
         match self {
             Self::TaskSetClosed => "simulation task set is closed".to_owned(),
-            Self::AdmissionTimedOut => "timed out waiting for simulation capacity".to_owned(),
             Self::AttemptTask { .. } => "simulation attempt task failed".to_owned(),
             _ => self.to_string(),
         }
@@ -91,7 +86,6 @@ impl From<SimulationTaskError> for ConfluxServiceError {
     fn from(error: SimulationTaskError) -> Self {
         match error {
             SimulationTaskError::Closed => Self::TaskSetClosed,
-            SimulationTaskError::AdmissionTimedOut => Self::AdmissionTimedOut,
             SimulationTaskError::TaskFailed { source } => Self::AttemptTask { source },
         }
     }
