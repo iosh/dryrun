@@ -1,19 +1,85 @@
 use std::collections::HashMap;
 
 use alloy_primitives::{Address, U256};
+use contract_standards::Position;
 use revm::state::EvmState;
 
 use crate::{Change, NativeMetadata};
 
-use super::{
-    PositionedChange,
-    candidate::{ChangeCandidate, ChangeCandidateKind},
-    error::TransactionChangesError,
-};
+use super::{PositionedChange, error::TransactionChangesError, observation::Observation};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NativeCandidate {
+    position: Position,
+    from: Address,
+    to: Address,
+    amount: U256,
+}
+
+pub(crate) fn collect_native_candidates(
+    observations: &[Observation],
+) -> Result<Vec<NativeCandidate>, TransactionChangesError> {
+    let mut candidates = Vec::new();
+
+    for (observation_index, observation) in observations.iter().enumerate() {
+        let candidate = match observation {
+            Observation::Call {
+                caller,
+                target,
+                value,
+                ..
+            } if !value.is_zero() => Some(NativeCandidate {
+                position: Position::new(observation_index, 0),
+                from: *caller,
+                to: *target,
+                amount: *value,
+            }),
+            Observation::CreateTransfer { from, to, amount } if !amount.is_zero() => {
+                Some(NativeCandidate {
+                    position: Position::new(observation_index, 0),
+                    from: *from,
+                    to: *to,
+                    amount: *amount,
+                })
+            }
+            Observation::SelfDestruct { amount, .. } if amount.is_zero() => None,
+            Observation::SelfDestruct {
+                contract,
+                target,
+                amount,
+            } if contract == target => {
+                return Err(TransactionChangesError::UnsupportedSelfDestructToSelf {
+                    observation_index,
+                    contract: *contract,
+                    amount: *amount,
+                });
+            }
+            Observation::SelfDestruct {
+                contract,
+                target,
+                amount,
+            } => Some(NativeCandidate {
+                position: Position::new(observation_index, 0),
+                from: *contract,
+                to: *target,
+                amount: *amount,
+            }),
+            Observation::Call { .. }
+            | Observation::CreateTransfer { .. }
+            | Observation::Log { .. } => None,
+        };
+
+        if let Some(candidate) = candidate {
+            candidates.push(candidate);
+        }
+    }
+
+    Ok(candidates)
+}
 
 pub(crate) fn check_native_balances(
     state: &EvmState,
-    candidates: &[ChangeCandidate],
+    candidates: &[NativeCandidate],
     caller: Address,
     beneficiary: Address,
     gas_precharge: U256,
@@ -29,20 +95,16 @@ pub(crate) fn check_native_balances(
     decrease_balance(&mut balances, caller, gas_precharge)?;
 
     for candidate in candidates {
-        let ChangeCandidateKind::NativeTransfer { from, to, amount } = candidate.kind else {
-            continue;
-        };
+        decrease_balance(&mut balances, candidate.from, candidate.amount)?;
+        increase_balance(&mut balances, candidate.to, candidate.amount)?;
 
-        decrease_balance(&mut balances, from, amount)?;
-        increase_balance(&mut balances, to, amount)?;
-
-        if !amount.is_zero() {
+        if !candidate.amount.is_zero() {
             changes.push(PositionedChange::new(
                 candidate.position,
                 Change::NativeTransfer {
-                    from,
-                    to,
-                    raw_amount: amount,
+                    from: candidate.from,
+                    to: candidate.to,
+                    raw_amount: candidate.amount,
                     metadata: NativeMetadata::default(),
                 },
             ));

@@ -1,11 +1,3 @@
 mod candidate;
-mod erc1155;
-mod erc20;
-mod erc20_allowance;
-mod erc721;
 mod metadata;
 mod native;
-mod operator_approval;
-mod support;
-mod token_contract;
-mod token_state;

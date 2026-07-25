@@ -1,23 +1,18 @@
 use alloy::{sol, sol_types::SolCall};
 use alloy_primitives::{Address, B256, FixedBytes};
+use contract_standards::{
+    CollectionStandards, ERC165_INTERFACE_ID, ERC721_INTERFACE_ID, ERC1155_INTERFACE_ID,
+    Erc721TokenKey, Erc721TokenState, INVALID_ERC165_INTERFACE_ID, StandardStateValues,
+    StateRequirements,
+};
 use revm::{Database, context_interface::result::EVMError, handler::EvmTr};
 
-use crate::{
-    EvmEngineError, EvmTransaction,
-    changes::{
-        CollectionStandards, Erc721TokenKey, Erc721TokenState, TokenStateKeys, TokenStateValues,
-    },
-};
+use crate::{EvmEngineError, EvmTransaction};
 
 use super::{
     MainnetEvmWithDb,
     read_call::{ReadCallOutcome, execute_read_call, with_read_call_context},
 };
-
-const ERC165_INTERFACE_ID: [u8; 4] = [0x01, 0xff, 0xc9, 0xa7];
-const INVALID_INTERFACE_ID: [u8; 4] = [0xff; 4];
-const ERC721_INTERFACE_ID: [u8; 4] = [0x80, 0xac, 0x58, 0xcd];
-const ERC1155_INTERFACE_ID: [u8; 4] = [0xd9, 0xb6, 0x7a, 0x26];
 
 sol! {
     contract IERC165 {
@@ -48,39 +43,41 @@ pub(super) fn read_token_state_values<DB, INSP>(
     evm: &mut MainnetEvmWithDb<DB, INSP>,
     transaction: &EvmTransaction,
     chain_id: u64,
-    keys: &TokenStateKeys,
-) -> Result<TokenStateValues, EvmEngineError>
+    requirements: &StateRequirements,
+) -> Result<StandardStateValues, EvmEngineError>
 where
     DB: Database,
 {
-    with_read_call_context(evm, |evm| read_values(evm, transaction, chain_id, keys))
+    with_read_call_context(evm, |evm| {
+        read_values(evm, transaction, chain_id, requirements)
+    })
 }
 
 fn read_values<DB, INSP>(
     evm: &mut MainnetEvmWithDb<DB, INSP>,
     transaction: &EvmTransaction,
     chain_id: u64,
-    keys: &TokenStateKeys,
-) -> Result<TokenStateValues, EvmEngineError>
+    requirements: &StateRequirements,
+) -> Result<StandardStateValues, EvmEngineError>
 where
     DB: Database,
 {
-    let mut values = TokenStateValues::default();
+    let mut values = StandardStateValues::default();
 
-    for &contract in &keys.token_contracts {
+    for &contract in &requirements.token_contracts {
         values
             .contract_code_hashes
             .insert(contract, read_contract_code_hash(evm, contract)?);
     }
 
-    for &collection in &keys.collection_standards {
+    for &collection in &requirements.collection_standards {
         values.collection_standards.insert(
             collection,
             read_collection_standards(evm, transaction, chain_id, collection)?,
         );
     }
 
-    for &key in &keys.erc20_balances {
+    for &key in &requirements.erc20_balances {
         let balance = read_required_value(
             evm,
             transaction,
@@ -93,7 +90,7 @@ where
         values.erc20_balances.insert(key, balance);
     }
 
-    for &token in &keys.erc20_total_supplies {
+    for &token in &requirements.erc20_total_supplies {
         let total_supply = read_required_value(
             evm,
             transaction,
@@ -104,7 +101,7 @@ where
         values.erc20_total_supplies.insert(token, total_supply);
     }
 
-    for &key in &keys.erc20_allowances {
+    for &key in &requirements.erc20_allowances {
         let allowance = read_required_value(
             evm,
             transaction,
@@ -118,14 +115,14 @@ where
         values.erc20_allowances.insert(key, allowance);
     }
 
-    for &key in &keys.erc721_tokens {
+    for &key in &requirements.erc721_tokens {
         values.erc721_tokens.insert(
             key,
             read_erc721_token_state(evm, transaction, chain_id, key)?,
         );
     }
 
-    for &key in &keys.erc1155_balances {
+    for &key in &requirements.erc1155_balances {
         let balance = read_required_value(
             evm,
             transaction,
@@ -139,7 +136,7 @@ where
         values.erc1155_balances.insert(key, balance);
     }
 
-    for &key in &keys.operator_approvals {
+    for &key in &requirements.operator_approvals {
         let approved = read_required_value(
             evm,
             transaction,
@@ -256,8 +253,13 @@ where
         )));
     }
 
-    let supports_invalid_interface =
-        read_interface_support(evm, transaction, chain_id, collection, INVALID_INTERFACE_ID)?;
+    let supports_invalid_interface = read_interface_support(
+        evm,
+        transaction,
+        chain_id,
+        collection,
+        INVALID_ERC165_INTERFACE_ID,
+    )?;
 
     if supports_invalid_interface {
         return Err(EvmEngineError::analysis_failed(format!(
@@ -392,13 +394,12 @@ mod tests {
         state::{AccountInfo, Bytecode, bytecode::opcode},
     };
 
-    use crate::{
-        EvmTransaction, EvmTransactionVariant,
-        changes::{
-            CollectionStandards, Erc20AllowanceKey, Erc20BalanceKey, Erc721TokenKey,
-            Erc721TokenState, Erc1155BalanceKey, OperatorApprovalKey, TokenStateKeys,
-        },
+    use contract_standards::{
+        CollectionStandards, Erc20AllowanceKey, Erc20BalanceKey, Erc721TokenKey, Erc721TokenState,
+        Erc1155BalanceKey, OperatorApprovalKey, StateRequirements,
     };
+
+    use crate::{EvmTransaction, EvmTransactionVariant};
 
     use super::read_token_state_values;
 
@@ -424,7 +425,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_requested_token_state_values() {
+    fn reads_state() {
         let caller = Address::repeat_byte(0x01);
         let token_contract = Address::repeat_byte(0x02);
         let reverting_contract = Address::repeat_byte(0x03);
@@ -489,7 +490,7 @@ mod tests {
             owner: account,
             operator,
         };
-        let keys = TokenStateKeys {
+        let requirements = StateRequirements {
             token_contracts: vec![token_contract, reverting_contract],
             collection_standards: vec![token_contract],
             erc20_balances: vec![erc20_balance_key],
@@ -511,8 +512,8 @@ mod tests {
         };
         let mut evm = Context::mainnet().with_db(db).build_mainnet();
 
-        let values =
-            read_token_state_values(&mut evm, &transaction, 1, &keys).expect("token state values");
+        let values = read_token_state_values(&mut evm, &transaction, 1, &requirements)
+            .expect("token state values");
 
         assert_eq!(
             values.contract_code_hashes.get(&token_contract),

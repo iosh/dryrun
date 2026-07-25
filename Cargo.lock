@@ -2374,6 +2374,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "contract-standards"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "alloy-sol-types",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "convert_case"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3164,6 +3173,7 @@ dependencies = [
  "alloy-chains",
  "alloy-hardforks",
  "alloy-primitives",
+ "contract-standards",
  "revm",
  "thiserror 2.0.18",
  "tokio",

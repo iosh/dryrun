@@ -1,18 +1,16 @@
 use alloy_primitives::{Address, U256};
 
-use super::{
-    super::{
-        candidate::{ChangeCandidateKind, Erc20AllowanceEvidence},
-        token_state::{
-            Erc20AllowanceKey, Erc20BalanceKey, Erc721TokenKey, Erc1155BalanceKey,
-            OperatorApprovalKey, TokenStateKeys, collect_token_state_keys,
-        },
-    },
-    support::{candidate, erc20_movement_candidate},
+use crate::{
+    Erc20AllowanceKey, Erc20BalanceKey, Erc721TokenKey, Erc1155BalanceKey, OperatorApprovalKey,
+    StateRequirements,
+    candidate::{AllowanceSource, StandardCandidateKind},
+    state_requirements,
 };
 
+use super::support::{candidate, erc20_movement_candidate};
+
 #[test]
-fn collects_deduplicated_keys_in_candidate_order() {
+fn orders_requirements() {
     let erc20 = Address::repeat_byte(0x01);
     let erc721 = Address::repeat_byte(0x02);
     let erc1155 = Address::repeat_byte(0x03);
@@ -28,11 +26,11 @@ fn collects_deduplicated_keys_in_candidate_order() {
         candidate(
             2,
             0,
-            ChangeCandidateKind::Erc20Allowance {
+            StandardCandidateKind::Erc20Allowance {
                 token: erc20,
                 owner,
                 spender,
-                evidence: Erc20AllowanceEvidence::ApprovalEvent {
+                source: AllowanceSource::ApprovalEvent {
                     value: U256::from(4_u64),
                 },
             },
@@ -40,7 +38,7 @@ fn collects_deduplicated_keys_in_candidate_order() {
         candidate(
             3,
             0,
-            ChangeCandidateKind::Erc721Transfer {
+            StandardCandidateKind::Erc721Transfer {
                 collection: erc721,
                 from: owner,
                 to: recipient,
@@ -50,7 +48,7 @@ fn collects_deduplicated_keys_in_candidate_order() {
         candidate(
             4,
             0,
-            ChangeCandidateKind::Erc721Approval {
+            StandardCandidateKind::Erc721Approval {
                 collection: erc721,
                 owner,
                 approved_address: Some(spender),
@@ -60,7 +58,7 @@ fn collects_deduplicated_keys_in_candidate_order() {
         candidate(
             5,
             0,
-            ChangeCandidateKind::Erc1155Transfer {
+            StandardCandidateKind::Erc1155Transfer {
                 collection: erc1155,
                 from: Address::ZERO,
                 to: recipient,
@@ -71,7 +69,7 @@ fn collects_deduplicated_keys_in_candidate_order() {
         candidate(
             6,
             0,
-            ChangeCandidateKind::OperatorApproval {
+            StandardCandidateKind::OperatorApproval {
                 collection: erc1155,
                 owner,
                 operator,
@@ -81,8 +79,8 @@ fn collects_deduplicated_keys_in_candidate_order() {
     ];
 
     assert_eq!(
-        collect_token_state_keys(&candidates),
-        TokenStateKeys {
+        state_requirements(&candidates),
+        StateRequirements {
             token_contracts: vec![erc20, erc721, erc1155],
             collection_standards: vec![erc721, erc1155],
             erc20_balances: vec![

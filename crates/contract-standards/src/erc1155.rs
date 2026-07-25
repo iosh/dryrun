@@ -4,29 +4,26 @@ use std::collections::HashMap;
 
 use alloy_primitives::{Address, U256};
 
-use crate::Change;
-
-use super::{
-    PositionedChange,
-    candidate::{ChangeCandidate, ChangeCandidateKind},
-    error::TransactionChangesError,
-    token_state::{Erc1155BalanceKey, TokenStateKeys, TokenStateValues},
+use crate::{
+    ContractStandardsError, Erc1155BalanceKey, PositionedStandardChange, StandardCandidate,
+    StandardCandidateKind, StandardChange, StandardStateValues, StateArithmeticOperation,
+    StatePhase, StateRequirement, StateRequirements,
 };
 
 pub(crate) fn check_erc1155_movements(
-    candidates: &[ChangeCandidate],
-    keys: &TokenStateKeys,
-    before: &TokenStateValues,
-    after: &TokenStateValues,
-) -> Result<Vec<PositionedChange>, TransactionChangesError> {
+    candidates: &[StandardCandidate],
+    keys: &StateRequirements,
+    before: &StandardStateValues,
+    after: &StandardStateValues,
+) -> Result<Vec<PositionedStandardChange>, ContractStandardsError> {
     let replayed_balances = replay_erc1155_movements(candidates, before)?;
 
     for &key in &keys.erc1155_balances {
-        let replayed_balance = balance_value(&replayed_balances, key, "before")?;
-        let after_balance = balance_value(&after.erc1155_balances, key, "after")?;
+        let replayed_balance = balance_value(&replayed_balances, key, StatePhase::Before)?;
+        let after_balance = balance_value(&after.erc1155_balances, key, StatePhase::After)?;
 
         if replayed_balance != after_balance {
-            return Err(TransactionChangesError::Erc1155BalanceMismatch {
+            return Err(ContractStandardsError::Erc1155BalanceMismatch {
                 collection: key.collection,
                 account: key.account,
                 token_id: key.token_id,
@@ -41,8 +38,8 @@ pub(crate) fn check_erc1155_movements(
         .collect())
 }
 
-fn erc1155_movement_change(candidate: &ChangeCandidate) -> Option<PositionedChange> {
-    let ChangeCandidateKind::Erc1155Transfer {
+fn erc1155_movement_change(candidate: &StandardCandidate) -> Option<PositionedStandardChange> {
+    let StandardCandidateKind::Erc1155Transfer {
         collection,
         from,
         to,
@@ -58,21 +55,21 @@ fn erc1155_movement_change(candidate: &ChangeCandidate) -> Option<PositionedChan
     }
 
     let change = if from == Address::ZERO {
-        Change::Erc1155Mint {
+        StandardChange::Erc1155Mint {
             contract_address: collection,
             to,
             token_id,
             raw_amount: amount,
         }
     } else if to == Address::ZERO {
-        Change::Erc1155Burn {
+        StandardChange::Erc1155Burn {
             contract_address: collection,
             from,
             token_id,
             raw_amount: amount,
         }
     } else {
-        Change::Erc1155Transfer {
+        StandardChange::Erc1155Transfer {
             contract_address: collection,
             from,
             to,
@@ -81,17 +78,17 @@ fn erc1155_movement_change(candidate: &ChangeCandidate) -> Option<PositionedChan
         }
     };
 
-    Some(PositionedChange::new(candidate.position, change))
+    Some(PositionedStandardChange::new(candidate.position, change))
 }
 
 fn replay_erc1155_movements(
-    candidates: &[ChangeCandidate],
-    before: &TokenStateValues,
-) -> Result<HashMap<Erc1155BalanceKey, U256>, TransactionChangesError> {
+    candidates: &[StandardCandidate],
+    before: &StandardStateValues,
+) -> Result<HashMap<Erc1155BalanceKey, U256>, ContractStandardsError> {
     let mut balances = before.erc1155_balances.clone();
 
     for candidate in candidates {
-        let ChangeCandidateKind::Erc1155Transfer {
+        let StandardCandidateKind::Erc1155Transfer {
             collection,
             from,
             to,
@@ -107,7 +104,7 @@ fn replay_erc1155_movements(
 
             (true, true) => {
                 return Err(
-                    TransactionChangesError::Erc1155TransferBetweenZeroAddresses {
+                    ContractStandardsError::Erc1155TransferBetweenZeroAddresses {
                         collection,
                         token_id,
                         amount,
@@ -139,7 +136,7 @@ fn subtract_from_balance(
     account: Address,
     token_id: U256,
     amount: U256,
-) -> Result<(), TransactionChangesError> {
+) -> Result<(), ContractStandardsError> {
     let key = Erc1155BalanceKey {
         collection,
         account,
@@ -147,23 +144,20 @@ fn subtract_from_balance(
     };
     let balance = balances
         .get_mut(&key)
-        .ok_or(TransactionChangesError::Erc1155BalanceMissing {
-            collection,
-            account,
-            token_id,
-            state: "before",
+        .ok_or(ContractStandardsError::StateValueMissing {
+            requirement: StateRequirement::Erc1155Balance(key),
+            phase: StatePhase::Before,
         })?;
 
     let current = *balance;
-    *balance =
-        current
-            .checked_sub(amount)
-            .ok_or(TransactionChangesError::Erc1155BalanceUnderflow {
-                collection,
-                account,
-                token_id,
-                amount,
-            })?;
+    *balance = current.checked_sub(amount).ok_or_else(|| {
+        ContractStandardsError::state_arithmetic(
+            StateRequirement::Erc1155Balance(key),
+            StateArithmeticOperation::Subtract,
+            current,
+            amount,
+        )
+    })?;
 
     Ok(())
 }
@@ -174,7 +168,7 @@ fn add_to_balance(
     account: Address,
     token_id: U256,
     amount: U256,
-) -> Result<(), TransactionChangesError> {
+) -> Result<(), ContractStandardsError> {
     let key = Erc1155BalanceKey {
         collection,
         account,
@@ -182,23 +176,20 @@ fn add_to_balance(
     };
     let balance = balances
         .get_mut(&key)
-        .ok_or(TransactionChangesError::Erc1155BalanceMissing {
-            collection,
-            account,
-            token_id,
-            state: "before",
+        .ok_or(ContractStandardsError::StateValueMissing {
+            requirement: StateRequirement::Erc1155Balance(key),
+            phase: StatePhase::Before,
         })?;
 
     let current = *balance;
-    *balance =
-        current
-            .checked_add(amount)
-            .ok_or(TransactionChangesError::Erc1155BalanceOverflow {
-                collection,
-                account,
-                token_id,
-                amount,
-            })?;
+    *balance = current.checked_add(amount).ok_or_else(|| {
+        ContractStandardsError::state_arithmetic(
+            StateRequirement::Erc1155Balance(key),
+            StateArithmeticOperation::Add,
+            current,
+            amount,
+        )
+    })?;
 
     Ok(())
 }
@@ -206,15 +197,13 @@ fn add_to_balance(
 fn balance_value(
     balances: &HashMap<Erc1155BalanceKey, U256>,
     key: Erc1155BalanceKey,
-    state: &'static str,
-) -> Result<U256, TransactionChangesError> {
+    phase: StatePhase,
+) -> Result<U256, ContractStandardsError> {
     balances
         .get(&key)
         .copied()
-        .ok_or(TransactionChangesError::Erc1155BalanceMissing {
-            collection: key.collection,
-            account: key.account,
-            token_id: key.token_id,
-            state,
+        .ok_or(ContractStandardsError::StateValueMissing {
+            requirement: StateRequirement::Erc1155Balance(key),
+            phase,
         })
 }

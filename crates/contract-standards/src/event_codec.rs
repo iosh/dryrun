@@ -1,10 +1,10 @@
 use std::{fmt, sync::LazyLock};
 
-use alloy::sol_types::SolValue;
 use alloy_primitives::{Address, B256, U256, keccak256};
+use alloy_sol_types::SolValue;
 use thiserror::Error;
 
-use super::observation::Observation;
+use crate::Record;
 
 static TRANSFER_TOPIC0: LazyLock<B256> =
     LazyLock::new(|| keccak256("Transfer(address,address,uint256)"));
@@ -16,18 +16,13 @@ static TRANSFER_SINGLE_TOPIC0: LazyLock<B256> =
     LazyLock::new(|| keccak256("TransferSingle(address,address,address,uint256,uint256)"));
 static TRANSFER_BATCH_TOPIC0: LazyLock<B256> =
     LazyLock::new(|| keccak256("TransferBatch(address,address,address,uint256[],uint256[])"));
-static DEPOSIT_TOPIC0: LazyLock<B256> = LazyLock::new(|| keccak256("Deposit(address,uint256)"));
-static WITHDRAWAL_TOPIC0: LazyLock<B256> =
-    LazyLock::new(|| keccak256("Withdrawal(address,uint256)"));
-
-pub(super) fn decode_event(
-    observation: &Observation,
-) -> Result<Option<DecodedEvent>, EventCodecError> {
-    let Observation::Log {
+pub(super) fn decode_event(record: &Record) -> Result<Option<DecodedEvent>, EventCodecError> {
+    let Record::Log {
         address,
         topics,
         data,
-    } = observation
+        ..
+    } = record
     else {
         return Ok(None);
     };
@@ -46,26 +41,6 @@ pub(super) fn decode_event(
         decode_transfer_single_event(*address, topics, data)?
     } else if *topic0 == *TRANSFER_BATCH_TOPIC0 {
         decode_transfer_batch_event(*address, topics, data)?
-    } else if *topic0 == *DEPOSIT_TOPIC0 {
-        let Some((account, amount)) = decode_wrapped_native_event(topics, data) else {
-            return Ok(None);
-        };
-
-        DecodedEvent::WrappedNativeDeposit {
-            token: *address,
-            account,
-            amount,
-        }
-    } else if *topic0 == *WITHDRAWAL_TOPIC0 {
-        let Some((account, amount)) = decode_wrapped_native_event(topics, data) else {
-            return Ok(None);
-        };
-
-        DecodedEvent::WrappedNativeWithdrawal {
-            token: *address,
-            account,
-            amount,
-        }
     } else {
         return Ok(None);
     };
@@ -74,21 +49,11 @@ pub(super) fn decode_event(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum DecodedEvent {
+pub(crate) enum DecodedEvent {
     Erc20Transfer {
         token: Address,
         from: Address,
         to: Address,
-        amount: U256,
-    },
-    WrappedNativeDeposit {
-        token: Address,
-        account: Address,
-        amount: U256,
-    },
-    WrappedNativeWithdrawal {
-        token: Address,
-        account: Address,
         amount: U256,
     },
     Erc721Transfer {
@@ -131,13 +96,13 @@ pub(super) enum DecodedEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Erc1155TransferItem {
-    pub(super) token_id: U256,
-    pub(super) amount: U256,
+pub(crate) struct Erc1155TransferItem {
+    pub(crate) token_id: U256,
+    pub(crate) amount: U256,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SupportedEvent {
+pub enum SupportedEvent {
     Transfer,
     Approval,
     ApprovalForAll,
@@ -159,13 +124,13 @@ impl fmt::Display for SupportedEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("malformed {event} event: {reason}")]
-pub(crate) struct EventCodecError {
-    pub(super) event: SupportedEvent,
-    pub(super) reason: &'static str,
+pub struct EventCodecError {
+    event: SupportedEvent,
+    reason: &'static str,
 }
 
 impl EventCodecError {
-    pub(super) const fn malformed(event: SupportedEvent, reason: &'static str) -> Self {
+    pub(crate) const fn malformed(event: SupportedEvent, reason: &'static str) -> Self {
         Self { event, reason }
     }
 }
@@ -201,17 +166,6 @@ fn indexed_address(topic: &B256, event: SupportedEvent) -> Result<Address, Event
     canonical_indexed_address(topic).ok_or(EventCodecError::malformed(
         event,
         "indexed address is not zero padded",
-    ))
-}
-
-fn decode_wrapped_native_event(topics: &[B256], data: &[u8]) -> Option<(Address, U256)> {
-    if topics.len() != 2 || data.len() != 32 {
-        return None;
-    }
-
-    Some((
-        canonical_indexed_address(&topics[1])?,
-        U256::from_be_slice(data),
     ))
 }
 

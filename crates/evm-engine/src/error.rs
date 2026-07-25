@@ -1,5 +1,9 @@
 use thiserror::Error;
 
+use contract_standards::{
+    ContractStandardsError, StateArithmeticOperation, StatePhase, StateRequirement,
+};
+
 use crate::changes::TransactionChangesError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,8 +101,110 @@ impl From<TransactionChangesError> for EvmEngineError {
     }
 }
 
+impl From<ContractStandardsError> for EvmEngineError {
+    fn from(error: ContractStandardsError) -> Self {
+        let details = contract_standards_error_details(&error);
+        Self::analysis_failed(format!("transaction changes failed: {details}"))
+    }
+}
+
+fn contract_standards_error_details(error: &ContractStandardsError) -> String {
+    // Keep the existing EVM RPC details stable while the shared crate uses
+    // chain-neutral terminology and a more precise record position.
+    match error {
+        ContractStandardsError::MalformedEvent { position, source } => format!(
+            "failed to decode event at observation {}: {source}",
+            position.index
+        ),
+        ContractStandardsError::StateValueMissing { requirement, phase } => {
+            legacy_state_value_missing(*requirement, *phase)
+        }
+        ContractStandardsError::StateArithmetic {
+            requirement,
+            operation,
+            current,
+            amount,
+        } => legacy_state_arithmetic(**requirement, *operation, *current, *amount),
+        _ => error.to_string(),
+    }
+}
+
+fn legacy_state_value_missing(requirement: StateRequirement, phase: StatePhase) -> String {
+    match requirement {
+        StateRequirement::TokenContractCode(address) => {
+            format!("token state values are missing {phase} runtime code hash for {address}")
+        }
+        StateRequirement::CollectionStandards(collection) => {
+            format!("token state values are missing {phase} collection standards for {collection}")
+        }
+        StateRequirement::Erc20Balance(key) => format!(
+            "ERC-20 {phase} balance for {} in token {} is missing",
+            key.account, key.token
+        ),
+        StateRequirement::Erc20TotalSupply(token) => {
+            format!("ERC-20 {phase} total supply for token {token} is missing")
+        }
+        StateRequirement::Erc20Allowance(key) => format!(
+            "ERC-20 {phase} allowance for owner {} and spender {} in token {} is missing",
+            key.owner, key.spender, key.token
+        ),
+        StateRequirement::Erc721Token(key) => format!(
+            "ERC-721 {phase} state for token {} in collection {} is missing",
+            key.token_id, key.collection
+        ),
+        StateRequirement::Erc1155Balance(key) => format!(
+            "ERC-1155 {phase} balance for {} and token {} in collection {} is missing",
+            key.account, key.token_id, key.collection
+        ),
+        StateRequirement::OperatorApproval(key) => format!(
+            "{phase} operator approval for owner {} and operator {} in collection {} is missing",
+            key.owner, key.operator, key.collection
+        ),
+    }
+}
+
+fn legacy_state_arithmetic(
+    requirement: StateRequirement,
+    operation: StateArithmeticOperation,
+    current: alloy_primitives::U256,
+    amount: alloy_primitives::U256,
+) -> String {
+    match (requirement, operation) {
+        (StateRequirement::Erc20Balance(key), StateArithmeticOperation::Subtract) => format!(
+            "ERC-20 balance underflow for {} in token {}: balance {current}, cannot subtract {amount}",
+            key.account, key.token
+        ),
+        (StateRequirement::Erc20Balance(key), StateArithmeticOperation::Add) => format!(
+            "ERC-20 balance overflow for {} in token {}: balance {current}, cannot add {amount}",
+            key.account, key.token
+        ),
+        (StateRequirement::Erc20TotalSupply(token), StateArithmeticOperation::Subtract) => format!(
+            "ERC-20 total supply underflow for token {token}: total supply {current}, cannot subtract {amount}"
+        ),
+        (StateRequirement::Erc20TotalSupply(token), StateArithmeticOperation::Add) => format!(
+            "ERC-20 total supply overflow for token {token}: total supply {current}, cannot add {amount}"
+        ),
+        (StateRequirement::Erc1155Balance(key), StateArithmeticOperation::Subtract) => format!(
+            "ERC-1155 balance underflow for {} and token {} in collection {}: cannot subtract {amount}",
+            key.account, key.token_id, key.collection
+        ),
+        (StateRequirement::Erc1155Balance(key), StateArithmeticOperation::Add) => format!(
+            "ERC-1155 balance overflow for {} and token {} in collection {}: cannot add {amount}",
+            key.account, key.token_id, key.collection
+        ),
+        (requirement, operation) => {
+            format!(
+                "state {operation} failed for {requirement}: current {current}, amount {amount}"
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use alloy_primitives::Address;
+    use contract_standards::{ContractStandardsError, StatePhase, StateRequirement};
+
     use super::{EvmEngineError, EvmEngineInternalKind};
 
     #[test]
@@ -141,5 +247,22 @@ mod tests {
         assert!(not_supported.is_not_supported());
         assert_eq!(not_supported.kind_code(), None);
         assert_eq!(not_supported.details(), "block.hash is not supported yet");
+    }
+
+    #[test]
+    fn shared_state_errors_keep_existing_evm_details() {
+        let address = Address::repeat_byte(0x11);
+        let error = EvmEngineError::from(ContractStandardsError::StateValueMissing {
+            requirement: StateRequirement::TokenContractCode(address),
+            phase: StatePhase::Before,
+        });
+
+        assert_eq!(
+            error.details(),
+            format!(
+                "transaction changes failed: token state values are missing \
+                 before runtime code hash for {address}"
+            )
+        );
     }
 }

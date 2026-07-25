@@ -1,14 +1,12 @@
 use alloy_primitives::{Address, U256};
 
-use crate::Change;
-
-use super::super::{
-    PositionedChange,
-    candidate::{ChangeCandidate, ChangeCandidateKind, ObservationPosition},
-    erc1155::check_erc1155_movements,
-    error::TransactionChangesError,
-    token_state::{Erc1155BalanceKey, TokenStateValues, collect_token_state_keys},
+use crate::{
+    ContractStandardsError, Erc1155BalanceKey, Position, PositionedStandardChange,
+    StandardCandidate, StandardChange, StandardStateValues, candidate::StandardCandidateKind,
+    state_requirements,
 };
+
+use super::super::erc1155::check_erc1155_movements;
 
 fn address(byte: u8) -> Address {
     Address::repeat_byte(byte)
@@ -21,13 +19,10 @@ fn movement(
     to: Address,
     token_id: u64,
     amount: u64,
-) -> ChangeCandidate {
-    ChangeCandidate {
-        position: ObservationPosition {
-            observation_index,
-            item_index: 0,
-        },
-        kind: ChangeCandidateKind::Erc1155Transfer {
+) -> StandardCandidate {
+    StandardCandidate {
+        position: Position::new(observation_index, 0),
+        kind: StandardCandidateKind::Erc1155Transfer {
             collection,
             from,
             to,
@@ -40,8 +35,8 @@ fn movement(
 fn state_values<const N: usize>(
     collection: Address,
     balances: [(Address, u64, u64); N],
-) -> TokenStateValues {
-    TokenStateValues {
+) -> StandardStateValues {
+    StandardStateValues {
         erc1155_balances: balances
             .into_iter()
             .map(|(account, token_id, balance)| {
@@ -55,25 +50,20 @@ fn state_values<const N: usize>(
                 )
             })
             .collect(),
-        ..TokenStateValues::default()
+        ..StandardStateValues::default()
     }
 }
 
 fn run_check(
-    candidates: &[ChangeCandidate],
-    before: &TokenStateValues,
-    after: &TokenStateValues,
-) -> Result<Vec<PositionedChange>, TransactionChangesError> {
-    check_erc1155_movements(
-        candidates,
-        &collect_token_state_keys(candidates),
-        before,
-        after,
-    )
+    candidates: &[StandardCandidate],
+    before: &StandardStateValues,
+    after: &StandardStateValues,
+) -> Result<Vec<PositionedStandardChange>, ContractStandardsError> {
+    check_erc1155_movements(candidates, &state_requirements(candidates), before, after)
 }
 
 #[test]
-fn reconciles_ordered_mint_transfer_self_transfer_and_burn() {
+fn replays_movements() {
     let collection = address(0x01);
     let alice = address(0x02);
     let bob = address(0x03);
@@ -92,14 +82,26 @@ fn reconciles_ordered_mint_transfer_self_transfer_and_burn() {
     .expect("ERC-1155 movements should reconcile");
 
     assert_eq!(changes.len(), 4);
-    assert!(matches!(changes[0].change, Change::Erc1155Transfer { .. }));
-    assert!(matches!(changes[1].change, Change::Erc1155Transfer { .. }));
-    assert!(matches!(changes[2].change, Change::Erc1155Burn { .. }));
-    assert!(matches!(changes[3].change, Change::Erc1155Mint { .. }));
+    assert!(matches!(
+        changes[0].change,
+        StandardChange::Erc1155Transfer { .. }
+    ));
+    assert!(matches!(
+        changes[1].change,
+        StandardChange::Erc1155Transfer { .. }
+    ));
+    assert!(matches!(
+        changes[2].change,
+        StandardChange::Erc1155Burn { .. }
+    ));
+    assert!(matches!(
+        changes[3].change,
+        StandardChange::Erc1155Mint { .. }
+    ));
 }
 
 #[test]
-fn rejects_impossible_and_mismatched_balance_paths() {
+fn rejects_bad_replay() {
     let collection = address(0x01);
     let alice = address(0x02);
     let bob = address(0x03);
@@ -111,7 +113,11 @@ fn rejects_impossible_and_mismatched_balance_paths() {
             &state_values(collection, [(alice, 1, 2), (bob, 1, 0)]),
             &state_values(collection, [(alice, 1, 2), (bob, 1, 0)]),
         ),
-        Err(TransactionChangesError::Erc1155BalanceUnderflow { .. })
+        Err(ContractStandardsError::StateArithmetic {
+            requirement,
+            operation: crate::StateArithmeticOperation::Subtract,
+            ..
+        }) if matches!(requirement.as_ref(), crate::StateRequirement::Erc1155Balance(_))
     ));
 
     assert!(matches!(
@@ -120,30 +126,6 @@ fn rejects_impossible_and_mismatched_balance_paths() {
             &state_values(collection, [(alice, 1, 10), (bob, 1, 0)]),
             &state_values(collection, [(alice, 1, 8), (bob, 1, 3)]),
         ),
-        Err(TransactionChangesError::Erc1155BalanceMismatch { .. })
-    ));
-}
-
-#[test]
-fn accepts_zero_amount_between_zero_addresses_only() {
-    let collection = address(0x01);
-    let empty = TokenStateValues::default();
-
-    assert_eq!(
-        run_check(
-            &[movement(0, collection, Address::ZERO, Address::ZERO, 1, 0)],
-            &empty,
-            &empty,
-        ),
-        Ok(Vec::new())
-    );
-
-    assert!(matches!(
-        run_check(
-            &[movement(0, collection, Address::ZERO, Address::ZERO, 1, 1,)],
-            &empty,
-            &empty,
-        ),
-        Err(TransactionChangesError::Erc1155TransferBetweenZeroAddresses { .. })
+        Err(ContractStandardsError::Erc1155BalanceMismatch { .. })
     ));
 }

@@ -19,13 +19,13 @@ use crate::{
     EvmEngineError, EvmExecutionInput, EvmSimulation, EvmTransaction, ResolvedBlock,
     chain_spec::resolve_execution_spec_id,
     changes::{
-        ChangeObservationInspector, build_changes, check_erc20_changes, check_erc721_changes,
-        check_erc1155_movements, check_native_balances, check_operator_approvals,
-        check_token_contracts, collect_candidates, collect_change_metadata_requests,
-        collect_token_state_keys, sort_changes_by_position,
+        ChangeObservationInspector, build_changes, check_native_balances,
+        collect_change_metadata_requests, collect_contract_candidates, collect_native_candidates,
+        map_contract_changes, sort_changes_by_position,
     },
 };
 use alloy::providers::DynProvider;
+use contract_standards::{state_requirements, verify};
 use revm::{
     Context, ExecuteCommitEvm, InspectEvm, MainBuilder, MainContext, MainnetEvm,
     context::{BlockEnv, CfgEnv, TxEnv},
@@ -101,17 +101,21 @@ fn execute_transaction(
             let fee_settlement =
                 TransactionFeeSettlement::new(result.gas(), effective_gas_price, base_fee_per_gas)?;
 
-            let change_candidates = if matches!(&result, ExecutionResult::Success { .. }) {
-                collect_candidates(&observations)?
-            } else {
-                Vec::new()
-            };
-            let token_state_keys = collect_token_state_keys(&change_candidates);
+            let (native_candidates, candidates) =
+                if matches!(&result, ExecutionResult::Success { .. }) {
+                    (
+                        collect_native_candidates(&observations)?,
+                        collect_contract_candidates(&observations)?,
+                    )
+                } else {
+                    (Vec::new(), Vec::new())
+                };
+            let requirements = state_requirements(&candidates);
             let execution = build_execution(result, chain_id, resolved_block, &fee_settlement);
 
             let mut positioned_changes = check_native_balances(
                 &state,
-                &change_candidates,
+                &native_candidates,
                 caller,
                 beneficiary,
                 fee_settlement.gas_precharge,
@@ -120,47 +124,18 @@ fn execute_transaction(
             )?;
 
             let before_token_state =
-                read_token_state_values(&mut evm, transaction, chain_id, &token_state_keys)?;
+                read_token_state_values(&mut evm, transaction, chain_id, &requirements)?;
 
             evm.commit(state);
 
             let after_token_state =
-                read_token_state_values(&mut evm, transaction, chain_id, &token_state_keys)?;
+                read_token_state_values(&mut evm, transaction, chain_id, &requirements)?;
 
-            check_token_contracts(
-                &change_candidates,
-                &token_state_keys,
+            positioned_changes.extend(map_contract_changes(verify(
+                &candidates,
                 &before_token_state,
                 &after_token_state,
-            )?;
-
-            positioned_changes.extend(check_erc20_changes(
-                &change_candidates,
-                &token_state_keys,
-                &before_token_state,
-                &after_token_state,
-            )?);
-
-            positioned_changes.extend(check_erc721_changes(
-                &change_candidates,
-                &token_state_keys,
-                &before_token_state,
-                &after_token_state,
-            )?);
-
-            positioned_changes.extend(check_erc1155_movements(
-                &change_candidates,
-                &token_state_keys,
-                &before_token_state,
-                &after_token_state,
-            )?);
-
-            positioned_changes.extend(check_operator_approvals(
-                &change_candidates,
-                &token_state_keys,
-                &before_token_state,
-                &after_token_state,
-            )?);
+            )?));
 
             (execution, positioned_changes)
         }

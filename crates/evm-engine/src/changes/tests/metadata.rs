@@ -1,28 +1,22 @@
 use std::collections::HashMap;
 
 use alloy_primitives::{Address, U256};
+use contract_standards::Position;
 
 use crate::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
 
 use super::super::{
     PositionedChange, build_changes,
-    candidate::ObservationPosition,
     metadata::{ChangeMetadata, ChangeMetadataRequests, collect_change_metadata_requests},
     sort_changes_by_position,
 };
 
 fn positioned(observation_index: usize, change: Change) -> PositionedChange {
-    PositionedChange::new(
-        ObservationPosition {
-            observation_index,
-            item_index: 0,
-        },
-        change,
-    )
+    PositionedChange::new(Position::new(observation_index, 0), change)
 }
 
 #[test]
-fn sorts_changes_before_metadata_collection_and_enrichment() {
+fn sorts_before_metadata() {
     let erc721 = Address::repeat_byte(0x01);
     let second_erc721 = Address::repeat_byte(0x02);
     let erc20 = Address::repeat_byte(0x03);

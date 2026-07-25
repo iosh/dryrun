@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "apps/dryrun",
+    "crates/contract-standards",
     "crates/evm-engine",
     "crates/evm-rpc",
     "crates/evm-service",
@@ -16,6 +17,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+contract-standards = { path = "crates/contract-standards" }
 evm-engine = { path = "crates/evm-engine" }
 evm-rpc = { path = "crates/evm-rpc" }
 evm-service = { path = "crates/evm-service" }
@@ -35,6 +37,7 @@ alloy = { version = "1", features = ["full"] }
 alloy-chains = "0.2"
 alloy-hardforks = "0.4"
 alloy-primitives = "1"
+alloy-sol-types = "1"
 revm = "36"
 
 async-trait = "0.1"

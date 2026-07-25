@@ -7,12 +7,10 @@ use revm::{
     state::{Account, AccountInfo, EvmState},
 };
 
-use super::{
-    super::{
-        candidate::collect_candidates, error::TransactionChangesError,
-        native::check_native_balances, observation::ChangeObservationInspector,
-    },
-    support::native_candidate,
+use super::super::{
+    error::TransactionChangesError,
+    native::{check_native_balances, collect_native_candidates},
+    observation::{ChangeObservationInspector, Observation},
 };
 
 fn state_account(original_balance: U256, current_balance: U256) -> Account {
@@ -31,8 +29,18 @@ fn native_state<const N: usize>(accounts: [(Address, U256, U256); N]) -> EvmStat
         .collect()
 }
 
+fn call_observation(caller: Address, target: Address, value: u64) -> Observation {
+    Observation::Call {
+        caller,
+        target,
+        value: U256::from(value),
+        input_len: 0,
+        input_prefix: alloy_primitives::Bytes::new(),
+    }
+}
+
 #[test]
-fn reconciles_revm_transfer_and_fee_only_state() {
+fn replays_transfer_and_fee() {
     const GAS_LIMIT: u64 = 21_000;
     const GAS_PRICE: u128 = 10;
     const BASE_FEE: u64 = 3;
@@ -74,7 +82,7 @@ fn reconciles_revm_transfer_and_fee_only_state() {
         )
         .expect("native transfer execution");
     let observations = std::mem::take(&mut evm.inspector).into_observations();
-    let candidates = collect_candidates(&observations).expect("native transfer candidate");
+    let candidates = collect_native_candidates(&observations).expect("native transfer candidate");
     let gas = result_and_state.result.gas();
     let gas_precharge = U256::from(gas.limit()) * U256::from(GAS_PRICE);
     let fee = U256::from(gas.used()) * U256::from(GAS_PRICE);
@@ -110,7 +118,7 @@ fn reconciles_revm_transfer_and_fee_only_state() {
 }
 
 #[test]
-fn rejects_balance_received_after_selfdestruct() {
+fn rejects_deleted_balance() {
     let caller = Address::repeat_byte(0x01);
     let destroyed = Address::repeat_byte(0x02);
     let target = Address::repeat_byte(0x03);
@@ -123,10 +131,15 @@ fn rejects_balance_received_after_selfdestruct() {
         .get_mut(&destroyed)
         .expect("destroyed account")
         .mark_selfdestruct();
-    let candidates = [
-        native_candidate(0, destroyed, target, U256::from(300_u64)),
-        native_candidate(1, caller, destroyed, U256::from(25_u64)),
-    ];
+    let candidates = collect_native_candidates(&[
+        Observation::SelfDestruct {
+            contract: destroyed,
+            target,
+            amount: U256::from(300_u64),
+        },
+        call_observation(caller, destroyed, 25),
+    ])
+    .expect("native candidates");
 
     let error = check_native_balances(
         &state,
@@ -152,7 +165,7 @@ fn rejects_balance_received_after_selfdestruct() {
 }
 
 #[test]
-fn rejects_invalid_balance_replay() {
+fn rejects_bad_balance_replay() {
     let caller = Address::repeat_byte(0x01);
     let target = Address::repeat_byte(0x02);
     let unrelated = Address::repeat_byte(0x03);
@@ -160,7 +173,8 @@ fn rejects_invalid_balance_replay() {
 
     let missing_error = check_native_balances(
         &missing_state,
-        &[native_candidate(0, caller, target, U256::from(1_u64))],
+        &collect_native_candidates(&[call_observation(caller, target, 1)])
+            .expect("native candidate"),
         caller,
         caller,
         U256::ZERO,
@@ -176,7 +190,8 @@ fn rejects_invalid_balance_replay() {
     let underflow_state = native_state([(caller, U256::from(10_u64), U256::from(10_u64))]);
     let underflow_error = check_native_balances(
         &underflow_state,
-        &[native_candidate(0, caller, caller, U256::from(20_u64))],
+        &collect_native_candidates(&[call_observation(caller, caller, 20)])
+            .expect("native candidate"),
         caller,
         caller,
         U256::ZERO,

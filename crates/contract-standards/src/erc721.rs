@@ -1,16 +1,13 @@
 //! ERC-721 transaction state checks.
 
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::HashMap;
 
 use alloy_primitives::{Address, U256};
 
-use crate::{Change, Erc721CollectionMetadata};
-
-use super::{
-    PositionedChange,
-    candidate::{ChangeCandidate, ChangeCandidateKind, ObservationPosition},
-    error::TransactionChangesError,
-    token_state::{Erc721TokenKey, Erc721TokenState, TokenStateKeys, TokenStateValues},
+use crate::{
+    ContractStandardsError, Erc721TokenKey, Erc721TokenState, Position, PositionedStandardChange,
+    StandardCandidate, StandardCandidateKind, StandardChange, StandardStateValues, StatePhase,
+    StateRequirement,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,29 +29,29 @@ impl Erc721TokenCursor {
 }
 
 struct Erc721Replay {
-    cursors: HashMap<Erc721TokenKey, Erc721TokenCursor>,
-    approval_positions: HashMap<Erc721TokenKey, ObservationPosition>,
-    movements: Vec<PositionedChange>,
+    tokens: Vec<Erc721ReplayToken>,
+    movements: Vec<PositionedStandardChange>,
+}
+
+struct Erc721ReplayToken {
+    key: Erc721TokenKey,
+    cursor: Erc721TokenCursor,
+    approval_position: Position,
 }
 
 pub(crate) fn check_erc721_changes(
-    candidates: &[ChangeCandidate],
-    keys: &TokenStateKeys,
-    before: &TokenStateValues,
-    after: &TokenStateValues,
-) -> Result<Vec<PositionedChange>, TransactionChangesError> {
+    candidates: &[StandardCandidate],
+    before: &StandardStateValues,
+    after: &StandardStateValues,
+) -> Result<Vec<PositionedStandardChange>, ContractStandardsError> {
     let replayed = replay_erc721_changes(candidates, before)?;
     let mut changes = replayed.movements;
 
-    for &key in &keys.erc721_tokens {
-        let cursor = replayed.cursors.get(&key).copied().ok_or(
-            TransactionChangesError::Erc721CandidateMissing {
-                collection: key.collection,
-                token_id: key.token_id,
-            },
-        )?;
-        let before_state = token_state(before, key, "before")?;
-        let after_state = token_state(after, key, "after")?;
+    for replay_token in &replayed.tokens {
+        let key = replay_token.key;
+        let cursor = replay_token.cursor;
+        let before_state = token_state(before, key, StatePhase::Before)?;
+        let after_state = token_state(after, key, StatePhase::After)?;
 
         check_after_state(cursor, key, after_state)?;
 
@@ -64,20 +61,13 @@ pub(crate) fn check_erc721_changes(
             continue;
         }
 
-        let position = replayed.approval_positions.get(&key).copied().ok_or(
-            TransactionChangesError::Erc721CandidateMissing {
-                collection: key.collection,
-                token_id: key.token_id,
-            },
-        )?;
-        changes.push(PositionedChange::new(
-            position,
-            Change::Erc721TokenApproval {
+        changes.push(PositionedStandardChange::new(
+            replay_token.approval_position,
+            StandardChange::Erc721TokenApproval {
                 contract_address: key.collection,
                 token_id: key.token_id,
                 approved_address_before,
                 approved_address_after,
-                metadata: Erc721CollectionMetadata::default(),
             },
         ));
     }
@@ -86,16 +76,16 @@ pub(crate) fn check_erc721_changes(
 }
 
 fn replay_erc721_changes(
-    candidates: &[ChangeCandidate],
-    before: &TokenStateValues,
-) -> Result<Erc721Replay, TransactionChangesError> {
-    let mut cursors = HashMap::new();
-    let mut approval_positions = HashMap::new();
+    candidates: &[StandardCandidate],
+    before: &StandardStateValues,
+) -> Result<Erc721Replay, ContractStandardsError> {
+    let mut tokens = Vec::new();
+    let mut token_indexes = HashMap::new();
     let mut movements = Vec::new();
 
     for candidate in candidates {
         match candidate.kind {
-            ChangeCandidateKind::Erc721Transfer {
+            StandardCandidateKind::Erc721Transfer {
                 collection,
                 from,
                 to,
@@ -105,16 +95,22 @@ fn replay_erc721_changes(
                     collection,
                     token_id,
                 };
-                let cursor = token_cursor(&mut cursors, before, key)?;
-                apply_movement(cursor, key, from, to)?;
-                approval_positions.insert(key, candidate.position);
-                movements.push(PositionedChange::new(
+                let replay_token = token_entry(
+                    &mut tokens,
+                    &mut token_indexes,
+                    before,
+                    key,
+                    candidate.position,
+                )?;
+                apply_movement(&mut replay_token.cursor, key, from, to)?;
+                replay_token.approval_position = candidate.position;
+                movements.push(PositionedStandardChange::new(
                     candidate.position,
                     erc721_movement_change(collection, from, to, token_id),
                 ));
             }
 
-            ChangeCandidateKind::Erc721Approval {
+            StandardCandidateKind::Erc721Approval {
                 collection,
                 owner,
                 approved_address,
@@ -124,20 +120,22 @@ fn replay_erc721_changes(
                     collection,
                     token_id,
                 };
-                let cursor = token_cursor(&mut cursors, before, key)?;
-                apply_approval(cursor, key, owner, approved_address)?;
-                approval_positions.insert(key, candidate.position);
+                let replay_token = token_entry(
+                    &mut tokens,
+                    &mut token_indexes,
+                    before,
+                    key,
+                    candidate.position,
+                )?;
+                apply_approval(&mut replay_token.cursor, key, owner, approved_address)?;
+                replay_token.approval_position = candidate.position;
             }
 
             _ => {}
         }
     }
 
-    Ok(Erc721Replay {
-        cursors,
-        approval_positions,
-        movements,
-    })
+    Ok(Erc721Replay { tokens, movements })
 }
 
 fn erc721_movement_change(
@@ -145,30 +143,25 @@ fn erc721_movement_change(
     from: Address,
     to: Address,
     token_id: U256,
-) -> Change {
-    let metadata = Erc721CollectionMetadata::default();
-
+) -> StandardChange {
     if from == Address::ZERO {
-        Change::Erc721Mint {
+        StandardChange::Erc721Mint {
             contract_address: collection,
             to,
             token_id,
-            metadata,
         }
     } else if to == Address::ZERO {
-        Change::Erc721Burn {
+        StandardChange::Erc721Burn {
             contract_address: collection,
             from,
             token_id,
-            metadata,
         }
     } else {
-        Change::Erc721Transfer {
+        StandardChange::Erc721Transfer {
             contract_address: collection,
             from,
             to,
             token_id,
-            metadata,
         }
     }
 }
@@ -177,7 +170,7 @@ fn check_after_state(
     cursor: Erc721TokenCursor,
     key: Erc721TokenKey,
     after: Erc721TokenState,
-) -> Result<(), TransactionChangesError> {
+) -> Result<(), ContractStandardsError> {
     match (cursor, after) {
         (Erc721TokenCursor::Absent, Erc721TokenState::OwnerOfReverted) => Ok(()),
 
@@ -192,7 +185,7 @@ fn check_after_state(
             },
         ) if owner == after_owner => {
             if approved_address != after_approved_address {
-                return Err(TransactionChangesError::Erc721ApprovalMismatch {
+                return Err(ContractStandardsError::Erc721ApprovalMismatch {
                     collection: key.collection,
                     token_id: key.token_id,
                     replayed_approved_address: approved_address,
@@ -203,7 +196,7 @@ fn check_after_state(
             Ok(())
         }
 
-        (cursor, after) => Err(TransactionChangesError::Erc721OwnerMismatch {
+        (cursor, after) => Err(ContractStandardsError::Erc721OwnerMismatch {
             collection: key.collection,
             token_id: key.token_id,
             replayed_owner: cursor.owner(),
@@ -228,31 +221,40 @@ fn token_state_approval(state: Erc721TokenState) -> Option<Address> {
     }
 }
 
-fn token_cursor<'a>(
-    cursors: &'a mut HashMap<Erc721TokenKey, Erc721TokenCursor>,
-    before: &TokenStateValues,
+fn token_entry<'a>(
+    tokens: &'a mut Vec<Erc721ReplayToken>,
+    token_indexes: &mut HashMap<Erc721TokenKey, usize>,
+    before: &StandardStateValues,
     key: Erc721TokenKey,
-) -> Result<&'a mut Erc721TokenCursor, TransactionChangesError> {
-    match cursors.entry(key) {
-        Entry::Occupied(entry) => Ok(entry.into_mut()),
-        Entry::Vacant(entry) => {
-            let cursor = match token_state(before, key, "before")? {
-                Erc721TokenState::Present {
-                    owner,
-                    approved_address,
-                } => Erc721TokenCursor::Present {
-                    owner,
-                    approved_address,
-                },
-
-                // The first candidate is applied immediately. Only a mint can
-                // turn this getter outcome into a valid absent-token path.
-                Erc721TokenState::OwnerOfReverted => Erc721TokenCursor::Absent,
-            };
-
-            Ok(entry.insert(cursor))
-        }
+    position: Position,
+) -> Result<&'a mut Erc721ReplayToken, ContractStandardsError> {
+    if let Some(&index) = token_indexes.get(&key) {
+        return Ok(&mut tokens[index]);
     }
+
+    let cursor = match token_state(before, key, StatePhase::Before)? {
+        Erc721TokenState::Present {
+            owner,
+            approved_address,
+        } => Erc721TokenCursor::Present {
+            owner,
+            approved_address,
+        },
+
+        // The first candidate is applied immediately. Only a mint can
+        // turn this getter outcome into a valid absent-token path.
+        Erc721TokenState::OwnerOfReverted => Erc721TokenCursor::Absent,
+    };
+
+    let index = tokens.len();
+    tokens.push(Erc721ReplayToken {
+        key,
+        cursor,
+        approval_position: position,
+    });
+    token_indexes.insert(key, index);
+
+    Ok(&mut tokens[index])
 }
 
 fn apply_movement(
@@ -260,7 +262,7 @@ fn apply_movement(
     key: Erc721TokenKey,
     from: Address,
     to: Address,
-) -> Result<(), TransactionChangesError> {
+) -> Result<(), ContractStandardsError> {
     let current_owner = cursor.owner();
 
     match (from == Address::ZERO, to == Address::ZERO, *cursor) {
@@ -299,7 +301,7 @@ fn apply_movement(
             Ok(())
         }
 
-        _ => Err(TransactionChangesError::Erc721MovementInvalid {
+        _ => Err(ContractStandardsError::Erc721MovementInvalid {
             collection: key.collection,
             token_id: key.token_id,
             from,
@@ -314,7 +316,7 @@ fn apply_approval(
     key: Erc721TokenKey,
     event_owner: Address,
     approved_address: Option<Address>,
-) -> Result<(), TransactionChangesError> {
+) -> Result<(), ContractStandardsError> {
     let current_owner = cursor.owner();
 
     match *cursor {
@@ -326,7 +328,7 @@ fn apply_approval(
             Ok(())
         }
 
-        _ => Err(TransactionChangesError::Erc721ApprovalInvalid {
+        _ => Err(ContractStandardsError::Erc721ApprovalInvalid {
             collection: key.collection,
             token_id: key.token_id,
             event_owner,
@@ -336,15 +338,16 @@ fn apply_approval(
 }
 
 fn token_state(
-    values: &TokenStateValues,
+    values: &StandardStateValues,
     key: Erc721TokenKey,
-    state: &'static str,
-) -> Result<Erc721TokenState, TransactionChangesError> {
-    values.erc721_tokens.get(&key).copied().ok_or(
-        TransactionChangesError::Erc721TokenStateMissing {
-            collection: key.collection,
-            token_id: key.token_id,
-            state,
-        },
-    )
+    phase: StatePhase,
+) -> Result<Erc721TokenState, ContractStandardsError> {
+    values
+        .erc721_tokens
+        .get(&key)
+        .copied()
+        .ok_or(ContractStandardsError::StateValueMissing {
+            requirement: StateRequirement::Erc721Token(key),
+            phase,
+        })
 }
