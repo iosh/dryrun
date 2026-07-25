@@ -1,12 +1,16 @@
 use cfx_executor::{
-    executive::{ChargeCollateral, ExecutionOutcome, ExecutiveContext, TransactOptions},
+    executive::{
+        ChargeCollateral, ExecutionOutcome, ExecutiveContext, TransactOptions, TransactSettings,
+    },
     machine::Machine,
     state::State,
 };
 use cfx_statedb::Result as StateDbResult;
+use cfx_types::Space;
 
 mod context;
 mod env;
+mod observer;
 mod params;
 mod transaction;
 
@@ -49,8 +53,16 @@ pub fn execute_transaction(
     Ok(outcome)
 }
 
-fn transact_options_for(transaction: &DryRunTransactionInput) -> TransactOptions<()> {
-    let mut options = TransactOptions::default();
+fn transact_options_for(
+    transaction: &DryRunTransactionInput,
+) -> TransactOptions<observer::ObservationObserver> {
+    let mut options = TransactOptions {
+        observer: observer::ObservationObserver::new(match transaction {
+            DryRunTransactionInput::Espace(_) => Space::Ethereum,
+            DryRunTransactionInput::CoreSpace(_) => Space::Native,
+        }),
+        settings: TransactSettings::all_checks(),
+    };
 
     if matches!(transaction, DryRunTransactionInput::CoreSpace(_)) {
         // Public Core Space RPC returns storage values without storage owners.
