@@ -1,5 +1,6 @@
 mod execution;
 mod outcome;
+pub(crate) mod simulation;
 mod transaction;
 
 pub(crate) use outcome::{build_core_space_execution, build_core_space_not_executed};

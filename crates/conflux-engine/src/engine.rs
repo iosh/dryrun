@@ -8,17 +8,14 @@ use crate::{
     core_space::{
         CoreSpaceExecution, CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode,
         CoreSpaceStateAnchor, CoreSpaceTransaction, CoreSpaceTransactionVariant,
-        SimulateCoreSpaceTransactionInput, build_core_space_execution,
-        build_core_space_not_executed, build_core_space_transaction_input,
+        SimulateCoreSpaceTransactionInput, build_core_space_not_executed,
+        build_core_space_transaction_input,
     },
     espace::{
-        EspaceExecution, SimulateEspaceTransactionInput, build_espace_execution,
-        build_espace_not_executed, build_espace_transaction_input, validate_espace_transaction,
+        EspaceExecution, SimulateEspaceTransactionInput, build_espace_not_executed,
+        build_espace_transaction_input, validate_espace_transaction,
     },
-    execution::{
-        DryRunTransactionInput, TransactionExecutionInput, build_mainnet_machine,
-        build_rpc_backed_state, execute_transaction,
-    },
+    execution::{DryRunTransactionInput, TransactionExecutionInput},
     preparation::context::{
         resolve_core_space_execution_context, resolve_espace_execution_context,
     },
@@ -94,30 +91,7 @@ impl ConfluxEngine {
         &self,
         prepared: PreparedEspaceSimulation,
     ) -> Result<EspaceExecution, ConfluxEngineError> {
-        match prepared.kind {
-            PreparedEspaceSimulationState::Complete(execution) => Ok(*execution),
-            PreparedEspaceSimulationState::Ready(ready) => {
-                let ReadyEspaceSimulation {
-                    chain_id,
-                    simulated_block,
-                    gas_limit,
-                    execution_input,
-                    state_reader,
-                } = *ready;
-                let mut state = build_rpc_backed_state(state_reader, self.runtime_handle.clone())
-                    .map_err(|error| ConfluxEngineError::StateAccess {
-                    message: error.to_string(),
-                })?;
-                let machine = build_mainnet_machine();
-                let outcome = execute_transaction(&mut state, &machine, execution_input).map_err(
-                    |error| ConfluxEngineError::StateAccess {
-                        message: error.to_string(),
-                    },
-                )?;
-
-                build_espace_execution(chain_id, simulated_block, gas_limit, outcome)
-            }
-        }
+        crate::espace::simulation::simulate(prepared, &self.runtime_handle)
     }
 
     pub async fn prepare_core_space_transaction(
@@ -167,35 +141,7 @@ impl ConfluxEngine {
         &self,
         prepared: PreparedCoreSpaceSimulation,
     ) -> Result<CoreSpaceExecution, ConfluxEngineError> {
-        match prepared.kind {
-            PreparedCoreSpaceSimulationState::Complete(execution) => Ok(*execution),
-            PreparedCoreSpaceSimulationState::Ready(ready) => {
-                let ReadyCoreSpaceSimulation {
-                    chain_id,
-                    state_anchor,
-                    gas_limit,
-                    execution_input,
-                    state_reader,
-                } = *ready;
-                let mut state = build_rpc_backed_state(state_reader, self.runtime_handle.clone())
-                    .map_err(|error| ConfluxEngineError::StateAccess {
-                    message: error.to_string(),
-                })?;
-                let machine = build_mainnet_machine();
-                let outcome = execute_transaction(&mut state, &machine, execution_input).map_err(
-                    |error| ConfluxEngineError::StateAccess {
-                        message: error.to_string(),
-                    },
-                )?;
-
-                Ok(build_core_space_execution(
-                    chain_id,
-                    state_anchor,
-                    gas_limit,
-                    outcome,
-                ))
-            }
-        }
+        crate::core_space::simulation::simulate(prepared, &self.runtime_handle)
     }
 
     async fn prepare_state_reader(

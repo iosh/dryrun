@@ -1,5 +1,6 @@
 mod execution;
 mod outcome;
+pub(crate) mod simulation;
 mod transaction;
 
 pub use execution::{
