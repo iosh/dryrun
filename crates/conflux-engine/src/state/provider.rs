@@ -11,7 +11,20 @@ use cfx_rpc_cfx_types::EpochNumber;
 use cfx_rpc_eth_types::BlockId;
 
 #[async_trait]
-pub trait RemoteStateProvider: Send + Sync {
+pub trait ConfluxBlockProvider: Send + Sync {
+    async fn get_core_space_block_by_epoch_number(
+        &self,
+        epoch_number: EpochNumber,
+    ) -> Result<Option<CoreSpaceRpcBlock>, RemoteStateProviderError>;
+
+    async fn get_espace_block_by_number(
+        &self,
+        block_number: BlockId,
+    ) -> Result<Option<EspaceRpcBlock>, RemoteStateProviderError>;
+}
+
+#[async_trait]
+pub trait ConfluxStateProvider: Send + Sync {
     async fn get_espace_storage_at(
         &self,
         block: BlockId,
@@ -73,16 +86,6 @@ pub trait RemoteStateProvider: Send + Sync {
         to: Address,
         data: Vec<u8>,
     ) -> Result<Vec<u8>, RemoteStateProviderError>;
-
-    async fn get_core_space_block_by_epoch_number(
-        &self,
-        epoch_number: EpochNumber,
-    ) -> Result<Option<CoreSpaceRpcBlock>, RemoteStateProviderError>;
-
-    async fn get_espace_block_by_number(
-        &self,
-        block_number: BlockId,
-    ) -> Result<Option<EspaceRpcBlock>, RemoteStateProviderError>;
 }
 
 #[derive(Debug, Error)]

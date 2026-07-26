@@ -23,24 +23,28 @@ use crate::{
         PreparedCoreSpaceSimulationState, PreparedEspaceSimulationState, ReadyCoreSpaceSimulation,
         ReadyEspaceSimulation,
     },
-    state::{ConfluxStatePoint, RemoteStateProvider, RemoteStateReader},
+    state::{ConfluxBlockProvider, ConfluxStatePoint, ConfluxStateProvider, RemoteStateReader},
 };
 
 pub struct ConfluxEngine {
     chain: ConfluxChainConfig,
-    provider: Arc<dyn RemoteStateProvider>,
+    block_provider: Arc<dyn ConfluxBlockProvider>,
+    state_provider: Arc<dyn ConfluxStateProvider>,
     runtime_handle: Handle,
 }
 
 impl ConfluxEngine {
-    pub fn new(
-        chain: ConfluxChainConfig,
-        provider: Arc<dyn RemoteStateProvider>,
-        runtime_handle: Handle,
-    ) -> Self {
+    pub fn new<P>(chain: ConfluxChainConfig, provider: Arc<P>, runtime_handle: Handle) -> Self
+    where
+        P: ConfluxBlockProvider + ConfluxStateProvider + 'static,
+    {
+        let block_provider: Arc<dyn ConfluxBlockProvider> = provider.clone();
+        let state_provider: Arc<dyn ConfluxStateProvider> = provider;
+
         Self {
             chain,
-            provider,
+            block_provider,
+            state_provider,
             runtime_handle,
         }
     }
@@ -52,7 +56,7 @@ impl ConfluxEngine {
         let SimulateEspaceTransactionInput { block, transaction } = input;
         let gas_limit = transaction.gas_limit;
         let execution_context =
-            resolve_espace_execution_context(self.provider.as_ref(), &block).await?;
+            resolve_espace_execution_context(self.block_provider.as_ref(), &block).await?;
         let chain_id = self.chain.evm_chain_id;
 
         if let Err(failure) = validate_espace_transaction(&transaction, chain_id) {
@@ -101,7 +105,7 @@ impl ConfluxEngine {
         let SimulateCoreSpaceTransactionInput { epoch, transaction } = input;
         let gas_limit = transaction.gas_limit;
         let execution_context =
-            resolve_core_space_execution_context(self.provider.as_ref(), &epoch).await?;
+            resolve_core_space_execution_context(self.block_provider.as_ref(), &epoch).await?;
         let chain_id = self.chain.core_space_chain_id;
         let state_anchor = CoreSpaceStateAnchor {
             epoch_number: execution_context.state_point.anchor().epoch_number(),
@@ -148,7 +152,7 @@ impl ConfluxEngine {
         &self,
         state_point: ConfluxStatePoint,
     ) -> Result<RemoteStateReader, ConfluxEngineError> {
-        RemoteStateReader::prepare(state_point, Arc::clone(&self.provider))
+        RemoteStateReader::prepare(state_point, Arc::clone(&self.state_provider))
             .await
             .map_err(|error| ConfluxEngineError::StateAccess {
                 message: error.to_string(),

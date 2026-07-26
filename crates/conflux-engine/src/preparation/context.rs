@@ -12,8 +12,8 @@ use crate::{
         build_execution_block_context,
     },
     state::{
-        ConfluxStateAnchor, ConfluxStatePoint, CoreSpaceRpcBlock, EspaceRpcBlock,
-        RemoteStateProvider,
+        ConfluxBlockProvider, ConfluxStateAnchor, ConfluxStatePoint, CoreSpaceRpcBlock,
+        EspaceRpcBlock,
     },
 };
 
@@ -29,17 +29,18 @@ pub(crate) struct CoreSpaceExecutionContext {
 }
 
 pub(crate) async fn resolve_espace_execution_context(
-    provider: &dyn RemoteStateProvider,
+    block_provider: &dyn ConfluxBlockProvider,
     block: &EspaceBlockRef,
 ) -> Result<EspaceExecutionContext, ConfluxEngineError> {
-    let espace_block = provider
+    let espace_block = block_provider
         .get_espace_block_by_number(espace_block_selector(block))
         .await?
         .ok_or_else(|| ConfluxEngineError::BlockNotFound {
             block: "eSpace block".to_string(),
         })?;
     let state_anchor = state_anchor_from_espace_block(&espace_block)?;
-    let core_space_pivot_block = resolve_core_space_pivot_block(provider, state_anchor).await?;
+    let core_space_pivot_block =
+        resolve_core_space_pivot_block(block_provider, state_anchor).await?;
 
     let simulated_block = SimulatedBlock {
         number: state_anchor.epoch_number(),
@@ -67,10 +68,10 @@ pub(crate) async fn resolve_espace_execution_context(
 }
 
 pub(crate) async fn resolve_core_space_execution_context(
-    provider: &dyn RemoteStateProvider,
+    block_provider: &dyn ConfluxBlockProvider,
     epoch: &CoreSpaceEpochRef,
 ) -> Result<CoreSpaceExecutionContext, ConfluxEngineError> {
-    let core_space_pivot_block = provider
+    let core_space_pivot_block = block_provider
         .get_core_space_block_by_epoch_number(core_space_epoch_selector(epoch))
         .await?
         .ok_or_else(|| ConfluxEngineError::BlockNotFound {
@@ -79,7 +80,7 @@ pub(crate) async fn resolve_core_space_execution_context(
 
     let core_space_pivot = build_core_space_pivot_block_context(&core_space_pivot_block)?;
     let state_anchor = state_anchor_from_core_space_pivot(&core_space_pivot);
-    let espace_block = resolve_espace_block_for_anchor(provider, state_anchor).await?;
+    let espace_block = resolve_espace_block_for_anchor(block_provider, state_anchor).await?;
     validate_same_state_anchor(state_anchor, state_anchor_from_espace_block(&espace_block)?)?;
     let espace = build_espace_block_context(&espace_block);
     let block_context = build_execution_block_context(
@@ -95,10 +96,10 @@ pub(crate) async fn resolve_core_space_execution_context(
 }
 
 async fn resolve_core_space_pivot_block(
-    provider: &dyn RemoteStateProvider,
+    block_provider: &dyn ConfluxBlockProvider,
     anchor: ConfluxStateAnchor,
 ) -> Result<CoreSpaceRpcBlock, ConfluxEngineError> {
-    provider
+    block_provider
         .get_core_space_block_by_epoch_number(core_space_epoch_from_anchor(anchor))
         .await?
         .ok_or_else(|| ConfluxEngineError::BlockNotFound {
@@ -107,10 +108,10 @@ async fn resolve_core_space_pivot_block(
 }
 
 async fn resolve_espace_block_for_anchor(
-    provider: &dyn RemoteStateProvider,
+    block_provider: &dyn ConfluxBlockProvider,
     anchor: ConfluxStateAnchor,
 ) -> Result<EspaceRpcBlock, ConfluxEngineError> {
-    provider
+    block_provider
         .get_espace_block_by_number(anchor.espace_block())
         .await?
         .ok_or_else(|| ConfluxEngineError::BlockNotFound {

@@ -19,7 +19,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::state::{
-    provider::{RemoteStateProvider, RemoteStateProviderError},
+    provider::{ConfluxBlockProvider, ConfluxStateProvider, RemoteStateProviderError},
     rpc_encoding::{RpcStorageWord, decode_rpc_bytes},
     rpc_types::{
         CoreSpaceGlobalSnapshot, CoreSpacePoSEconomics, CoreSpaceRpcAccount, CoreSpaceRpcBlock,
@@ -28,13 +28,13 @@ use crate::state::{
     },
 };
 
-pub struct HttpConfluxStateProvider {
+pub struct HttpConfluxProvider {
     core_space_address_network: Network,
     espace_client: HttpClient,
     core_space_client: HttpClient,
 }
 
-impl HttpConfluxStateProvider {
+impl HttpConfluxProvider {
     pub fn new(
         espace_url: &str,
         core_space_url: &str,
@@ -192,7 +192,7 @@ impl HttpConfluxStateProvider {
 }
 
 #[async_trait]
-impl RemoteStateProvider for HttpConfluxStateProvider {
+impl ConfluxStateProvider for HttpConfluxProvider {
     async fn get_espace_storage_at(
         &self,
         block_number: BlockId,
@@ -429,7 +429,10 @@ impl RemoteStateProvider for HttpConfluxStateProvider {
             .await?;
         decode_rpc_bytes(value, "cfx_call")
     }
+}
 
+#[async_trait]
+impl ConfluxBlockProvider for HttpConfluxProvider {
     async fn get_core_space_block_by_epoch_number(
         &self,
         epoch_number: EpochNumber,

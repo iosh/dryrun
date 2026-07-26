@@ -1,7 +1,7 @@
 use std::{io, sync::Arc};
 
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
-use conflux_engine::{ConfluxEngine, config::ConfluxChainConfig, state::HttpConfluxStateProvider};
+use conflux_engine::{ConfluxEngine, config::ConfluxChainConfig, state::HttpConfluxProvider};
 use conflux_rpc::build_rpc_module as build_conflux_rpc_module;
 use conflux_service::ConfluxService;
 use evm_engine::EvmEngine;
@@ -119,15 +119,13 @@ fn create_ethereum_provider(config: &EthereumConfig) -> io::Result<DynProvider> 
 fn create_conflux_provider(
     config: &ConfluxConfig,
     chain: &ConfluxChainConfig,
-) -> io::Result<HttpConfluxStateProvider> {
-    HttpConfluxStateProvider::new(
+) -> io::Result<HttpConfluxProvider> {
+    HttpConfluxProvider::new(
         &config.espace_rpc_url,
         &config.core_space_rpc_url,
         chain.core_space_address_network,
     )
-    .map_err(|error| {
-        configuration_error(format!("failed to create Conflux state provider: {error}"))
-    })
+    .map_err(|error| configuration_error(format!("failed to create Conflux provider: {error}")))
 }
 
 fn startup_error(message: impl Into<String>) -> io::Error {

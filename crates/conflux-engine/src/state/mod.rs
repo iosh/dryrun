@@ -13,8 +13,8 @@ use cfx_rpc_eth_types::BlockId as EthBlockId;
 use cfx_types::{H256, U64};
 
 pub use self::{
-    http_provider::HttpConfluxStateProvider,
-    provider::{RemoteStateProvider, RemoteStateProviderError},
+    http_provider::HttpConfluxProvider,
+    provider::{ConfluxBlockProvider, ConfluxStateProvider, RemoteStateProviderError},
     rpc_types::{
         CoreSpaceGlobalSnapshot, CoreSpacePoSEconomics, CoreSpaceRpcAccount, CoreSpaceRpcBlock,
         CoreSpaceStorageCollateralInfo, CoreSpaceSupplyInfo, CoreSpaceVoteParamsInfo,

@@ -11,7 +11,7 @@ use crate::state::{
     core_space_internal::{
         CoreSpaceInternalStateItem, SponsorWhitelistStorageKey, decode_abi_bool,
     },
-    provider::{RemoteStateProvider, RemoteStateProviderError},
+    provider::{ConfluxStateProvider, RemoteStateProviderError},
     rpc_types::{CoreSpaceGlobalSnapshot, EspaceAccountSnapshot},
     state_item::{CoreSpaceStateItem, EspaceStateItem, StateItem},
     state_value_encoding::{
@@ -30,7 +30,7 @@ type StateRead = Option<RawStateValue>;
 pub(crate) struct RemoteStateReader {
     state_point: ConfluxStatePoint,
     core_space_epoch: CfxEpochNumber,
-    provider: Arc<dyn RemoteStateProvider>,
+    state_provider: Arc<dyn ConfluxStateProvider>,
     core_space_globals: CoreSpaceGlobalSnapshot,
     espace_account_cache: Mutex<HashMap<Address, Arc<EspaceAccountSnapshot>>>,
 }
@@ -38,10 +38,10 @@ pub(crate) struct RemoteStateReader {
 impl RemoteStateReader {
     pub(crate) async fn prepare(
         state_point: ConfluxStatePoint,
-        provider: Arc<dyn RemoteStateProvider>,
+        state_provider: Arc<dyn ConfluxStateProvider>,
     ) -> StorageResult<Self> {
         let core_space_epoch = state_point.core_space_epoch();
-        let core_space_globals = provider
+        let core_space_globals = state_provider
             .get_core_space_global_snapshot(core_space_epoch.clone())
             .await
             .map_err(|error| {
@@ -51,7 +51,7 @@ impl RemoteStateReader {
         Ok(Self {
             state_point,
             core_space_epoch,
-            provider,
+            state_provider,
             core_space_globals,
             espace_account_cache: Mutex::new(HashMap::new()),
         })
@@ -177,7 +177,7 @@ impl RemoteStateReader {
         }
 
         let snapshot = Arc::new(
-            self.provider
+            self.state_provider
                 .get_espace_account_snapshot(self.espace_block(), address)
                 .await
                 .map_err(|error| self.provider_error("get_espace_account_snapshot", error))?,
@@ -189,14 +189,14 @@ impl RemoteStateReader {
 
     async fn fetch_core_space_account(&self, address: Address) -> StorageResult<StateRead> {
         let account = self
-            .provider
+            .state_provider
             .get_core_space_account(self.core_space_epoch(), address)
             .await
             .map_err(|error| self.provider_error("get_core_space_account", error))?;
 
         if should_encode_core_space_contract_account(address, account.code_hash) {
             let sponsor_info = self
-                .provider
+                .state_provider
                 .get_core_space_sponsor_info(self.core_space_epoch(), address)
                 .await
                 .map_err(|error| self.provider_error("get_core_space_sponsor_info", error))?;
@@ -224,7 +224,7 @@ impl RemoteStateReader {
 
     async fn fetch_core_space_deposit_list(&self, address: Address) -> StorageResult<StateRead> {
         let deposits = self
-            .provider
+            .state_provider
             .get_core_space_deposit_list(self.core_space_epoch(), address)
             .await
             .map_err(|error| self.provider_error("get_core_space_deposit_list", error))?;
@@ -234,7 +234,7 @@ impl RemoteStateReader {
 
     async fn fetch_core_space_vote_list(&self, address: Address) -> StorageResult<StateRead> {
         let votes = self
-            .provider
+            .state_provider
             .get_core_space_vote_list(self.core_space_epoch(), address)
             .await
             .map_err(|error| self.provider_error("get_core_space_vote_list", error))?;
@@ -248,7 +248,7 @@ impl RemoteStateReader {
         slot: H256,
     ) -> StorageResult<StateRead> {
         let value = self
-            .provider
+            .state_provider
             .get_core_space_storage_at(self.core_space_epoch(), address, slot)
             .await
             .map_err(|error| self.provider_error("get_core_space_storage_at", error))?;
@@ -262,7 +262,7 @@ impl RemoteStateReader {
         expected_code_hash: H256,
     ) -> StorageResult<StateRead> {
         let code = self
-            .provider
+            .state_provider
             .get_core_space_code_at(self.core_space_epoch(), address)
             .await
             .map_err(|error| self.provider_error("get_core_space_code_at", error))?;
@@ -292,7 +292,7 @@ impl RemoteStateReader {
         key: SponsorWhitelistStorageKey,
     ) -> StorageResult<StateRead> {
         let is_all_whitelisted = self
-            .provider
+            .state_provider
             .call_core_space(
                 self.core_space_epoch(),
                 key.control_contract_address(),
@@ -317,7 +317,7 @@ impl RemoteStateReader {
         }
 
         let is_user_whitelisted = self
-            .provider
+            .state_provider
             .call_core_space(
                 self.core_space_epoch(),
                 key.control_contract_address(),
@@ -346,7 +346,7 @@ impl RemoteStateReader {
         slot: H256,
     ) -> StorageResult<StateRead> {
         let value = self
-            .provider
+            .state_provider
             .get_espace_storage_at(self.espace_block(), address, slot)
             .await
             .map_err(|error| self.provider_error("get_espace_storage_at", error))?;
