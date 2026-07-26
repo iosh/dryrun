@@ -31,12 +31,8 @@ pub(crate) fn simulate(
                     }
                 })?;
             let machine = build_mainnet_machine();
-            let outcome =
-                execute_transaction(&mut state, &machine, execution_input).map_err(|error| {
-                    ConfluxEngineError::StateAccess {
-                        message: error.to_string(),
-                    }
-                })?;
+            let outcome = execute_transaction(&mut state, &machine, execution_input)
+                .map_err(ConfluxEngineError::from)?;
 
             Ok(build_core_space_execution(
                 chain_id,

@@ -1,5 +1,5 @@
 use cfx_bytes::Bytes;
-use cfx_executor::executive::{ExecutionError, ExecutionOutcome, ToRepackError, TxDropError};
+use cfx_executor::executive::{ExecutionError, ToRepackError, TxDropError};
 use cfx_types::U256;
 use cfx_vm_types as vm;
 use primitives::receipt::StorageChange;
@@ -8,24 +8,25 @@ use super::{
     CoreSpaceExecution, CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode,
     CoreSpaceExecutionStatus, CoreSpaceStateAnchor, CoreSpaceStorageChange,
 };
+use crate::execution::TransactionExecutionOutcome;
 
 pub(crate) fn build_core_space_execution(
     chain_id: u32,
     state: CoreSpaceStateAnchor,
     gas_limit: U256,
-    outcome: ExecutionOutcome,
+    outcome: TransactionExecutionOutcome,
 ) -> CoreSpaceExecution {
     let status = match &outcome {
-        ExecutionOutcome::Finished(_) => CoreSpaceExecutionStatus::Success,
-        ExecutionOutcome::ExecutionErrorBumpNonce(_, _) => CoreSpaceExecutionStatus::Failed,
-        ExecutionOutcome::NotExecutedDrop(_)
-        | ExecutionOutcome::NotExecutedToReconsiderPacking(_) => {
+        TransactionExecutionOutcome::Success(_) => CoreSpaceExecutionStatus::Success,
+        TransactionExecutionOutcome::Failed { .. } => CoreSpaceExecutionStatus::Failed,
+        TransactionExecutionOutcome::NotExecutedDrop(_)
+        | TransactionExecutionOutcome::NotExecutedToReconsiderPacking(_) => {
             CoreSpaceExecutionStatus::NotExecuted
         }
     };
 
     let failure = build_core_space_failure(&outcome);
-    let executed = outcome.try_into_executed();
+    let executed = outcome.into_executed();
 
     let storage_collateralized = if status == CoreSpaceExecutionStatus::Success {
         executed
@@ -118,14 +119,18 @@ fn map_core_space_storage_changes(changes: &[StorageChange]) -> Vec<CoreSpaceSto
         .collect()
 }
 
-fn build_core_space_failure(outcome: &ExecutionOutcome) -> Option<CoreSpaceExecutionFailure> {
+fn build_core_space_failure(
+    outcome: &TransactionExecutionOutcome,
+) -> Option<CoreSpaceExecutionFailure> {
     match outcome {
-        ExecutionOutcome::Finished(_) => None,
-        ExecutionOutcome::ExecutionErrorBumpNonce(error, executed) => Some(
-            build_core_space_execution_error_failure(error, executed.output.as_ref()),
+        TransactionExecutionOutcome::Success(_) => None,
+        TransactionExecutionOutcome::Failed { error, details } => Some(
+            build_core_space_execution_error_failure(error, details.output.as_ref()),
         ),
-        ExecutionOutcome::NotExecutedDrop(error) => Some(build_core_space_drop_failure(error)),
-        ExecutionOutcome::NotExecutedToReconsiderPacking(error) => {
+        TransactionExecutionOutcome::NotExecutedDrop(error) => {
+            Some(build_core_space_drop_failure(error))
+        }
+        TransactionExecutionOutcome::NotExecutedToReconsiderPacking(error) => {
             Some(build_core_space_repack_failure(error))
         }
     }

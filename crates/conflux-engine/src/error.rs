@@ -1,6 +1,9 @@
 use thiserror::Error;
 
-use crate::{execution::ExecutionBlockContextError, state::RemoteStateProviderError};
+use crate::{
+    execution::{ExecutionBlockContextError, TransactionExecutionError},
+    state::RemoteStateProviderError,
+};
 
 #[derive(Debug, Error)]
 pub enum ConfluxEngineError {
@@ -24,4 +27,17 @@ pub enum ConfluxEngineError {
 
     #[error("engine execution failed: {message}")]
     ExecutionInternal { message: String },
+}
+
+impl From<TransactionExecutionError> for ConfluxEngineError {
+    fn from(error: TransactionExecutionError) -> Self {
+        match error {
+            TransactionExecutionError::StateAccess(error) => Self::StateAccess {
+                message: error.to_string(),
+            },
+            TransactionExecutionError::MissingObservations => Self::ExecutionInternal {
+                message: error.to_string(),
+            },
+        }
+    }
 }

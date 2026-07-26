@@ -1,5 +1,5 @@
 use cfx_bytes::Bytes;
-use cfx_executor::executive::{ExecutionError, ExecutionOutcome, ToRepackError, TxDropError};
+use cfx_executor::executive::{ExecutionError, ToRepackError, TxDropError};
 use cfx_types::U256;
 use cfx_vm_types as vm;
 
@@ -7,7 +7,7 @@ use super::{
     EspaceExecution, EspaceExecutionFailure, EspaceExecutionFailureCode, EspaceExecutionStatus,
     SimulatedBlock,
 };
-use crate::ConfluxEngineError;
+use crate::{ConfluxEngineError, execution::TransactionExecutionOutcome};
 
 pub(crate) fn build_espace_not_executed(
     chain_id: u32,
@@ -33,7 +33,7 @@ pub(crate) fn build_espace_execution(
     chain_id: u32,
     block: SimulatedBlock,
     gas_limit: U256,
-    outcome: ExecutionOutcome,
+    outcome: TransactionExecutionOutcome,
 ) -> Result<EspaceExecution, ConfluxEngineError> {
     let failure = build_failure(&outcome)?;
     let status = if failure.is_some() {
@@ -42,7 +42,7 @@ pub(crate) fn build_espace_execution(
         EspaceExecutionStatus::Success
     };
 
-    let executed = outcome.try_into_executed();
+    let executed = outcome.into_executed();
 
     Ok(EspaceExecution {
         chain_id: u64::from(chain_id),
@@ -67,15 +67,17 @@ pub(crate) fn build_espace_execution(
     })
 }
 fn build_failure(
-    outcome: &ExecutionOutcome,
+    outcome: &TransactionExecutionOutcome,
 ) -> Result<Option<EspaceExecutionFailure>, ConfluxEngineError> {
     match outcome {
-        ExecutionOutcome::Finished(_) => Ok(None),
-        ExecutionOutcome::ExecutionErrorBumpNonce(error, executed) => {
-            build_execution_error_failure(error, executed.output.as_ref()).map(Some)
+        TransactionExecutionOutcome::Success(_) => Ok(None),
+        TransactionExecutionOutcome::Failed { error, details } => {
+            build_execution_error_failure(error, details.output.as_ref()).map(Some)
         }
-        ExecutionOutcome::NotExecutedDrop(error) => build_espace_drop_failure(error).map(Some),
-        ExecutionOutcome::NotExecutedToReconsiderPacking(error) => {
+        TransactionExecutionOutcome::NotExecutedDrop(error) => {
+            build_espace_drop_failure(error).map(Some)
+        }
+        TransactionExecutionOutcome::NotExecutedToReconsiderPacking(error) => {
             build_espace_repack_failure(error).map(Some)
         }
     }

@@ -1,16 +1,14 @@
 use cfx_executor::{
-    executive::{
-        ChargeCollateral, ExecutionOutcome, ExecutiveContext, TransactOptions, TransactSettings,
-    },
+    executive::{ChargeCollateral, ExecutiveContext, TransactOptions, TransactSettings},
     machine::Machine,
     state::State,
 };
-use cfx_statedb::Result as StateDbResult;
 use cfx_types::Space;
 
 mod context;
 mod env;
 mod observer;
+mod outcome;
 mod params;
 mod transaction;
 
@@ -21,22 +19,23 @@ pub use context::{
 };
 pub(crate) use env::build_rpc_backed_state;
 pub use env::{build_execution_spec, build_mainnet_machine, build_transaction_env};
+pub(crate) use outcome::{TransactionExecutionError, TransactionExecutionOutcome};
 pub use params::mainnet_common_params;
 pub use transaction::{
     CoreSpaceTransactionInput, DryRunTransactionInput, EspaceTransactionInput,
     signed_transaction_for_dryrun,
 };
 
-pub struct TransactionExecutionInput {
-    pub block_context: ExecutionBlockContext,
-    pub transaction: DryRunTransactionInput,
+pub(crate) struct TransactionExecutionInput {
+    pub(crate) block_context: ExecutionBlockContext,
+    pub(crate) transaction: DryRunTransactionInput,
 }
 
-pub fn execute_transaction(
+pub(crate) fn execute_transaction(
     state: &mut State,
     machine: &Machine,
     input: TransactionExecutionInput,
-) -> StateDbResult<ExecutionOutcome> {
+) -> Result<TransactionExecutionOutcome, TransactionExecutionError> {
     let options = transact_options_for(&input.transaction);
     let tx = signed_transaction_for_dryrun(input.transaction);
     let env = build_transaction_env(machine, state, &tx, &input.block_context);
@@ -50,7 +49,7 @@ pub fn execute_transaction(
         state.burn_by_cip1559(burnt_fee);
     }
 
-    Ok(outcome)
+    TransactionExecutionOutcome::from_upstream(outcome)
 }
 
 fn transact_options_for(
