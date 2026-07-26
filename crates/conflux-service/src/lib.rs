@@ -29,7 +29,20 @@ impl ConfluxService {
         let engine = Arc::clone(&self.engine);
         let simulation = self
             .simulation_tasks
-            .run(move || async move { engine.simulate_espace_transaction(input).await })
+            .run(move || async move {
+                let prepared = engine.prepare_espace_transaction(input).await?;
+                let execution_engine = Arc::clone(&engine);
+
+                tokio::task::spawn_blocking(move || {
+                    execution_engine.simulate_espace_transaction(prepared)
+                })
+                .await
+                .map_err(|source| ConfluxServiceError::ExecutionTask {
+                    space: "eSpace",
+                    source,
+                })?
+                .map_err(ConfluxServiceError::from)
+            })
             .await??;
 
         Ok(simulation.into())
@@ -42,7 +55,20 @@ impl ConfluxService {
         let engine = Arc::clone(&self.engine);
         let simulation = self
             .simulation_tasks
-            .run(move || async move { engine.simulate_core_space_transaction(input).await })
+            .run(move || async move {
+                let prepared = engine.prepare_core_space_transaction(input).await?;
+                let execution_engine = Arc::clone(&engine);
+
+                tokio::task::spawn_blocking(move || {
+                    execution_engine.simulate_core_space_transaction(prepared)
+                })
+                .await
+                .map_err(|source| ConfluxServiceError::ExecutionTask {
+                    space: "Core Space",
+                    source,
+                })?
+                .map_err(ConfluxServiceError::from)
+            })
             .await??;
 
         Ok(simulation.into())
@@ -60,6 +86,13 @@ pub enum ConfluxServiceError {
         source: JoinError,
     },
 
+    #[error("engine execution failed: {space} blocking execution task failed: {source}")]
+    ExecutionTask {
+        space: &'static str,
+        #[source]
+        source: JoinError,
+    },
+
     #[error(transparent)]
     Engine(#[from] conflux_engine::ConfluxEngineError),
 }
@@ -69,6 +102,7 @@ impl ConfluxServiceError {
         match self {
             Self::TaskSetClosed => "task_set_closed",
             Self::AttemptTask { .. } => "attempt_task_error",
+            Self::ExecutionTask { .. } => "engine_execution_error",
             Self::Engine(error) => engine_error_kind(error),
         }
     }

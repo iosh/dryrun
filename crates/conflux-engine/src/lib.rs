@@ -9,3 +9,4 @@ pub mod state;
 
 pub use engine::ConfluxEngine;
 pub use error::ConfluxEngineError;
+pub use preparation::{PreparedCoreSpaceSimulation, PreparedEspaceSimulation};

@@ -87,7 +87,11 @@ fn add_conflux_rpc_module(
     let conflux_chain = ConfluxChainConfig::mainnet();
     let core_space_address_network = conflux_chain.core_space_address_network;
     let conflux_provider = Arc::new(create_conflux_provider(config, &conflux_chain)?);
-    let conflux_engine = Arc::new(ConfluxEngine::new(conflux_chain, conflux_provider));
+    let conflux_engine = Arc::new(ConfluxEngine::new(
+        conflux_chain,
+        conflux_provider,
+        tokio::runtime::Handle::current(),
+    ));
     let conflux_service = Arc::new(ConfluxService::new(conflux_engine, simulation_tasks));
 
     rpc_module

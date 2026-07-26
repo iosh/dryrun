@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
+use tokio::runtime::Handle;
+
 use crate::{
-    ConfluxEngineError,
+    ConfluxEngineError, PreparedCoreSpaceSimulation, PreparedEspaceSimulation,
     config::ConfluxChainConfig,
     core_space::{
         CoreSpaceExecution, CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode,
@@ -20,24 +22,36 @@ use crate::{
     preparation::context::{
         resolve_core_space_execution_context, resolve_espace_execution_context,
     },
+    preparation::{
+        PreparedCoreSpaceSimulationState, PreparedEspaceSimulationState, ReadyCoreSpaceSimulation,
+        ReadyEspaceSimulation,
+    },
     state::{ConfluxStatePoint, RemoteStateProvider, RemoteStateReader},
 };
 
 pub struct ConfluxEngine {
     chain: ConfluxChainConfig,
     provider: Arc<dyn RemoteStateProvider>,
+    runtime_handle: Handle,
 }
 
 impl ConfluxEngine {
-    pub fn new(chain: ConfluxChainConfig, provider: Arc<dyn RemoteStateProvider>) -> Self {
-        Self { chain, provider }
+    pub fn new(
+        chain: ConfluxChainConfig,
+        provider: Arc<dyn RemoteStateProvider>,
+        runtime_handle: Handle,
+    ) -> Self {
+        Self {
+            chain,
+            provider,
+            runtime_handle,
+        }
     }
 
-    pub async fn simulate_espace_transaction(
+    pub async fn prepare_espace_transaction(
         &self,
         input: SimulateEspaceTransactionInput,
-    ) -> Result<EspaceExecution, ConfluxEngineError> {
-        let runtime_handle = current_runtime_handle()?;
+    ) -> Result<PreparedEspaceSimulation, ConfluxEngineError> {
         let SimulateEspaceTransactionInput { block, transaction } = input;
         let gas_limit = transaction.gas_limit;
         let execution_context =
@@ -45,12 +59,14 @@ impl ConfluxEngine {
         let chain_id = self.chain.evm_chain_id;
 
         if let Err(failure) = validate_espace_transaction(&transaction, chain_id) {
-            return Ok(build_espace_not_executed(
-                chain_id,
-                execution_context.simulated_block,
-                gas_limit,
-                failure,
-            ));
+            return Ok(PreparedEspaceSimulation {
+                kind: PreparedEspaceSimulationState::Complete(Box::new(build_espace_not_executed(
+                    chain_id,
+                    execution_context.simulated_block,
+                    gas_limit,
+                    failure,
+                ))),
+            });
         }
 
         let transaction = build_espace_transaction_input(transaction);
@@ -63,41 +79,51 @@ impl ConfluxEngine {
             .prepare_state_reader(execution_context.state_point)
             .await?;
 
-        tokio::task::spawn_blocking(move || {
-            let mut state =
-                build_rpc_backed_state(state_reader, runtime_handle).map_err(|error| {
-                    ConfluxEngineError::StateAccess {
-                        message: error.to_string(),
-                    }
-                })?;
-
-            let machine = build_mainnet_machine();
-
-            let outcome =
-                execute_transaction(&mut state, &machine, execution_input).map_err(|error| {
-                    ConfluxEngineError::StateAccess {
-                        message: error.to_string(),
-                    }
-                })?;
-
-            build_espace_execution(
+        Ok(PreparedEspaceSimulation {
+            kind: PreparedEspaceSimulationState::Ready(Box::new(ReadyEspaceSimulation {
                 chain_id,
-                execution_context.simulated_block,
+                simulated_block: execution_context.simulated_block,
                 gas_limit,
-                outcome,
-            )
+                execution_input,
+                state_reader,
+            })),
         })
-        .await
-        .map_err(|error| ConfluxEngineError::ExecutionInternal {
-            message: format!("eSpace blocking execution task failed: {error}"),
-        })?
     }
 
-    pub async fn simulate_core_space_transaction(
+    pub fn simulate_espace_transaction(
+        &self,
+        prepared: PreparedEspaceSimulation,
+    ) -> Result<EspaceExecution, ConfluxEngineError> {
+        match prepared.kind {
+            PreparedEspaceSimulationState::Complete(execution) => Ok(*execution),
+            PreparedEspaceSimulationState::Ready(ready) => {
+                let ReadyEspaceSimulation {
+                    chain_id,
+                    simulated_block,
+                    gas_limit,
+                    execution_input,
+                    state_reader,
+                } = *ready;
+                let mut state = build_rpc_backed_state(state_reader, self.runtime_handle.clone())
+                    .map_err(|error| ConfluxEngineError::StateAccess {
+                    message: error.to_string(),
+                })?;
+                let machine = build_mainnet_machine();
+                let outcome = execute_transaction(&mut state, &machine, execution_input).map_err(
+                    |error| ConfluxEngineError::StateAccess {
+                        message: error.to_string(),
+                    },
+                )?;
+
+                build_espace_execution(chain_id, simulated_block, gas_limit, outcome)
+            }
+        }
+    }
+
+    pub async fn prepare_core_space_transaction(
         &self,
         input: SimulateCoreSpaceTransactionInput,
-    ) -> Result<CoreSpaceExecution, ConfluxEngineError> {
-        let runtime_handle = current_runtime_handle()?;
+    ) -> Result<PreparedCoreSpaceSimulation, ConfluxEngineError> {
         let SimulateCoreSpaceTransactionInput { epoch, transaction } = input;
         let gas_limit = transaction.gas_limit;
         let execution_context =
@@ -109,12 +135,11 @@ impl ConfluxEngine {
         };
 
         if let Err(failure) = validate_core_space_transaction(&transaction, chain_id) {
-            return Ok(build_core_space_not_executed(
-                chain_id,
-                state_anchor,
-                gas_limit,
-                failure,
-            ));
+            return Ok(PreparedCoreSpaceSimulation {
+                kind: PreparedCoreSpaceSimulationState::Complete(Box::new(
+                    build_core_space_not_executed(chain_id, state_anchor, gas_limit, failure),
+                )),
+            });
         }
 
         let transaction = build_core_space_transaction_input(transaction);
@@ -127,34 +152,50 @@ impl ConfluxEngine {
             .prepare_state_reader(execution_context.state_point)
             .await?;
 
-        tokio::task::spawn_blocking(move || {
-            let mut state =
-                build_rpc_backed_state(state_reader, runtime_handle).map_err(|error| {
-                    ConfluxEngineError::StateAccess {
-                        message: error.to_string(),
-                    }
-                })?;
-
-            let machine = build_mainnet_machine();
-
-            let outcome =
-                execute_transaction(&mut state, &machine, execution_input).map_err(|error| {
-                    ConfluxEngineError::StateAccess {
-                        message: error.to_string(),
-                    }
-                })?;
-
-            Ok(build_core_space_execution(
+        Ok(PreparedCoreSpaceSimulation {
+            kind: PreparedCoreSpaceSimulationState::Ready(Box::new(ReadyCoreSpaceSimulation {
                 chain_id,
                 state_anchor,
                 gas_limit,
-                outcome,
-            ))
+                execution_input,
+                state_reader,
+            })),
         })
-        .await
-        .map_err(|error| ConfluxEngineError::ExecutionInternal {
-            message: format!("Core Space blocking execution task failed: {error}"),
-        })?
+    }
+
+    pub fn simulate_core_space_transaction(
+        &self,
+        prepared: PreparedCoreSpaceSimulation,
+    ) -> Result<CoreSpaceExecution, ConfluxEngineError> {
+        match prepared.kind {
+            PreparedCoreSpaceSimulationState::Complete(execution) => Ok(*execution),
+            PreparedCoreSpaceSimulationState::Ready(ready) => {
+                let ReadyCoreSpaceSimulation {
+                    chain_id,
+                    state_anchor,
+                    gas_limit,
+                    execution_input,
+                    state_reader,
+                } = *ready;
+                let mut state = build_rpc_backed_state(state_reader, self.runtime_handle.clone())
+                    .map_err(|error| ConfluxEngineError::StateAccess {
+                    message: error.to_string(),
+                })?;
+                let machine = build_mainnet_machine();
+                let outcome = execute_transaction(&mut state, &machine, execution_input).map_err(
+                    |error| ConfluxEngineError::StateAccess {
+                        message: error.to_string(),
+                    },
+                )?;
+
+                Ok(build_core_space_execution(
+                    chain_id,
+                    state_anchor,
+                    gas_limit,
+                    outcome,
+                ))
+            }
+        }
     }
 
     async fn prepare_state_reader(
@@ -167,12 +208,6 @@ impl ConfluxEngine {
                 message: error.to_string(),
             })
     }
-}
-
-fn current_runtime_handle() -> Result<tokio::runtime::Handle, ConfluxEngineError> {
-    tokio::runtime::Handle::try_current().map_err(|error| ConfluxEngineError::ExecutionInternal {
-        message: format!("Conflux simulation requires a Tokio runtime: {error}"),
-    })
 }
 
 fn validate_core_space_transaction(
