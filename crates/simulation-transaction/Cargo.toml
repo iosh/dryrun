@@ -1,0 +1,8 @@
+[package]
+name = "simulation-transaction"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+alloy-primitives = { workspace = true }
+thiserror = { workspace = true }

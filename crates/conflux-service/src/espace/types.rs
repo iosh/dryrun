@@ -1,9 +1,15 @@
 use conflux_engine as engine;
 pub use engine::espace::{
-    AccessListItem, EspaceBlockRef, EspaceExecution, EspaceExecutionFailure,
-    EspaceExecutionFailureCode, EspaceExecutionStatus, EspaceTransaction, EspaceTransactionVariant,
-    SimulateEspaceTransactionInput, SimulatedBlock,
+    EspaceBlockRef, EspaceExecution, EspaceExecutionFailure, EspaceExecutionFailureCode,
+    EspaceExecutionStatus, SimulatedBlock,
 };
+pub use simulation_transaction::TransactionRequest;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SimulateEspaceTransactionInput {
+    pub block: EspaceBlockRef,
+    pub transaction: TransactionRequest,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SimulateEspaceTransactionOutput {

@@ -7,8 +7,15 @@ use primitives::{
         Action, Eip155Transaction, Eip1559Transaction, Eip2930Transaction, EthereumTransaction,
     },
 };
+use simulation_transaction::{SimulationTransaction, TransactionKind as SimulationTransactionKind};
 
-use crate::execution::EspaceTransactionInput;
+use crate::{
+    execution::EspaceTransactionInput,
+    transaction_adapter::{
+        TransactionInputError, TransactionInputField, to_cfx_address, to_cfx_bytes, to_cfx_h256,
+        to_cfx_u256,
+    },
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EspaceBlockRef {
@@ -54,6 +61,71 @@ pub struct EspaceTransaction {
 pub struct SimulateEspaceTransactionInput {
     pub block: EspaceBlockRef,
     pub transaction: EspaceTransaction,
+}
+
+impl TryFrom<SimulationTransaction> for EspaceTransaction {
+    type Error = TransactionInputError;
+
+    fn try_from(transaction: SimulationTransaction) -> Result<Self, Self::Error> {
+        let SimulationTransaction {
+            from,
+            to,
+            nonce,
+            gas_limit,
+            value,
+            input,
+            chain_id,
+            kind,
+        } = transaction;
+
+        let chain_id = u32::try_from(chain_id)
+            .map_err(|_| TransactionInputError::out_of_range(TransactionInputField::ChainId, 32))?;
+
+        let variant = match kind {
+            SimulationTransactionKind::Legacy { gas_price } => EspaceTransactionVariant::Legacy {
+                gas_price: to_cfx_u256(gas_price),
+            },
+            SimulationTransactionKind::AccessList {
+                gas_price,
+                access_list,
+            } => EspaceTransactionVariant::Eip2930 {
+                gas_price: to_cfx_u256(gas_price),
+                access_list: to_espace_access_list(access_list),
+            },
+            SimulationTransactionKind::DynamicFee {
+                max_fee_per_gas,
+                max_priority_fee_per_gas,
+                access_list,
+            } => EspaceTransactionVariant::Eip1559 {
+                max_fee_per_gas: to_cfx_u256(max_fee_per_gas),
+                max_priority_fee_per_gas: to_cfx_u256(max_priority_fee_per_gas),
+                access_list: to_espace_access_list(access_list),
+            },
+        };
+
+        Ok(Self {
+            from: to_cfx_address(from),
+            to: to.map(to_cfx_address),
+            nonce: to_cfx_u256(nonce),
+            gas_limit: to_cfx_u256(gas_limit),
+            value: to_cfx_u256(value),
+            data: to_cfx_bytes(input),
+            chain_id,
+            variant,
+        })
+    }
+}
+
+fn to_espace_access_list(
+    items: Vec<simulation_transaction::AccessListItem>,
+) -> Vec<AccessListItem> {
+    items
+        .into_iter()
+        .map(|item| AccessListItem {
+            address: to_cfx_address(item.address),
+            storage_keys: item.storage_keys.into_iter().map(to_cfx_h256).collect(),
+        })
+        .collect()
 }
 
 pub(crate) fn build_espace_transaction_input(input: EspaceTransaction) -> EspaceTransactionInput {

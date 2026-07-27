@@ -81,40 +81,6 @@ impl Transaction {
             ));
         }
 
-        match self.tx_type {
-            Some(0x0) => {
-                if self
-                    .access_list
-                    .as_ref()
-                    .is_some_and(|items| !items.is_empty())
-                {
-                    return Err(ValidationError::invalid_params(
-                        "`transaction.type` `0x0` cannot be combined with `transaction.accessList`",
-                    ));
-                }
-                if has_dynamic_fee {
-                    return Err(ValidationError::invalid_params(
-                        "`transaction.type` `0x0` cannot be combined with EIP-1559 fee fields",
-                    ));
-                }
-            }
-            Some(0x1) => {
-                if has_dynamic_fee {
-                    return Err(ValidationError::invalid_params(
-                        "`transaction.type` `0x1` cannot be combined with EIP-1559 fee fields",
-                    ));
-                }
-            }
-            Some(0x2) => {
-                if has_gas_price {
-                    return Err(ValidationError::invalid_params(
-                        "`transaction.type` `0x2` cannot be combined with `transaction.gasPrice`",
-                    ));
-                }
-            }
-            _ => {}
-        }
-
         Ok(())
     }
 }

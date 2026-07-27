@@ -32,11 +32,9 @@ pub fn build_rpc_module(
                     .map_err(|error| invalid_params(error.to_string()))?;
 
                 let output = service
-                    .simulate_espace_transaction(
-                        request.try_into().map_err(ErrorObjectOwned::from)?,
-                    )
+                    .simulate_espace_transaction(request.try_into()?)
                     .await
-                    .map_err(|error| map_service_error(&error))?;
+                    .map_err(map_service_error)?;
 
                 Ok::<_, ErrorObjectOwned>(SimulateEspaceTransactionResponse::from(output))
             },
@@ -51,14 +49,12 @@ pub fn build_rpc_module(
                     .parse::<SimulateCoreSpaceTransactionRequest>()
                     .map_err(|error| invalid_params(error.to_string()))?;
 
-                let input = request
-                    .try_into_service_input(core_space_address_network)
-                    .map_err(ErrorObjectOwned::from)?;
+                let input = request.try_into_service_input(core_space_address_network)?;
 
                 let output = service
                     .simulate_core_space_transaction(input)
                     .await
-                    .map_err(|error| map_service_error(&error))?;
+                    .map_err(map_service_error)?;
 
                 SimulateCoreSpaceTransactionResponse::try_from_output(
                     output,

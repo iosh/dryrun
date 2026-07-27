@@ -16,4 +16,6 @@ pub use simulation::{
     EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode, EvmExecutionOutcome, EvmSimulation,
     SimulatedBlock,
 };
-pub use transaction::{AccessListItem, EvmExecutionInput, EvmTransaction, EvmTransactionVariant};
+pub use transaction::{
+    AccessListItem, EvmExecutionInput, EvmTransaction, EvmTransactionVariant, TransactionInputError,
+};

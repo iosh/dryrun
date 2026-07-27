@@ -1,6 +1,10 @@
 use std::convert::TryFrom;
 
 use alloy::primitives::U256;
+use simulation_transaction::{
+    AccessListItem as SimulationAccessListItem, TransactionRequest as SimulationTransactionRequest,
+    TransactionType,
+};
 
 use crate::{errors::ValidationError, interface as rpc};
 
@@ -44,83 +48,51 @@ fn map_block_ref(block: rpc::BlockRef) -> Result<evm_service::BlockSelector, Val
 
 fn map_transaction(
     transaction: rpc::Transaction,
-) -> Result<evm_service::EvmTransaction, ValidationError> {
-    let variant = map_transaction_variant(&transaction)?;
-
-    Ok(evm_service::EvmTransaction {
-        chain_id: transaction
-            .chain_id
-            .ok_or_else(|| ValidationError::invalid_params("`transaction.chainId` is required"))?,
+) -> Result<SimulationTransactionRequest, ValidationError> {
+    let request = SimulationTransactionRequest {
         from: transaction.from,
         to: transaction.to,
-        nonce: transaction
-            .nonce
-            .ok_or_else(|| ValidationError::invalid_params("`transaction.nonce` is required"))?,
-        gas_limit: transaction.gas,
-        value: transaction.value.unwrap_or(U256::ZERO),
-        data: transaction.data.unwrap_or_default(),
-        variant,
-    })
+        nonce: transaction.nonce.map(U256::from),
+        gas_limit: Some(U256::from(transaction.gas)),
+        value: transaction.value,
+        input: transaction.data,
+        chain_id: transaction.chain_id.map(U256::from),
+        transaction_type: map_transaction_type(transaction.tx_type)?,
+        access_list: transaction.access_list.map(|items| {
+            items
+                .into_iter()
+                .map(to_simulation_access_list_item)
+                .collect()
+        }),
+        gas_price: transaction.gas_price.map(U256::from),
+        max_fee_per_gas: transaction.max_fee_per_gas.map(U256::from),
+        max_priority_fee_per_gas: transaction.max_priority_fee_per_gas.map(U256::from),
+    };
+
+    request
+        .validate_shape()
+        .map_err(|error| ValidationError::invalid_params(error.to_string()))?;
+
+    Ok(request)
 }
 
-fn infer_transaction_type(transaction: &rpc::Transaction) -> u8 {
-    match transaction.tx_type {
-        Some(tx_type @ 0x0..=0x2) => tx_type,
-        None if transaction.max_fee_per_gas.is_some()
-            || transaction.max_priority_fee_per_gas.is_some() =>
-        {
-            0x2
-        }
-        None if transaction.access_list.as_ref().is_some() => 0x1,
-        None => 0x0,
-        Some(_) => unreachable!("transaction type is already validated"),
-    }
+fn map_transaction_type(
+    transaction_type: Option<u8>,
+) -> Result<Option<TransactionType>, ValidationError> {
+    transaction_type
+        .map(|transaction_type| match transaction_type {
+            0x0 => Ok(TransactionType::Legacy),
+            0x1 => Ok(TransactionType::AccessList),
+            0x2 => Ok(TransactionType::DynamicFee),
+            _ => Err(ValidationError::not_supported(
+                "`transaction.type` only supports `0x0`, `0x1`, and `0x2`",
+            )),
+        })
+        .transpose()
 }
 
-fn map_transaction_variant(
-    transaction: &rpc::Transaction,
-) -> Result<evm_service::EvmTransactionVariant, ValidationError> {
-    let tx_type = infer_transaction_type(transaction);
-    let access_list = transaction
-        .access_list
-        .as_ref()
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .map(convert_access_list_item)
-        .collect();
-
-    match tx_type {
-        0x0 => Ok(evm_service::EvmTransactionVariant::Legacy {
-            gas_price: transaction.gas_price.ok_or_else(|| {
-                ValidationError::invalid_params("`transaction.gasPrice` is required for type `0x0`")
-            })?,
-        }),
-        0x1 => Ok(evm_service::EvmTransactionVariant::Eip2930 {
-            gas_price: transaction.gas_price.ok_or_else(|| {
-                ValidationError::invalid_params("`transaction.gasPrice` is required for type `0x1`")
-            })?,
-            access_list,
-        }),
-        0x2 => Ok(evm_service::EvmTransactionVariant::Eip1559 {
-            max_fee_per_gas: transaction.max_fee_per_gas.ok_or_else(|| {
-                ValidationError::invalid_params(
-                    "`transaction.maxFeePerGas` is required for type `0x2`",
-                )
-            })?,
-            max_priority_fee_per_gas: transaction.max_priority_fee_per_gas.ok_or_else(|| {
-                ValidationError::invalid_params(
-                    "`transaction.maxPriorityFeePerGas` is required for type `0x2`",
-                )
-            })?,
-            access_list,
-        }),
-        _ => unreachable!("transaction type is already validated"),
-    }
-}
-
-fn convert_access_list_item(item: rpc::AccessListItem) -> evm_service::AccessListItem {
-    evm_service::AccessListItem {
+fn to_simulation_access_list_item(item: rpc::AccessListItem) -> SimulationAccessListItem {
+    SimulationAccessListItem {
         address: item.address,
         storage_keys: item.storage_keys,
     }
@@ -131,13 +103,13 @@ mod tests {
     use std::convert::TryInto;
     use std::str::FromStr;
 
-    use alloy::primitives::{Address, Bytes, U256};
+    use alloy::primitives::{Address, U256};
     use serde_json::json;
 
     use crate::interface as rpc;
 
     #[test]
-    fn request_maps_into_final_service_transaction() {
+    fn request_maps_into_partial_service_transaction() {
         let request = rpc::EvmSimulateTransactionRequest {
             block: Some(rpc::BlockRef::Tag("latest".to_string())),
             options: None,
@@ -147,14 +119,14 @@ mod tests {
         let input: evm_service::SimulateEvmTransactionInput =
             request.try_into().expect("request should map");
         assert!(matches!(input.block, evm_service::BlockSelector::Latest));
-        assert!(matches!(
-            input.transaction.variant,
-            evm_service::EvmTransactionVariant::Legacy { gas_price: 1 }
-        ));
-        assert_eq!(input.transaction.chain_id, 1);
-        assert_eq!(input.transaction.nonce, 0);
-        assert_eq!(input.transaction.value, U256::ZERO);
-        assert_eq!(input.transaction.data, Bytes::new());
+        assert_eq!(
+            input.transaction.resolved_type(),
+            simulation_transaction::TransactionType::Legacy
+        );
+        assert_eq!(input.transaction.chain_id, Some(U256::from(1)));
+        assert_eq!(input.transaction.nonce, Some(U256::ZERO));
+        assert_eq!(input.transaction.value, None);
+        assert_eq!(input.transaction.input, None);
     }
 
     #[test]
