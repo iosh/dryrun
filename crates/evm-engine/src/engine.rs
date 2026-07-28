@@ -1,4 +1,4 @@
-use alloy::providers::DynProvider;
+use alloy::providers::RootProvider;
 use alloy_chains::Chain;
 use tokio::runtime::Handle;
 
@@ -6,13 +6,13 @@ use crate::{EvmEngineError, EvmExecutionInput, EvmSimulation, execution::simulat
 
 #[derive(Debug, Clone)]
 pub struct EvmEngine {
-    provider: DynProvider,
+    provider: RootProvider,
     runtime_handle: Handle,
     chain_id: u64,
 }
 
 impl EvmEngine {
-    pub fn new(provider: DynProvider, runtime_handle: Handle) -> Self {
+    pub fn new(provider: RootProvider, runtime_handle: Handle) -> Self {
         Self {
             provider,
             runtime_handle,

@@ -1,7 +1,7 @@
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
     primitives::{Address, Bytes, TxKind, U256},
-    providers::{DynProvider, Provider},
+    providers::{Provider, RootProvider},
     rpc::types::{
         AccessList as RpcAccessList, AccessListItem as RpcAccessListItem, TransactionInput,
         TransactionRequest,
@@ -27,7 +27,7 @@ pub struct EvmTransactionRequest {
 impl EvmTransactionRequest {
     pub(crate) async fn resolve(
         self,
-        provider: &DynProvider,
+        provider: &RootProvider,
         block: &ResolvedBlock,
     ) -> Result<EvmTransaction, SimulationServiceError> {
         let Self {
@@ -93,7 +93,7 @@ impl EvmTransactionRequest {
 }
 
 async fn resolve_fees(
-    provider: &DynProvider,
+    provider: &RootProvider,
     block: &ResolvedBlock,
     variant: TransactionVariantRequest<u128, AccessListItem>,
 ) -> Result<EvmTransactionVariant, SimulationServiceError> {
@@ -139,7 +139,7 @@ async fn resolve_fees(
 }
 
 async fn suggested_gas_price(
-    provider: &DynProvider,
+    provider: &RootProvider,
     gas_price: Option<u128>,
 ) -> Result<u128, SimulationServiceError> {
     match gas_price {

@@ -24,7 +24,7 @@ use crate::{
         map_contract_changes, sort_changes_by_position,
     },
 };
-use alloy::providers::DynProvider;
+use alloy::providers::RootProvider;
 use contract_standards::{state_requirements, verify};
 use revm::{
     Context, ExecuteCommitEvm, InspectEvm, MainBuilder, MainContext, MainnetEvm,
@@ -41,7 +41,7 @@ pub(super) type MainnetEvmWithDb<DB, INSP = ()> =
 pub(super) type MainnetAlloyEvm<INSP = ()> = MainnetEvmWithDb<AlloyCacheDb, INSP>;
 
 pub(crate) fn simulate_execution(
-    provider: &DynProvider,
+    provider: &RootProvider,
     runtime_handle: &Handle,
     chain_id: u64,
     input: EvmExecutionInput,

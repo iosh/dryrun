@@ -1,6 +1,6 @@
 use std::{io, sync::Arc};
 
-use alloy::providers::{DynProvider, Provider, ProviderBuilder};
+use alloy::providers::RootProvider;
 use conflux_engine::{ConfluxEngine, config::ConfluxChainConfig, state::HttpConfluxProvider};
 use conflux_rpc::build_rpc_module as build_conflux_rpc_module;
 use conflux_service::ConfluxService;
@@ -102,18 +102,13 @@ fn add_conflux_rpc_module(
         .map_err(|error| startup_error(format!("failed to merge Conflux RPC module: {error}")))
 }
 
-fn create_ethereum_provider(config: &EthereumConfig) -> io::Result<DynProvider> {
-    let rpc_url: reqwest::Url = config
+fn create_ethereum_provider(config: &EthereumConfig) -> io::Result<RootProvider> {
+    let rpc_url = config
         .rpc_url
         .parse()
         .map_err(|error| configuration_error(format!("invalid Ethereum RPC URL: {error}")))?;
-    let client = reqwest::Client::builder().build().map_err(|error| {
-        startup_error(format!("failed to create Ethereum HTTP client: {error}"))
-    })?;
 
-    Ok(ProviderBuilder::new()
-        .connect_reqwest(client, rpc_url)
-        .erased())
+    Ok(RootProvider::new_http(rpc_url))
 }
 
 fn create_conflux_provider(

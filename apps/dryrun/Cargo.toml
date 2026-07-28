@@ -20,4 +20,3 @@ axum = { workspace = true }
 serde = { workspace = true }
 config = { workspace = true }
 alloy = { workspace = true }
-reqwest = { workspace = true }

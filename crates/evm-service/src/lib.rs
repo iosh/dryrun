@@ -7,7 +7,7 @@ use alloy::{
     consensus::{Header, Sealable},
     eips::{BlockId, BlockNumberOrTag},
     primitives::B256,
-    providers::{DynProvider, Provider},
+    providers::{Provider, RootProvider},
 };
 use evm_engine::{EvmEngine, EvmExecutionInput, ResolvedBlock};
 use simulation_tasks::SimulationTaskSet;
@@ -50,14 +50,14 @@ pub struct SimulateEvmTransactionInput {
 
 #[derive(Debug, Clone)]
 pub struct SimulationService {
-    provider: DynProvider,
+    provider: RootProvider,
     evm_engine: Arc<EvmEngine>,
     simulation_tasks: SimulationTaskSet,
 }
 
 impl SimulationService {
     pub fn new(
-        provider: DynProvider,
+        provider: RootProvider,
         evm_engine: Arc<EvmEngine>,
         simulation_tasks: SimulationTaskSet,
     ) -> Self {
@@ -97,7 +97,7 @@ impl SimulationService {
 }
 
 async fn resolve_block(
-    provider: &DynProvider,
+    provider: &RootProvider,
     selector: BlockSelector,
 ) -> Result<ResolvedBlock, SimulationServiceError> {
     let block = provider

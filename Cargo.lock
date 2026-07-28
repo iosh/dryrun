@@ -2957,7 +2957,6 @@ dependencies = [
  "evm-service",
  "jsonrpsee",
  "metrics-exporter-prometheus",
- "reqwest",
  "serde",
  "simulation-tasks",
  "tokio",

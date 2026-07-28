@@ -1,17 +1,17 @@
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
     network::Ethereum,
-    providers::DynProvider,
+    providers::RootProvider,
 };
 use revm::database::{AlloyDB, CacheDB, WrapDatabaseAsync};
 use tokio::runtime::Handle;
 
 use crate::ResolvedBlock;
 
-pub(super) type AlloyCacheDb = CacheDB<WrapDatabaseAsync<AlloyDB<Ethereum, DynProvider>>>;
+pub(super) type AlloyCacheDb = CacheDB<WrapDatabaseAsync<AlloyDB<Ethereum, RootProvider>>>;
 
 pub(super) fn create_database(
-    provider: &DynProvider,
+    provider: &RootProvider,
     runtime_handle: &Handle,
     resolved_block: &ResolvedBlock,
 ) -> AlloyCacheDb {
