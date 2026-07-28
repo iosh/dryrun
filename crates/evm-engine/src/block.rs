@@ -18,8 +18,12 @@ impl ResolvedBlock {
         self.header.inner()
     }
 
-    pub(crate) fn number(&self) -> u64 {
+    pub fn number(&self) -> u64 {
         self.header.number()
+    }
+
+    pub fn base_fee_per_gas(&self) -> Option<u64> {
+        self.header.base_fee_per_gas()
     }
 
     pub fn hash(&self) -> B256 {

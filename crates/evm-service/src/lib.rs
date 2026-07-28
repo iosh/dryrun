@@ -1,4 +1,5 @@
 mod error;
+mod transaction;
 
 use std::sync::Arc;
 
@@ -8,17 +9,17 @@ use alloy::{
     primitives::B256,
     providers::{DynProvider, Provider},
 };
-use evm_engine::{EvmEngine, EvmExecutionInput, EvmTransaction, ResolvedBlock};
+use evm_engine::{EvmEngine, EvmExecutionInput, ResolvedBlock};
 use simulation_tasks::SimulationTaskSet;
 
 pub use error::SimulationServiceError;
 pub use evm_engine::{
-    Change, Erc20Metadata, Erc721CollectionMetadata, EvmExecution as SimulationExecution,
-    EvmExecutionFailure as ExecutionFailure, EvmExecutionFailureCode,
-    EvmExecutionOutcome as ExecutionOutcome, EvmSimulation as SimulateEvmTransactionOutput,
-    NativeMetadata, SimulatedBlock,
+    AccessListItem, Change, Erc20Metadata, Erc721CollectionMetadata,
+    EvmExecution as SimulationExecution, EvmExecutionFailure as ExecutionFailure,
+    EvmExecutionFailureCode, EvmExecutionOutcome as ExecutionOutcome,
+    EvmSimulation as SimulateEvmTransactionOutput, NativeMetadata, SimulatedBlock,
 };
-pub use simulation_transaction::TransactionRequest;
+pub use transaction::EvmTransactionRequest;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockSelector {
@@ -44,7 +45,7 @@ impl BlockSelector {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SimulateEvmTransactionInput {
     pub block: BlockSelector,
-    pub transaction: TransactionRequest,
+    pub transaction: EvmTransactionRequest,
 }
 
 #[derive(Debug, Clone)]
@@ -72,13 +73,13 @@ impl SimulationService {
         input: SimulateEvmTransactionInput,
     ) -> Result<SimulateEvmTransactionOutput, SimulationServiceError> {
         let SimulateEvmTransactionInput { block, transaction } = input;
-        let transaction = build_evm_transaction(transaction)?;
         let provider = self.provider.clone();
         let evm_engine = Arc::clone(&self.evm_engine);
 
         self.simulation_tasks
             .run(move || async move {
                 let resolved_block = resolve_block(&provider, block).await?;
+                let transaction = transaction.resolve(&provider, &resolved_block).await?;
 
                 let simulation = tokio::task::spawn_blocking(move || {
                     evm_engine.simulate(EvmExecutionInput {
@@ -93,13 +94,6 @@ impl SimulationService {
             })
             .await?
     }
-}
-
-fn build_evm_transaction(
-    request: TransactionRequest,
-) -> Result<EvmTransaction, SimulationServiceError> {
-    let transaction = request.complete()?;
-    Ok(EvmTransaction::try_from(transaction)?)
 }
 
 async fn resolve_block(

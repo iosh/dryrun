@@ -6,9 +6,14 @@ pub mod espace;
 pub mod execution;
 mod preparation;
 pub mod state;
-mod transaction_adapter;
+mod transaction;
 
 pub use engine::ConfluxEngine;
 pub use error::ConfluxEngineError;
-pub use preparation::{PreparedCoreSpaceSimulation, PreparedEspaceSimulation};
-pub use transaction_adapter::TransactionInputError;
+pub use preparation::{
+    PreparedCoreSpaceSimulation, PreparedEspaceSimulation, ResolvedCoreSpaceContext,
+    ResolvedEspaceContext,
+};
+pub use transaction::{
+    AccessListItem, ConfluxTransaction, ConfluxTransactionBody, ConfluxTransactionVariant,
+};

@@ -71,16 +71,6 @@ impl Transaction {
             }
         }
 
-        let has_gas_price = self.gas_price.is_some();
-        let has_dynamic_fee =
-            self.max_fee_per_gas.is_some() || self.max_priority_fee_per_gas.is_some();
-
-        if has_gas_price && has_dynamic_fee {
-            return Err(ValidationError::invalid_params(
-                "`transaction.gasPrice` cannot be mixed with EIP-1559 fee fields",
-            ));
-        }
-
         Ok(())
     }
 }

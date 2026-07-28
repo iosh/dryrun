@@ -1,17 +1,16 @@
 pub mod core_space;
 pub mod espace;
+mod transaction;
 
 use std::sync::Arc;
 
-use conflux_engine::{
-    ConfluxEngine, TransactionInputError,
-    core_space::{CoreSpaceTransaction, SimulateCoreSpaceTransactionInput as EngineCoreSpaceInput},
-    espace::{EspaceTransaction, SimulateEspaceTransactionInput as EngineEspaceInput},
-};
+use conflux_engine::ConfluxEngine;
 use simulation_tasks::{SimulationTaskError, SimulationTaskSet};
-use simulation_transaction::TransactionRequestError;
 use thiserror::Error;
 use tokio::task::JoinError;
+
+pub use transaction::{AccessListItem, ConfluxTransactionRequest};
+use transaction::{resolve_core_space_transaction, resolve_espace_transaction};
 
 #[derive(Clone)]
 pub struct ConfluxService {
@@ -31,12 +30,17 @@ impl ConfluxService {
         &self,
         input: espace::SimulateEspaceTransactionInput,
     ) -> Result<espace::SimulateEspaceTransactionOutput, ConfluxServiceError> {
-        let input = build_espace_engine_input(input)?;
+        let espace::SimulateEspaceTransactionInput { block, transaction } = input;
         let engine = Arc::clone(&self.engine);
         let simulation = self
             .simulation_tasks
             .run(move || async move {
-                let prepared = engine.prepare_espace_transaction(input).await?;
+                let context = engine.resolve_espace_context(block).await?;
+                let transaction =
+                    resolve_espace_transaction(&engine, &context, transaction).await?;
+                let prepared = engine
+                    .prepare_espace_transaction(context, transaction)
+                    .await?;
                 let execution_engine = Arc::clone(&engine);
 
                 let simulation = tokio::task::spawn_blocking(move || {
@@ -59,12 +63,17 @@ impl ConfluxService {
         &self,
         input: core_space::SimulateCoreSpaceTransactionInput,
     ) -> Result<core_space::SimulateCoreSpaceTransactionOutput, ConfluxServiceError> {
-        let input = build_core_space_engine_input(input)?;
+        let core_space::SimulateCoreSpaceTransactionInput { epoch, transaction } = input;
         let engine = Arc::clone(&self.engine);
         let simulation = self
             .simulation_tasks
             .run(move || async move {
-                let prepared = engine.prepare_core_space_transaction(input).await?;
+                let context = engine.resolve_core_space_context(epoch).await?;
+                let transaction =
+                    resolve_core_space_transaction(&engine, &context, transaction).await?;
+                let prepared = engine
+                    .prepare_core_space_transaction(context, transaction)
+                    .await?;
                 let execution_engine = Arc::clone(&engine);
 
                 let simulation = tokio::task::spawn_blocking(move || {
@@ -84,41 +93,10 @@ impl ConfluxService {
     }
 }
 
-fn build_espace_engine_input(
-    input: espace::SimulateEspaceTransactionInput,
-) -> Result<EngineEspaceInput, ConfluxServiceError> {
-    let espace::SimulateEspaceTransactionInput { block, transaction } = input;
-    let transaction = EspaceTransaction::try_from(transaction.complete()?)?;
-
-    Ok(EngineEspaceInput { block, transaction })
-}
-
-fn build_core_space_engine_input(
-    input: core_space::SimulateCoreSpaceTransactionInput,
-) -> Result<EngineCoreSpaceInput, ConfluxServiceError> {
-    let core_space::SimulateCoreSpaceTransactionInput { epoch, transaction } = input;
-    let core_space::CoreSpaceTransactionRequest {
-        transaction,
-        storage_limit,
-        epoch_height,
-    } = transaction;
-    let transaction = transaction.complete()?;
-    let storage_limit = storage_limit.ok_or_else(|| {
-        ConfluxServiceError::invalid_transaction("Core Space transaction storage_limit is required")
-    })?;
-    let epoch_height = epoch_height.ok_or_else(|| {
-        ConfluxServiceError::invalid_transaction("Core Space transaction epoch_height is required")
-    })?;
-    let transaction =
-        CoreSpaceTransaction::try_from_parts(transaction, storage_limit, epoch_height)?;
-
-    Ok(EngineCoreSpaceInput { epoch, transaction })
-}
-
 #[derive(Debug, Error)]
 pub enum ConfluxServiceError {
-    #[error("invalid transaction: {details}")]
-    InvalidTransaction { details: String },
+    #[error("transaction resolution failed: {details}")]
+    TransactionResolution { details: String },
 
     #[error("simulation task set is closed")]
     TaskSetClosed,
@@ -141,19 +119,15 @@ pub enum ConfluxServiceError {
 }
 
 impl ConfluxServiceError {
-    fn invalid_transaction(details: impl Into<String>) -> Self {
-        Self::InvalidTransaction {
+    pub(crate) fn transaction_resolution(details: impl Into<String>) -> Self {
+        Self::TransactionResolution {
             details: details.into(),
         }
     }
 
-    pub fn is_invalid_transaction(&self) -> bool {
-        matches!(self, Self::InvalidTransaction { .. })
-    }
-
     pub fn kind_code(&self) -> &'static str {
         match self {
-            Self::InvalidTransaction { .. } => "transaction_resolution_error",
+            Self::TransactionResolution { .. } => "transaction_resolution_error",
             Self::TaskSetClosed => "task_set_closed",
             Self::AttemptTask { .. } => "attempt_task_error",
             Self::ExecutionTask { .. } => "engine_execution_error",
@@ -163,23 +137,11 @@ impl ConfluxServiceError {
 
     pub fn details(&self) -> String {
         match self {
-            Self::InvalidTransaction { details } => details.clone(),
+            Self::TransactionResolution { details } => details.clone(),
             Self::TaskSetClosed => "simulation task set is closed".to_owned(),
             Self::AttemptTask { .. } => "simulation attempt task failed".to_owned(),
             _ => self.to_string(),
         }
-    }
-}
-
-impl From<TransactionRequestError> for ConfluxServiceError {
-    fn from(error: TransactionRequestError) -> Self {
-        Self::invalid_transaction(error.to_string())
-    }
-}
-
-impl From<TransactionInputError> for ConfluxServiceError {
-    fn from(error: TransactionInputError) -> Self {
-        Self::invalid_transaction(error.to_string())
     }
 }
 

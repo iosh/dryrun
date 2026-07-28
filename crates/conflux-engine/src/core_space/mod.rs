@@ -10,7 +10,4 @@ pub use execution::{
     CoreSpaceExecution, CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode,
     CoreSpaceExecutionStatus, CoreSpaceStateAnchor, CoreSpaceStorageChange,
 };
-pub use transaction::{
-    AccessListItem, CoreSpaceEpochRef, CoreSpaceTransaction, CoreSpaceTransactionVariant,
-    SimulateCoreSpaceTransactionInput,
-};
+pub use transaction::{CoreSpaceEpochRef, CoreSpaceTransaction, CoreSpaceTransactionVariant};

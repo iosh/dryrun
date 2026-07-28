@@ -1,69 +1,113 @@
 use std::sync::Arc;
 
+use cfx_types::{Address, U256};
 use tokio::runtime::Handle;
 
 use crate::{
-    ConfluxEngineError, PreparedCoreSpaceSimulation, PreparedEspaceSimulation,
+    ConfluxEngineError, ConfluxTransactionBody, PreparedCoreSpaceSimulation,
+    PreparedEspaceSimulation,
     config::ConfluxChainConfig,
     core_space::{
-        CoreSpaceExecution, CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode,
-        CoreSpaceStateAnchor, CoreSpaceTransaction, CoreSpaceTransactionVariant,
-        SimulateCoreSpaceTransactionInput, build_core_space_not_executed,
+        CoreSpaceEpochRef, CoreSpaceExecution, CoreSpaceExecutionFailure,
+        CoreSpaceExecutionFailureCode, CoreSpaceStateAnchor, CoreSpaceTransaction,
+        CoreSpaceTransactionVariant, build_core_space_not_executed,
         build_core_space_transaction_input,
     },
     espace::{
-        EspaceExecution, SimulateEspaceTransactionInput, build_espace_not_executed,
+        EspaceBlockRef, EspaceExecution, EspaceTransaction, build_espace_not_executed,
         build_espace_transaction_input, validate_espace_transaction,
     },
     execution::{DryRunTransactionInput, TransactionExecutionInput},
-    preparation::context::{
-        resolve_core_space_execution_context, resolve_espace_execution_context,
-    },
     preparation::{
         PreparedCoreSpaceSimulationState, PreparedEspaceSimulationState, ReadyCoreSpaceSimulation,
-        ReadyEspaceSimulation,
+        ReadyEspaceSimulation, ResolvedCoreSpaceContext, ResolvedEspaceContext,
+        resolve_core_space_execution_context, resolve_espace_execution_context,
     },
-    state::{ConfluxBlockProvider, ConfluxStatePoint, ConfluxStateProvider, RemoteStateReader},
+    state::{
+        ConfluxBlockProvider, ConfluxStatePoint, ConfluxStateProvider, ConfluxTransactionProvider,
+        CoreSpaceResourceEstimate, RemoteStateReader,
+    },
 };
 
 pub struct ConfluxEngine {
     chain: ConfluxChainConfig,
     block_provider: Arc<dyn ConfluxBlockProvider>,
     state_provider: Arc<dyn ConfluxStateProvider>,
+    transaction_provider: Arc<dyn ConfluxTransactionProvider>,
     runtime_handle: Handle,
 }
 
 impl ConfluxEngine {
     pub fn new<P>(chain: ConfluxChainConfig, provider: Arc<P>, runtime_handle: Handle) -> Self
     where
-        P: ConfluxBlockProvider + ConfluxStateProvider + 'static,
+        P: ConfluxBlockProvider + ConfluxStateProvider + ConfluxTransactionProvider + 'static,
     {
         let block_provider: Arc<dyn ConfluxBlockProvider> = provider.clone();
-        let state_provider: Arc<dyn ConfluxStateProvider> = provider;
+        let state_provider: Arc<dyn ConfluxStateProvider> = provider.clone();
+        let transaction_provider: Arc<dyn ConfluxTransactionProvider> = provider;
 
         Self {
             chain,
             block_provider,
             state_provider,
+            transaction_provider,
             runtime_handle,
         }
     }
 
+    pub async fn resolve_espace_context(
+        &self,
+        block: EspaceBlockRef,
+    ) -> Result<ResolvedEspaceContext, ConfluxEngineError> {
+        resolve_espace_execution_context(self.block_provider.as_ref(), &block).await
+    }
+
+    pub async fn espace_nonce(
+        &self,
+        context: &ResolvedEspaceContext,
+        address: Address,
+    ) -> Result<U256, ConfluxEngineError> {
+        Ok(self
+            .transaction_provider
+            .eth_get_transaction_count(address, context.state_point.espace_block())
+            .await?)
+    }
+
+    pub async fn eth_gas_price(&self) -> Result<U256, ConfluxEngineError> {
+        Ok(self.transaction_provider.eth_gas_price().await?)
+    }
+
+    pub async fn eth_max_priority_fee_per_gas(&self) -> Result<U256, ConfluxEngineError> {
+        Ok(self
+            .transaction_provider
+            .eth_max_priority_fee_per_gas()
+            .await?)
+    }
+
+    pub async fn eth_estimate_gas(
+        &self,
+        context: &ResolvedEspaceContext,
+        transaction: &ConfluxTransactionBody,
+    ) -> Result<U256, ConfluxEngineError> {
+        Ok(self
+            .transaction_provider
+            .eth_estimate_gas(context.state_point.espace_block(), transaction)
+            .await?)
+    }
+
     pub async fn prepare_espace_transaction(
         &self,
-        input: SimulateEspaceTransactionInput,
+        context: ResolvedEspaceContext,
+        transaction: EspaceTransaction,
     ) -> Result<PreparedEspaceSimulation, ConfluxEngineError> {
-        let SimulateEspaceTransactionInput { block, transaction } = input;
         let gas_limit = transaction.gas_limit;
-        let execution_context =
-            resolve_espace_execution_context(self.block_provider.as_ref(), &block).await?;
         let chain_id = self.chain.evm_chain_id;
 
         if let Err(failure) = validate_espace_transaction(&transaction, chain_id) {
             return Ok(PreparedEspaceSimulation {
                 kind: PreparedEspaceSimulationState::Complete(Box::new(build_espace_not_executed(
                     chain_id,
-                    execution_context.simulated_block,
+                    context.simulated_block,
                     gas_limit,
                     failure,
                 ))),
@@ -73,17 +117,15 @@ impl ConfluxEngine {
         let transaction = build_espace_transaction_input(transaction);
 
         let execution_input = TransactionExecutionInput {
-            block_context: execution_context.block_context,
+            block_context: context.block_context,
             transaction: DryRunTransactionInput::Espace(transaction),
         };
-        let state_reader = self
-            .prepare_state_reader(execution_context.state_point)
-            .await?;
+        let state_reader = self.prepare_state_reader(context.state_point).await?;
 
         Ok(PreparedEspaceSimulation {
             kind: PreparedEspaceSimulationState::Ready(Box::new(ReadyEspaceSimulation {
                 chain_id,
-                simulated_block: execution_context.simulated_block,
+                simulated_block: context.simulated_block,
                 gas_limit,
                 execution_input,
                 state_reader,
@@ -98,18 +140,65 @@ impl ConfluxEngine {
         crate::espace::simulation::simulate(prepared, &self.runtime_handle)
     }
 
+    pub async fn resolve_core_space_context(
+        &self,
+        epoch: CoreSpaceEpochRef,
+    ) -> Result<ResolvedCoreSpaceContext, ConfluxEngineError> {
+        resolve_core_space_execution_context(self.block_provider.as_ref(), &epoch).await
+    }
+
+    pub async fn core_space_nonce(
+        &self,
+        context: &ResolvedCoreSpaceContext,
+        address: Address,
+    ) -> Result<U256, ConfluxEngineError> {
+        Ok(self
+            .transaction_provider
+            .cfx_get_next_nonce(address, context.state_point.core_space_epoch())
+            .await?)
+    }
+
+    pub async fn cfx_gas_price(&self) -> Result<U256, ConfluxEngineError> {
+        Ok(self.transaction_provider.cfx_gas_price().await?)
+    }
+
+    pub async fn cfx_max_priority_fee_per_gas(&self) -> Result<U256, ConfluxEngineError> {
+        Ok(self
+            .transaction_provider
+            .cfx_max_priority_fee_per_gas()
+            .await?)
+    }
+
+    pub async fn cfx_estimate_gas_and_collateral(
+        &self,
+        context: &ResolvedCoreSpaceContext,
+        transaction: &ConfluxTransactionBody,
+        epoch_height: u64,
+        gas_limit: Option<U256>,
+        storage_limit: Option<u64>,
+    ) -> Result<CoreSpaceResourceEstimate, ConfluxEngineError> {
+        Ok(self
+            .transaction_provider
+            .cfx_estimate_gas_and_collateral(
+                context.state_point.core_space_epoch(),
+                transaction,
+                epoch_height,
+                gas_limit,
+                storage_limit,
+            )
+            .await?)
+    }
+
     pub async fn prepare_core_space_transaction(
         &self,
-        input: SimulateCoreSpaceTransactionInput,
+        context: ResolvedCoreSpaceContext,
+        transaction: CoreSpaceTransaction,
     ) -> Result<PreparedCoreSpaceSimulation, ConfluxEngineError> {
-        let SimulateCoreSpaceTransactionInput { epoch, transaction } = input;
-        let gas_limit = transaction.gas_limit;
-        let execution_context =
-            resolve_core_space_execution_context(self.block_provider.as_ref(), &epoch).await?;
+        let gas_limit = transaction.transaction.gas_limit;
         let chain_id = self.chain.core_space_chain_id;
         let state_anchor = CoreSpaceStateAnchor {
-            epoch_number: execution_context.state_point.anchor().epoch_number(),
-            pivot_hash: execution_context.state_point.anchor().pivot_hash(),
+            epoch_number: context.state_point.anchor().epoch_number(),
+            pivot_hash: context.state_point.anchor().pivot_hash(),
         };
 
         if let Err(failure) = validate_core_space_transaction(&transaction, chain_id) {
@@ -123,12 +212,10 @@ impl ConfluxEngine {
         let transaction = build_core_space_transaction_input(transaction);
 
         let execution_input = TransactionExecutionInput {
-            block_context: execution_context.block_context,
+            block_context: context.block_context,
             transaction: DryRunTransactionInput::CoreSpace(transaction),
         };
-        let state_reader = self
-            .prepare_state_reader(execution_context.state_point)
-            .await?;
+        let state_reader = self.prepare_state_reader(context.state_point).await?;
 
         Ok(PreparedCoreSpaceSimulation {
             kind: PreparedCoreSpaceSimulationState::Ready(Box::new(ReadyCoreSpaceSimulation {
@@ -164,6 +251,8 @@ fn validate_core_space_transaction(
     transaction: &CoreSpaceTransaction,
     expected_chain_id: u32,
 ) -> Result<(), CoreSpaceExecutionFailure> {
+    let transaction = &transaction.transaction.body;
+
     if transaction.chain_id != expected_chain_id {
         return Err(CoreSpaceExecutionFailure {
             code: CoreSpaceExecutionFailureCode::ChainIdMismatch,
@@ -176,8 +265,8 @@ fn validate_core_space_transaction(
     }
 
     match &transaction.variant {
-        CoreSpaceTransactionVariant::Cip155 { gas_price }
-        | CoreSpaceTransactionVariant::Cip2930 { gas_price, .. } => {
+        CoreSpaceTransactionVariant::Legacy { gas_price }
+        | CoreSpaceTransactionVariant::AccessList { gas_price, .. } => {
             if gas_price.is_zero() {
                 return Err(CoreSpaceExecutionFailure {
                     code: CoreSpaceExecutionFailureCode::ZeroGasPrice,
@@ -186,7 +275,7 @@ fn validate_core_space_transaction(
                 });
             }
         }
-        CoreSpaceTransactionVariant::Cip1559 {
+        CoreSpaceTransactionVariant::DynamicFee {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             ..

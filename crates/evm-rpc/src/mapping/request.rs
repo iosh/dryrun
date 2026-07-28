@@ -1,10 +1,6 @@
 use std::convert::TryFrom;
 
-use alloy::primitives::U256;
-use simulation_transaction::{
-    AccessListItem as SimulationAccessListItem, TransactionRequest as SimulationTransactionRequest,
-    TransactionType,
-};
+use simulation_transaction::{TransactionType, TransactionVariantRequest};
 
 use crate::{errors::ValidationError, interface as rpc};
 
@@ -48,32 +44,34 @@ fn map_block_ref(block: rpc::BlockRef) -> Result<evm_service::BlockSelector, Val
 
 fn map_transaction(
     transaction: rpc::Transaction,
-) -> Result<SimulationTransactionRequest, ValidationError> {
-    let request = SimulationTransactionRequest {
+) -> Result<evm_service::EvmTransactionRequest, ValidationError> {
+    let transaction_type = map_transaction_type(transaction.tx_type)?;
+    let transaction_type = TransactionType::resolve(
+        transaction_type,
+        transaction.access_list.is_some(),
+        transaction.max_fee_per_gas.is_some() || transaction.max_priority_fee_per_gas.is_some(),
+    );
+    let variant = TransactionVariantRequest::try_new(
+        transaction_type,
+        transaction
+            .access_list
+            .map(|items| items.into_iter().map(to_service_access_list_item).collect()),
+        transaction.gas_price,
+        transaction.max_fee_per_gas,
+        transaction.max_priority_fee_per_gas,
+    )
+    .map_err(|error| ValidationError::invalid_params(error.to_string()))?;
+
+    Ok(evm_service::EvmTransactionRequest {
         from: transaction.from,
         to: transaction.to,
-        nonce: transaction.nonce.map(U256::from),
-        gas_limit: Some(U256::from(transaction.gas)),
+        nonce: transaction.nonce,
+        gas_limit: transaction.gas,
         value: transaction.value,
         input: transaction.data,
-        chain_id: transaction.chain_id.map(U256::from),
-        transaction_type: map_transaction_type(transaction.tx_type)?,
-        access_list: transaction.access_list.map(|items| {
-            items
-                .into_iter()
-                .map(to_simulation_access_list_item)
-                .collect()
-        }),
-        gas_price: transaction.gas_price.map(U256::from),
-        max_fee_per_gas: transaction.max_fee_per_gas.map(U256::from),
-        max_priority_fee_per_gas: transaction.max_priority_fee_per_gas.map(U256::from),
-    };
-
-    request
-        .validate_shape()
-        .map_err(|error| ValidationError::invalid_params(error.to_string()))?;
-
-    Ok(request)
+        chain_id: transaction.chain_id,
+        variant,
+    })
 }
 
 fn map_transaction_type(
@@ -91,8 +89,8 @@ fn map_transaction_type(
         .transpose()
 }
 
-fn to_simulation_access_list_item(item: rpc::AccessListItem) -> SimulationAccessListItem {
-    SimulationAccessListItem {
+fn to_service_access_list_item(item: rpc::AccessListItem) -> evm_service::AccessListItem {
+    evm_service::AccessListItem {
         address: item.address,
         storage_keys: item.storage_keys,
     }
@@ -103,7 +101,7 @@ mod tests {
     use std::convert::TryInto;
     use std::str::FromStr;
 
-    use alloy::primitives::{Address, U256};
+    use alloy::primitives::Address;
     use serde_json::json;
 
     use crate::interface as rpc;
@@ -120,11 +118,11 @@ mod tests {
             request.try_into().expect("request should map");
         assert!(matches!(input.block, evm_service::BlockSelector::Latest));
         assert_eq!(
-            input.transaction.resolved_type(),
+            input.transaction.variant.transaction_type(),
             simulation_transaction::TransactionType::Legacy
         );
-        assert_eq!(input.transaction.chain_id, Some(U256::from(1)));
-        assert_eq!(input.transaction.nonce, Some(U256::ZERO));
+        assert_eq!(input.transaction.chain_id, 1);
+        assert_eq!(input.transaction.nonce, Some(0));
         assert_eq!(input.transaction.value, None);
         assert_eq!(input.transaction.input, None);
     }
@@ -188,11 +186,11 @@ mod tests {
     fn sample_transaction() -> rpc::Transaction {
         rpc::Transaction {
             tx_type: None,
-            chain_id: Some(1),
+            chain_id: 1,
             from: Address::from_str("0x1111111111111111111111111111111111111111").unwrap(),
             to: Some(Address::from_str("0x2222222222222222222222222222222222222222").unwrap()),
             nonce: Some(0),
-            gas: 0x5208,
+            gas: Some(0x5208),
             value: None,
             data: None,
             access_list: None,

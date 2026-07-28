@@ -4,9 +4,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-alloy-primitives = { workspace = true }
 cfx-addr = { workspace = true }
-cfx-bytes = { workspace = true }
 cfx-rpc-cfx-types = { workspace = true }
 cfx-rpc-eth-types = { workspace = true }
 cfx-rpc-primitives = { workspace = true }

@@ -6,7 +6,7 @@ use jsonrpsee::types::ErrorObjectOwned;
 use tracing::instrument;
 
 use crate::{
-    errors::{ValidationError, internal_error, not_supported},
+    errors::{internal_error, not_supported},
     interface::{
         BlockRef, EvmSimulateTransactionRequest, EvmSimulateTransactionResponse,
         SimulateTransactionOptions, Transaction,
@@ -66,9 +66,7 @@ impl DryrunRpcServer for RpcHandler {
 fn map_service_error(error: SimulationServiceError) -> ErrorObjectOwned {
     let details = error.details();
 
-    if error.is_invalid_transaction() {
-        ValidationError::invalid_params(details).into()
-    } else if error.is_not_supported() {
+    if error.is_not_supported() {
         not_supported(details)
     } else {
         internal_error(error.kind_code(), details)

@@ -2241,7 +2241,6 @@ dependencies = [
 name = "conflux-engine"
 version = "0.1.0"
 dependencies = [
- "alloy-primitives",
  "async-trait",
  "cfx-addr",
  "cfx-bytes",
@@ -2273,9 +2272,7 @@ dependencies = [
 name = "conflux-rpc"
 version = "0.1.0"
 dependencies = [
- "alloy-primitives",
  "cfx-addr",
- "cfx-bytes",
  "cfx-rpc-cfx-types",
  "cfx-rpc-eth-types",
  "cfx-rpc-primitives",
@@ -2293,10 +2290,9 @@ dependencies = [
 name = "conflux-service"
 version = "0.1.0"
 dependencies = [
- "alloy-primitives",
+ "cfx-bytes",
  "cfx-types",
  "conflux-engine",
- "primitives",
  "simulation-tasks",
  "simulation-transaction",
  "thiserror 2.0.18",
@@ -7243,7 +7239,6 @@ dependencies = [
 name = "simulation-transaction"
 version = "0.1.0"
 dependencies = [
- "alloy-primitives",
  "thiserror 2.0.18",
 ]
 

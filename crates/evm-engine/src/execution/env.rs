@@ -78,7 +78,7 @@ pub(super) fn create_tx_env(transaction: &EvmTransaction) -> Result<TxEnv, EvmEn
         EvmTransactionVariant::Legacy { gas_price } => {
             Ok(create_legacy_tx_env(transaction, *gas_price))
         }
-        EvmTransactionVariant::Eip2930 {
+        EvmTransactionVariant::AccessList {
             gas_price,
             access_list,
         } => Ok(create_access_list_tx_env(
@@ -86,7 +86,7 @@ pub(super) fn create_tx_env(transaction: &EvmTransaction) -> Result<TxEnv, EvmEn
             *gas_price,
             access_list,
         )),
-        EvmTransactionVariant::Eip1559 {
+        EvmTransactionVariant::DynamicFee {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             access_list,
@@ -229,7 +229,7 @@ mod tests {
             gas_limit: 21_000,
             value: U256::ZERO,
             data: Bytes::new(),
-            variant: EvmTransactionVariant::Eip1559 {
+            variant: EvmTransactionVariant::DynamicFee {
                 max_fee_per_gas: 10,
                 max_priority_fee_per_gas: 7,
                 access_list: Vec::new(),

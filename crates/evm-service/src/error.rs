@@ -1,16 +1,15 @@
-use evm_engine::{EvmEngineError, TransactionInputError};
+use evm_engine::EvmEngineError;
 use simulation_tasks::SimulationTaskError;
-use simulation_transaction::TransactionRequestError;
 use thiserror::Error;
 use tokio::task::JoinError;
 
 #[derive(Debug, Error)]
 pub enum SimulationServiceError {
-    #[error("invalid transaction: {details}")]
-    InvalidTransaction { details: String },
-
     #[error("block resolution failed: {details}")]
     BlockResolution { details: String },
+
+    #[error("transaction resolution failed: {details}")]
+    TransactionResolution { details: String },
 
     #[error("simulation task set is closed")]
     TaskSetClosed,
@@ -42,8 +41,8 @@ impl SimulationServiceError {
         Self::ExecutionTask { source }
     }
 
-    fn invalid_transaction(details: impl Into<String>) -> Self {
-        Self::InvalidTransaction {
+    pub(crate) fn transaction_resolution(details: impl Into<String>) -> Self {
+        Self::TransactionResolution {
             details: details.into(),
         }
     }
@@ -52,14 +51,10 @@ impl SimulationServiceError {
         matches!(self, Self::Engine(error) if error.is_not_supported())
     }
 
-    pub fn is_invalid_transaction(&self) -> bool {
-        matches!(self, Self::InvalidTransaction { .. })
-    }
-
     pub fn kind_code(&self) -> Option<&'static str> {
         match self {
-            Self::InvalidTransaction { .. } => None,
             Self::BlockResolution { .. } => Some("block_resolution_error"),
+            Self::TransactionResolution { .. } => Some("transaction_resolution_error"),
             Self::TaskSetClosed => Some("task_set_closed"),
             Self::AttemptTask { .. } => Some("attempt_task_error"),
             Self::ExecutionTask { .. } => Some("execution_task_error"),
@@ -69,25 +64,13 @@ impl SimulationServiceError {
 
     pub fn details(&self) -> String {
         match self {
-            Self::InvalidTransaction { details } => details.clone(),
             Self::BlockResolution { details } => details.clone(),
+            Self::TransactionResolution { details } => details.clone(),
             Self::TaskSetClosed => "simulation task set is closed".to_owned(),
             Self::AttemptTask { .. } => "simulation attempt task failed".to_owned(),
             Self::ExecutionTask { .. } => "EVM execution task failed".to_owned(),
             Self::Engine(error) => error.details().to_owned(),
         }
-    }
-}
-
-impl From<TransactionRequestError> for SimulationServiceError {
-    fn from(error: TransactionRequestError) -> Self {
-        Self::invalid_transaction(error.to_string())
-    }
-}
-
-impl From<TransactionInputError> for SimulationServiceError {
-    fn from(error: TransactionInputError) -> Self {
-        Self::invalid_transaction(error.to_string())
     }
 }
 

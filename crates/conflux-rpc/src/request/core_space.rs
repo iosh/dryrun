@@ -1,16 +1,12 @@
-use alloy_primitives::{Bytes as AlloyBytes, U256 as AlloyU256};
 use cfx_addr::Network;
 use cfx_rpc_cfx_types::{EpochNumber, RpcAddress};
 use cfx_rpc_primitives::Bytes as CoreSpaceRpcBytes;
 use cfx_types::{H256, U64, U256};
-use conflux_service::core_space as service_core_space;
+use conflux_service::{AccessListItem, core_space as service_core_space};
 use serde::Deserialize;
-use simulation_transaction::{
-    AccessListItem as SimulationAccessListItem, TransactionRequest as SimulationTransactionRequest,
-    TransactionType,
-};
+use simulation_transaction::{TransactionType, TransactionVariantRequest};
 
-use super::primitives::{to_alloy_address, to_alloy_b256, to_alloy_u256};
+use super::chain_id_from_wire;
 use crate::error::ValidationError;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -80,9 +76,13 @@ fn map_core_space_transaction(
 ) -> Result<service_core_space::CoreSpaceTransactionRequest, ValidationError> {
     validate_core_space_address_networks(&transaction, expected_network)?;
 
-    let transaction_type = to_transaction_type(transaction.transaction_type)?;
-    let tx_type = resolve_transaction_type(&transaction, transaction_type);
-    validate_core_space_transaction_shape(&transaction, tx_type)?;
+    let transaction_type = map_transaction_type(transaction.transaction_type)?;
+    let transaction_type = TransactionType::resolve(
+        transaction_type,
+        transaction.access_list.is_some(),
+        transaction.max_fee_per_gas.is_some() || transaction.max_priority_fee_per_gas.is_some(),
+    );
+    validate_legacy_access_list(&transaction, transaction_type)?;
 
     let CoreSpaceTransactionRequest {
         from,
@@ -102,45 +102,41 @@ fn map_core_space_transaction(
     } = transaction;
 
     let from = require_core_space_field(from, "transaction.from")?;
-    let request = SimulationTransactionRequest {
-        from: to_alloy_address(from.hex_address),
-        to: to.map(|address| to_alloy_address(address.hex_address)),
-        nonce: nonce.map(to_alloy_u256),
-        gas_limit: gas.map(to_alloy_u256),
-        value: value.map(to_alloy_u256),
-        input: data.map(|data| AlloyBytes::from(data.into_vec())),
-        chain_id: chain_id.map(to_alloy_u256),
+    let chain_id = require_core_space_field(chain_id, "transaction.chainId")?;
+    let variant = TransactionVariantRequest::try_new(
         transaction_type,
-        access_list: access_list.map(map_core_space_access_list),
-        gas_price: gas_price.map(to_alloy_u256),
-        max_fee_per_gas: max_fee_per_gas.map(to_alloy_u256),
-        max_priority_fee_per_gas: max_priority_fee_per_gas.map(to_alloy_u256),
-    };
+        access_list.map(map_core_space_access_list),
+        gas_price,
+        max_fee_per_gas,
+        max_priority_fee_per_gas,
+    )
+    .map_err(|error| ValidationError::invalid_params(error.to_string()))?;
 
     Ok(service_core_space::CoreSpaceTransactionRequest {
-        transaction: request,
-        storage_limit: storage_limit.map(|value| AlloyU256::from(value.as_u64())),
-        epoch_height: epoch_height.map(to_alloy_u256),
+        transaction: conflux_service::ConfluxTransactionRequest {
+            from: from.hex_address,
+            to: to.map(|address| address.hex_address),
+            nonce,
+            gas_limit: gas,
+            value,
+            input: data.map(|data| data.into_vec()),
+            chain_id: chain_id_from_wire(chain_id)?,
+            variant,
+        },
+        storage_limit: storage_limit.map(|value| value.as_u64()),
+        epoch_height: epoch_height.map(epoch_height_from_wire).transpose()?,
     })
 }
 
-fn resolve_transaction_type(
-    transaction: &CoreSpaceTransactionRequest,
-    transaction_type: Option<TransactionType>,
-) -> TransactionType {
-    match transaction_type {
-        Some(transaction_type) => transaction_type,
-        None if transaction.max_fee_per_gas.is_some()
-            || transaction.max_priority_fee_per_gas.is_some() =>
-        {
-            TransactionType::DynamicFee
-        }
-        None if transaction.access_list.is_some() => TransactionType::AccessList,
-        None => TransactionType::Legacy,
-    }
+fn epoch_height_from_wire(epoch_height: U256) -> Result<u64, ValidationError> {
+    u64::try_from(epoch_height).map_err(|_| {
+        ValidationError::invalid_params(
+            "`transaction.epochHeight` must fit into an unsigned 64-bit integer",
+        )
+    })
 }
 
-fn to_transaction_type(
+fn map_transaction_type(
     transaction_type: Option<U64>,
 ) -> Result<Option<TransactionType>, ValidationError> {
     match transaction_type.map(|value| value.as_u64()) {
@@ -154,41 +150,14 @@ fn to_transaction_type(
     }
 }
 
-fn validate_core_space_transaction_shape(
+fn validate_legacy_access_list(
     transaction: &CoreSpaceTransactionRequest,
-    tx_type: TransactionType,
+    transaction_type: TransactionType,
 ) -> Result<(), ValidationError> {
-    let has_dynamic_fee =
-        transaction.max_fee_per_gas.is_some() || transaction.max_priority_fee_per_gas.is_some();
-
-    match tx_type {
-        TransactionType::Legacy => {
-            if transaction.access_list.is_some() {
-                return Err(ValidationError::invalid_params(
-                    "CIP-155 transactions cannot include `transaction.accessList`",
-                ));
-            }
-
-            if has_dynamic_fee {
-                return Err(ValidationError::invalid_params(
-                    "CIP-155 transactions cannot include CIP-1559 fee fields",
-                ));
-            }
-        }
-        TransactionType::AccessList => {
-            if has_dynamic_fee {
-                return Err(ValidationError::invalid_params(
-                    "CIP-2930 transactions cannot include CIP-1559 fee fields",
-                ));
-            }
-        }
-        TransactionType::DynamicFee => {
-            if transaction.gas_price.is_some() {
-                return Err(ValidationError::invalid_params(
-                    "CIP-1559 transactions cannot include `transaction.gasPrice`",
-                ));
-            }
-        }
+    if transaction_type == TransactionType::Legacy && transaction.access_list.is_some() {
+        return Err(ValidationError::invalid_params(
+            "CIP-155 transactions cannot include `transaction.accessList`",
+        ));
     }
 
     Ok(())
@@ -238,14 +207,12 @@ fn require_core_space_field<T>(value: Option<T>, field: &str) -> Result<T, Valid
     value.ok_or_else(|| ValidationError::invalid_params(format!("`{field}` is required")))
 }
 
-fn map_core_space_access_list(
-    items: Vec<CoreSpaceAccessListItem>,
-) -> Vec<SimulationAccessListItem> {
+fn map_core_space_access_list(items: Vec<CoreSpaceAccessListItem>) -> Vec<AccessListItem> {
     items
         .into_iter()
-        .map(|item| SimulationAccessListItem {
-            address: to_alloy_address(item.address.hex_address),
-            storage_keys: item.storage_keys.into_iter().map(to_alloy_b256).collect(),
+        .map(|item| AccessListItem {
+            address: item.address.hex_address,
+            storage_keys: item.storage_keys,
         })
         .collect()
 }

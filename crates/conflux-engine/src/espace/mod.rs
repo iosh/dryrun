@@ -8,8 +8,5 @@ pub use execution::{
     SimulatedBlock,
 };
 pub(crate) use outcome::{build_espace_execution, build_espace_not_executed};
-pub use transaction::{
-    AccessListItem, EspaceBlockRef, EspaceTransaction, EspaceTransactionVariant,
-    SimulateEspaceTransactionInput,
-};
+pub use transaction::{EspaceBlockRef, EspaceTransaction, EspaceTransactionVariant};
 pub(crate) use transaction::{build_espace_transaction_input, validate_espace_transaction};

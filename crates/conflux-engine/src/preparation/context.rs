@@ -17,23 +17,39 @@ use crate::{
     },
 };
 
-pub(crate) struct EspaceExecutionContext {
+pub struct ResolvedEspaceContext {
     pub(crate) block_context: ExecutionBlockContext,
     pub(crate) state_point: ConfluxStatePoint,
     pub(crate) simulated_block: SimulatedBlock,
 }
 
-pub(crate) struct CoreSpaceExecutionContext {
+impl ResolvedEspaceContext {
+    pub fn base_fee_per_gas(&self) -> Option<U256> {
+        self.block_context.base_fees.espace_base_fee_per_gas
+    }
+}
+
+pub struct ResolvedCoreSpaceContext {
     pub(crate) block_context: ExecutionBlockContext,
     pub(crate) state_point: ConfluxStatePoint,
+}
+
+impl ResolvedCoreSpaceContext {
+    pub fn epoch_height(&self) -> u64 {
+        self.block_context.pivot_epoch_height
+    }
+
+    pub fn base_fee_per_gas(&self) -> Option<U256> {
+        self.block_context.base_fees.core_space_base_fee_per_gas
+    }
 }
 
 pub(crate) async fn resolve_espace_execution_context(
     block_provider: &dyn ConfluxBlockProvider,
     block: &EspaceBlockRef,
-) -> Result<EspaceExecutionContext, ConfluxEngineError> {
+) -> Result<ResolvedEspaceContext, ConfluxEngineError> {
     let espace_block = block_provider
-        .get_espace_block_by_number(espace_block_selector(block))
+        .eth_get_block_by_number(espace_block_selector(block))
         .await?
         .ok_or_else(|| ConfluxEngineError::BlockNotFound {
             block: "eSpace block".to_string(),
@@ -60,7 +76,7 @@ pub(crate) async fn resolve_espace_execution_context(
         ExecutionConsensusContext::default(),
     );
 
-    Ok(EspaceExecutionContext {
+    Ok(ResolvedEspaceContext {
         block_context,
         state_point: ConfluxStatePoint::from_anchor(state_anchor),
         simulated_block,
@@ -70,9 +86,9 @@ pub(crate) async fn resolve_espace_execution_context(
 pub(crate) async fn resolve_core_space_execution_context(
     block_provider: &dyn ConfluxBlockProvider,
     epoch: &CoreSpaceEpochRef,
-) -> Result<CoreSpaceExecutionContext, ConfluxEngineError> {
+) -> Result<ResolvedCoreSpaceContext, ConfluxEngineError> {
     let core_space_pivot_block = block_provider
-        .get_core_space_block_by_epoch_number(core_space_epoch_selector(epoch))
+        .cfx_get_block_by_epoch_number(core_space_epoch_selector(epoch))
         .await?
         .ok_or_else(|| ConfluxEngineError::BlockNotFound {
             block: "Core Space pivot block".to_string(),
@@ -89,7 +105,7 @@ pub(crate) async fn resolve_core_space_execution_context(
         ExecutionConsensusContext::default(),
     );
 
-    Ok(CoreSpaceExecutionContext {
+    Ok(ResolvedCoreSpaceContext {
         block_context,
         state_point: ConfluxStatePoint::from_anchor(state_anchor),
     })
@@ -100,7 +116,7 @@ async fn resolve_core_space_pivot_block(
     anchor: ConfluxStateAnchor,
 ) -> Result<CoreSpaceRpcBlock, ConfluxEngineError> {
     block_provider
-        .get_core_space_block_by_epoch_number(core_space_epoch_from_anchor(anchor))
+        .cfx_get_block_by_epoch_number(core_space_epoch_from_anchor(anchor))
         .await?
         .ok_or_else(|| ConfluxEngineError::BlockNotFound {
             block: "Core Space pivot block".to_string(),
@@ -112,7 +128,7 @@ async fn resolve_espace_block_for_anchor(
     anchor: ConfluxStateAnchor,
 ) -> Result<EspaceRpcBlock, ConfluxEngineError> {
     block_provider
-        .get_espace_block_by_number(anchor.espace_block())
+        .eth_get_block_by_number(anchor.espace_block())
         .await?
         .ok_or_else(|| ConfluxEngineError::BlockNotFound {
             block: "eSpace block".to_string(),

@@ -190,16 +190,16 @@ impl RemoteStateReader {
     async fn fetch_core_space_account(&self, address: Address) -> StorageResult<StateRead> {
         let account = self
             .state_provider
-            .get_core_space_account(self.core_space_epoch(), address)
+            .cfx_get_account(self.core_space_epoch(), address)
             .await
-            .map_err(|error| self.provider_error("get_core_space_account", error))?;
+            .map_err(|error| self.provider_error("cfx_getAccount", error))?;
 
         if should_encode_core_space_contract_account(address, account.code_hash) {
             let sponsor_info = self
                 .state_provider
-                .get_core_space_sponsor_info(self.core_space_epoch(), address)
+                .cfx_get_sponsor_info(self.core_space_epoch(), address)
                 .await
-                .map_err(|error| self.provider_error("get_core_space_sponsor_info", error))?;
+                .map_err(|error| self.provider_error("cfx_getSponsorInfo", error))?;
 
             return Ok(encode_core_space_contract_account(
                 account.balance,
@@ -225,9 +225,9 @@ impl RemoteStateReader {
     async fn fetch_core_space_deposit_list(&self, address: Address) -> StorageResult<StateRead> {
         let deposits = self
             .state_provider
-            .get_core_space_deposit_list(self.core_space_epoch(), address)
+            .cfx_get_deposit_list(self.core_space_epoch(), address)
             .await
-            .map_err(|error| self.provider_error("get_core_space_deposit_list", error))?;
+            .map_err(|error| self.provider_error("cfx_getDepositList", error))?;
 
         Ok(encode_core_space_deposit_list(deposits))
     }
@@ -235,9 +235,9 @@ impl RemoteStateReader {
     async fn fetch_core_space_vote_list(&self, address: Address) -> StorageResult<StateRead> {
         let votes = self
             .state_provider
-            .get_core_space_vote_list(self.core_space_epoch(), address)
+            .cfx_get_vote_list(self.core_space_epoch(), address)
             .await
-            .map_err(|error| self.provider_error("get_core_space_vote_list", error))?;
+            .map_err(|error| self.provider_error("cfx_getVoteList", error))?;
 
         Ok(encode_core_space_vote_list(votes))
     }
@@ -249,9 +249,9 @@ impl RemoteStateReader {
     ) -> StorageResult<StateRead> {
         let value = self
             .state_provider
-            .get_core_space_storage_at(self.core_space_epoch(), address, slot)
+            .cfx_get_storage_at(self.core_space_epoch(), address, slot)
             .await
-            .map_err(|error| self.provider_error("get_core_space_storage_at", error))?;
+            .map_err(|error| self.provider_error("cfx_getStorageAt", error))?;
 
         Ok(value.map(encode_core_space_storage_slot))
     }
@@ -263,9 +263,9 @@ impl RemoteStateReader {
     ) -> StorageResult<StateRead> {
         let code = self
             .state_provider
-            .get_core_space_code_at(self.core_space_epoch(), address)
+            .cfx_get_code(self.core_space_epoch(), address)
             .await
-            .map_err(|error| self.provider_error("get_core_space_code_at", error))?;
+            .map_err(|error| self.provider_error("cfx_getCode", error))?;
 
         if code.is_empty() {
             return Ok(None);
@@ -293,14 +293,14 @@ impl RemoteStateReader {
     ) -> StorageResult<StateRead> {
         let is_all_whitelisted = self
             .state_provider
-            .call_core_space(
+            .cfx_call(
                 self.core_space_epoch(),
                 key.control_contract_address(),
                 key.is_all_whitelisted_call_data(),
             )
             .await
             .and_then(|value| decode_abi_bool(value, "cfx_call"))
-            .map_err(|error| self.provider_error("call_core_space_sponsor_whitelist", error))?;
+            .map_err(|error| self.provider_error("cfx_call", error))?;
 
         if key.is_all_whitelist_key() {
             return Ok(is_all_whitelisted.then_some(encode_core_space_storage_slot(U256::one())));
@@ -318,14 +318,14 @@ impl RemoteStateReader {
 
         let is_user_whitelisted = self
             .state_provider
-            .call_core_space(
+            .cfx_call(
                 self.core_space_epoch(),
                 key.control_contract_address(),
                 key.is_user_whitelisted_call_data(),
             )
             .await
             .and_then(|value| decode_abi_bool(value, "cfx_call"))
-            .map_err(|error| self.provider_error("call_core_space_sponsor_whitelist", error))?;
+            .map_err(|error| self.provider_error("cfx_call", error))?;
 
         Ok(is_user_whitelisted.then_some(encode_core_space_storage_slot(U256::one())))
     }
@@ -347,9 +347,9 @@ impl RemoteStateReader {
     ) -> StorageResult<StateRead> {
         let value = self
             .state_provider
-            .get_espace_storage_at(self.espace_block(), address, slot)
+            .eth_get_storage_at(self.espace_block(), address, slot)
             .await
-            .map_err(|error| self.provider_error("get_espace_storage_at", error))?;
+            .map_err(|error| self.provider_error("eth_getStorageAt", error))?;
 
         Ok(value.map(encode_espace_storage_slot))
     }

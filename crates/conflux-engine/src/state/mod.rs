@@ -14,7 +14,10 @@ use cfx_types::{H256, U64};
 
 pub use self::{
     http_provider::HttpConfluxProvider,
-    provider::{ConfluxBlockProvider, ConfluxStateProvider, RemoteStateProviderError},
+    provider::{
+        ConfluxBlockProvider, ConfluxStateProvider, ConfluxTransactionProvider,
+        CoreSpaceResourceEstimate, RemoteStateProviderError,
+    },
     rpc_types::{
         CoreSpaceGlobalSnapshot, CoreSpacePoSEconomics, CoreSpaceRpcAccount, CoreSpaceRpcBlock,
         CoreSpaceStorageCollateralInfo, CoreSpaceSupplyInfo, CoreSpaceVoteParamsInfo,
