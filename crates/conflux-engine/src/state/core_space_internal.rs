@@ -1,7 +1,7 @@
 use cfx_parameters::internal_contract_addresses::SPONSOR_WHITELIST_CONTROL_CONTRACT_ADDRESS;
 use cfx_types::{Address, U256};
 
-use crate::state::provider::RemoteStateProviderError;
+use crate::ConfluxRpcError;
 
 const ADDRESS_BYTES: usize = 20;
 const SPONSOR_WHITELIST_KEY_BYTES: usize = ADDRESS_BYTES * 2;
@@ -48,11 +48,11 @@ impl SponsorWhitelistStorageKey {
 pub(crate) fn decode_abi_bool(
     value: Vec<u8>,
     field: &'static str,
-) -> Result<bool, RemoteStateProviderError> {
+) -> Result<bool, ConfluxRpcError> {
     if value.len() != ABI_WORD_BYTES {
-        return Err(RemoteStateProviderError::RpcDecode {
-            field,
-            message: format!("expected 32-byte ABI bool, got {} bytes", value.len()),
+        return Err(ConfluxRpcError {
+            operation: field,
+            reason: format!("expected 32-byte ABI bool, got {} bytes", value.len()),
         });
     }
 
@@ -60,9 +60,9 @@ pub(crate) fn decode_abi_bool(
     match decoded {
         value if value.is_zero() => Ok(false),
         value if value == U256::one() => Ok(true),
-        _ => Err(RemoteStateProviderError::RpcDecode {
-            field,
-            message: "expected ABI bool value 0 or 1".to_owned(),
+        _ => Err(ConfluxRpcError {
+            operation: field,
+            reason: "expected ABI bool value 0 or 1".to_owned(),
         }),
     }
 }

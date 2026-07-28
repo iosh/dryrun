@@ -21,7 +21,7 @@ pub(crate) fn build_rpc_backed_state(
 }
 
 fn next_execution_block_number(pivot_block_number: BlockNumber) -> BlockNumber {
-    // The state/context we resolve is the parent snapshot. The simulated
+    // The loaded context points at the parent state. The simulated
     // transaction executes in the next block, matching Conflux block assembly.
     pivot_block_number + 1
 }

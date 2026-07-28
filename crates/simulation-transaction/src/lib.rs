@@ -20,7 +20,7 @@ impl fmt::Display for TransactionType {
 }
 
 impl TransactionType {
-    pub fn resolve(explicit: Option<Self>, has_access_list: bool, has_dynamic_fee: bool) -> Self {
+    pub fn infer(explicit: Option<Self>, has_access_list: bool, has_dynamic_fee: bool) -> Self {
         match explicit {
             Some(transaction_type) => transaction_type,
             None if has_dynamic_fee => Self::DynamicFee,

@@ -1,11 +1,9 @@
 use std::sync::Arc;
 
-use cfx_types::{Address, U256};
 use tokio::runtime::Handle;
 
 use crate::{
-    ConfluxEngineError, ConfluxTransactionBody, PreparedCoreSpaceSimulation,
-    PreparedEspaceSimulation,
+    ConfluxEngineError, PreparedCoreSpaceSimulation, PreparedEspaceSimulation,
     config::ConfluxChainConfig,
     core_space::{
         CoreSpaceEpochRef, CoreSpaceExecution, CoreSpaceExecutionFailure,
@@ -19,85 +17,42 @@ use crate::{
     },
     execution::{DryRunTransactionInput, TransactionExecutionInput},
     preparation::{
-        PreparedCoreSpaceSimulationState, PreparedEspaceSimulationState, ReadyCoreSpaceSimulation,
-        ReadyEspaceSimulation, ResolvedCoreSpaceContext, ResolvedEspaceContext,
-        resolve_core_space_execution_context, resolve_espace_execution_context,
+        CoreSpaceSimulationContext, EspaceSimulationContext, PreparedCoreSpaceSimulationState,
+        PreparedEspaceSimulationState, ReadyCoreSpaceSimulation, ReadyEspaceSimulation,
+        load_core_space_context, load_espace_context,
     },
-    state::{
-        ConfluxBlockProvider, ConfluxStatePoint, ConfluxStateProvider, ConfluxTransactionProvider,
-        CoreSpaceResourceEstimate, RemoteStateReader,
-    },
+    state::{ConfluxStateAnchor, HttpConfluxProvider, RemoteStateReader},
 };
 
 pub struct ConfluxEngine {
     chain: ConfluxChainConfig,
-    block_provider: Arc<dyn ConfluxBlockProvider>,
-    state_provider: Arc<dyn ConfluxStateProvider>,
-    transaction_provider: Arc<dyn ConfluxTransactionProvider>,
+    provider: Arc<HttpConfluxProvider>,
     runtime_handle: Handle,
 }
 
 impl ConfluxEngine {
-    pub fn new<P>(chain: ConfluxChainConfig, provider: Arc<P>, runtime_handle: Handle) -> Self
-    where
-        P: ConfluxBlockProvider + ConfluxStateProvider + ConfluxTransactionProvider + 'static,
-    {
-        let block_provider: Arc<dyn ConfluxBlockProvider> = provider.clone();
-        let state_provider: Arc<dyn ConfluxStateProvider> = provider.clone();
-        let transaction_provider: Arc<dyn ConfluxTransactionProvider> = provider;
-
+    pub fn new(
+        chain: ConfluxChainConfig,
+        provider: Arc<HttpConfluxProvider>,
+        runtime_handle: Handle,
+    ) -> Self {
         Self {
             chain,
-            block_provider,
-            state_provider,
-            transaction_provider,
+            provider,
             runtime_handle,
         }
     }
 
-    pub async fn resolve_espace_context(
+    pub async fn load_espace_context(
         &self,
         block: EspaceBlockRef,
-    ) -> Result<ResolvedEspaceContext, ConfluxEngineError> {
-        resolve_espace_execution_context(self.block_provider.as_ref(), &block).await
-    }
-
-    pub async fn espace_nonce(
-        &self,
-        context: &ResolvedEspaceContext,
-        address: Address,
-    ) -> Result<U256, ConfluxEngineError> {
-        Ok(self
-            .transaction_provider
-            .eth_get_transaction_count(address, context.state_point.espace_block())
-            .await?)
-    }
-
-    pub async fn eth_gas_price(&self) -> Result<U256, ConfluxEngineError> {
-        Ok(self.transaction_provider.eth_gas_price().await?)
-    }
-
-    pub async fn eth_max_priority_fee_per_gas(&self) -> Result<U256, ConfluxEngineError> {
-        Ok(self
-            .transaction_provider
-            .eth_max_priority_fee_per_gas()
-            .await?)
-    }
-
-    pub async fn eth_estimate_gas(
-        &self,
-        context: &ResolvedEspaceContext,
-        transaction: &ConfluxTransactionBody,
-    ) -> Result<U256, ConfluxEngineError> {
-        Ok(self
-            .transaction_provider
-            .eth_estimate_gas(context.state_point.espace_block(), transaction)
-            .await?)
+    ) -> Result<EspaceSimulationContext, ConfluxEngineError> {
+        load_espace_context(self.provider.as_ref(), &block).await
     }
 
     pub async fn prepare_espace_transaction(
         &self,
-        context: ResolvedEspaceContext,
+        context: EspaceSimulationContext,
         transaction: EspaceTransaction,
     ) -> Result<PreparedEspaceSimulation, ConfluxEngineError> {
         let gas_limit = transaction.gas_limit;
@@ -105,12 +60,14 @@ impl ConfluxEngine {
 
         if let Err(failure) = validate_espace_transaction(&transaction, chain_id) {
             return Ok(PreparedEspaceSimulation {
-                kind: PreparedEspaceSimulationState::Complete(Box::new(build_espace_not_executed(
-                    chain_id,
-                    context.simulated_block,
-                    gas_limit,
-                    failure,
-                ))),
+                state: PreparedEspaceSimulationState::Finished(Box::new(
+                    build_espace_not_executed(
+                        chain_id,
+                        context.simulated_block,
+                        gas_limit,
+                        failure,
+                    ),
+                )),
             });
         }
 
@@ -120,10 +77,10 @@ impl ConfluxEngine {
             block_context: context.block_context,
             transaction: DryRunTransactionInput::Espace(transaction),
         };
-        let state_reader = self.prepare_state_reader(context.state_point).await?;
+        let state_reader = self.prepare_state_reader(context.state_anchor).await?;
 
         Ok(PreparedEspaceSimulation {
-            kind: PreparedEspaceSimulationState::Ready(Box::new(ReadyEspaceSimulation {
+            state: PreparedEspaceSimulationState::Ready(Box::new(ReadyEspaceSimulation {
                 chain_id,
                 simulated_block: context.simulated_block,
                 gas_limit,
@@ -140,70 +97,28 @@ impl ConfluxEngine {
         crate::espace::simulation::simulate(prepared, &self.runtime_handle)
     }
 
-    pub async fn resolve_core_space_context(
+    pub async fn load_core_space_context(
         &self,
         epoch: CoreSpaceEpochRef,
-    ) -> Result<ResolvedCoreSpaceContext, ConfluxEngineError> {
-        resolve_core_space_execution_context(self.block_provider.as_ref(), &epoch).await
-    }
-
-    pub async fn core_space_nonce(
-        &self,
-        context: &ResolvedCoreSpaceContext,
-        address: Address,
-    ) -> Result<U256, ConfluxEngineError> {
-        Ok(self
-            .transaction_provider
-            .cfx_get_next_nonce(address, context.state_point.core_space_epoch())
-            .await?)
-    }
-
-    pub async fn cfx_gas_price(&self) -> Result<U256, ConfluxEngineError> {
-        Ok(self.transaction_provider.cfx_gas_price().await?)
-    }
-
-    pub async fn cfx_max_priority_fee_per_gas(&self) -> Result<U256, ConfluxEngineError> {
-        Ok(self
-            .transaction_provider
-            .cfx_max_priority_fee_per_gas()
-            .await?)
-    }
-
-    pub async fn cfx_estimate_gas_and_collateral(
-        &self,
-        context: &ResolvedCoreSpaceContext,
-        transaction: &ConfluxTransactionBody,
-        epoch_height: u64,
-        gas_limit: Option<U256>,
-        storage_limit: Option<u64>,
-    ) -> Result<CoreSpaceResourceEstimate, ConfluxEngineError> {
-        Ok(self
-            .transaction_provider
-            .cfx_estimate_gas_and_collateral(
-                context.state_point.core_space_epoch(),
-                transaction,
-                epoch_height,
-                gas_limit,
-                storage_limit,
-            )
-            .await?)
+    ) -> Result<CoreSpaceSimulationContext, ConfluxEngineError> {
+        load_core_space_context(self.provider.as_ref(), &epoch).await
     }
 
     pub async fn prepare_core_space_transaction(
         &self,
-        context: ResolvedCoreSpaceContext,
+        context: CoreSpaceSimulationContext,
         transaction: CoreSpaceTransaction,
     ) -> Result<PreparedCoreSpaceSimulation, ConfluxEngineError> {
         let gas_limit = transaction.transaction.gas_limit;
         let chain_id = self.chain.core_space_chain_id;
         let state_anchor = CoreSpaceStateAnchor {
-            epoch_number: context.state_point.anchor().epoch_number(),
-            pivot_hash: context.state_point.anchor().pivot_hash(),
+            epoch_number: context.state_anchor.epoch_number(),
+            pivot_hash: context.state_anchor.pivot_hash(),
         };
 
         if let Err(failure) = validate_core_space_transaction(&transaction, chain_id) {
             return Ok(PreparedCoreSpaceSimulation {
-                kind: PreparedCoreSpaceSimulationState::Complete(Box::new(
+                state: PreparedCoreSpaceSimulationState::Finished(Box::new(
                     build_core_space_not_executed(chain_id, state_anchor, gas_limit, failure),
                 )),
             });
@@ -215,10 +130,10 @@ impl ConfluxEngine {
             block_context: context.block_context,
             transaction: DryRunTransactionInput::CoreSpace(transaction),
         };
-        let state_reader = self.prepare_state_reader(context.state_point).await?;
+        let state_reader = self.prepare_state_reader(context.state_anchor).await?;
 
         Ok(PreparedCoreSpaceSimulation {
-            kind: PreparedCoreSpaceSimulationState::Ready(Box::new(ReadyCoreSpaceSimulation {
+            state: PreparedCoreSpaceSimulationState::Ready(Box::new(ReadyCoreSpaceSimulation {
                 chain_id,
                 state_anchor,
                 gas_limit,
@@ -237,9 +152,9 @@ impl ConfluxEngine {
 
     async fn prepare_state_reader(
         &self,
-        state_point: ConfluxStatePoint,
+        state_anchor: ConfluxStateAnchor,
     ) -> Result<RemoteStateReader, ConfluxEngineError> {
-        RemoteStateReader::prepare(state_point, Arc::clone(&self.state_provider))
+        RemoteStateReader::prepare(state_anchor, Arc::clone(&self.provider))
             .await
             .map_err(|error| ConfluxEngineError::StateAccess {
                 message: error.to_string(),

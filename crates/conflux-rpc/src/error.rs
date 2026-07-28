@@ -63,12 +63,15 @@ fn not_supported(details: impl Into<String>) -> ErrorObjectOwned {
     )
 }
 
-fn internal_error(kind_code: Option<&'static str>, details: impl Into<String>) -> ErrorObjectOwned {
+fn internal_error(
+    error_code: Option<&'static str>,
+    details: impl Into<String>,
+) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(
         INTERNAL_ERROR_CODE,
         "Internal error",
         Some(ErrorData {
-            subkind: kind_code,
+            subkind: error_code,
             details: details.into(),
         }),
     )
@@ -80,5 +83,5 @@ pub(super) fn response_mapping_error(details: impl Into<String>) -> ErrorObjectO
 
 pub(super) fn map_service_error(error: ConfluxServiceError) -> ErrorObjectOwned {
     let details = error.details();
-    internal_error(Some(error.kind_code()), details)
+    internal_error(Some(error.rpc_error_code()), details)
 }

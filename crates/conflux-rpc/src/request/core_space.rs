@@ -77,7 +77,7 @@ fn map_core_space_transaction(
     validate_core_space_address_networks(&transaction, expected_network)?;
 
     let transaction_type = map_transaction_type(transaction.transaction_type)?;
-    let transaction_type = TransactionType::resolve(
+    let transaction_type = TransactionType::infer(
         transaction_type,
         transaction.access_list.is_some(),
         transaction.max_fee_per_gas.is_some() || transaction.max_priority_fee_per_gas.is_some(),

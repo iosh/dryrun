@@ -7,7 +7,7 @@ use crate::state::{CoreSpaceRpcBlock, EspaceRpcBlock};
 // Used by Core Space Context / PoS internal contracts. Upstream derives these
 // values from a pivot block's PoS reference; ordinary eSpace execution does not
 // depend on them, so the RPC-backed path keeps them optional until that
-// resolution is implemented.
+// data is loaded.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ExecutionConsensusContext {
     pub pos_view: Option<u64>,
@@ -64,7 +64,7 @@ pub enum ExecutionBlockContextError {
     U64Overflow { field: &'static str, value: U256 },
 }
 
-pub fn build_core_space_pivot_block_context(
+pub(crate) fn build_core_space_pivot_block_context(
     block: &CoreSpaceRpcBlock,
 ) -> Result<CoreSpacePivotBlockContext, ExecutionBlockContextError> {
     Ok(CoreSpacePivotBlockContext {
@@ -77,13 +77,13 @@ pub fn build_core_space_pivot_block_context(
     })
 }
 
-pub fn build_espace_block_context(block: &EspaceRpcBlock) -> EspaceBlockContext {
+pub(crate) fn build_espace_block_context(block: &EspaceRpcBlock) -> EspaceBlockContext {
     EspaceBlockContext {
         base_fee_per_gas: block.base_fee_per_gas,
     }
 }
 
-pub fn build_execution_block_context(
+pub(crate) fn build_execution_block_context(
     pivot: &CoreSpacePivotBlockContext,
     espace: &EspaceBlockContext,
     consensus: ExecutionConsensusContext,

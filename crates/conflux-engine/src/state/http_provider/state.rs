@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use cfx_rpc_cfx_types::{EpochNumber, RpcAddress, epoch_number::BlockHashOrEpochNumber};
 use cfx_rpc_eth_types::BlockId;
 use cfx_rpc_primitives::Bytes as RpcBytes;
@@ -10,25 +9,23 @@ use primitives::{DepositInfo, VoteStakeInfo};
 use serde::Serialize;
 
 use crate::state::{
-    provider::{ConfluxStateProvider, RemoteStateProviderError},
-    rpc_encoding::{RpcStorageWord, decode_rpc_bytes},
+    ConfluxRpcError,
     rpc_types::{
-        CoreSpaceGlobalSnapshot, CoreSpacePoSEconomics, CoreSpaceRpcAccount, CoreSpaceSponsorInfo,
+        CoreSpaceGlobals, CoreSpacePoSEconomics, CoreSpaceRpcAccount, CoreSpaceSponsorInfo,
         CoreSpaceStorageCollateralInfo, CoreSpaceSupplyInfo, CoreSpaceVoteParamsInfo,
-        EspaceAccountSnapshot,
+        EspaceAccountData,
     },
 };
 
 use super::HttpConfluxProvider;
 
-#[async_trait]
-impl ConfluxStateProvider for HttpConfluxProvider {
-    async fn eth_get_storage_at(
+impl HttpConfluxProvider {
+    pub(crate) async fn eth_get_storage_at(
         &self,
-        block_number: BlockId,
         address: Address,
         slot: H256,
-    ) -> Result<Option<U256>, RemoteStateProviderError> {
+        block_number: BlockId,
+    ) -> Result<Option<U256>, ConfluxRpcError> {
         let value: H256 = self
             .espace_rpc_request(
                 "eth_getStorageAt",
@@ -44,11 +41,11 @@ impl ConfluxStateProvider for HttpConfluxProvider {
         Ok((!value.is_zero()).then_some(value))
     }
 
-    async fn get_espace_account_snapshot(
+    pub(crate) async fn load_espace_account(
         &self,
-        block_number: BlockId,
         address: Address,
-    ) -> Result<EspaceAccountSnapshot, RemoteStateProviderError> {
+        block_number: BlockId,
+    ) -> Result<EspaceAccountData, ConfluxRpcError> {
         const BATCH_NAME: &str = "eSpace account";
         const BATCH_LEN: usize = 3;
 
@@ -78,17 +75,17 @@ impl ConfluxStateProvider for HttpConfluxProvider {
         let nonce = Self::decode_batch_result(&mut entries, "eth_getTransactionCount")?;
         let code: String = Self::decode_batch_result(&mut entries, "eth_getCode")?;
 
-        Ok(EspaceAccountSnapshot {
+        Ok(EspaceAccountData {
             balance,
             nonce,
             code: Arc::new(decode_rpc_bytes(code, "eth_getCode")?),
         })
     }
 
-    async fn get_core_space_global_snapshot(
+    pub(crate) async fn load_core_space_globals(
         &self,
         epoch: EpochNumber,
-    ) -> Result<CoreSpaceGlobalSnapshot, RemoteStateProviderError> {
+    ) -> Result<CoreSpaceGlobals, ConfluxRpcError> {
         const BATCH_NAME: &str = "Core Space globals";
         const BATCH_LEN: usize = 7;
 
@@ -132,7 +129,7 @@ impl ConfluxStateProvider for HttpConfluxProvider {
         Self::validate_batch_len(BATCH_NAME, BATCH_LEN, response.len())?;
         let mut entries = response.into_iter();
 
-        Ok(CoreSpaceGlobalSnapshot {
+        Ok(CoreSpaceGlobals {
             interest_rate: Self::decode_batch_result(&mut entries, "cfx_getInterestRate")?,
             accumulate_interest_rate: Self::decode_batch_result(
                 &mut entries,
@@ -158,55 +155,55 @@ impl ConfluxStateProvider for HttpConfluxProvider {
         })
     }
 
-    async fn cfx_get_account(
+    pub(crate) async fn cfx_get_account(
         &self,
-        epoch: EpochNumber,
         address: Address,
-    ) -> Result<CoreSpaceRpcAccount, RemoteStateProviderError> {
+        epoch: EpochNumber,
+    ) -> Result<CoreSpaceRpcAccount, ConfluxRpcError> {
         let address = self.cfx_rpc_address(address)?;
 
         self.core_space_rpc_request("cfx_getAccount", rpc_params![address, epoch])
             .await
     }
 
-    async fn cfx_get_deposit_list(
+    pub(crate) async fn cfx_get_deposit_list(
         &self,
-        epoch: EpochNumber,
         address: Address,
-    ) -> Result<Vec<DepositInfo>, RemoteStateProviderError> {
+        epoch: EpochNumber,
+    ) -> Result<Vec<DepositInfo>, ConfluxRpcError> {
         let address = self.cfx_rpc_address(address)?;
 
         self.core_space_rpc_request("cfx_getDepositList", rpc_params![address, epoch])
             .await
     }
 
-    async fn cfx_get_vote_list(
+    pub(crate) async fn cfx_get_vote_list(
         &self,
-        epoch: EpochNumber,
         address: Address,
-    ) -> Result<Vec<VoteStakeInfo>, RemoteStateProviderError> {
+        epoch: EpochNumber,
+    ) -> Result<Vec<VoteStakeInfo>, ConfluxRpcError> {
         let address = self.cfx_rpc_address(address)?;
 
         self.core_space_rpc_request("cfx_getVoteList", rpc_params![address, epoch])
             .await
     }
 
-    async fn cfx_get_sponsor_info(
+    pub(crate) async fn cfx_get_sponsor_info(
         &self,
-        epoch: EpochNumber,
         address: Address,
-    ) -> Result<CoreSpaceSponsorInfo, RemoteStateProviderError> {
+        epoch: EpochNumber,
+    ) -> Result<CoreSpaceSponsorInfo, ConfluxRpcError> {
         let address = self.cfx_rpc_address(address)?;
 
         self.core_space_rpc_request("cfx_getSponsorInfo", rpc_params![address, epoch])
             .await
     }
 
-    async fn cfx_get_code(
+    pub(crate) async fn cfx_get_code(
         &self,
-        epoch: EpochNumber,
         address: Address,
-    ) -> Result<Vec<u8>, RemoteStateProviderError> {
+        epoch: EpochNumber,
+    ) -> Result<Vec<u8>, ConfluxRpcError> {
         let address = self.cfx_rpc_address(address)?;
         let epoch = BlockHashOrEpochNumber::EpochNumber(epoch);
 
@@ -217,29 +214,43 @@ impl ConfluxStateProvider for HttpConfluxProvider {
         decode_rpc_bytes(value, "cfx_getCode")
     }
 
-    async fn cfx_get_storage_at(
+    pub(crate) async fn cfx_get_storage_at(
         &self,
-        epoch: EpochNumber,
         address: Address,
         slot: H256,
-    ) -> Result<Option<U256>, RemoteStateProviderError> {
+        epoch: EpochNumber,
+    ) -> Result<Option<U256>, ConfluxRpcError> {
         let address = self.cfx_rpc_address(address)?;
         let slot = U256::from_big_endian(slot.as_bytes());
         let epoch = BlockHashOrEpochNumber::EpochNumber(epoch);
 
-        let value: RpcStorageWord = self
+        let value: Option<RpcBytes> = self
             .core_space_rpc_request("cfx_getStorageAt", rpc_params![address, slot, epoch])
             .await?;
+        let Some(value) = value else {
+            return Ok(None);
+        };
 
-        value.into_option_u256()
+        if value.is_empty() {
+            return Ok(None);
+        }
+
+        if value.len() != 32 {
+            return Err(ConfluxRpcError {
+                operation: "cfx_getStorageAt",
+                reason: format!("expected 32 bytes, got {}", value.len()),
+            });
+        }
+
+        Ok(Some(U256::from_big_endian(value.as_ref())))
     }
 
-    async fn cfx_call(
+    pub(crate) async fn cfx_call(
         &self,
-        epoch: EpochNumber,
         to: Address,
         data: Vec<u8>,
-    ) -> Result<Vec<u8>, RemoteStateProviderError> {
+        epoch: EpochNumber,
+    ) -> Result<Vec<u8>, ConfluxRpcError> {
         let to = self.cfx_rpc_address(to)?;
         let epoch = BlockHashOrEpochNumber::EpochNumber(epoch);
         let request = CoreSpaceCallRequest {
@@ -259,4 +270,20 @@ impl ConfluxStateProvider for HttpConfluxProvider {
 struct CoreSpaceCallRequest {
     to: RpcAddress,
     data: RpcBytes,
+}
+
+fn decode_rpc_bytes(value: String, field: &'static str) -> Result<Vec<u8>, ConfluxRpcError> {
+    let digits = value.strip_prefix("0x").ok_or_else(|| ConfluxRpcError {
+        operation: field,
+        reason: "missing 0x prefix".to_owned(),
+    })?;
+
+    if digits.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    hex::decode(digits).map_err(|error| ConfluxRpcError {
+        operation: field,
+        reason: error.to_string(),
+    })
 }

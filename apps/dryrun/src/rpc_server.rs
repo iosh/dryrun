@@ -1,7 +1,7 @@
 use std::{io, sync::Arc};
 
 use alloy::providers::RootProvider;
-use conflux_engine::{ConfluxEngine, config::ConfluxChainConfig, state::HttpConfluxProvider};
+use conflux_engine::{ConfluxEngine, HttpConfluxProvider, config::ConfluxChainConfig};
 use conflux_rpc::build_rpc_module as build_conflux_rpc_module;
 use conflux_service::ConfluxService;
 use evm_engine::EvmEngine;
@@ -89,10 +89,14 @@ fn add_conflux_rpc_module(
     let conflux_provider = Arc::new(create_conflux_provider(config, &conflux_chain)?);
     let conflux_engine = Arc::new(ConfluxEngine::new(
         conflux_chain,
-        conflux_provider,
+        Arc::clone(&conflux_provider),
         tokio::runtime::Handle::current(),
     ));
-    let conflux_service = Arc::new(ConfluxService::new(conflux_engine, simulation_tasks));
+    let conflux_service = Arc::new(ConfluxService::new(
+        conflux_provider,
+        conflux_engine,
+        simulation_tasks,
+    ));
 
     rpc_module
         .merge(build_conflux_rpc_module(

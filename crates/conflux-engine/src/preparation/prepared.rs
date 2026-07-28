@@ -8,11 +8,11 @@ use crate::{
 };
 
 pub struct PreparedEspaceSimulation {
-    pub(crate) kind: PreparedEspaceSimulationState,
+    pub(crate) state: PreparedEspaceSimulationState,
 }
 
 pub(crate) enum PreparedEspaceSimulationState {
-    Complete(Box<EspaceExecution>),
+    Finished(Box<EspaceExecution>),
     Ready(Box<ReadyEspaceSimulation>),
 }
 
@@ -25,11 +25,11 @@ pub(crate) struct ReadyEspaceSimulation {
 }
 
 pub struct PreparedCoreSpaceSimulation {
-    pub(crate) kind: PreparedCoreSpaceSimulationState,
+    pub(crate) state: PreparedCoreSpaceSimulationState,
 }
 
 pub(crate) enum PreparedCoreSpaceSimulationState {
-    Complete(Box<CoreSpaceExecution>),
+    Finished(Box<CoreSpaceExecution>),
     Ready(Box<ReadyCoreSpaceSimulation>),
 }
 

@@ -1,8 +1,8 @@
 use thiserror::Error;
 
 use crate::{
+    ConfluxRpcError,
     execution::{ExecutionBlockContextError, TransactionExecutionError},
-    state::RemoteStateProviderError,
 };
 
 #[derive(Debug, Error)]
@@ -20,7 +20,7 @@ pub enum ConfluxEngineError {
     StateAnchorInconsistent,
 
     #[error(transparent)]
-    RemoteState(#[from] RemoteStateProviderError),
+    Provider(#[from] ConfluxRpcError),
 
     #[error("state access failed: {message}")]
     StateAccess { message: String },

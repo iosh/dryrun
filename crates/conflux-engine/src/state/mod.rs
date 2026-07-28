@@ -1,8 +1,6 @@
 mod core_space_internal;
 mod http_provider;
-mod provider;
 mod reader;
-mod rpc_encoding;
 mod rpc_types;
 mod state_item;
 mod state_value_encoding;
@@ -12,20 +10,13 @@ use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;
 use cfx_rpc_eth_types::BlockId as EthBlockId;
 use cfx_types::{H256, U64};
 
-pub use self::{
-    http_provider::HttpConfluxProvider,
-    provider::{
-        ConfluxBlockProvider, ConfluxStateProvider, ConfluxTransactionProvider,
-        CoreSpaceResourceEstimate, RemoteStateProviderError,
-    },
-    rpc_types::{
-        CoreSpaceGlobalSnapshot, CoreSpacePoSEconomics, CoreSpaceRpcAccount, CoreSpaceRpcBlock,
-        CoreSpaceStorageCollateralInfo, CoreSpaceSupplyInfo, CoreSpaceVoteParamsInfo,
-        EspaceAccountSnapshot, EspaceRpcBlock,
-    },
-};
+pub use self::http_provider::{ConfluxRpcError, CoreSpaceResourceEstimate, HttpConfluxProvider};
 
-pub(crate) use self::{reader::RemoteStateReader, storage::new_rpc_backed_state};
+pub(crate) use self::{
+    reader::RemoteStateReader,
+    rpc_types::{CoreSpaceRpcBlock, EspaceRpcBlock},
+    storage::new_rpc_backed_state,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct ConfluxStateAnchor {
@@ -55,28 +46,5 @@ impl ConfluxStateAnchor {
 
     pub(crate) fn core_space_epoch(&self) -> CfxEpochNumber {
         CfxEpochNumber::Num(U64::from(self.epoch_number))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ConfluxStatePoint {
-    anchor: ConfluxStateAnchor,
-}
-
-impl ConfluxStatePoint {
-    pub(crate) fn from_anchor(anchor: ConfluxStateAnchor) -> Self {
-        Self { anchor }
-    }
-
-    pub(crate) fn anchor(&self) -> &ConfluxStateAnchor {
-        &self.anchor
-    }
-
-    pub(crate) fn espace_block(&self) -> EthBlockId {
-        self.anchor.espace_block()
-    }
-
-    pub(crate) fn core_space_epoch(&self) -> CfxEpochNumber {
-        self.anchor.core_space_epoch()
     }
 }

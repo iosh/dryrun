@@ -41,7 +41,6 @@ alloy-primitives = "1"
 alloy-sol-types = "1"
 revm = "36"
 
-async-trait = "0.1"
 cfx-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-bytes = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-addr = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }

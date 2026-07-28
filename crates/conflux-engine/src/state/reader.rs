@@ -7,12 +7,11 @@ use cfx_storage::{Error as StorageError, Result as StorageResult};
 use tokio::sync::Mutex;
 
 use crate::state::{
-    ConfluxStatePoint,
+    ConfluxRpcError, ConfluxStateAnchor, HttpConfluxProvider,
     core_space_internal::{
         CoreSpaceInternalStateItem, SponsorWhitelistStorageKey, decode_abi_bool,
     },
-    provider::{ConfluxStateProvider, RemoteStateProviderError},
-    rpc_types::{CoreSpaceGlobalSnapshot, EspaceAccountSnapshot},
+    rpc_types::{CoreSpaceGlobals, EspaceAccountData},
     state_item::{CoreSpaceStateItem, EspaceStateItem, StateItem},
     state_value_encoding::{
         StateValueEncodingError, encode_core_space_basic_account, encode_core_space_code,
@@ -28,37 +27,35 @@ type RawStateValue = Box<[u8]>;
 type StateRead = Option<RawStateValue>;
 
 pub(crate) struct RemoteStateReader {
-    state_point: ConfluxStatePoint,
-    core_space_epoch: CfxEpochNumber,
-    state_provider: Arc<dyn ConfluxStateProvider>,
-    core_space_globals: CoreSpaceGlobalSnapshot,
-    espace_account_cache: Mutex<HashMap<Address, Arc<EspaceAccountSnapshot>>>,
+    state_anchor: ConfluxStateAnchor,
+    provider: Arc<HttpConfluxProvider>,
+    core_space_globals: CoreSpaceGlobals,
+    espace_account_cache: Mutex<HashMap<Address, Arc<EspaceAccountData>>>,
 }
 
 impl RemoteStateReader {
     pub(crate) async fn prepare(
-        state_point: ConfluxStatePoint,
-        state_provider: Arc<dyn ConfluxStateProvider>,
+        state_anchor: ConfluxStateAnchor,
+        provider: Arc<HttpConfluxProvider>,
     ) -> StorageResult<Self> {
-        let core_space_epoch = state_point.core_space_epoch();
-        let core_space_globals = state_provider
-            .get_core_space_global_snapshot(core_space_epoch.clone())
+        let core_space_epoch = state_anchor.core_space_epoch();
+        let core_space_globals = provider
+            .load_core_space_globals(core_space_epoch)
             .await
             .map_err(|error| {
-                Self::provider_error_at(&state_point, "get_core_space_global_snapshot", error)
+                Self::provider_error_at(&state_anchor, "load_core_space_globals", error)
             })?;
 
         Ok(Self {
-            state_point,
-            core_space_epoch,
-            state_provider,
+            state_anchor,
+            provider,
             core_space_globals,
             espace_account_cache: Mutex::new(HashMap::new()),
         })
     }
 
-    pub(crate) fn state_point(&self) -> &ConfluxStatePoint {
-        &self.state_point
+    pub(crate) fn state_anchor(&self) -> ConfluxStateAnchor {
+        self.state_anchor
     }
 
     pub(crate) async fn read(&self, item: &StateItem) -> StorageResult<StateRead> {
@@ -155,49 +152,46 @@ impl RemoteStateReader {
     }
 
     fn core_space_epoch(&self) -> CfxEpochNumber {
-        self.core_space_epoch.clone()
+        self.state_anchor.core_space_epoch()
     }
 
     fn espace_block(&self) -> EthBlockId {
-        self.state_point.espace_block()
+        self.state_anchor.espace_block()
     }
 
-    async fn espace_account_snapshot(
-        &self,
-        address: Address,
-    ) -> StorageResult<Arc<EspaceAccountSnapshot>> {
-        if let Some(snapshot) = self
+    async fn espace_account_data(&self, address: Address) -> StorageResult<Arc<EspaceAccountData>> {
+        if let Some(account) = self
             .espace_account_cache
             .lock()
             .await
             .get(&address)
             .cloned()
         {
-            return Ok(snapshot);
+            return Ok(account);
         }
 
-        let snapshot = Arc::new(
-            self.state_provider
-                .get_espace_account_snapshot(self.espace_block(), address)
+        let account = Arc::new(
+            self.provider
+                .load_espace_account(address, self.espace_block())
                 .await
-                .map_err(|error| self.provider_error("get_espace_account_snapshot", error))?,
+                .map_err(|error| self.provider_error("load_espace_account", error))?,
         );
         let mut cache = self.espace_account_cache.lock().await;
 
-        Ok(Arc::clone(cache.entry(address).or_insert_with(|| snapshot)))
+        Ok(Arc::clone(cache.entry(address).or_insert_with(|| account)))
     }
 
     async fn fetch_core_space_account(&self, address: Address) -> StorageResult<StateRead> {
         let account = self
-            .state_provider
-            .cfx_get_account(self.core_space_epoch(), address)
+            .provider
+            .cfx_get_account(address, self.core_space_epoch())
             .await
             .map_err(|error| self.provider_error("cfx_getAccount", error))?;
 
         if should_encode_core_space_contract_account(address, account.code_hash) {
             let sponsor_info = self
-                .state_provider
-                .cfx_get_sponsor_info(self.core_space_epoch(), address)
+                .provider
+                .cfx_get_sponsor_info(address, self.core_space_epoch())
                 .await
                 .map_err(|error| self.provider_error("cfx_getSponsorInfo", error))?;
 
@@ -224,8 +218,8 @@ impl RemoteStateReader {
 
     async fn fetch_core_space_deposit_list(&self, address: Address) -> StorageResult<StateRead> {
         let deposits = self
-            .state_provider
-            .cfx_get_deposit_list(self.core_space_epoch(), address)
+            .provider
+            .cfx_get_deposit_list(address, self.core_space_epoch())
             .await
             .map_err(|error| self.provider_error("cfx_getDepositList", error))?;
 
@@ -234,8 +228,8 @@ impl RemoteStateReader {
 
     async fn fetch_core_space_vote_list(&self, address: Address) -> StorageResult<StateRead> {
         let votes = self
-            .state_provider
-            .cfx_get_vote_list(self.core_space_epoch(), address)
+            .provider
+            .cfx_get_vote_list(address, self.core_space_epoch())
             .await
             .map_err(|error| self.provider_error("cfx_getVoteList", error))?;
 
@@ -248,8 +242,8 @@ impl RemoteStateReader {
         slot: H256,
     ) -> StorageResult<StateRead> {
         let value = self
-            .state_provider
-            .cfx_get_storage_at(self.core_space_epoch(), address, slot)
+            .provider
+            .cfx_get_storage_at(address, slot, self.core_space_epoch())
             .await
             .map_err(|error| self.provider_error("cfx_getStorageAt", error))?;
 
@@ -262,8 +256,8 @@ impl RemoteStateReader {
         expected_code_hash: H256,
     ) -> StorageResult<StateRead> {
         let code = self
-            .state_provider
-            .cfx_get_code(self.core_space_epoch(), address)
+            .provider
+            .cfx_get_code(address, self.core_space_epoch())
             .await
             .map_err(|error| self.provider_error("cfx_getCode", error))?;
 
@@ -292,11 +286,11 @@ impl RemoteStateReader {
         key: SponsorWhitelistStorageKey,
     ) -> StorageResult<StateRead> {
         let is_all_whitelisted = self
-            .state_provider
+            .provider
             .cfx_call(
-                self.core_space_epoch(),
                 key.control_contract_address(),
                 key.is_all_whitelisted_call_data(),
+                self.core_space_epoch(),
             )
             .await
             .and_then(|value| decode_abi_bool(value, "cfx_call"))
@@ -317,11 +311,11 @@ impl RemoteStateReader {
         }
 
         let is_user_whitelisted = self
-            .state_provider
+            .provider
             .cfx_call(
-                self.core_space_epoch(),
                 key.control_contract_address(),
                 key.is_user_whitelisted_call_data(),
+                self.core_space_epoch(),
             )
             .await
             .and_then(|value| decode_abi_bool(value, "cfx_call"))
@@ -331,12 +325,12 @@ impl RemoteStateReader {
     }
 
     async fn fetch_espace_account(&self, address: Address) -> StorageResult<StateRead> {
-        let snapshot = self.espace_account_snapshot(address).await?;
+        let account = self.espace_account_data(address).await?;
 
         Ok(encode_espace_account(
-            snapshot.balance,
-            snapshot.nonce,
-            snapshot.code.as_ref(),
+            account.balance,
+            account.nonce,
+            account.code.as_ref(),
         ))
     }
 
@@ -346,8 +340,8 @@ impl RemoteStateReader {
         slot: H256,
     ) -> StorageResult<StateRead> {
         let value = self
-            .state_provider
-            .eth_get_storage_at(self.espace_block(), address, slot)
+            .provider
+            .eth_get_storage_at(address, slot, self.espace_block())
             .await
             .map_err(|error| self.provider_error("eth_getStorageAt", error))?;
 
@@ -359,34 +353,30 @@ impl RemoteStateReader {
         address: Address,
         expected_code_hash: H256,
     ) -> StorageResult<StateRead> {
-        let snapshot = self.espace_account_snapshot(address).await?;
+        let account = self.espace_account_data(address).await?;
 
-        if snapshot.code.is_empty() {
+        if account.code.is_empty() {
             return Ok(None);
         }
 
-        encode_espace_code(expected_code_hash, Arc::clone(&snapshot.code))
+        encode_espace_code(expected_code_hash, Arc::clone(&account.code))
             .map(Some)
             .map_err(|error| self.encoding_error("encode_espace_code", error))
     }
 
-    fn provider_error(
-        &self,
-        operation: &'static str,
-        error: RemoteStateProviderError,
-    ) -> StorageError {
-        Self::provider_error_at(&self.state_point, operation, error)
+    fn provider_error(&self, operation: &'static str, error: ConfluxRpcError) -> StorageError {
+        Self::provider_error_at(&self.state_anchor, operation, error)
     }
 
     fn provider_error_at(
-        state_point: &ConfluxStatePoint,
+        state_anchor: &ConfluxStateAnchor,
         operation: &'static str,
-        error: RemoteStateProviderError,
+        error: ConfluxRpcError,
     ) -> StorageError {
         let message = format!(
             "rpc-backed storage provider error: operation={operation}, state={:?},
               reason={error}",
-            state_point
+            state_anchor
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)
@@ -399,7 +389,7 @@ impl RemoteStateReader {
     ) -> StorageError {
         let message = format!(
             "rpc-backed storage value encoding error: operation={operation}, state={:?}, reason={error}",
-            self.state_point
+            self.state_anchor
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)

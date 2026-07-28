@@ -6,9 +6,8 @@ use primitives::{EpochId, StorageKeyWithSpace};
 use tokio::runtime::Handle;
 
 use crate::state::{
-    ConfluxStatePoint,
     reader::RemoteStateReader,
-    state_item::{StateItem, StateItemError},
+    state_item::{StateItem, StateKeyError},
 };
 
 pub(crate) fn new_rpc_backed_state(
@@ -22,7 +21,6 @@ pub(crate) fn new_rpc_backed_state(
 }
 
 pub(crate) struct RpcBackedStorage {
-    state_point: ConfluxStatePoint,
     reader: RemoteStateReader,
     runtime_handle: Handle,
 }
@@ -30,7 +28,6 @@ pub(crate) struct RpcBackedStorage {
 impl RpcBackedStorage {
     fn new(reader: RemoteStateReader, runtime_handle: Handle) -> Self {
         Self {
-            state_point: reader.state_point().clone(),
             reader,
             runtime_handle,
         }
@@ -39,7 +36,8 @@ impl RpcBackedStorage {
     fn unsupported(&self, operation: &'static str, key: StorageKeyWithSpace<'_>) -> StorageError {
         let message = format!(
             "unsupported rpc-backed storage operation: operation={operation}, state={:?}, key={:?}",
-            self.state_point, key
+            self.reader.state_anchor(),
+            key
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)
@@ -49,11 +47,11 @@ impl RpcBackedStorage {
         &self,
         operation: &'static str,
         key: StorageKeyWithSpace<'_>,
-        error: StateItemError,
+        error: StateKeyError,
     ) -> StorageError {
         let message = format!(
             "unsupported rpc-backed storage key: operation={operation}, state={:?}, key={key:?}, reason={error}",
-            self.state_point
+            self.reader.state_anchor()
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)
@@ -62,7 +60,7 @@ impl RpcBackedStorage {
     fn unsupported_operation(&self, operation: &'static str) -> StorageError {
         let message = format!(
             "unsupported rpc-backed storage operation: operation={operation}, state={:?}",
-            self.state_point
+            self.reader.state_anchor()
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)
@@ -71,7 +69,7 @@ impl RpcBackedStorage {
     fn unsupported_commit(&self, epoch: EpochId) -> StorageError {
         let message = format!(
             "unsupported rpc-backed storage operation: operation=commit, state={:?}, epoch={epoch:?}",
-            self.state_point
+            self.reader.state_anchor()
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)

@@ -2,8 +2,9 @@ use cfx_bytes::Bytes;
 use cfx_types::{Address, U256};
 pub use conflux_engine::AccessListItem;
 use conflux_engine::{
-    ConfluxEngine, ConfluxTransaction, ConfluxTransactionBody, ConfluxTransactionVariant,
-    ResolvedCoreSpaceContext, ResolvedEspaceContext, core_space::CoreSpaceTransaction,
+    ConfluxRpcError, ConfluxTransaction, ConfluxTransactionBody, ConfluxTransactionVariant,
+    CoreSpaceSimulationContext, EspaceSimulationContext, HttpConfluxProvider,
+    core_space::CoreSpaceTransaction,
 };
 use simulation_transaction::{TransactionVariant, TransactionVariantRequest};
 
@@ -21,28 +22,31 @@ pub struct ConfluxTransactionRequest {
     pub variant: TransactionVariantRequest<U256, AccessListItem>,
 }
 
-pub(crate) async fn resolve_espace_transaction(
-    engine: &ConfluxEngine,
-    context: &ResolvedEspaceContext,
+pub(crate) async fn complete_espace_transaction(
+    provider: &HttpConfluxProvider,
+    context: &EspaceSimulationContext,
     request: ConfluxTransactionRequest,
 ) -> Result<ConfluxTransaction, ConfluxServiceError> {
-    let transaction = request
-        .resolve(ConfluxSpaceContext::Espace { engine, context })
-        .await?;
-    let gas_limit = match transaction.gas_limit {
+    let (body, gas_limit) = complete_transaction_body(
+        request,
+        TransactionCompletionContext::Espace { provider, context },
+    )
+    .await?;
+    let gas_limit = match gas_limit {
         Some(gas_limit) => gas_limit,
-        None => engine.eth_estimate_gas(context, &transaction.body).await?,
+        None => {
+            provider
+                .eth_estimate_gas(&body, context.state_block())
+                .await?
+        }
     };
 
-    Ok(ConfluxTransaction {
-        body: transaction.body,
-        gas_limit,
-    })
+    Ok(ConfluxTransaction { body, gas_limit })
 }
 
-pub(crate) async fn resolve_core_space_transaction(
-    engine: &ConfluxEngine,
-    context: &ResolvedCoreSpaceContext,
+pub(crate) async fn complete_core_space_transaction(
+    provider: &HttpConfluxProvider,
+    context: &CoreSpaceSimulationContext,
     request: CoreSpaceTransactionRequest,
 ) -> Result<CoreSpaceTransaction, ConfluxServiceError> {
     let CoreSpaceTransactionRequest {
@@ -50,21 +54,23 @@ pub(crate) async fn resolve_core_space_transaction(
         storage_limit,
         epoch_height,
     } = request;
-    let transaction = transaction
-        .resolve(ConfluxSpaceContext::CoreSpace { engine, context })
-        .await?;
+    let (body, gas_limit) = complete_transaction_body(
+        transaction,
+        TransactionCompletionContext::CoreSpace { provider, context },
+    )
+    .await?;
     let epoch_height = epoch_height.unwrap_or_else(|| context.epoch_height());
 
-    let (gas_limit, storage_limit) = match (transaction.gas_limit, storage_limit) {
+    let (gas_limit, storage_limit) = match (gas_limit, storage_limit) {
         (Some(gas_limit), Some(storage_limit)) => (gas_limit, storage_limit),
         (gas_limit, storage_limit) => {
-            let estimate = engine
+            let estimate = provider
                 .cfx_estimate_gas_and_collateral(
-                    context,
-                    &transaction.body,
+                    &body,
                     epoch_height,
                     gas_limit,
                     storage_limit,
+                    context.state_epoch(),
                 )
                 .await?;
 
@@ -76,87 +82,85 @@ pub(crate) async fn resolve_core_space_transaction(
     };
 
     Ok(CoreSpaceTransaction {
-        transaction: ConfluxTransaction {
-            body: transaction.body,
-            gas_limit,
-        },
+        transaction: ConfluxTransaction { body, gas_limit },
         storage_limit,
         epoch_height,
     })
 }
 
-struct ResolvedBaseTransaction {
-    body: ConfluxTransactionBody,
-    gas_limit: Option<U256>,
-}
+async fn complete_transaction_body(
+    request: ConfluxTransactionRequest,
+    context: TransactionCompletionContext<'_>,
+) -> Result<(ConfluxTransactionBody, Option<U256>), ConfluxServiceError> {
+    let ConfluxTransactionRequest {
+        from,
+        to,
+        nonce,
+        gas_limit,
+        value,
+        input,
+        chain_id,
+        variant,
+    } = request;
+    let nonce = match nonce {
+        Some(nonce) => nonce,
+        None => context.nonce(from).await?,
+    };
+    let variant = complete_transaction_variant(context, variant).await?;
 
-impl ConfluxTransactionRequest {
-    async fn resolve(
-        self,
-        context: ConfluxSpaceContext<'_>,
-    ) -> Result<ResolvedBaseTransaction, ConfluxServiceError> {
-        let Self {
+    Ok((
+        ConfluxTransactionBody {
             from,
             to,
             nonce,
-            gas_limit,
-            value,
-            input,
+            value: value.unwrap_or_default(),
+            data: input.unwrap_or_default(),
             chain_id,
             variant,
-        } = self;
-        let nonce = match nonce {
-            Some(nonce) => nonce,
-            None => context.nonce(from).await?,
-        };
-        let variant = resolve_fees(context, variant).await?;
-
-        Ok(ResolvedBaseTransaction {
-            body: ConfluxTransactionBody {
-                from,
-                to,
-                nonce,
-                value: value.unwrap_or_default(),
-                data: input.unwrap_or_default(),
-                chain_id,
-                variant,
-            },
-            gas_limit,
-        })
-    }
+        },
+        gas_limit,
+    ))
 }
 
 #[derive(Clone, Copy)]
-enum ConfluxSpaceContext<'a> {
+enum TransactionCompletionContext<'a> {
     Espace {
-        engine: &'a ConfluxEngine,
-        context: &'a ResolvedEspaceContext,
+        provider: &'a HttpConfluxProvider,
+        context: &'a EspaceSimulationContext,
     },
     CoreSpace {
-        engine: &'a ConfluxEngine,
-        context: &'a ResolvedCoreSpaceContext,
+        provider: &'a HttpConfluxProvider,
+        context: &'a CoreSpaceSimulationContext,
     },
 }
 
-impl ConfluxSpaceContext<'_> {
-    async fn nonce(self, address: Address) -> Result<U256, conflux_engine::ConfluxEngineError> {
+impl TransactionCompletionContext<'_> {
+    async fn nonce(self, address: Address) -> Result<U256, ConfluxRpcError> {
         match self {
-            Self::Espace { engine, context } => engine.espace_nonce(context, address).await,
-            Self::CoreSpace { engine, context } => engine.core_space_nonce(context, address).await,
+            Self::Espace { provider, context } => {
+                provider
+                    .eth_get_transaction_count(address, context.state_block())
+                    .await
+            }
+            Self::CoreSpace { provider, context } => {
+                provider
+                    .cfx_get_next_nonce(address, context.state_epoch())
+                    .await
+            }
         }
     }
 
-    async fn gas_price(self) -> Result<U256, conflux_engine::ConfluxEngineError> {
+    async fn gas_price(self) -> Result<U256, ConfluxRpcError> {
         match self {
-            Self::Espace { engine, .. } => engine.eth_gas_price().await,
-            Self::CoreSpace { engine, .. } => engine.cfx_gas_price().await,
+            Self::Espace { provider, .. } => provider.eth_gas_price().await,
+            Self::CoreSpace { provider, .. } => provider.cfx_gas_price().await,
         }
     }
 
-    async fn max_priority_fee_per_gas(self) -> Result<U256, conflux_engine::ConfluxEngineError> {
+    async fn max_priority_fee_per_gas(self) -> Result<U256, ConfluxRpcError> {
         match self {
-            Self::Espace { engine, .. } => engine.eth_max_priority_fee_per_gas().await,
-            Self::CoreSpace { engine, .. } => engine.cfx_max_priority_fee_per_gas().await,
+            Self::Espace { provider, .. } => provider.eth_max_priority_fee_per_gas().await,
+            Self::CoreSpace { provider, .. } => provider.cfx_max_priority_fee_per_gas().await,
         }
     }
 
@@ -168,8 +172,8 @@ impl ConfluxSpaceContext<'_> {
     }
 }
 
-async fn resolve_fees(
-    context: ConfluxSpaceContext<'_>,
+async fn complete_transaction_variant(
+    context: TransactionCompletionContext<'_>,
     variant: TransactionVariantRequest<U256, AccessListItem>,
 ) -> Result<ConfluxTransactionVariant, ConfluxServiceError> {
     match variant {
@@ -207,9 +211,9 @@ async fn resolve_fees(
 }
 
 async fn suggested_gas_price(
-    context: ConfluxSpaceContext<'_>,
+    context: TransactionCompletionContext<'_>,
     gas_price: Option<U256>,
-) -> Result<U256, conflux_engine::ConfluxEngineError> {
+) -> Result<U256, ConfluxRpcError> {
     match gas_price {
         Some(value) => Ok(value),
         None => context.gas_price().await,
@@ -217,20 +221,20 @@ async fn suggested_gas_price(
 }
 
 fn suggested_dynamic_fee_cap(
-    context: ConfluxSpaceContext<'_>,
+    context: TransactionCompletionContext<'_>,
     max_priority_fee_per_gas: U256,
 ) -> Result<U256, ConfluxServiceError> {
     let base_fee = context.base_fee_per_gas().ok_or_else(|| {
-        ConfluxServiceError::transaction_resolution(
-            "resolved execution context does not provide a base fee for dynamic fee resolution",
+        ConfluxServiceError::transaction_completion(
+            "simulation context does not provide a base fee for dynamic fee completion",
         )
     })?;
     let (base_fee, multiplication_overflow) = base_fee.overflowing_mul(2.into());
     let (max_fee_per_gas, addition_overflow) = base_fee.overflowing_add(max_priority_fee_per_gas);
 
     if multiplication_overflow || addition_overflow {
-        return Err(ConfluxServiceError::transaction_resolution(
-            "resolved dynamic fee exceeds an unsigned 256-bit integer",
+        return Err(ConfluxServiceError::transaction_completion(
+            "calculated dynamic fee exceeds an unsigned 256-bit integer",
         ));
     }
 

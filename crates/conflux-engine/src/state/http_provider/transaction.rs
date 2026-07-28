@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use cfx_rpc_cfx_types::{EpochNumber, RpcAddress, epoch_number::BlockHashOrEpochNumber};
 use cfx_rpc_eth_types::BlockId;
 use cfx_rpc_primitives::Bytes as RpcBytes;
@@ -7,40 +6,40 @@ use jsonrpsee::rpc_params;
 use primitives::AccessListItem;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    ConfluxTransactionBody, ConfluxTransactionVariant,
-    state::provider::{
-        ConfluxTransactionProvider, CoreSpaceResourceEstimate, RemoteStateProviderError,
-    },
-};
+use crate::{ConfluxTransactionBody, ConfluxTransactionVariant};
 
-use super::HttpConfluxProvider;
+use super::{ConfluxRpcError, HttpConfluxProvider};
 
-#[async_trait]
-impl ConfluxTransactionProvider for HttpConfluxProvider {
-    async fn eth_get_transaction_count(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoreSpaceResourceEstimate {
+    pub gas_limit: U256,
+    pub storage_limit: u64,
+}
+
+impl HttpConfluxProvider {
+    pub async fn eth_get_transaction_count(
         &self,
         address: Address,
         block: BlockId,
-    ) -> Result<U256, RemoteStateProviderError> {
+    ) -> Result<U256, ConfluxRpcError> {
         self.espace_rpc_request("eth_getTransactionCount", rpc_params![address, block])
             .await
     }
 
-    async fn eth_gas_price(&self) -> Result<U256, RemoteStateProviderError> {
+    pub async fn eth_gas_price(&self) -> Result<U256, ConfluxRpcError> {
         self.espace_rpc_request("eth_gasPrice", rpc_params![]).await
     }
 
-    async fn eth_max_priority_fee_per_gas(&self) -> Result<U256, RemoteStateProviderError> {
+    pub async fn eth_max_priority_fee_per_gas(&self) -> Result<U256, ConfluxRpcError> {
         self.espace_rpc_request("eth_maxPriorityFeePerGas", rpc_params![])
             .await
     }
 
-    async fn eth_estimate_gas(
+    pub async fn eth_estimate_gas(
         &self,
-        block: BlockId,
         transaction: &ConfluxTransactionBody,
-    ) -> Result<U256, RemoteStateProviderError> {
+        block: BlockId,
+    ) -> Result<U256, ConfluxRpcError> {
         self.espace_rpc_request(
             "eth_estimateGas",
             rpc_params![eth_estimate_gas_request(transaction), block],
@@ -48,11 +47,11 @@ impl ConfluxTransactionProvider for HttpConfluxProvider {
         .await
     }
 
-    async fn cfx_get_next_nonce(
+    pub async fn cfx_get_next_nonce(
         &self,
         address: Address,
         epoch: EpochNumber,
-    ) -> Result<U256, RemoteStateProviderError> {
+    ) -> Result<U256, ConfluxRpcError> {
         let address = self.cfx_rpc_address(address)?;
         let epoch = BlockHashOrEpochNumber::EpochNumber(epoch);
 
@@ -60,24 +59,24 @@ impl ConfluxTransactionProvider for HttpConfluxProvider {
             .await
     }
 
-    async fn cfx_gas_price(&self) -> Result<U256, RemoteStateProviderError> {
+    pub async fn cfx_gas_price(&self) -> Result<U256, ConfluxRpcError> {
         self.core_space_rpc_request("cfx_gasPrice", rpc_params![])
             .await
     }
 
-    async fn cfx_max_priority_fee_per_gas(&self) -> Result<U256, RemoteStateProviderError> {
+    pub async fn cfx_max_priority_fee_per_gas(&self) -> Result<U256, ConfluxRpcError> {
         self.core_space_rpc_request("cfx_maxPriorityFeePerGas", rpc_params![])
             .await
     }
 
-    async fn cfx_estimate_gas_and_collateral(
+    pub async fn cfx_estimate_gas_and_collateral(
         &self,
-        epoch: EpochNumber,
         transaction: &ConfluxTransactionBody,
         epoch_height: u64,
         gas_limit: Option<U256>,
         storage_limit: Option<u64>,
-    ) -> Result<CoreSpaceResourceEstimate, RemoteStateProviderError> {
+        epoch: EpochNumber,
+    ) -> Result<CoreSpaceResourceEstimate, ConfluxRpcError> {
         let request = self.cfx_estimate_gas_and_collateral_request(
             transaction,
             epoch_height,
@@ -177,10 +176,8 @@ impl HttpConfluxProvider {
         epoch_height: u64,
         gas_limit: Option<U256>,
         storage_limit: Option<u64>,
-    ) -> Result<
-        EstimateRpcRequest<RpcAddress, CoreEstimateRpcAccessListItem>,
-        RemoteStateProviderError,
-    > {
+    ) -> Result<EstimateRpcRequest<RpcAddress, CoreEstimateRpcAccessListItem>, ConfluxRpcError>
+    {
         let cfx_access_list = |items: &[AccessListItem]| {
             items
                 .iter()
@@ -190,7 +187,7 @@ impl HttpConfluxProvider {
                         storage_keys: item.storage_keys.clone(),
                     })
                 })
-                .collect::<Result<Vec<_>, RemoteStateProviderError>>()
+                .collect::<Result<Vec<_>, ConfluxRpcError>>()
         };
         let mut request = EstimateRpcRequest {
             from: self.cfx_rpc_address(transaction.from)?,

@@ -13,12 +13,13 @@ use jsonrpsee::{
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-
-use crate::state::provider::RemoteStateProviderError;
+use thiserror::Error;
 
 mod block;
 mod state;
 mod transaction;
+
+pub use transaction::CoreSpaceResourceEstimate;
 
 pub struct HttpConfluxProvider {
     core_space_address_network: Network,
@@ -31,18 +32,20 @@ impl HttpConfluxProvider {
         espace_url: &str,
         core_space_url: &str,
         core_space_address_network: Network,
-    ) -> Result<Self, RemoteStateProviderError> {
+    ) -> Result<Self, ConfluxRpcError> {
         let espace_client = HttpClientBuilder::default()
             .build(espace_url)
-            .map_err(|error| RemoteStateProviderError::InvalidEndpoint {
-                message: format!("invalid eSpace rpc url or http client config: {error}"),
+            .map_err(|error| ConfluxRpcError {
+                operation: "create eSpace RPC client",
+                reason: format!("invalid rpc url or http client config: {error}"),
             })?;
 
         let core_space_client =
             HttpClientBuilder::default()
                 .build(core_space_url)
-                .map_err(|error| RemoteStateProviderError::InvalidEndpoint {
-                    message: format!("invalid Core Space rpc url or http client config: {error}"),
+                .map_err(|error| ConfluxRpcError {
+                    operation: "create Core Space RPC client",
+                    reason: format!("invalid rpc url or http client config: {error}"),
                 })?;
 
         Ok(Self {
@@ -52,16 +55,20 @@ impl HttpConfluxProvider {
         })
     }
 
-    fn cfx_rpc_address(&self, address: Address) -> Result<RpcAddress, RemoteStateProviderError> {
-        RpcAddress::try_from_h160(address, self.core_space_address_network)
-            .map_err(|message| RemoteStateProviderError::AddressEncoding { message })
+    fn cfx_rpc_address(&self, address: Address) -> Result<RpcAddress, ConfluxRpcError> {
+        RpcAddress::try_from_h160(address, self.core_space_address_network).map_err(|reason| {
+            ConfluxRpcError {
+                operation: "encode Core Space RPC address",
+                reason,
+            }
+        })
     }
 
     async fn espace_rpc_request<R, Params>(
         &self,
         method: &'static str,
         params: Params,
-    ) -> Result<R, RemoteStateProviderError>
+    ) -> Result<R, ConfluxRpcError>
     where
         R: DeserializeOwned + Send,
         Params: ToRpcParams + Send,
@@ -73,7 +80,7 @@ impl HttpConfluxProvider {
         &self,
         method: &'static str,
         params: Params,
-    ) -> Result<R, RemoteStateProviderError>
+    ) -> Result<R, ConfluxRpcError>
     where
         R: DeserializeOwned + Send,
         Params: ToRpcParams + Send,
@@ -86,7 +93,7 @@ impl HttpConfluxProvider {
         space: &'static str,
         method: &'static str,
         params: Params,
-    ) -> Result<R, RemoteStateProviderError>
+    ) -> Result<R, ConfluxRpcError>
     where
         R: DeserializeOwned + Send,
         Params: ToRpcParams + Send,
@@ -102,9 +109,9 @@ impl HttpConfluxProvider {
             "remote state RPC request completed"
         );
 
-        result.map_err(|error| RemoteStateProviderError::RpcRequest {
+        result.map_err(|error| ConfluxRpcError {
             operation: method,
-            message: error.to_string(),
+            reason: error.to_string(),
         })
     }
 
@@ -114,7 +121,7 @@ impl HttpConfluxProvider {
         batch_name: &'static str,
         batch_size: usize,
         batch: BatchRequestBuilder<'a>,
-    ) -> Result<BatchResponse<'a, Value>, RemoteStateProviderError> {
+    ) -> Result<BatchResponse<'a, Value>, ConfluxRpcError> {
         let started_at = Instant::now();
         let result = client.batch_request(batch).await;
 
@@ -127,9 +134,9 @@ impl HttpConfluxProvider {
             "remote state RPC batch completed"
         );
 
-        result.map_err(|error| RemoteStateProviderError::RpcRequest {
+        result.map_err(|error| ConfluxRpcError {
             operation: batch_name,
-            message: format!("JSON-RPC batch request failed: {error}"),
+            reason: format!("JSON-RPC batch request failed: {error}"),
         })
     }
 
@@ -137,38 +144,38 @@ impl HttpConfluxProvider {
         batch: &mut BatchRequestBuilder<'a>,
         method: &'static str,
         params: Params,
-    ) -> Result<(), RemoteStateProviderError>
+    ) -> Result<(), ConfluxRpcError>
     where
         Params: ToRpcParams,
     {
         batch
             .insert(method, params)
-            .map_err(|error| RemoteStateProviderError::RpcRequest {
+            .map_err(|error| ConfluxRpcError {
                 operation: method,
-                message: format!("failed to encode JSON-RPC batch parameters: {error}"),
+                reason: format!("failed to encode JSON-RPC batch parameters: {error}"),
             })
     }
 
     fn decode_batch_result<'a, T>(
         entries: &mut impl Iterator<Item = BatchEntry<'a, Value>>,
         method: &'static str,
-    ) -> Result<T, RemoteStateProviderError>
+    ) -> Result<T, ConfluxRpcError>
     where
         T: DeserializeOwned,
     {
         let value = entries
             .next()
-            .ok_or_else(|| RemoteStateProviderError::RpcRequest {
+            .ok_or_else(|| ConfluxRpcError {
                 operation: method,
-                message: "missing response in JSON-RPC batch".to_string(),
+                reason: "missing response in JSON-RPC batch".to_owned(),
             })?
-            .map_err(|error| RemoteStateProviderError::RpcRequest {
+            .map_err(|error| ConfluxRpcError {
                 operation: method,
-                message: format!("request failed in JSON-RPC batch: {error}"),
+                reason: format!("request failed in JSON-RPC batch: {error}"),
             })?;
-        serde_json::from_value(value).map_err(|error| RemoteStateProviderError::RpcDecode {
-            field: method,
-            message: error.to_string(),
+        serde_json::from_value(value).map_err(|error| ConfluxRpcError {
+            operation: method,
+            reason: format!("failed to decode JSON-RPC response: {error}"),
         })
     }
 
@@ -176,14 +183,21 @@ impl HttpConfluxProvider {
         batch_name: &'static str,
         expected: usize,
         actual: usize,
-    ) -> Result<(), RemoteStateProviderError> {
+    ) -> Result<(), ConfluxRpcError> {
         if actual == expected {
             return Ok(());
         }
 
-        Err(RemoteStateProviderError::RpcRequest {
+        Err(ConfluxRpcError {
             operation: batch_name,
-            message: format!("unexpected batch response length: expected {expected}, got {actual}"),
+            reason: format!("unexpected batch response length: expected {expected}, got {actual}"),
         })
     }
+}
+
+#[derive(Debug, Error)]
+#[error("Conflux RPC failed: operation={operation}, reason={reason}")]
+pub struct ConfluxRpcError {
+    pub(crate) operation: &'static str,
+    pub(crate) reason: String,
 }

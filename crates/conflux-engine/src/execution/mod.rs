@@ -14,8 +14,10 @@ mod transaction;
 
 pub use context::{
     CoreSpacePivotBlockContext, EspaceBlockContext, ExecutionBaseFees, ExecutionBlockContext,
-    ExecutionBlockContextError, ExecutionConsensusContext, build_core_space_pivot_block_context,
-    build_espace_block_context, build_execution_block_context,
+    ExecutionBlockContextError, ExecutionConsensusContext,
+};
+pub(crate) use context::{
+    build_core_space_pivot_block_context, build_espace_block_context, build_execution_block_context,
 };
 pub(crate) use env::build_rpc_backed_state;
 pub use env::{build_execution_spec, build_mainnet_machine, build_transaction_env};

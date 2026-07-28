@@ -12,8 +12,8 @@ pub(crate) fn simulate(
     prepared: PreparedEspaceSimulation,
     runtime_handle: &Handle,
 ) -> Result<EspaceExecution, ConfluxEngineError> {
-    match prepared.kind {
-        PreparedEspaceSimulationState::Complete(execution) => Ok(*execution),
+    match prepared.state {
+        PreparedEspaceSimulationState::Finished(execution) => Ok(*execution),
         PreparedEspaceSimulationState::Ready(ready) => {
             let ReadyEspaceSimulation {
                 chain_id,

@@ -1,5 +1,3 @@
-use std::fmt;
-
 use crate::state::core_space_internal::{
     CoreSpaceInternalStateItem, parse_core_space_internal_storage,
 };
@@ -24,7 +22,7 @@ pub(crate) enum StateItem {
 impl StateItem {
     pub(crate) fn from_storage_key(
         storage_key: StorageKeyWithSpace<'_>,
-    ) -> Result<Self, StateItemError> {
+    ) -> Result<Self, StateKeyError> {
         match storage_key.space {
             Space::Ethereum => from_espace_key(storage_key.key).map(Self::Espace),
             Space::Native => from_core_space_key(storage_key).map(Self::CoreSpace),
@@ -63,70 +61,23 @@ pub(crate) enum EspaceStateItem {
     Code { address: Address, code_hash: H256 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StorageKeyKind {
-    Account,
-    StorageRoot,
-    Storage,
-    CodeRoot,
-    Code,
-    DepositList,
-    VoteList,
-    Empty,
-    AddressPrefix,
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("{message}")]
+pub(crate) struct StateKeyError {
+    message: String,
 }
 
-impl StorageKeyKind {
-    fn from_storage_key(key: StorageKey<'_>) -> Self {
-        match key {
-            StorageKey::AccountKey(_) => Self::Account,
-            StorageKey::StorageRootKey(_) => Self::StorageRoot,
-            StorageKey::StorageKey { .. } => Self::Storage,
-            StorageKey::CodeRootKey(_) => Self::CodeRoot,
-            StorageKey::CodeKey { .. } => Self::Code,
-            StorageKey::DepositListKey(_) => Self::DepositList,
-            StorageKey::VoteListKey(_) => Self::VoteList,
-            StorageKey::EmptyKey => Self::Empty,
-            StorageKey::AddressPrefixKey(_) => Self::AddressPrefix,
+impl StateKeyError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
         }
     }
 }
 
-impl fmt::Display for StorageKeyKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let kind = match self {
-            Self::Account => "AccountKey",
-            Self::StorageRoot => "StorageRootKey",
-            Self::Storage => "StorageKey",
-            Self::CodeRoot => "CodeRootKey",
-            Self::Code => "CodeKey",
-            Self::DepositList => "DepositListKey",
-            Self::VoteList => "VoteListKey",
-            Self::Empty => "EmptyKey",
-            Self::AddressPrefix => "AddressPrefixKey",
-        };
-
-        f.write_str(kind)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub(crate) enum StateItemError {
-    #[error("unsupported Core Space state key kind: {kind}")]
-    UnsupportedCoreSpaceKey { kind: StorageKeyKind },
-    #[error("unsupported eSpace storage key kind: {kind}")]
-    UnsupportedEspaceKey { kind: StorageKeyKind },
-    #[error("invalid address length: expected {ADDRESS_BYTES} bytes, got {actual}")]
-    InvalidAddressLength { actual: usize },
-    #[error("invalid storage slot length: expected {HASH_BYTES} bytes, got {actual}")]
-    InvalidStorageSlotLength { actual: usize },
-    #[error("invalid code hash length: expected {HASH_BYTES} bytes, got {actual}")]
-    InvalidCodeHashLength { actual: usize },
-}
-
 fn from_core_space_key(
     storage_key: StorageKeyWithSpace<'_>,
-) -> Result<CoreSpaceStateItem, StateItemError> {
+) -> Result<CoreSpaceStateItem, StateKeyError> {
     if let StorageKey::AccountKey(address_bytes) = storage_key.key {
         return Ok(CoreSpaceStateItem::Account {
             address: parse_address(address_bytes)?,
@@ -228,12 +179,10 @@ fn from_core_space_key(
         });
     }
 
-    Err(StateItemError::UnsupportedCoreSpaceKey {
-        kind: StorageKeyKind::from_storage_key(storage_key.key),
-    })
+    Err(StateKeyError::new("unsupported Core Space state key"))
 }
 
-fn from_espace_key(key: StorageKey<'_>) -> Result<EspaceStateItem, StateItemError> {
+fn from_espace_key(key: StorageKey<'_>) -> Result<EspaceStateItem, StateKeyError> {
     match key {
         StorageKey::AccountKey(address_bytes) => Ok(EspaceStateItem::Account {
             address: parse_address(address_bytes)?,
@@ -252,37 +201,38 @@ fn from_espace_key(key: StorageKey<'_>) -> Result<EspaceStateItem, StateItemErro
             address: parse_address(address_bytes)?,
             code_hash: parse_code_hash(code_hash_bytes)?,
         }),
-        other => Err(StateItemError::UnsupportedEspaceKey {
-            kind: StorageKeyKind::from_storage_key(other),
-        }),
+        _ => Err(StateKeyError::new("unsupported eSpace state key")),
     }
 }
 
-fn parse_address(address_bytes: &[u8]) -> Result<Address, StateItemError> {
+fn parse_address(address_bytes: &[u8]) -> Result<Address, StateKeyError> {
     if address_bytes.len() != ADDRESS_BYTES {
-        return Err(StateItemError::InvalidAddressLength {
-            actual: address_bytes.len(),
-        });
+        return Err(StateKeyError::new(format!(
+            "invalid address length: expected {ADDRESS_BYTES} bytes, got {}",
+            address_bytes.len()
+        )));
     }
 
     Ok(Address::from_slice(address_bytes))
 }
 
-fn parse_storage_slot(slot_bytes: &[u8]) -> Result<H256, StateItemError> {
+fn parse_storage_slot(slot_bytes: &[u8]) -> Result<H256, StateKeyError> {
     if slot_bytes.len() != HASH_BYTES {
-        return Err(StateItemError::InvalidStorageSlotLength {
-            actual: slot_bytes.len(),
-        });
+        return Err(StateKeyError::new(format!(
+            "invalid storage slot length: expected {HASH_BYTES} bytes, got {}",
+            slot_bytes.len()
+        )));
     }
 
     Ok(H256::from_slice(slot_bytes))
 }
 
-fn parse_code_hash(code_hash_bytes: &[u8]) -> Result<H256, StateItemError> {
+fn parse_code_hash(code_hash_bytes: &[u8]) -> Result<H256, StateKeyError> {
     if code_hash_bytes.len() != HASH_BYTES {
-        return Err(StateItemError::InvalidCodeHashLength {
-            actual: code_hash_bytes.len(),
-        });
+        return Err(StateKeyError::new(format!(
+            "invalid code hash length: expected {HASH_BYTES} bytes, got {}",
+            code_hash_bytes.len()
+        )));
     }
 
     Ok(H256::from_slice(code_hash_bytes))
