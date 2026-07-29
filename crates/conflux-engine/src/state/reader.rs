@@ -14,10 +14,9 @@ use crate::state::{
     rpc_types::{CoreSpaceGlobals, EspaceAccountData},
     state_item::{CoreSpaceStateItem, EspaceStateItem, StateItem},
     state_value_encoding::{
-        StateValueEncodingError, encode_core_space_basic_account, encode_core_space_code,
-        encode_core_space_contract_account, encode_core_space_deposit_list,
-        encode_core_space_storage_slot, encode_core_space_u256, encode_core_space_vote_list,
-        encode_espace_account, encode_espace_code, encode_espace_storage_slot,
+        StateValueEncodingError, encode_code, encode_core_space_basic_account,
+        encode_core_space_contract_account, encode_core_space_deposit_list, encode_core_space_u256,
+        encode_core_space_vote_list, encode_espace_account, encode_storage_slot,
         should_encode_core_space_contract_account,
     },
 };
@@ -136,12 +135,14 @@ impl RemoteStateReader {
             CoreSpaceStateItem::InternalContractStorage(item) => {
                 self.fetch_core_space_internal_storage(item).await
             }
-            CoreSpaceStateItem::StorageSlot { address, slot } => self
-                .provider
-                .cfx_get_storage_at(address, slot, self.core_space_epoch())
-                .await
-                .map_err(|error| self.provider_error("cfx_getStorageAt", error))
-                .map(|value| value.map(encode_core_space_storage_slot)),
+            CoreSpaceStateItem::StorageSlot { address, slot } => {
+                // Public Core Space RPC returns the value without its storage owner.
+                self.provider
+                    .cfx_get_storage_at(address, slot, self.core_space_epoch())
+                    .await
+                    .map_err(|error| self.provider_error("cfx_getStorageAt", error))
+                    .map(|value| value.map(encode_storage_slot))
+            }
             CoreSpaceStateItem::Code { address, code_hash } => {
                 self.fetch_core_space_code(address, code_hash).await
             }
@@ -156,7 +157,7 @@ impl RemoteStateReader {
                 .eth_get_storage_at(address, slot, self.espace_block())
                 .await
                 .map_err(|error| self.provider_error("eth_getStorageAt", error))
-                .map(|value| value.map(encode_espace_storage_slot)),
+                .map(|value| value.map(encode_storage_slot)),
             EspaceStateItem::Code { address, code_hash } => {
                 self.fetch_espace_code(address, code_hash).await
             }
@@ -243,7 +244,8 @@ impl RemoteStateReader {
             return Ok(None);
         }
 
-        encode_core_space_code(expected_code_hash, address, code)
+        // Core Space code keeps the state address as the upstream CodeInfo owner.
+        encode_code(expected_code_hash, address, Arc::new(code))
             .map(Some)
             .map_err(|error| self.encoding_error("encode_core_space_code", error))
     }
@@ -275,7 +277,7 @@ impl RemoteStateReader {
             .map_err(|error| self.provider_error("cfx_call", error))?;
 
         if key.is_all_whitelist_key() {
-            return Ok(is_all_whitelisted.then_some(encode_core_space_storage_slot(U256::one())));
+            return Ok(is_all_whitelisted.then_some(encode_storage_slot(U256::one())));
         }
 
         // The raw user key is only read after the all-whitelist key is zero.
@@ -299,7 +301,7 @@ impl RemoteStateReader {
             .and_then(|value| decode_abi_bool(value, "cfx_call"))
             .map_err(|error| self.provider_error("cfx_call", error))?;
 
-        Ok(is_user_whitelisted.then_some(encode_core_space_storage_slot(U256::one())))
+        Ok(is_user_whitelisted.then_some(encode_storage_slot(U256::one())))
     }
 
     async fn fetch_espace_account(&self, address: Address) -> StorageResult<StateRead> {
@@ -323,9 +325,14 @@ impl RemoteStateReader {
             return Ok(None);
         }
 
-        encode_espace_code(expected_code_hash, Arc::clone(&account.code))
-            .map(Some)
-            .map_err(|error| self.encoding_error("encode_espace_code", error))
+        // Upstream eSpace code values use the zero address as their owner.
+        encode_code(
+            expected_code_hash,
+            Address::zero(),
+            Arc::clone(&account.code),
+        )
+        .map(Some)
+        .map_err(|error| self.encoding_error("encode_espace_code", error))
     }
 
     fn provider_error(&self, operation: &'static str, error: ConfluxRpcError) -> StorageError {

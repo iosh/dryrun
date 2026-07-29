@@ -97,12 +97,14 @@ pub(crate) fn should_encode_core_space_contract_account(address: Address, code_h
     (code_hash != KECCAK_EMPTY && !code_hash.is_zero()) || address.is_contract_address()
 }
 
-pub(crate) fn encode_core_space_code(
+// CodeKey carries the expected hash. Verify RPC-returned bytes before encoding
+// the upstream CodeInfo layout; the caller supplies the space-specific owner.
+pub(crate) fn encode_code(
     expected_code_hash: H256,
     owner: Address,
-    code: Vec<u8>,
+    code: Arc<Vec<u8>>,
 ) -> Result<Box<[u8]>, StateValueEncodingError> {
-    let actual_code_hash = keccak(&code);
+    let actual_code_hash = keccak(code.as_ref());
     if actual_code_hash != expected_code_hash {
         return Err(StateValueEncodingError::CodeHashMismatch {
             expected: expected_code_hash,
@@ -110,12 +112,9 @@ pub(crate) fn encode_core_space_code(
         });
     }
 
-    Ok(rlp::encode(&CodeInfo {
-        code: Arc::new(code),
-        owner,
-    })
-    .to_vec()
-    .into_boxed_slice())
+    Ok(rlp::encode(&CodeInfo { code, owner })
+        .to_vec()
+        .into_boxed_slice())
 }
 
 pub(crate) fn encode_core_space_deposit_list(deposits: Vec<DepositInfo>) -> Option<Box<[u8]>> {
@@ -142,7 +141,8 @@ pub(crate) fn encode_core_space_vote_list(votes: Vec<VoteStakeInfo>) -> Option<B
     )
 }
 
-pub(crate) fn encode_core_space_storage_slot(value: U256) -> Box<[u8]> {
+// Upstream StorageValue encodes an ownerless slot as the bare U256 value.
+pub(crate) fn encode_storage_slot(value: U256) -> Box<[u8]> {
     rlp::encode(&StorageValue { value, owner: None })
         .to_vec()
         .into_boxed_slice()
@@ -161,35 +161,6 @@ fn core_space_sponsor_info_from_rpc(info: CoreSpaceSponsorInfo) -> SponsorInfo {
         storage_points: (!unused.is_zero() || !used.is_zero())
             .then_some(StoragePoints { unused, used }),
     }
-}
-
-// eSpace storage slots are encoded as StorageValue with no owner.
-pub(crate) fn encode_espace_storage_slot(value: U256) -> Box<[u8]> {
-    rlp::encode(&StorageValue { value, owner: None })
-        .to_vec()
-        .into_boxed_slice()
-}
-
-// eSpace code values follow the upstream CodeInfo RLP layout. CodeKey already
-// carries the expected hash, so verify the code bytes before encoding.
-pub(crate) fn encode_espace_code(
-    expected_code_hash: H256,
-    code: Arc<Vec<u8>>,
-) -> Result<Box<[u8]>, StateValueEncodingError> {
-    let actual_code_hash = keccak(code.as_ref());
-    if actual_code_hash != expected_code_hash {
-        return Err(StateValueEncodingError::CodeHashMismatch {
-            expected: expected_code_hash,
-            actual: actual_code_hash,
-        });
-    }
-
-    Ok(rlp::encode(&CodeInfo {
-        code,
-        owner: Address::zero(),
-    })
-    .to_vec()
-    .into_boxed_slice())
 }
 
 pub(crate) fn encode_espace_account(balance: U256, nonce: U256, code: &[u8]) -> Option<Box<[u8]>> {
