@@ -68,12 +68,18 @@ impl RemoteStateReader {
     async fn read_core_space(&self, item: CoreSpaceStateItem) -> StorageResult<StateRead> {
         match item {
             CoreSpaceStateItem::Account { address } => self.fetch_core_space_account(address).await,
-            CoreSpaceStateItem::DepositList { address } => {
-                self.fetch_core_space_deposit_list(address).await
-            }
-            CoreSpaceStateItem::VoteList { address } => {
-                self.fetch_core_space_vote_list(address).await
-            }
+            CoreSpaceStateItem::DepositList { address } => self
+                .provider
+                .cfx_get_deposit_list(address, self.core_space_epoch())
+                .await
+                .map_err(|error| self.provider_error("cfx_getDepositList", error))
+                .map(encode_core_space_deposit_list),
+            CoreSpaceStateItem::VoteList { address } => self
+                .provider
+                .cfx_get_vote_list(address, self.core_space_epoch())
+                .await
+                .map_err(|error| self.provider_error("cfx_getVoteList", error))
+                .map(encode_core_space_vote_list),
             CoreSpaceStateItem::InterestRate => Ok(Some(encode_core_space_u256(
                 self.core_space_globals.interest_rate,
             ))),
@@ -130,9 +136,12 @@ impl RemoteStateReader {
             CoreSpaceStateItem::InternalContractStorage(item) => {
                 self.fetch_core_space_internal_storage(item).await
             }
-            CoreSpaceStateItem::StorageSlot { address, slot } => {
-                self.fetch_core_space_storage_slot(address, slot).await
-            }
+            CoreSpaceStateItem::StorageSlot { address, slot } => self
+                .provider
+                .cfx_get_storage_at(address, slot, self.core_space_epoch())
+                .await
+                .map_err(|error| self.provider_error("cfx_getStorageAt", error))
+                .map(|value| value.map(encode_core_space_storage_slot)),
             CoreSpaceStateItem::Code { address, code_hash } => {
                 self.fetch_core_space_code(address, code_hash).await
             }
@@ -142,9 +151,12 @@ impl RemoteStateReader {
     async fn read_espace(&self, item: EspaceStateItem) -> StorageResult<StateRead> {
         match item {
             EspaceStateItem::Account { address } => self.fetch_espace_account(address).await,
-            EspaceStateItem::StorageSlot { address, slot } => {
-                self.fetch_espace_storage_slot(address, slot).await
-            }
+            EspaceStateItem::StorageSlot { address, slot } => self
+                .provider
+                .eth_get_storage_at(address, slot, self.espace_block())
+                .await
+                .map_err(|error| self.provider_error("eth_getStorageAt", error))
+                .map(|value| value.map(encode_espace_storage_slot)),
             EspaceStateItem::Code { address, code_hash } => {
                 self.fetch_espace_code(address, code_hash).await
             }
@@ -214,40 +226,6 @@ impl RemoteStateReader {
             account.collateral_for_storage,
             account.accumulated_interest_return,
         ))
-    }
-
-    async fn fetch_core_space_deposit_list(&self, address: Address) -> StorageResult<StateRead> {
-        let deposits = self
-            .provider
-            .cfx_get_deposit_list(address, self.core_space_epoch())
-            .await
-            .map_err(|error| self.provider_error("cfx_getDepositList", error))?;
-
-        Ok(encode_core_space_deposit_list(deposits))
-    }
-
-    async fn fetch_core_space_vote_list(&self, address: Address) -> StorageResult<StateRead> {
-        let votes = self
-            .provider
-            .cfx_get_vote_list(address, self.core_space_epoch())
-            .await
-            .map_err(|error| self.provider_error("cfx_getVoteList", error))?;
-
-        Ok(encode_core_space_vote_list(votes))
-    }
-
-    async fn fetch_core_space_storage_slot(
-        &self,
-        address: Address,
-        slot: H256,
-    ) -> StorageResult<StateRead> {
-        let value = self
-            .provider
-            .cfx_get_storage_at(address, slot, self.core_space_epoch())
-            .await
-            .map_err(|error| self.provider_error("cfx_getStorageAt", error))?;
-
-        Ok(value.map(encode_core_space_storage_slot))
     }
 
     async fn fetch_core_space_code(
@@ -332,20 +310,6 @@ impl RemoteStateReader {
             account.nonce,
             account.code.as_ref(),
         ))
-    }
-
-    async fn fetch_espace_storage_slot(
-        &self,
-        address: Address,
-        slot: H256,
-    ) -> StorageResult<StateRead> {
-        let value = self
-            .provider
-            .eth_get_storage_at(address, slot, self.espace_block())
-            .await
-            .map_err(|error| self.provider_error("eth_getStorageAt", error))?;
-
-        Ok(value.map(encode_espace_storage_slot))
     }
 
     async fn fetch_espace_code(
