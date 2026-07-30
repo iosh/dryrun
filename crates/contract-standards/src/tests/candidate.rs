@@ -47,6 +47,7 @@ fn transfer_from(
         position: Position::new(index, 0),
         caller,
         target: token,
+        value: U256::ZERO,
         input_len: input.len(),
         input_prefix: input.into(),
     }

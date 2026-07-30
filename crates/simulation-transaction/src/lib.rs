@@ -1,6 +1,32 @@
 use std::fmt;
 
+pub use alloy_eips::eip2930::AccessListItem;
+use alloy_primitives::{Address, Bytes, U256};
 use thiserror::Error;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransactionRequest {
+    pub from: Address,
+    pub to: Option<Address>,
+    pub nonce: Option<u64>,
+    pub gas_limit: Option<u64>,
+    pub value: Option<U256>,
+    pub data: Option<Bytes>,
+    pub chain_id: u64,
+    pub variant: TransactionVariantRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Transaction {
+    pub from: Address,
+    pub to: Option<Address>,
+    pub nonce: u64,
+    pub gas_limit: u64,
+    pub value: U256,
+    pub data: Bytes,
+    pub chain_id: u64,
+    pub variant: TransactionVariant,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransactionType {
@@ -31,28 +57,28 @@ impl TransactionType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TransactionVariantRequest<Fee, AccessListItem> {
+pub enum TransactionVariantRequest {
     Legacy {
-        gas_price: Option<Fee>,
+        gas_price: Option<u128>,
     },
     AccessList {
-        gas_price: Option<Fee>,
+        gas_price: Option<u128>,
         access_list: Vec<AccessListItem>,
     },
     DynamicFee {
-        max_fee_per_gas: Option<Fee>,
-        max_priority_fee_per_gas: Option<Fee>,
+        max_fee_per_gas: Option<u128>,
+        max_priority_fee_per_gas: Option<u128>,
         access_list: Vec<AccessListItem>,
     },
 }
 
-impl<Fee, AccessListItem> TransactionVariantRequest<Fee, AccessListItem> {
+impl TransactionVariantRequest {
     pub fn try_new(
         transaction_type: TransactionType,
         access_list: Option<Vec<AccessListItem>>,
-        gas_price: Option<Fee>,
-        max_fee_per_gas: Option<Fee>,
-        max_priority_fee_per_gas: Option<Fee>,
+        gas_price: Option<u128>,
+        max_fee_per_gas: Option<u128>,
+        max_priority_fee_per_gas: Option<u128>,
     ) -> Result<Self, TransactionVariantError> {
         let has_dynamic_fee = max_fee_per_gas.is_some() || max_priority_fee_per_gas.is_some();
 
@@ -102,17 +128,17 @@ impl<Fee, AccessListItem> TransactionVariantRequest<Fee, AccessListItem> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TransactionVariant<Fee, AccessListItem> {
+pub enum TransactionVariant {
     Legacy {
-        gas_price: Fee,
+        gas_price: u128,
     },
     AccessList {
-        gas_price: Fee,
+        gas_price: u128,
         access_list: Vec<AccessListItem>,
     },
     DynamicFee {
-        max_fee_per_gas: Fee,
-        max_priority_fee_per_gas: Fee,
+        max_fee_per_gas: u128,
+        max_priority_fee_per_gas: u128,
         access_list: Vec<AccessListItem>,
     },
 }

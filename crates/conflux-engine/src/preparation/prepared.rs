@@ -1,5 +1,3 @@
-use cfx_types::U256;
-
 use crate::{
     core_space::{CoreSpaceExecution, CoreSpaceStateAnchor},
     espace::{EspaceExecution, SimulatedBlock},
@@ -19,7 +17,7 @@ pub(crate) enum PreparedEspaceSimulationState {
 pub(crate) struct ReadyEspaceSimulation {
     pub(crate) chain_id: u32,
     pub(crate) simulated_block: SimulatedBlock,
-    pub(crate) gas_limit: U256,
+    pub(crate) gas_limit: u64,
     pub(crate) execution_input: TransactionExecutionInput,
     pub(crate) state_reader: RemoteStateReader,
 }
@@ -36,7 +34,7 @@ pub(crate) enum PreparedCoreSpaceSimulationState {
 pub(crate) struct ReadyCoreSpaceSimulation {
     pub(crate) chain_id: u32,
     pub(crate) state_anchor: CoreSpaceStateAnchor,
-    pub(crate) gas_limit: U256,
+    pub(crate) gas_limit: u64,
     pub(crate) execution_input: TransactionExecutionInput,
     pub(crate) state_reader: RemoteStateReader,
 }

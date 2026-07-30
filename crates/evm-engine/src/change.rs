@@ -1,23 +1,11 @@
 use alloy_primitives::{Address, U256};
+pub use contract_standards::{Erc20Metadata, Erc721CollectionMetadata};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct NativeMetadata {
     pub name: Option<String>,
     pub symbol: Option<String>,
     pub decimals: Option<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Erc20Metadata {
-    pub name: Option<String>,
-    pub symbol: Option<String>,
-    pub decimals: Option<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Erc721CollectionMetadata {
-    pub name: Option<String>,
-    pub symbol: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

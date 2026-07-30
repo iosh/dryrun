@@ -1,14 +1,12 @@
 use std::collections::HashMap;
 
 use alloy_primitives::{Address, U256};
-use contract_standards::Position;
+use contract_standards::{Position, StandardMetadata};
 
 use crate::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
 
 use super::super::{
-    PositionedChange, build_changes,
-    metadata::{ChangeMetadata, ChangeMetadataRequests, collect_change_metadata_requests},
-    sort_changes_by_position,
+    PositionedChange, build_changes, metadata::ChangeMetadata, sort_changes_by_position,
 };
 
 fn positioned(observation_index: usize, change: Change) -> PositionedChange {
@@ -68,27 +66,21 @@ fn sorts_before_metadata() {
     ];
 
     sort_changes_by_position(&mut changes);
-    assert_eq!(
-        collect_change_metadata_requests(&changes),
-        ChangeMetadataRequests {
-            erc20_contracts: vec![erc20],
-            erc721_collections: vec![second_erc721, erc721],
-        }
-    );
-
     let metadata = ChangeMetadata::new(
         NativeMetadata::default(),
-        [(
-            erc20,
-            Erc20Metadata {
-                name: None,
-                symbol: Some("TOK".to_string()),
-                decimals: Some(6),
-            },
-        )]
-        .into_iter()
-        .collect(),
-        HashMap::new(),
+        StandardMetadata::new(
+            [(
+                erc20,
+                Erc20Metadata {
+                    name: None,
+                    symbol: Some("TOK".to_string()),
+                    decimals: Some(6),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            HashMap::new(),
+        ),
     );
     let changes = build_changes(changes, &metadata);
 

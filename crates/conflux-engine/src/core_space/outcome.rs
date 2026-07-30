@@ -1,139 +1,94 @@
-use cfx_bytes::Bytes;
 use cfx_executor::executive::{ExecutionError, ToRepackError, TxDropError};
-use cfx_types::U256;
 use cfx_vm_types as vm;
 use primitives::receipt::StorageChange;
 
 use super::{
-    CoreSpaceExecution, CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode,
-    CoreSpaceExecutionStatus, CoreSpaceStateAnchor, CoreSpaceStorageChange,
+    CoreSpaceExecutedDetails, CoreSpaceExecution, CoreSpaceExecutionFailure,
+    CoreSpaceExecutionFailureCode, CoreSpaceExecutionOutcome, CoreSpaceStateAnchor,
+    CoreSpaceStorageChange,
 };
-use crate::execution::TransactionExecutionOutcome;
+use crate::execution::{ExecutedTransactionDetails, TransactionExecutionOutcome};
 
 pub(crate) fn build_core_space_execution(
     chain_id: u32,
     state: CoreSpaceStateAnchor,
-    gas_limit: U256,
+    gas_limit: u64,
     outcome: TransactionExecutionOutcome,
 ) -> CoreSpaceExecution {
-    let status = match &outcome {
-        TransactionExecutionOutcome::Success(_) => CoreSpaceExecutionStatus::Success,
-        TransactionExecutionOutcome::Failed { .. } => CoreSpaceExecutionStatus::Failed,
-        TransactionExecutionOutcome::NotExecutedDrop(_)
-        | TransactionExecutionOutcome::NotExecutedToReconsiderPacking(_) => {
-            CoreSpaceExecutionStatus::NotExecuted
+    let outcome = match outcome {
+        TransactionExecutionOutcome::Success(details) => {
+            CoreSpaceExecutionOutcome::Success(into_core_space_details(details, true))
         }
-    };
-
-    let failure = build_core_space_failure(&outcome);
-    let executed = outcome.into_executed();
-
-    let storage_collateralized = if status == CoreSpaceExecutionStatus::Success {
-        executed
-            .as_ref()
-            .map(|executed| map_core_space_storage_changes(&executed.storage_collateralized))
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    let storage_released = if status == CoreSpaceExecutionStatus::Success {
-        executed
-            .as_ref()
-            .map(|executed| map_core_space_storage_changes(&executed.storage_released))
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-
-    let burnt_fee = if status == CoreSpaceExecutionStatus::NotExecuted {
-        Some(U256::zero())
-    } else {
-        executed.as_ref().and_then(|executed| executed.burnt_fee)
+        TransactionExecutionOutcome::Failed { error, details } => {
+            let failure =
+                build_core_space_execution_error_failure(&error, details.common.output.as_ref());
+            CoreSpaceExecutionOutcome::Failed {
+                details: into_core_space_details(details, false),
+                failure,
+            }
+        }
+        TransactionExecutionOutcome::NotExecutedDrop(error) => {
+            CoreSpaceExecutionOutcome::NotExecuted(build_core_space_drop_failure(&error))
+        }
+        TransactionExecutionOutcome::NotExecutedToReconsiderPacking(error) => {
+            CoreSpaceExecutionOutcome::NotExecuted(build_core_space_repack_failure(&error))
+        }
     };
 
     CoreSpaceExecution {
         chain_id: u64::from(chain_id),
-        state,
-        status,
-        gas_used: executed
-            .as_ref()
-            .map(|executed| executed.gas_used)
-            .unwrap_or_else(U256::zero),
+        context: state,
         gas_limit,
-        gas_charged: executed
-            .as_ref()
-            .map(|executed| executed.gas_charged)
-            .unwrap_or_else(U256::zero),
-        fee: executed
-            .as_ref()
-            .map(|executed| executed.fee)
-            .unwrap_or_else(U256::zero),
-        burnt_fee,
-        gas_covered_by_sponsor: executed
-            .as_ref()
-            .map(|executed| executed.gas_sponsor_paid)
-            .unwrap_or(false),
-        storage_covered_by_sponsor: executed
-            .as_ref()
-            .map(|executed| executed.storage_sponsor_paid)
-            .unwrap_or(false),
-        storage_collateralized,
-        storage_released,
-        output: executed.map(|executed| executed.output).unwrap_or_default(),
-        failure,
+        outcome,
     }
 }
 
 pub(crate) fn build_core_space_not_executed(
     chain_id: u32,
     state: CoreSpaceStateAnchor,
-    gas_limit: U256,
+    gas_limit: u64,
     failure: CoreSpaceExecutionFailure,
 ) -> CoreSpaceExecution {
     CoreSpaceExecution {
         chain_id: u64::from(chain_id),
-        state,
-        status: CoreSpaceExecutionStatus::NotExecuted,
-        gas_used: U256::zero(),
+        context: state,
         gas_limit,
-        gas_charged: U256::zero(),
-        fee: U256::zero(),
-        burnt_fee: Some(U256::zero()),
-        gas_covered_by_sponsor: false,
-        storage_covered_by_sponsor: false,
-        storage_collateralized: Vec::new(),
-        storage_released: Vec::new(),
-        output: Bytes::new(),
-        failure: Some(failure),
+        outcome: CoreSpaceExecutionOutcome::NotExecuted(failure),
     }
 }
 
-fn map_core_space_storage_changes(changes: &[StorageChange]) -> Vec<CoreSpaceStorageChange> {
+fn into_core_space_details(
+    details: ExecutedTransactionDetails,
+    include_storage_changes: bool,
+) -> CoreSpaceExecutedDetails {
+    let storage_collateralized = if include_storage_changes {
+        into_core_space_storage_changes(details.storage_collateralized)
+    } else {
+        Vec::new()
+    };
+    let storage_released = if include_storage_changes {
+        into_core_space_storage_changes(details.storage_released)
+    } else {
+        Vec::new()
+    };
+
+    CoreSpaceExecutedDetails {
+        common: details.common,
+        gas_covered_by_sponsor: details.gas_sponsor_paid,
+        storage_covered_by_sponsor: details.storage_sponsor_paid,
+        storage_collateralized,
+        storage_released,
+    }
+}
+
+fn into_core_space_storage_changes(changes: Vec<StorageChange>) -> Vec<CoreSpaceStorageChange> {
     changes
-        .iter()
+        .into_iter()
         .map(|change| CoreSpaceStorageChange {
             address: change.address,
             collateral_units: change.collaterals.as_u64(),
         })
         .collect()
-}
-
-fn build_core_space_failure(
-    outcome: &TransactionExecutionOutcome,
-) -> Option<CoreSpaceExecutionFailure> {
-    match outcome {
-        TransactionExecutionOutcome::Success(_) => None,
-        TransactionExecutionOutcome::Failed { error, details } => Some(
-            build_core_space_execution_error_failure(error, details.output.as_ref()),
-        ),
-        TransactionExecutionOutcome::NotExecutedDrop(error) => {
-            Some(build_core_space_drop_failure(error))
-        }
-        TransactionExecutionOutcome::NotExecutedToReconsiderPacking(error) => {
-            Some(build_core_space_repack_failure(error))
-        }
-    }
 }
 
 fn build_core_space_drop_failure(error: &TxDropError) -> CoreSpaceExecutionFailure {

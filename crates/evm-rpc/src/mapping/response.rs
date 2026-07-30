@@ -7,18 +7,19 @@ impl From<evm_service::SimulateEvmTransactionOutput> for rpc::EvmSimulateTransac
         let (execution, changes) = output.into_parts();
         let evm_service::SimulationExecution {
             chain_id,
-            block,
+            context: block,
             gas_limit,
             outcome,
         } = execution;
 
         let (status, gas_used, fee, burnt_fee, output, failure) = match outcome {
-            evm_service::ExecutionOutcome::Success {
+            evm_service::ExecutionOutcome::Success(evm_service::ExecutedDetails {
                 gas_used,
+                gas_charged: _,
                 fee,
                 burnt_fee,
                 output,
-            } => (
+            }) => (
                 rpc::ExecutionStatus::Success,
                 gas_used,
                 fee,
@@ -27,10 +28,14 @@ impl From<evm_service::SimulateEvmTransactionOutput> for rpc::EvmSimulateTransac
                 None,
             ),
             evm_service::ExecutionOutcome::Failed {
-                gas_used,
-                fee,
-                burnt_fee,
-                output,
+                details:
+                    evm_service::ExecutedDetails {
+                        gas_used,
+                        gas_charged: _,
+                        fee,
+                        burnt_fee,
+                        output,
+                    },
                 failure,
             } => (
                 rpc::ExecutionStatus::Failed,
@@ -40,7 +45,7 @@ impl From<evm_service::SimulateEvmTransactionOutput> for rpc::EvmSimulateTransac
                 output,
                 Some(failure.into()),
             ),
-            evm_service::ExecutionOutcome::NotExecuted { failure } => (
+            evm_service::ExecutionOutcome::NotExecuted(failure) => (
                 rpc::ExecutionStatus::NotExecuted,
                 0,
                 U256::ZERO,
@@ -334,17 +339,18 @@ mod tests {
     fn successful_execution() -> evm_service::SimulationExecution {
         evm_service::SimulationExecution {
             chain_id: 1,
-            block: evm_service::SimulatedBlock {
+            context: evm_service::SimulatedBlock {
                 number: 0x1234,
                 hash: B256::repeat_byte(0xaa),
             },
             gas_limit: 0x5300,
-            outcome: evm_service::ExecutionOutcome::Success {
+            outcome: evm_service::ExecutionOutcome::Success(evm_service::ExecutedDetails {
                 gas_used: 0x5208,
+                gas_charged: 0x5208,
                 fee: U256::ZERO,
                 burnt_fee: U256::ZERO,
                 output: Bytes::new(),
-            },
+            }),
         }
     }
 
@@ -489,10 +495,13 @@ mod tests {
         let output = evm_service::SimulateEvmTransactionOutput {
             execution: evm_service::SimulationExecution {
                 outcome: evm_service::ExecutionOutcome::Failed {
-                    gas_used: 0x5208,
-                    fee: U256::ZERO,
-                    burnt_fee: U256::ZERO,
-                    output: Bytes::new(),
+                    details: evm_service::ExecutedDetails {
+                        gas_used: 0x5208,
+                        gas_charged: 0x5208,
+                        fee: U256::ZERO,
+                        burnt_fee: U256::ZERO,
+                        output: Bytes::new(),
+                    },
                     failure: evm_service::ExecutionFailure {
                         code: evm_service::EvmExecutionFailureCode::Revert,
                         message: "execution reverted".to_string(),
@@ -520,13 +529,13 @@ mod tests {
     fn not_executed_outcome_maps_wire_zero_values() {
         let output = evm_service::SimulateEvmTransactionOutput {
             execution: evm_service::SimulationExecution {
-                outcome: evm_service::ExecutionOutcome::NotExecuted {
-                    failure: evm_service::ExecutionFailure {
+                outcome: evm_service::ExecutionOutcome::NotExecuted(
+                    evm_service::ExecutionFailure {
                         code: evm_service::EvmExecutionFailureCode::InsufficientFunds,
                         message: "insufficient funds".to_string(),
                         reason: None,
                     },
-                },
+                ),
                 ..successful_execution()
             },
             changes: Vec::new(),

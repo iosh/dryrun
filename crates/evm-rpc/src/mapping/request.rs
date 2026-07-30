@@ -4,7 +4,7 @@ use simulation_transaction::{TransactionType, TransactionVariantRequest};
 
 use crate::{errors::ValidationError, interface as rpc};
 
-use super::shared::parse_u64_quantity;
+use super::shared::parse_u64_param;
 
 impl TryFrom<rpc::EvmSimulateTransactionRequest> for evm_service::SimulateEvmTransactionInput {
     type Error = ValidationError;
@@ -32,7 +32,7 @@ fn map_block_ref(block: rpc::BlockRef) -> Result<evm_service::BlockSelector, Val
             "latest" => Ok(evm_service::BlockSelector::Latest),
             "safe" => Ok(evm_service::BlockSelector::Safe),
             "finalized" => Ok(evm_service::BlockSelector::Finalized),
-            value => Ok(evm_service::BlockSelector::Number(parse_u64_quantity(
+            value => Ok(evm_service::BlockSelector::Number(parse_u64_param(
                 value, "block",
             )?)),
         },
@@ -68,7 +68,7 @@ fn map_transaction(
         nonce: transaction.nonce,
         gas_limit: transaction.gas,
         value: transaction.value,
-        input: transaction.data,
+        data: transaction.data,
         chain_id: transaction.chain_id,
         variant,
     })
@@ -124,11 +124,11 @@ mod tests {
         assert_eq!(input.transaction.chain_id, 1);
         assert_eq!(input.transaction.nonce, Some(0));
         assert_eq!(input.transaction.value, None);
-        assert_eq!(input.transaction.input, None);
+        assert_eq!(input.transaction.data, None);
     }
 
     #[test]
-    fn block_quantity_maps_into_service_input() {
+    fn block_number_maps_into_service_input() {
         let request = rpc::EvmSimulateTransactionRequest {
             block: Some(rpc::BlockRef::Tag("0x1234".to_string())),
             options: None,

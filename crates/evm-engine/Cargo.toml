@@ -17,5 +17,6 @@ revm = { workspace = true, features = [
     "optional_no_base_fee",
 ] }
 simulation-transaction = { workspace = true }
+simulation-execution = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }

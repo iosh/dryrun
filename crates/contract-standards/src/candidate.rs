@@ -1,4 +1,7 @@
-use std::{collections::HashSet, sync::LazyLock};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::LazyLock,
+};
 
 use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 
@@ -25,6 +28,7 @@ pub enum Record {
         position: Position,
         caller: Address,
         target: Address,
+        value: U256,
         input_len: usize,
         input_prefix: Bytes,
     },
@@ -127,6 +131,29 @@ static TRANSFER_FROM_SELECTOR: LazyLock<[u8; 4]> = LazyLock::new(|| {
     let hash = keccak256("transferFrom(address,address,uint256)");
     [hash[0], hash[1], hash[2], hash[3]]
 });
+static DEPOSIT_TOPIC0: LazyLock<B256> = LazyLock::new(|| keccak256("Deposit(address,uint256)"));
+static WITHDRAWAL_TOPIC0: LazyLock<B256> =
+    LazyLock::new(|| keccak256("Withdrawal(address,uint256)"));
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct NativeValueCall {
+    from: Address,
+    to: Address,
+    amount: U256,
+}
+
+enum WrappedNativeEvent {
+    Deposit {
+        token: Address,
+        account: Address,
+        amount: U256,
+    },
+    Withdrawal {
+        token: Address,
+        account: Address,
+        amount: U256,
+    },
+}
 
 pub fn collect_candidates(
     records: &[Record],
@@ -142,11 +169,151 @@ pub fn collect_candidates(
         }
     }
 
+    candidates.extend(wrapped_native_candidates(records));
+    sort_candidates_by_position(&mut candidates);
+
     Ok(candidates)
 }
 
 pub fn sort_candidates_by_position(candidates: &mut [StandardCandidate]) {
     candidates.sort_by_key(StandardCandidate::position);
+}
+
+fn wrapped_native_candidates(records: &[Record]) -> Vec<StandardCandidate> {
+    let mut value_calls = HashMap::new();
+
+    for record in records {
+        let Some(call) = native_value_call(record) else {
+            continue;
+        };
+        *value_calls.entry(call).or_default() += 1;
+    }
+
+    records
+        .iter()
+        .filter_map(|record| {
+            let event = decode_wrapped_native_log(record)?;
+
+            let (token, from, to, amount, call) = match event {
+                WrappedNativeEvent::Deposit {
+                    token,
+                    account,
+                    amount,
+                } => (
+                    token,
+                    Address::ZERO,
+                    account,
+                    amount,
+                    NativeValueCall {
+                        from: account,
+                        to: token,
+                        amount,
+                    },
+                ),
+                WrappedNativeEvent::Withdrawal {
+                    token,
+                    account,
+                    amount,
+                } => (
+                    token,
+                    account,
+                    Address::ZERO,
+                    amount,
+                    NativeValueCall {
+                        from: token,
+                        to: account,
+                        amount,
+                    },
+                ),
+            };
+
+            take_value_call(&mut value_calls, call).then(|| {
+                StandardCandidate::erc20_movement(record.position(), token, from, to, amount)
+            })
+        })
+        .collect()
+}
+
+fn native_value_call(record: &Record) -> Option<NativeValueCall> {
+    let Record::Call {
+        caller,
+        target,
+        value,
+        ..
+    } = record
+    else {
+        return None;
+    };
+
+    if value.is_zero() {
+        return None;
+    }
+
+    Some(NativeValueCall {
+        from: *caller,
+        to: *target,
+        amount: *value,
+    })
+}
+
+fn take_value_call(
+    value_calls: &mut HashMap<NativeValueCall, usize>,
+    call: NativeValueCall,
+) -> bool {
+    let Some(count) = value_calls.get_mut(&call) else {
+        return false;
+    };
+
+    if *count == 0 {
+        return false;
+    }
+
+    *count -= 1;
+    true
+}
+
+fn decode_wrapped_native_log(record: &Record) -> Option<WrappedNativeEvent> {
+    let Record::Log {
+        address,
+        topics,
+        data,
+        ..
+    } = record
+    else {
+        return None;
+    };
+
+    let topic0 = topics.first()?;
+    let (account, amount) = decode_wrapped_native_fields(topics, data)?;
+
+    if *topic0 == *DEPOSIT_TOPIC0 {
+        Some(WrappedNativeEvent::Deposit {
+            token: *address,
+            account,
+            amount,
+        })
+    } else if *topic0 == *WITHDRAWAL_TOPIC0 {
+        Some(WrappedNativeEvent::Withdrawal {
+            token: *address,
+            account,
+            amount,
+        })
+    } else {
+        None
+    }
+}
+
+fn decode_wrapped_native_fields(topics: &[B256], data: &[u8]) -> Option<(Address, U256)> {
+    if topics.len() != 2 || data.len() != 32 {
+        return None;
+    }
+
+    let topic = &topics[1];
+    if topic.as_slice()[..12].iter().any(|byte| *byte != 0) {
+        return None;
+    }
+
+    Some((Address::from_word(*topic), U256::from_be_slice(data)))
 }
 
 fn decode_records(
@@ -183,6 +350,7 @@ fn append_transfer_from_candidate(
         target,
         input_len,
         input_prefix,
+        ..
     } = item
     else {
         return;

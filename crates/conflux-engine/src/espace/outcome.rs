@@ -1,10 +1,8 @@
-use cfx_bytes::Bytes;
 use cfx_executor::executive::{ExecutionError, ToRepackError, TxDropError};
-use cfx_types::U256;
 use cfx_vm_types as vm;
 
 use super::{
-    EspaceExecution, EspaceExecutionFailure, EspaceExecutionFailureCode, EspaceExecutionStatus,
+    EspaceExecution, EspaceExecutionFailure, EspaceExecutionFailureCode, EspaceExecutionOutcome,
     SimulatedBlock,
 };
 use crate::{ConfluxEngineError, execution::TransactionExecutionOutcome};
@@ -12,75 +10,48 @@ use crate::{ConfluxEngineError, execution::TransactionExecutionOutcome};
 pub(crate) fn build_espace_not_executed(
     chain_id: u32,
     block: SimulatedBlock,
-    gas_limit: U256,
+    gas_limit: u64,
     failure: EspaceExecutionFailure,
 ) -> EspaceExecution {
     EspaceExecution {
         chain_id: u64::from(chain_id),
-        block,
-        status: EspaceExecutionStatus::NotExecuted,
-        gas_used: U256::zero(),
+        context: block,
         gas_limit,
-        gas_charged: U256::zero(),
-        fee: U256::zero(),
-        burnt_fee: Some(U256::zero()),
-        output: Bytes::new(),
-        failure: Some(failure),
+        outcome: EspaceExecutionOutcome::NotExecuted(failure),
     }
 }
 
 pub(crate) fn build_espace_execution(
     chain_id: u32,
     block: SimulatedBlock,
-    gas_limit: U256,
+    gas_limit: u64,
     outcome: TransactionExecutionOutcome,
 ) -> Result<EspaceExecution, ConfluxEngineError> {
-    let failure = build_failure(&outcome)?;
-    let status = if failure.is_some() {
-        EspaceExecutionStatus::Failed
-    } else {
-        EspaceExecutionStatus::Success
+    let outcome = match outcome {
+        TransactionExecutionOutcome::Success(details) => {
+            EspaceExecutionOutcome::Success(details.common)
+        }
+        TransactionExecutionOutcome::Failed { error, details } => {
+            let failure = build_execution_error_failure(&error, details.common.output.as_ref())?;
+            EspaceExecutionOutcome::Failed {
+                details: details.common,
+                failure,
+            }
+        }
+        TransactionExecutionOutcome::NotExecutedDrop(error) => {
+            EspaceExecutionOutcome::NotExecuted(build_espace_drop_failure(&error)?)
+        }
+        TransactionExecutionOutcome::NotExecutedToReconsiderPacking(error) => {
+            EspaceExecutionOutcome::NotExecuted(build_espace_repack_failure(&error)?)
+        }
     };
-
-    let executed = outcome.into_executed();
 
     Ok(EspaceExecution {
         chain_id: u64::from(chain_id),
-        block,
-        status,
-        gas_used: executed
-            .as_ref()
-            .map(|executed| executed.gas_used)
-            .unwrap_or_else(U256::zero),
+        context: block,
         gas_limit,
-        gas_charged: executed
-            .as_ref()
-            .map(|executed| executed.gas_charged)
-            .unwrap_or_else(U256::zero),
-        fee: executed
-            .as_ref()
-            .map(|executed| executed.fee)
-            .unwrap_or_else(U256::zero),
-        burnt_fee: executed.as_ref().and_then(|executed| executed.burnt_fee),
-        output: executed.map(|executed| executed.output).unwrap_or_default(),
-        failure,
+        outcome,
     })
-}
-fn build_failure(
-    outcome: &TransactionExecutionOutcome,
-) -> Result<Option<EspaceExecutionFailure>, ConfluxEngineError> {
-    match outcome {
-        TransactionExecutionOutcome::Success(_) => Ok(None),
-        TransactionExecutionOutcome::Failed { error, details } => {
-            build_execution_error_failure(error, details.output.as_ref()).map(Some)
-        }
-        TransactionExecutionOutcome::NotExecutedDrop(error) => {
-            build_espace_drop_failure(error).map(Some)
-        }
-        TransactionExecutionOutcome::NotExecutedToReconsiderPacking(error) => {
-            build_espace_repack_failure(error).map(Some)
-        }
-    }
 }
 
 fn espace_failure(

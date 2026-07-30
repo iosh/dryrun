@@ -9,6 +9,7 @@ members = [
     "crates/conflux-engine",
     "crates/conflux-rpc",
     "crates/conflux-service",
+    "crates/simulation-execution",
     "crates/simulation-transaction",
     "crates/simulation-tasks",
 ]
@@ -27,6 +28,7 @@ conflux-rpc = { path = "crates/conflux-rpc" }
 conflux-service = { path = "crates/conflux-service" }
 simulation-transaction = { path = "crates/simulation-transaction" }
 simulation-tasks = { path = "crates/simulation-tasks" }
+simulation-execution = { path = "crates/simulation-execution" }
 
 jsonrpsee = "0.26"
 thiserror = "2"
@@ -36,6 +38,7 @@ tokio = "1"
 
 alloy = { version = "1", features = ["full"] }
 alloy-chains = "0.2"
+alloy-eips = "1"
 alloy-hardforks = "0.4"
 alloy-primitives = "1"
 alloy-sol-types = "1"

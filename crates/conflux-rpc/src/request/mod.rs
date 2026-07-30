@@ -1,17 +1,38 @@
 mod core_space;
 mod espace;
 
-use cfx_types::U256;
+use alloy_primitives::{Address, B256, U256 as AlloyU256};
+use cfx_types::{Address as CfxAddress, H256, U256};
 
 use crate::error::ValidationError;
 
 pub(crate) use core_space::SimulateCoreSpaceTransactionRequest;
 pub(crate) use espace::SimulateEspaceTransactionRequest;
 
-fn chain_id_from_wire(chain_id: U256) -> Result<u32, ValidationError> {
-    u32::try_from(chain_id).map_err(|_| {
-        ValidationError::invalid_params(
-            "`transaction.chainId` must fit into an unsigned 32-bit integer",
-        )
-    })
+fn u64_param(value: U256, field: &str) -> Result<u64, ValidationError> {
+    u64::try_from(value).map_err(|_| param_exceeds_max(field, value, U256::from(u64::MAX)))
+}
+
+fn u128_param(value: U256, field: &str) -> Result<u128, ValidationError> {
+    u128::try_from(value).map_err(|_| param_exceeds_max(field, value, U256::from(u128::MAX)))
+}
+
+fn param_exceeds_max(field: &str, value: U256, max: U256) -> ValidationError {
+    ValidationError::invalid_params(format!(
+        "`{field}` value {value:#x} exceeds the simulator maximum {max:#x}"
+    ))
+}
+
+fn cfx_address_to_alloy(address: CfxAddress) -> Address {
+    Address::from_slice(address.as_bytes())
+}
+
+fn cfx_h256_to_alloy(value: H256) -> B256 {
+    B256::from_slice(value.as_bytes())
+}
+
+fn cfx_u256_to_alloy(value: U256) -> AlloyU256 {
+    let mut bytes = [0_u8; 32];
+    value.to_big_endian(&mut bytes);
+    AlloyU256::from_be_bytes(bytes)
 }

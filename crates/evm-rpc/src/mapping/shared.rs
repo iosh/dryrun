@@ -1,8 +1,8 @@
 use crate::errors::ValidationError;
 
-pub(super) fn parse_u64_quantity(value: &str, field: &str) -> Result<u64, ValidationError> {
+pub(super) fn parse_u64_param(value: &str, field: &str) -> Result<u64, ValidationError> {
     let digits = value.strip_prefix("0x").ok_or_else(|| {
-        ValidationError::invalid_params(format!("`{field}` must be a 0x-prefixed hex quantity"))
+        ValidationError::invalid_params(format!("`{field}` must be a 0x-prefixed hex string"))
     })?;
 
     u64::from_str_radix(digits, 16).map_err(|_| {

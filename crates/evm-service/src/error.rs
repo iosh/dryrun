@@ -8,8 +8,8 @@ pub enum SimulationServiceError {
     #[error("block resolution failed: {details}")]
     BlockResolution { details: String },
 
-    #[error("transaction resolution failed: {details}")]
-    TransactionResolution { details: String },
+    #[error("transaction completion failed: {details}")]
+    TransactionCompletion { details: String },
 
     #[error("simulation task set is closed")]
     TaskSetClosed,
@@ -41,8 +41,8 @@ impl SimulationServiceError {
         Self::ExecutionTask { source }
     }
 
-    pub(crate) fn transaction_resolution(details: impl Into<String>) -> Self {
-        Self::TransactionResolution {
+    pub(crate) fn transaction_completion(details: impl Into<String>) -> Self {
+        Self::TransactionCompletion {
             details: details.into(),
         }
     }
@@ -54,7 +54,7 @@ impl SimulationServiceError {
     pub fn kind_code(&self) -> Option<&'static str> {
         match self {
             Self::BlockResolution { .. } => Some("block_resolution_error"),
-            Self::TransactionResolution { .. } => Some("transaction_resolution_error"),
+            Self::TransactionCompletion { .. } => Some("transaction_resolution_error"),
             Self::TaskSetClosed => Some("task_set_closed"),
             Self::AttemptTask { .. } => Some("attempt_task_error"),
             Self::ExecutionTask { .. } => Some("execution_task_error"),
@@ -65,7 +65,7 @@ impl SimulationServiceError {
     pub fn details(&self) -> String {
         match self {
             Self::BlockResolution { details } => details.clone(),
-            Self::TransactionResolution { details } => details.clone(),
+            Self::TransactionCompletion { details } => details.clone(),
             Self::TaskSetClosed => "simulation task set is closed".to_owned(),
             Self::AttemptTask { .. } => "simulation attempt task failed".to_owned(),
             Self::ExecutionTask { .. } => "EVM execution task failed".to_owned(),

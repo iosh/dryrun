@@ -20,12 +20,12 @@ use crate::{
     chain_spec::resolve_execution_spec_id,
     changes::{
         ChangeObservationInspector, build_changes, check_native_balances,
-        collect_change_metadata_requests, collect_contract_candidates, collect_native_candidates,
-        map_contract_changes, sort_changes_by_position,
+        collect_contract_candidates, collect_native_candidates, map_contract_changes,
+        sort_changes_by_position,
     },
 };
 use alloy::providers::RootProvider;
-use contract_standards::{state_requirements, verify};
+use contract_standards::{MetadataRequests, state_requirements, verify};
 use revm::{
     Context, ExecuteCommitEvm, InspectEvm, MainBuilder, MainContext, MainnetEvm,
     context::{BlockEnv, CfgEnv, TxEnv},
@@ -91,7 +91,7 @@ fn execute_transaction(
         .modify_block_chained(|block| *block = block_env)
         .build_mainnet_with_inspector(ChangeObservationInspector::new());
 
-    let (execution, mut positioned_changes) = match evm.inspect_tx(tx_env) {
+    let (execution, mut positioned_changes, metadata_requests) = match evm.inspect_tx(tx_env) {
         Ok(result_and_state) => {
             let result = result_and_state.result;
             let state = result_and_state.state;
@@ -131,17 +131,16 @@ fn execute_transaction(
             let after_token_state =
                 read_token_state_values(&mut evm, transaction, chain_id, &requirements)?;
 
-            positioned_changes.extend(map_contract_changes(verify(
-                &candidates,
-                &before_token_state,
-                &after_token_state,
-            )?));
+            let standard_changes = verify(&candidates, &before_token_state, &after_token_state)?;
+            let metadata_requests = MetadataRequests::from_changes(&standard_changes);
+            positioned_changes.extend(map_contract_changes(standard_changes));
 
-            (execution, positioned_changes)
+            (execution, positioned_changes, metadata_requests)
         }
         Err(EVMError::Transaction(error)) => (
             build_not_executed(chain_id, resolved_block, transaction, error),
             Vec::new(),
+            MetadataRequests::default(),
         ),
         Err(EVMError::Header(error)) => {
             return Err(EvmEngineError::block_context_error(format!(
@@ -164,8 +163,7 @@ fn execute_transaction(
         Vec::new()
     } else {
         sort_changes_by_position(&mut positioned_changes);
-        let requests = collect_change_metadata_requests(&positioned_changes);
-        let metadata = load_change_metadata(&mut evm, transaction, chain_id, requests);
+        let metadata = load_change_metadata(&mut evm, transaction, chain_id, metadata_requests);
 
         build_changes(positioned_changes, &metadata)
     };

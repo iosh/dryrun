@@ -1,4 +1,4 @@
-use cfx_bytes::Bytes;
+use alloy_primitives::{Bytes, U256 as AlloyU256};
 use cfx_executor::executive::{
     Executed, ExecutionError, ExecutionOutcome as UpstreamExecutionOutcome, ToRepackError,
     TxDropError,
@@ -6,9 +6,11 @@ use cfx_executor::executive::{
 use cfx_statedb::Error as StateDbError;
 use cfx_types::{AddressWithSpace, U256};
 use primitives::{LogEntry, receipt::StorageChange};
+use simulation_execution::ExecutedDetails;
 use thiserror::Error;
 
 use super::observer::{Observation, ObservationKey};
+use crate::primitive::u256_from_cfx;
 
 /// Execution details owned by this crate rather than by the upstream type map.
 #[derive(Debug)]
@@ -17,18 +19,14 @@ use super::observer::{Observation, ObservationKey};
     reason = "some details are carried for the next analysis slices before they have consumers"
 )]
 pub(crate) struct ExecutedTransactionDetails {
+    pub(crate) common: ExecutedDetails<Option<AlloyU256>>,
     pub(crate) base_gas: u64,
-    pub(crate) gas_used: U256,
-    pub(crate) fee: U256,
-    pub(crate) burnt_fee: Option<U256>,
-    pub(crate) gas_charged: U256,
     pub(crate) gas_sponsor_paid: bool,
     pub(crate) logs: Vec<LogEntry>,
     pub(crate) storage_sponsor_paid: bool,
     pub(crate) storage_collateralized: Vec<StorageChange>,
     pub(crate) storage_released: Vec<StorageChange>,
     pub(crate) contracts_created: Vec<AddressWithSpace>,
-    pub(crate) output: Bytes,
     pub(crate) observations: Vec<Observation>,
 }
 
@@ -51,6 +49,12 @@ pub(crate) enum TransactionExecutionError {
 
     #[error("executed transaction did not produce a valid observation journal")]
     MissingObservations,
+
+    #[error(
+        "execution returned {field} value {value}, exceeding the simulator maximum \
+         18446744073709551615"
+    )]
+    GasValueOutOfRange { field: &'static str, value: U256 },
 }
 
 impl From<StateDbError> for TransactionExecutionError {
@@ -77,13 +81,6 @@ impl TransactionExecutionOutcome {
             }
         })
     }
-
-    pub(crate) fn into_executed(self) -> Option<ExecutedTransactionDetails> {
-        match self {
-            Self::Success(details) | Self::Failed { details, .. } => Some(details),
-            Self::NotExecutedDrop(_) | Self::NotExecutedToReconsiderPacking(_) => None,
-        }
-    }
 }
 
 fn executed_transaction_details(
@@ -108,20 +105,32 @@ fn executed_transaction_details(
     let observations = ext_result
         .remove::<ObservationKey>()
         .ok_or(TransactionExecutionError::MissingObservations)?;
+    let gas_used =
+        u64::try_from(gas_used).map_err(|_| TransactionExecutionError::GasValueOutOfRange {
+            field: "gas used",
+            value: gas_used,
+        })?;
+    let gas_charged =
+        u64::try_from(gas_charged).map_err(|_| TransactionExecutionError::GasValueOutOfRange {
+            field: "gas charged",
+            value: gas_charged,
+        })?;
 
     Ok(ExecutedTransactionDetails {
+        common: ExecutedDetails {
+            gas_used,
+            gas_charged,
+            fee: u256_from_cfx(fee),
+            burnt_fee: burnt_fee.map(u256_from_cfx),
+            output: Bytes::from(output),
+        },
         base_gas,
-        gas_used,
-        fee,
-        burnt_fee,
-        gas_charged,
         gas_sponsor_paid,
         logs,
         storage_sponsor_paid,
         storage_collateralized,
         storage_released,
         contracts_created,
-        output,
         observations,
     })
 }

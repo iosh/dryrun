@@ -1,10 +1,13 @@
 use super::{EspaceExecutionFailure, EspaceExecutionFailureCode};
-use cfx_types::Address;
 use primitives::transaction::{
     Action, Eip155Transaction, Eip1559Transaction, Eip2930Transaction, EthereumTransaction,
 };
 
-use crate::{ConfluxTransaction, ConfluxTransactionVariant, execution::EspaceTransactionInput};
+use crate::{
+    ConfluxTransaction, ConfluxTransactionVariant,
+    execution::EspaceTransactionInput,
+    primitive::{access_list_to_cfx, address_to_cfx, u256_to_cfx},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EspaceBlockRef {
@@ -15,33 +18,41 @@ pub enum EspaceBlockRef {
 pub type EspaceTransaction = ConfluxTransaction;
 pub type EspaceTransactionVariant = ConfluxTransactionVariant;
 
-pub(crate) fn build_espace_transaction_input(input: EspaceTransaction) -> EspaceTransactionInput {
-    let sender = input.body.from;
-    let tx = build_ethereum_transaction(input);
+pub(crate) fn build_espace_transaction_input(
+    input: EspaceTransaction,
+    chain_id: u32,
+) -> EspaceTransactionInput {
+    let sender = address_to_cfx(input.from);
+    let tx = build_ethereum_transaction(input, chain_id);
 
     EspaceTransactionInput { tx, sender }
 }
 
-fn build_ethereum_transaction(input: EspaceTransaction) -> EthereumTransaction {
-    let EspaceTransaction { body, gas_limit } = input;
-    let crate::ConfluxTransactionBody {
+fn build_ethereum_transaction(input: EspaceTransaction, chain_id: u32) -> EthereumTransaction {
+    let EspaceTransaction {
         to,
         nonce,
+        gas_limit,
         value,
         data,
-        chain_id,
         variant,
         ..
-    } = body;
+    } = input;
 
-    let action = action_from_to(to);
+    let action = to.map_or(Action::Create, |address| {
+        Action::Call(address_to_cfx(address))
+    });
+    let nonce = nonce.into();
+    let gas = gas_limit.into();
+    let value = u256_to_cfx(value);
+    let data = data.to_vec();
 
     match variant {
         EspaceTransactionVariant::Legacy { gas_price } => {
             EthereumTransaction::Eip155(Eip155Transaction {
                 nonce,
-                gas_price,
-                gas: gas_limit,
+                gas_price: gas_price.into(),
+                gas,
                 action,
                 value,
                 chain_id: Some(chain_id),
@@ -54,12 +65,12 @@ fn build_ethereum_transaction(input: EspaceTransaction) -> EthereumTransaction {
         } => EthereumTransaction::Eip2930(Eip2930Transaction {
             chain_id,
             nonce,
-            gas_price,
-            gas: gas_limit,
+            gas_price: gas_price.into(),
+            gas,
             action,
             value,
             data,
-            access_list,
+            access_list: access_list_to_cfx(access_list),
         }),
         EspaceTransactionVariant::DynamicFee {
             max_fee_per_gas,
@@ -68,28 +79,22 @@ fn build_ethereum_transaction(input: EspaceTransaction) -> EthereumTransaction {
         } => EthereumTransaction::Eip1559(Eip1559Transaction {
             chain_id,
             nonce,
-            max_priority_fee_per_gas,
-            max_fee_per_gas,
-            gas: gas_limit,
+            max_priority_fee_per_gas: max_priority_fee_per_gas.into(),
+            max_fee_per_gas: max_fee_per_gas.into(),
+            gas,
             action,
             value,
             data,
-            access_list,
+            access_list: access_list_to_cfx(access_list),
         }),
     }
-}
-
-fn action_from_to(to: Option<Address>) -> Action {
-    to.map_or(Action::Create, Action::Call)
 }
 
 pub(crate) fn validate_espace_transaction(
     transaction: &EspaceTransaction,
     expected_chain_id: u32,
 ) -> Result<(), EspaceExecutionFailure> {
-    let transaction = &transaction.body;
-
-    if transaction.chain_id != expected_chain_id {
+    if transaction.chain_id != u64::from(expected_chain_id) {
         return Err(EspaceExecutionFailure {
             code: EspaceExecutionFailureCode::ChainIdMismatch,
             message: format!(
@@ -103,7 +108,7 @@ pub(crate) fn validate_espace_transaction(
     match &transaction.variant {
         EspaceTransactionVariant::Legacy { gas_price }
         | EspaceTransactionVariant::AccessList { gas_price, .. } => {
-            if gas_price.is_zero() {
+            if *gas_price == 0 {
                 return Err(EspaceExecutionFailure {
                     code: EspaceExecutionFailureCode::ZeroGasPrice,
                     message: "transaction gas price must be greater than zero".to_string(),
@@ -116,7 +121,7 @@ pub(crate) fn validate_espace_transaction(
             max_priority_fee_per_gas,
             ..
         } => {
-            if max_fee_per_gas.is_zero() {
+            if *max_fee_per_gas == 0 {
                 return Err(EspaceExecutionFailure {
                     code: EspaceExecutionFailureCode::ZeroGasPrice,
                     message: "transaction max fee per gas must be greater than zero".to_string(),

@@ -1,17 +1,6 @@
-use cfx_bytes::Bytes;
-use cfx_types::{H256, U256};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EspaceExecutionStatus {
-    Success,
-    Failed,
-    NotExecuted,
-}
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SimulatedBlock {
-    pub number: u64,
-    pub hash: H256,
-}
+use alloy_primitives::U256;
+pub use simulation_execution::SimulatedBlock;
+use simulation_execution::{ExecutedDetails, Execution, ExecutionOutcome};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EspaceExecutionFailureCode {
@@ -38,16 +27,6 @@ pub struct EspaceExecutionFailure {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EspaceExecution {
-    pub chain_id: u64,
-    pub block: SimulatedBlock,
-    pub status: EspaceExecutionStatus,
-    pub gas_used: U256,
-    pub gas_limit: U256,
-    pub gas_charged: U256,
-    pub fee: U256,
-    pub burnt_fee: Option<U256>,
-    pub output: Bytes,
-    pub failure: Option<EspaceExecutionFailure>,
-}
+pub type EspaceExecutedDetails = ExecutedDetails<Option<U256>>;
+pub type EspaceExecution = Execution<SimulatedBlock, EspaceExecutedDetails, EspaceExecutionFailure>;
+pub type EspaceExecutionOutcome = ExecutionOutcome<EspaceExecutedDetails, EspaceExecutionFailure>;

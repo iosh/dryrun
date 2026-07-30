@@ -4,7 +4,7 @@ use revm::context_interface::result::{ExecutionResult, HaltReason, InvalidTransa
 
 use crate::{
     EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode, EvmExecutionOutcome,
-    EvmTransaction, SimulatedBlock,
+    EvmTransaction, SimulatedBlock, simulation::ExecutedDetails,
 };
 
 use super::fee_settlement::TransactionFeeSettlement;
@@ -19,14 +19,15 @@ pub(super) fn build_execution(
     match result {
         ExecutionResult::Success { gas, output, .. } => EvmExecution {
             chain_id,
-            block: simulated_block(resolved_block),
+            context: simulated_block(resolved_block),
             gas_limit: gas.limit(),
-            outcome: EvmExecutionOutcome::Success {
+            outcome: EvmExecutionOutcome::Success(ExecutedDetails {
                 gas_used: gas.used(),
+                gas_charged: gas.used(),
                 fee: fee_settlement.fee,
                 burnt_fee: fee_settlement.burnt_fee,
                 output: output.into_data(),
-            },
+            }),
         },
         ExecutionResult::Revert { gas, output, .. } => build_revert_execution(
             chain_id,
@@ -55,11 +56,9 @@ pub(super) fn build_not_executed(
 ) -> EvmExecution {
     EvmExecution {
         chain_id,
-        block: simulated_block(resolved_block),
+        context: simulated_block(resolved_block),
         gas_limit: transaction.gas_limit,
-        outcome: EvmExecutionOutcome::NotExecuted {
-            failure: build_invalid_transaction_failure(error),
-        },
+        outcome: EvmExecutionOutcome::NotExecuted(build_invalid_transaction_failure(error)),
     }
 }
 
@@ -114,13 +113,16 @@ fn build_failed_execution(
 ) -> EvmExecution {
     EvmExecution {
         chain_id,
-        block: simulated_block(resolved_block),
+        context: simulated_block(resolved_block),
         gas_limit,
         outcome: EvmExecutionOutcome::Failed {
-            gas_used,
-            fee: fee_settlement.fee,
-            burnt_fee: fee_settlement.burnt_fee,
-            output,
+            details: ExecutedDetails {
+                gas_used,
+                gas_charged: gas_used,
+                fee: fee_settlement.fee,
+                burnt_fee: fee_settlement.burnt_fee,
+                output,
+            },
             failure,
         },
     }

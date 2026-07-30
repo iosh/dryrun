@@ -11,9 +11,7 @@ mod observation;
 pub(crate) use contract_candidates::collect_contract_candidates;
 pub(crate) use contract_changes::map_contract_changes;
 pub(crate) use error::TransactionChangesError;
-pub(crate) use metadata::{
-    ChangeMetadata, ChangeMetadataRequests, collect_change_metadata_requests,
-};
+pub(crate) use metadata::ChangeMetadata;
 pub(crate) use native::{check_native_balances, collect_native_candidates};
 pub(crate) use observation::ChangeObservationInspector;
 

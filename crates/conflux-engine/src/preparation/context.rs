@@ -11,6 +11,7 @@ use crate::{
         build_core_space_pivot_block_context, build_espace_block_context,
         build_execution_block_context,
     },
+    primitive::b256_from_cfx,
     state::{ConfluxStateAnchor, CoreSpaceRpcBlock, EspaceRpcBlock, HttpConfluxProvider},
 };
 
@@ -64,7 +65,7 @@ pub(crate) async fn load_espace_context(
 
     let simulated_block = SimulatedBlock {
         number: state_anchor.epoch_number(),
-        hash: espace_block.hash,
+        hash: b256_from_cfx(espace_block.hash),
     };
 
     let core_space_pivot = build_core_space_pivot_block_context(&core_space_pivot_block)?;

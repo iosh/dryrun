@@ -1,3 +1,4 @@
+use alloy_primitives::Bytes;
 use cfx_addr::Network;
 use cfx_rpc_cfx_types::{EpochNumber, RpcAddress};
 use cfx_rpc_primitives::Bytes as CoreSpaceRpcBytes;
@@ -6,7 +7,7 @@ use conflux_service::{AccessListItem, core_space as service_core_space};
 use serde::Deserialize;
 use simulation_transaction::{TransactionType, TransactionVariantRequest};
 
-use super::chain_id_from_wire;
+use super::{cfx_address_to_alloy, cfx_h256_to_alloy, cfx_u256_to_alloy, u64_param, u128_param};
 use crate::error::ValidationError;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -106,33 +107,37 @@ fn map_core_space_transaction(
     let variant = TransactionVariantRequest::try_new(
         transaction_type,
         access_list.map(map_core_space_access_list),
-        gas_price,
-        max_fee_per_gas,
-        max_priority_fee_per_gas,
+        gas_price
+            .map(|value| u128_param(value, "transaction.gasPrice"))
+            .transpose()?,
+        max_fee_per_gas
+            .map(|value| u128_param(value, "transaction.maxFeePerGas"))
+            .transpose()?,
+        max_priority_fee_per_gas
+            .map(|value| u128_param(value, "transaction.maxPriorityFeePerGas"))
+            .transpose()?,
     )
     .map_err(|error| ValidationError::invalid_params(error.to_string()))?;
 
     Ok(service_core_space::CoreSpaceTransactionRequest {
         transaction: conflux_service::ConfluxTransactionRequest {
-            from: from.hex_address,
-            to: to.map(|address| address.hex_address),
-            nonce,
-            gas_limit: gas,
-            value,
-            input: data.map(|data| data.into_vec()),
-            chain_id: chain_id_from_wire(chain_id)?,
+            from: cfx_address_to_alloy(from.hex_address),
+            to: to.map(|address| cfx_address_to_alloy(address.hex_address)),
+            nonce: nonce
+                .map(|value| u64_param(value, "transaction.nonce"))
+                .transpose()?,
+            gas_limit: gas
+                .map(|value| u64_param(value, "transaction.gas"))
+                .transpose()?,
+            value: value.map(cfx_u256_to_alloy),
+            data: data.map(|data| Bytes::from(data.into_vec())),
+            chain_id: u64_param(chain_id, "transaction.chainId")?,
             variant,
         },
         storage_limit: storage_limit.map(|value| value.as_u64()),
-        epoch_height: epoch_height.map(epoch_height_from_wire).transpose()?,
-    })
-}
-
-fn epoch_height_from_wire(epoch_height: U256) -> Result<u64, ValidationError> {
-    u64::try_from(epoch_height).map_err(|_| {
-        ValidationError::invalid_params(
-            "`transaction.epochHeight` must fit into an unsigned 64-bit integer",
-        )
+        epoch_height: epoch_height
+            .map(|value| u64_param(value, "transaction.epochHeight"))
+            .transpose()?,
     })
 }
 
@@ -211,8 +216,12 @@ fn map_core_space_access_list(items: Vec<CoreSpaceAccessListItem>) -> Vec<Access
     items
         .into_iter()
         .map(|item| AccessListItem {
-            address: item.address.hex_address,
-            storage_keys: item.storage_keys,
+            address: cfx_address_to_alloy(item.address.hex_address),
+            storage_keys: item
+                .storage_keys
+                .into_iter()
+                .map(cfx_h256_to_alloy)
+                .collect(),
         })
         .collect()
 }

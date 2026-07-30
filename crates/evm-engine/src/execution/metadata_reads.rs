@@ -1,47 +1,29 @@
 use std::collections::HashMap;
 
-use alloy::{sol, sol_types::SolCall};
-use alloy_primitives::{Address, FixedBytes};
-
-use crate::{
-    Erc20Metadata, Erc721CollectionMetadata, EvmTransaction, NativeMetadata,
-    changes::{ChangeMetadata, ChangeMetadataRequests},
+use alloy_primitives::Address;
+use contract_standards::{
+    ERC721_METADATA_INTERFACE_ID, Erc20Metadata, Erc721CollectionMetadata, MetadataRequests,
+    StandardMetadata, decimals_call, decode_decimals, decode_name, decode_supports_interface,
+    decode_symbol, name_call, supports_interface_call, symbol_call,
 };
+
+use crate::{EvmTransaction, NativeMetadata, changes::ChangeMetadata};
 
 use super::{
     MainnetAlloyEvm,
     read_call::{execute_optional_read_call, with_read_call_context},
 };
 
-const ERC721_METADATA_INTERFACE_ID: [u8; 4] = [0x5b, 0x5e, 0x13, 0x9f];
-
-sol! {
-    contract IERC20Metadata {
-        function name() external view returns (string);
-        function symbol() external view returns (string);
-        function decimals() external view returns (uint8);
-    }
-
-    contract IERC721Metadata {
-        function name() external view returns (string);
-        function symbol() external view returns (string);
-    }
-
-    contract IERC165 {
-        function supportsInterface(bytes4 interfaceId) external view returns (bool);
-    }
-}
-
 pub(super) fn load_change_metadata<INSP>(
     evm: &mut MainnetAlloyEvm<INSP>,
     transaction: &EvmTransaction,
     chain_id: u64,
-    requests: ChangeMetadataRequests,
+    requests: MetadataRequests,
 ) -> ChangeMetadata {
     let native = native_metadata(chain_id);
 
-    if requests.erc20_contracts.is_empty() && requests.erc721_collections.is_empty() {
-        return ChangeMetadata::new(native, HashMap::new(), HashMap::new());
+    if requests.is_empty() {
+        return ChangeMetadata::new(native, StandardMetadata::default());
     }
 
     with_read_call_context(evm, |evm| {
@@ -54,26 +36,26 @@ fn read_change_metadata<INSP>(
     transaction: &EvmTransaction,
     chain_id: u64,
     native: NativeMetadata,
-    requests: ChangeMetadataRequests,
+    requests: MetadataRequests,
 ) -> ChangeMetadata {
     let mut erc20 = HashMap::new();
     let mut erc721 = HashMap::new();
 
-    for contract in requests.erc20_contracts {
+    for &contract in requests.erc20_contracts() {
         erc20.insert(
             contract,
             read_erc20_metadata(evm, transaction, chain_id, contract),
         );
     }
 
-    for collection in requests.erc721_collections {
+    for &collection in requests.erc721_collections() {
         erc721.insert(
             collection,
             read_erc721_collection_metadata(evm, transaction, chain_id, collection),
         );
     }
 
-    ChangeMetadata::new(native, erc20, erc721)
+    ChangeMetadata::new(native, StandardMetadata::new(erc20, erc721))
 }
 
 fn native_metadata(chain_id: u64) -> NativeMetadata {
@@ -137,14 +119,10 @@ fn read_interface_support<INSP>(
         transaction,
         chain_id,
         contract,
-        IERC165::supportsInterfaceCall {
-            interfaceId: FixedBytes::<4>::from(interface_id),
-        }
-        .abi_encode()
-        .into(),
+        supports_interface_call(interface_id),
     )?;
 
-    IERC165::supportsInterfaceCall::abi_decode_returns(output.as_ref()).ok()
+    decode_supports_interface(output.as_ref())
 }
 
 fn read_erc20_name<INSP>(
@@ -153,15 +131,9 @@ fn read_erc20_name<INSP>(
     chain_id: u64,
     contract: Address,
 ) -> Option<String> {
-    let output = execute_optional_read_call(
-        evm,
-        transaction,
-        chain_id,
-        contract,
-        IERC20Metadata::nameCall {}.abi_encode().into(),
-    )?;
+    let output = execute_optional_read_call(evm, transaction, chain_id, contract, name_call())?;
 
-    IERC20Metadata::nameCall::abi_decode_returns(output.as_ref()).ok()
+    decode_name(output.as_ref())
 }
 
 fn read_erc20_symbol<INSP>(
@@ -170,15 +142,9 @@ fn read_erc20_symbol<INSP>(
     chain_id: u64,
     contract: Address,
 ) -> Option<String> {
-    let output = execute_optional_read_call(
-        evm,
-        transaction,
-        chain_id,
-        contract,
-        IERC20Metadata::symbolCall {}.abi_encode().into(),
-    )?;
+    let output = execute_optional_read_call(evm, transaction, chain_id, contract, symbol_call())?;
 
-    IERC20Metadata::symbolCall::abi_decode_returns(output.as_ref()).ok()
+    decode_symbol(output.as_ref())
 }
 
 fn read_erc20_decimals<INSP>(
@@ -187,15 +153,9 @@ fn read_erc20_decimals<INSP>(
     chain_id: u64,
     contract: Address,
 ) -> Option<u8> {
-    let output = execute_optional_read_call(
-        evm,
-        transaction,
-        chain_id,
-        contract,
-        IERC20Metadata::decimalsCall {}.abi_encode().into(),
-    )?;
+    let output = execute_optional_read_call(evm, transaction, chain_id, contract, decimals_call())?;
 
-    IERC20Metadata::decimalsCall::abi_decode_returns(output.as_ref()).ok()
+    decode_decimals(output.as_ref())
 }
 
 fn read_erc721_name<INSP>(
@@ -204,15 +164,9 @@ fn read_erc721_name<INSP>(
     chain_id: u64,
     collection: Address,
 ) -> Option<String> {
-    let output = execute_optional_read_call(
-        evm,
-        transaction,
-        chain_id,
-        collection,
-        IERC721Metadata::nameCall {}.abi_encode().into(),
-    )?;
+    let output = execute_optional_read_call(evm, transaction, chain_id, collection, name_call())?;
 
-    IERC721Metadata::nameCall::abi_decode_returns(output.as_ref()).ok()
+    decode_name(output.as_ref())
 }
 
 fn read_erc721_symbol<INSP>(
@@ -221,13 +175,7 @@ fn read_erc721_symbol<INSP>(
     chain_id: u64,
     collection: Address,
 ) -> Option<String> {
-    let output = execute_optional_read_call(
-        evm,
-        transaction,
-        chain_id,
-        collection,
-        IERC721Metadata::symbolCall {}.abi_encode().into(),
-    )?;
+    let output = execute_optional_read_call(evm, transaction, chain_id, collection, symbol_call())?;
 
-    IERC721Metadata::symbolCall::abi_decode_returns(output.as_ref()).ok()
+    decode_symbol(output.as_ref())
 }

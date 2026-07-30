@@ -14,6 +14,6 @@ pub use engine::EvmEngine;
 pub use error::{EvmEngineError, EvmEngineInternalKind};
 pub use simulation::{
     EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode, EvmExecutionOutcome, EvmSimulation,
-    SimulatedBlock,
+    ExecutedDetails, SimulatedBlock,
 };
 pub use transaction::{AccessListItem, EvmExecutionInput, EvmTransaction, EvmTransactionVariant};

@@ -7,7 +7,8 @@ pub(crate) use outcome::{build_core_space_execution, build_core_space_not_execut
 pub(crate) use transaction::build_core_space_transaction_input;
 
 pub use execution::{
-    CoreSpaceExecution, CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode,
-    CoreSpaceExecutionStatus, CoreSpaceStateAnchor, CoreSpaceStorageChange,
+    CoreSpaceExecutedDetails, CoreSpaceExecution, CoreSpaceExecutionFailure,
+    CoreSpaceExecutionFailureCode, CoreSpaceExecutionOutcome, CoreSpaceStateAnchor,
+    CoreSpaceStorageChange,
 };
 pub use transaction::{CoreSpaceEpochRef, CoreSpaceTransaction, CoreSpaceTransactionVariant};

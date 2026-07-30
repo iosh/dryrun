@@ -71,7 +71,7 @@ impl ConfluxEngine {
             });
         }
 
-        let transaction = build_espace_transaction_input(transaction);
+        let transaction = build_espace_transaction_input(transaction, chain_id);
 
         let execution_input = TransactionExecutionInput {
             block_context: context.block_context,
@@ -124,7 +124,7 @@ impl ConfluxEngine {
             });
         }
 
-        let transaction = build_core_space_transaction_input(transaction);
+        let transaction = build_core_space_transaction_input(transaction, chain_id);
 
         let execution_input = TransactionExecutionInput {
             block_context: context.block_context,
@@ -166,9 +166,9 @@ fn validate_core_space_transaction(
     transaction: &CoreSpaceTransaction,
     expected_chain_id: u32,
 ) -> Result<(), CoreSpaceExecutionFailure> {
-    let transaction = &transaction.transaction.body;
+    let transaction = &transaction.transaction;
 
-    if transaction.chain_id != expected_chain_id {
+    if transaction.chain_id != u64::from(expected_chain_id) {
         return Err(CoreSpaceExecutionFailure {
             code: CoreSpaceExecutionFailureCode::ChainIdMismatch,
             message: format!(
@@ -182,7 +182,7 @@ fn validate_core_space_transaction(
     match &transaction.variant {
         CoreSpaceTransactionVariant::Legacy { gas_price }
         | CoreSpaceTransactionVariant::AccessList { gas_price, .. } => {
-            if gas_price.is_zero() {
+            if *gas_price == 0 {
                 return Err(CoreSpaceExecutionFailure {
                     code: CoreSpaceExecutionFailureCode::ZeroGasPrice,
                     message: "transaction gas price must be greater than zero".to_string(),
@@ -195,7 +195,7 @@ fn validate_core_space_transaction(
             max_priority_fee_per_gas,
             ..
         } => {
-            if max_fee_per_gas.is_zero() {
+            if *max_fee_per_gas == 0 {
                 return Err(CoreSpaceExecutionFailure {
                     code: CoreSpaceExecutionFailureCode::ZeroGasPrice,
                     message: "transaction max fee per gas must be greater than zero".to_string(),

@@ -4,8 +4,8 @@ pub(crate) mod simulation;
 mod transaction;
 
 pub use execution::{
-    EspaceExecution, EspaceExecutionFailure, EspaceExecutionFailureCode, EspaceExecutionStatus,
-    SimulatedBlock,
+    EspaceExecutedDetails, EspaceExecution, EspaceExecutionFailure, EspaceExecutionFailureCode,
+    EspaceExecutionOutcome, SimulatedBlock,
 };
 pub(crate) use outcome::{build_espace_execution, build_espace_not_executed};
 pub use transaction::{EspaceBlockRef, EspaceTransaction, EspaceTransactionVariant};

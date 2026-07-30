@@ -21,7 +21,9 @@ pub(crate) use context::{
 };
 pub(crate) use env::build_rpc_backed_state;
 pub use env::{build_execution_spec, build_mainnet_machine, build_transaction_env};
-pub(crate) use outcome::{TransactionExecutionError, TransactionExecutionOutcome};
+pub(crate) use outcome::{
+    ExecutedTransactionDetails, TransactionExecutionError, TransactionExecutionOutcome,
+};
 pub use params::mainnet_common_params;
 pub use transaction::{
     CoreSpaceTransactionInput, DryRunTransactionInput, EspaceTransactionInput,

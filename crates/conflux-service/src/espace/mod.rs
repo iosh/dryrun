@@ -1,7 +1,7 @@
 mod types;
 
 pub use types::{
-    ConfluxTransactionRequest, EspaceBlockRef, EspaceExecution, EspaceExecutionFailure,
-    EspaceExecutionFailureCode, EspaceExecutionStatus, SimulateEspaceTransactionInput,
-    SimulateEspaceTransactionOutput, SimulatedBlock,
+    ConfluxTransactionRequest, EspaceBlockRef, EspaceExecutedDetails, EspaceExecution,
+    EspaceExecutionFailure, EspaceExecutionFailureCode, EspaceExecutionOutcome,
+    SimulateEspaceTransactionInput, SimulateEspaceTransactionOutput, SimulatedBlock,
 };

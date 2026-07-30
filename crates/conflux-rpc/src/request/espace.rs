@@ -1,13 +1,14 @@
 use std::str::FromStr;
 
+use alloy_primitives::Bytes;
 use cfx_rpc_eth_types::TransactionRequest;
-use cfx_types::{Address, H256, U64, U256};
+use cfx_types::{Address as CfxAddress, H256, U64, U256};
 use conflux_service::espace as service_espace;
 use serde::Deserialize;
 use serde_json::Value;
 use simulation_transaction::{TransactionType, TransactionVariantRequest};
 
-use super::chain_id_from_wire;
+use super::{cfx_address_to_alloy, cfx_h256_to_alloy, cfx_u256_to_alloy, u64_param, u128_param};
 use crate::error::ValidationError;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -88,7 +89,7 @@ impl BlockRef {
                 value if H256::from_str(value).is_ok() => Err(ValidationError::not_supported(
                     "`block` does not support block hash selectors yet",
                 )),
-                value => parse_u64_quantity(value, "block").map(|_| ()),
+                value => parse_u64_param(value, "block").map(|_| ()),
             },
             Self::Hash(_) => Err(ValidationError::not_supported(
                 "`block.blockHash` is not supported yet",
@@ -117,7 +118,9 @@ fn validate_transaction(transaction: &TransactionRequest) -> Result<(), Validati
     Ok(())
 }
 
-fn require_transaction_from(transaction: &TransactionRequest) -> Result<Address, ValidationError> {
+fn require_transaction_from(
+    transaction: &TransactionRequest,
+) -> Result<CfxAddress, ValidationError> {
     transaction
         .from
         .ok_or_else(|| ValidationError::invalid_params("`transaction.from` is required"))
@@ -137,7 +140,7 @@ fn map_block_ref(block: BlockRef) -> Result<service_espace::EspaceBlockRef, Vali
     match block {
         BlockRef::Tag(value) => match value.as_str() {
             "latest" => Ok(service_espace::EspaceBlockRef::Latest),
-            value => Ok(service_espace::EspaceBlockRef::Number(parse_u64_quantity(
+            value => Ok(service_espace::EspaceBlockRef::Number(parse_u64_param(
                 value, "block",
             )?)),
         },
@@ -180,24 +183,46 @@ fn map_transaction(
         .map_err(|error| {
             ValidationError::invalid_params(format!("`transaction.input` is invalid: {error}"))
         })?
-        .map(|input| input.to_vec());
+        .map(|input| Bytes::from(input.to_vec()));
     let variant = TransactionVariantRequest::try_new(
         transaction_type,
-        access_list,
-        gas_price,
-        max_fee_per_gas,
-        max_priority_fee_per_gas,
+        access_list.map(|items| {
+            items
+                .into_iter()
+                .map(|item| simulation_transaction::AccessListItem {
+                    address: cfx_address_to_alloy(item.address),
+                    storage_keys: item
+                        .storage_keys
+                        .into_iter()
+                        .map(cfx_h256_to_alloy)
+                        .collect(),
+                })
+                .collect()
+        }),
+        gas_price
+            .map(|value| u128_param(value, "transaction.gasPrice"))
+            .transpose()?,
+        max_fee_per_gas
+            .map(|value| u128_param(value, "transaction.maxFeePerGas"))
+            .transpose()?,
+        max_priority_fee_per_gas
+            .map(|value| u128_param(value, "transaction.maxPriorityFeePerGas"))
+            .transpose()?,
     )
     .map_err(|error| ValidationError::invalid_params(error.to_string()))?;
 
     Ok(service_espace::ConfluxTransactionRequest {
-        from,
-        to,
-        nonce,
-        gas_limit: gas,
-        value,
-        input,
-        chain_id: chain_id_from_wire(chain_id)?,
+        from: cfx_address_to_alloy(from),
+        to: to.map(cfx_address_to_alloy),
+        nonce: nonce
+            .map(|value| u64_param(value, "transaction.nonce"))
+            .transpose()?,
+        gas_limit: gas
+            .map(|value| u64_param(value, "transaction.gas"))
+            .transpose()?,
+        value: value.map(cfx_u256_to_alloy),
+        data: input,
+        chain_id: u64_param(chain_id, "transaction.chainId")?,
         variant,
     })
 }
@@ -232,33 +257,25 @@ fn map_transaction_type(
     }
 }
 
-fn parse_u64_quantity(value: &str, field: &str) -> Result<u64, ValidationError> {
-    let value = parse_quantity(value)?;
-
-    if value > U256::from(u64::MAX) {
-        return Err(ValidationError::invalid_params(format!(
-            "`{field}` must fit into an unsigned 64-bit integer"
-        )));
-    }
-
-    Ok(value.as_u64())
+fn parse_u64_param(value: &str, field: &str) -> Result<u64, ValidationError> {
+    u64_param(parse_hex_param(value, field)?, field)
 }
 
-fn parse_quantity(value: &str) -> Result<U256, ValidationError> {
+fn parse_hex_param(value: &str, field: &str) -> Result<U256, ValidationError> {
     let digits = value.strip_prefix("0x").ok_or_else(|| {
-        ValidationError::invalid_params("quantity must be a 0x-prefixed hex string")
+        ValidationError::invalid_params(format!("`{field}` must be a 0x-prefixed hex string"))
     })?;
 
     if digits.is_empty() {
-        return Err(ValidationError::invalid_params(
-            "quantity must not be empty",
-        ));
+        return Err(ValidationError::invalid_params(format!(
+            "`{field}` must not be empty"
+        )));
     }
 
     if digits.len() > 1 && digits.starts_with('0') {
-        return Err(ValidationError::invalid_params(
-            "quantity must not contain leading zeroes",
-        ));
+        return Err(ValidationError::invalid_params(format!(
+            "`{field}` must not contain leading zeroes"
+        )));
     }
 
     let mut normalized = digits.to_string();
@@ -267,12 +284,12 @@ fn parse_quantity(value: &str) -> Result<U256, ValidationError> {
     }
 
     let bytes = hex::decode(&normalized)
-        .map_err(|_| ValidationError::invalid_params("quantity must be a hex string"))?;
+        .map_err(|_| ValidationError::invalid_params(format!("`{field}` must be a hex string")))?;
 
     if bytes.len() > 32 {
-        return Err(ValidationError::invalid_params(
-            "quantity must fit into an unsigned 256-bit integer",
-        ));
+        return Err(ValidationError::invalid_params(format!(
+            "`{field}` must fit into an unsigned 256-bit integer"
+        )));
     }
 
     Ok(U256::from_big_endian(&bytes))

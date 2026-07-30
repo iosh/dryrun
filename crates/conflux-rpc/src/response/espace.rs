@@ -3,6 +3,8 @@ use cfx_types::{H256, U64, U256};
 use conflux_service::espace as service_espace;
 use serde::Serialize;
 
+use super::{b256_to_wire, u256_to_wire};
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SimulateEspaceTransactionResponse {
@@ -67,26 +69,62 @@ enum ExecutionFailureCode {
 }
 
 impl From<service_espace::SimulateEspaceTransactionOutput> for SimulateEspaceTransactionResponse {
-    fn from(output: service_espace::SimulateEspaceTransactionOutput) -> Self {
+    fn from(execution: service_espace::SimulateEspaceTransactionOutput) -> Self {
         Self {
-            execution: output.execution.into(),
+            execution: execution.into(),
         }
     }
 }
 
 impl From<service_espace::EspaceExecution> for Execution {
     fn from(execution: service_espace::EspaceExecution) -> Self {
+        let service_espace::EspaceExecution {
+            chain_id,
+            context: block,
+            gas_limit,
+            outcome,
+        } = execution;
+        let (status, gas_used, gas_charged, fee, burnt_fee, output, failure) = match outcome {
+            service_espace::EspaceExecutionOutcome::Success(details) => (
+                EspaceExecutionStatus::Success,
+                details.gas_used.into(),
+                details.gas_charged.into(),
+                u256_to_wire(details.fee),
+                details.burnt_fee.map(u256_to_wire),
+                RpcBytes::from(details.output.to_vec()),
+                None,
+            ),
+            service_espace::EspaceExecutionOutcome::Failed { details, failure } => (
+                EspaceExecutionStatus::Failed,
+                details.gas_used.into(),
+                details.gas_charged.into(),
+                u256_to_wire(details.fee),
+                details.burnt_fee.map(u256_to_wire),
+                RpcBytes::from(details.output.to_vec()),
+                Some(failure.into()),
+            ),
+            service_espace::EspaceExecutionOutcome::NotExecuted(failure) => (
+                EspaceExecutionStatus::NotExecuted,
+                U256::zero(),
+                U256::zero(),
+                U256::zero(),
+                Some(U256::zero()),
+                RpcBytes::default(),
+                Some(failure.into()),
+            ),
+        };
+
         Self {
-            chain_id: execution.chain_id.into(),
-            block: execution.block.into(),
-            status: execution.status.into(),
-            gas_used: execution.gas_used,
-            gas_limit: execution.gas_limit,
-            gas_charged: execution.gas_charged,
-            fee: execution.fee,
-            burnt_fee: execution.burnt_fee,
-            output: RpcBytes::from(execution.output),
-            failure: execution.failure.map(Into::into),
+            chain_id: chain_id.into(),
+            block: block.into(),
+            status,
+            gas_used,
+            gas_limit: gas_limit.into(),
+            gas_charged,
+            fee,
+            burnt_fee,
+            output,
+            failure,
         }
     }
 }
@@ -95,17 +133,7 @@ impl From<service_espace::SimulatedBlock> for SimulatedBlock {
     fn from(block: service_espace::SimulatedBlock) -> Self {
         Self {
             number: block.number.into(),
-            hash: block.hash,
-        }
-    }
-}
-
-impl From<service_espace::EspaceExecutionStatus> for EspaceExecutionStatus {
-    fn from(status: service_espace::EspaceExecutionStatus) -> Self {
-        match status {
-            service_espace::EspaceExecutionStatus::Success => Self::Success,
-            service_espace::EspaceExecutionStatus::Failed => Self::Failed,
-            service_espace::EspaceExecutionStatus::NotExecuted => Self::NotExecuted,
+            hash: b256_to_wire(block.hash),
         }
     }
 }

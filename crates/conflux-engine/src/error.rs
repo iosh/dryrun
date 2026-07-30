@@ -35,7 +35,7 @@ impl From<TransactionExecutionError> for ConfluxEngineError {
             TransactionExecutionError::StateAccess(error) => Self::StateAccess {
                 message: error.to_string(),
             },
-            TransactionExecutionError::MissingObservations => Self::ExecutionInternal {
+            error => Self::ExecutionInternal {
                 message: error.to_string(),
             },
         }

@@ -5,6 +5,7 @@ mod error;
 pub mod espace;
 pub mod execution;
 mod preparation;
+mod primitive;
 mod state;
 mod transaction;
 
@@ -15,6 +16,4 @@ pub use preparation::{
     PreparedEspaceSimulation,
 };
 pub use state::{ConfluxRpcError, CoreSpaceResourceEstimate, HttpConfluxProvider};
-pub use transaction::{
-    AccessListItem, ConfluxTransaction, ConfluxTransactionBody, ConfluxTransactionVariant,
-};
+pub use transaction::{AccessListItem, ConfluxTransaction, ConfluxTransactionVariant};

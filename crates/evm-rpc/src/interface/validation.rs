@@ -36,7 +36,7 @@ impl BlockRef {
                 value if B256::from_str(value).is_ok() => Err(ValidationError::not_supported(
                     "`block` does not support block hash selectors",
                 )),
-                value => validate_hex_quantity(value, "block"),
+                value => validate_hex_param(value, "block"),
             },
             Self::Hash(_) => Err(ValidationError::not_supported(
                 "`block.blockHash` is not supported yet",
@@ -94,9 +94,9 @@ fn validate_reserved_option(
     Ok(())
 }
 
-fn validate_hex_quantity(value: &str, field: &str) -> Result<(), ValidationError> {
+fn validate_hex_param(value: &str, field: &str) -> Result<(), ValidationError> {
     let digits = value.strip_prefix("0x").ok_or_else(|| {
-        ValidationError::invalid_params(format!("`{field}` must be a 0x-prefixed hex quantity"))
+        ValidationError::invalid_params(format!("`{field}` must be a 0x-prefixed hex string"))
     })?;
 
     if digits.is_empty() {
@@ -107,7 +107,7 @@ fn validate_hex_quantity(value: &str, field: &str) -> Result<(), ValidationError
 
     if !digits.chars().all(|char| char.is_ascii_hexdigit()) {
         return Err(ValidationError::invalid_params(format!(
-            "`{field}` must be a hex quantity"
+            "`{field}` must be a hex string"
         )));
     }
 

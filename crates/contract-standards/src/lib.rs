@@ -7,6 +7,7 @@ mod erc20;
 mod erc721;
 mod error;
 mod event_codec;
+mod metadata;
 mod operator_approval;
 mod state;
 mod token_contract;
@@ -18,6 +19,11 @@ pub use candidate::{
 pub use change::{PositionedStandardChange, StandardChange};
 pub use error::ContractStandardsError;
 pub use event_codec::{EventCodecError, SupportedEvent};
+pub use metadata::{
+    ERC721_METADATA_INTERFACE_ID, Erc20Metadata, Erc721CollectionMetadata, MetadataRequests,
+    StandardMetadata, decimals_call, decode_decimals, decode_name, decode_supports_interface,
+    decode_symbol, name_call, supports_interface_call, symbol_call,
+};
 pub use state::{
     CollectionStandards, Erc20AllowanceKey, Erc20BalanceKey, Erc721TokenKey, Erc721TokenState,
     Erc1155BalanceKey, OperatorApprovalKey, StandardStateValues, StateArithmeticOperation,

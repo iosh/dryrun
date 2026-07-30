@@ -63,7 +63,7 @@ impl ConfluxService {
             })
             .await??;
 
-        Ok(simulation.into())
+        Ok(simulation)
     }
 
     pub async fn simulate_core_space_transaction(
@@ -97,7 +97,7 @@ impl ConfluxService {
             })
             .await??;
 
-        Ok(simulation.into())
+        Ok(simulation)
     }
 }
 

@@ -1,12 +1,6 @@
-use alloy_primitives::{B256, Bytes, U256};
-
 use crate::Change;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SimulatedBlock {
-    pub number: u64,
-    pub hash: B256,
-}
+use simulation_execution::Execution;
+pub use simulation_execution::{ExecutedDetails, ExecutionOutcome, SimulatedBlock};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmExecutionFailure {
@@ -64,33 +58,8 @@ impl EvmExecutionFailureCode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EvmExecutionOutcome {
-    Success {
-        gas_used: u64,
-        fee: U256,
-        burnt_fee: U256,
-        output: Bytes,
-    },
-    Failed {
-        gas_used: u64,
-        fee: U256,
-        burnt_fee: U256,
-        output: Bytes,
-        failure: EvmExecutionFailure,
-    },
-    NotExecuted {
-        failure: EvmExecutionFailure,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvmExecution {
-    pub chain_id: u64,
-    pub block: SimulatedBlock,
-    pub gas_limit: u64,
-    pub outcome: EvmExecutionOutcome,
-}
+pub type EvmExecution = Execution<SimulatedBlock, ExecutedDetails, EvmExecutionFailure>;
+pub type EvmExecutionOutcome = ExecutionOutcome<ExecutedDetails, EvmExecutionFailure>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmSimulation {

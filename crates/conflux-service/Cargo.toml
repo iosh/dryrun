@@ -4,7 +4,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-cfx-bytes = { workspace = true }
+alloy-primitives = { workspace = true }
 cfx-types = { workspace = true }
 conflux-engine = { workspace = true }
 simulation-transaction = { workspace = true }

@@ -17,9 +17,10 @@ pub use evm_engine::{
     AccessListItem, Change, Erc20Metadata, Erc721CollectionMetadata,
     EvmExecution as SimulationExecution, EvmExecutionFailure as ExecutionFailure,
     EvmExecutionFailureCode, EvmExecutionOutcome as ExecutionOutcome,
-    EvmSimulation as SimulateEvmTransactionOutput, NativeMetadata, SimulatedBlock,
+    EvmSimulation as SimulateEvmTransactionOutput, ExecutedDetails, NativeMetadata, SimulatedBlock,
 };
 pub use transaction::EvmTransactionRequest;
+use transaction::complete_transaction;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockSelector {
@@ -79,7 +80,8 @@ impl SimulationService {
         self.simulation_tasks
             .run(move || async move {
                 let resolved_block = resolve_block(&provider, block).await?;
-                let transaction = transaction.resolve(&provider, &resolved_block).await?;
+                let transaction =
+                    complete_transaction(transaction, &provider, &resolved_block).await?;
 
                 let simulation = tokio::task::spawn_blocking(move || {
                     evm_engine.simulate(EvmExecutionInput {

@@ -5,7 +5,7 @@ use alloy::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-mod u256_quantity {
+mod u256_hex {
     use alloy::primitives::U256;
     use serde::{Serialize, Serializer};
 
@@ -211,30 +211,30 @@ pub enum Change {
 )]
 pub enum TransferAsset {
     Native {
-        #[serde(serialize_with = "u256_quantity::serialize")]
+        #[serde(serialize_with = "u256_hex::serialize")]
         raw_amount: U256,
         #[serde(flatten)]
         metadata: NativeMetadata,
     },
     Erc20 {
         contract_address: Address,
-        #[serde(serialize_with = "u256_quantity::serialize")]
+        #[serde(serialize_with = "u256_hex::serialize")]
         raw_amount: U256,
         #[serde(flatten)]
         metadata: Erc20Metadata,
     },
     Erc721 {
         contract_address: Address,
-        #[serde(serialize_with = "u256_quantity::serialize")]
+        #[serde(serialize_with = "u256_hex::serialize")]
         token_id: U256,
         #[serde(flatten)]
         metadata: Erc721CollectionMetadata,
     },
     Erc1155 {
         contract_address: Address,
-        #[serde(serialize_with = "u256_quantity::serialize")]
+        #[serde(serialize_with = "u256_hex::serialize")]
         token_id: U256,
-        #[serde(serialize_with = "u256_quantity::serialize")]
+        #[serde(serialize_with = "u256_hex::serialize")]
         raw_amount: U256,
     },
 }
@@ -248,23 +248,23 @@ pub enum TransferAsset {
 pub enum TokenMovementAsset {
     Erc20 {
         contract_address: Address,
-        #[serde(serialize_with = "u256_quantity::serialize")]
+        #[serde(serialize_with = "u256_hex::serialize")]
         raw_amount: U256,
         #[serde(flatten)]
         metadata: Erc20Metadata,
     },
     Erc721 {
         contract_address: Address,
-        #[serde(serialize_with = "u256_quantity::serialize")]
+        #[serde(serialize_with = "u256_hex::serialize")]
         token_id: U256,
         #[serde(flatten)]
         metadata: Erc721CollectionMetadata,
     },
     Erc1155 {
         contract_address: Address,
-        #[serde(serialize_with = "u256_quantity::serialize")]
+        #[serde(serialize_with = "u256_hex::serialize")]
         token_id: U256,
-        #[serde(serialize_with = "u256_quantity::serialize")]
+        #[serde(serialize_with = "u256_hex::serialize")]
         raw_amount: U256,
     },
 }
@@ -278,9 +278,9 @@ pub enum TokenMovementAsset {
 pub enum AllowanceAsset {
     Erc20 {
         contract_address: Address,
-        #[serde(serialize_with = "u256_quantity::serialize")]
+        #[serde(serialize_with = "u256_hex::serialize")]
         raw_amount_before: U256,
-        #[serde(serialize_with = "u256_quantity::serialize")]
+        #[serde(serialize_with = "u256_hex::serialize")]
         raw_amount_after: U256,
         #[serde(flatten)]
         metadata: Erc20Metadata,
@@ -296,7 +296,7 @@ pub enum AllowanceAsset {
 pub enum TokenApprovalAsset {
     Erc721 {
         contract_address: Address,
-        #[serde(serialize_with = "u256_quantity::serialize")]
+        #[serde(serialize_with = "u256_hex::serialize")]
         token_id: U256,
         approved_address_before: Option<Address>,
         approved_address_after: Option<Address>,

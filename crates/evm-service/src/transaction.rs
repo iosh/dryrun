@@ -3,99 +3,87 @@ use alloy::{
     primitives::{Address, Bytes, TxKind, U256},
     providers::{Provider, RootProvider},
     rpc::types::{
-        AccessList as RpcAccessList, AccessListItem as RpcAccessListItem, TransactionInput,
-        TransactionRequest,
+        AccessList as RpcAccessList, TransactionInput, TransactionRequest as RpcTransactionRequest,
     },
 };
-use evm_engine::{AccessListItem, EvmTransaction, EvmTransactionVariant, ResolvedBlock};
-use simulation_transaction::{TransactionVariant, TransactionVariantRequest};
+use evm_engine::{EvmTransaction, EvmTransactionVariant, ResolvedBlock};
+pub use simulation_transaction::TransactionRequest as EvmTransactionRequest;
+use simulation_transaction::{
+    AccessListItem, Transaction, TransactionVariant, TransactionVariantRequest,
+};
 
 use crate::SimulationServiceError;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvmTransactionRequest {
-    pub from: Address,
-    pub to: Option<Address>,
-    pub nonce: Option<u64>,
-    pub gas_limit: Option<u64>,
-    pub value: Option<U256>,
-    pub input: Option<Bytes>,
-    pub chain_id: u64,
-    pub variant: TransactionVariantRequest<u128, AccessListItem>,
-}
-
-impl EvmTransactionRequest {
-    pub(crate) async fn resolve(
-        self,
-        provider: &RootProvider,
-        block: &ResolvedBlock,
-    ) -> Result<EvmTransaction, SimulationServiceError> {
-        let Self {
-            from,
-            to,
-            nonce,
-            gas_limit,
-            value,
-            input,
-            chain_id,
-            variant,
-        } = self;
-        let block_id = BlockId::Number(BlockNumberOrTag::Number(block.number()));
-        let nonce = match nonce {
-            Some(nonce) => nonce,
-            None => provider
-                .get_transaction_count(from)
-                .block_id(block_id)
-                .await
-                .map_err(|error| {
-                    SimulationServiceError::transaction_resolution(format!(
-                        "failed to resolve nonce at block {}: {error}",
-                        block.number()
-                    ))
-                })?,
-        };
-        let variant = resolve_fees(provider, block, variant).await?;
-        let value = value.unwrap_or(U256::ZERO);
-        let data = input.unwrap_or_default();
-        let gas_limit = match gas_limit {
-            Some(gas_limit) => gas_limit,
-            None => provider
-                .estimate_gas(estimation_request(
-                    from,
-                    to,
-                    nonce,
-                    value,
-                    data.clone(),
-                    chain_id,
-                    &variant,
-                ))
-                .block(block_id)
-                .await
-                .map_err(|error| {
-                    SimulationServiceError::transaction_resolution(format!(
-                        "failed to estimate gas at block {}: {error}",
-                        block.number()
-                    ))
-                })?,
-        };
-
-        Ok(EvmTransaction {
-            chain_id,
-            from,
-            to,
-            nonce,
-            gas_limit,
-            value,
-            data,
-            variant,
-        })
-    }
-}
-
-async fn resolve_fees(
+pub(crate) async fn complete_transaction(
+    request: EvmTransactionRequest,
     provider: &RootProvider,
     block: &ResolvedBlock,
-    variant: TransactionVariantRequest<u128, AccessListItem>,
+) -> Result<EvmTransaction, SimulationServiceError> {
+    let EvmTransactionRequest {
+        from,
+        to,
+        nonce,
+        gas_limit,
+        value,
+        data,
+        chain_id,
+        variant,
+    } = request;
+    let block_id = BlockId::Number(BlockNumberOrTag::Number(block.number()));
+    let nonce = match nonce {
+        Some(nonce) => nonce,
+        None => provider
+            .get_transaction_count(from)
+            .block_id(block_id)
+            .await
+            .map_err(|error| {
+                SimulationServiceError::transaction_completion(format!(
+                    "failed to fetch nonce at block {}: {error}",
+                    block.number()
+                ))
+            })?,
+    };
+    let variant = complete_transaction_variant(provider, block, variant).await?;
+    let value = value.unwrap_or(U256::ZERO);
+    let data = data.unwrap_or_default();
+    let gas_limit = match gas_limit {
+        Some(gas_limit) => gas_limit,
+        None => provider
+            .estimate_gas(estimation_request(
+                from,
+                to,
+                nonce,
+                value,
+                data.clone(),
+                chain_id,
+                &variant,
+            ))
+            .block(block_id)
+            .await
+            .map_err(|error| {
+                SimulationServiceError::transaction_completion(format!(
+                    "failed to estimate gas at block {}: {error}",
+                    block.number()
+                ))
+            })?,
+    };
+
+    Ok(Transaction {
+        chain_id,
+        from,
+        to,
+        nonce,
+        gas_limit,
+        value,
+        data,
+        variant,
+    })
+}
+
+async fn complete_transaction_variant(
+    provider: &RootProvider,
+    block: &ResolvedBlock,
+    variant: TransactionVariantRequest,
 ) -> Result<EvmTransactionVariant, SimulationServiceError> {
     match variant {
         TransactionVariantRequest::Legacy { gas_price } => Ok(TransactionVariant::Legacy {
@@ -119,8 +107,8 @@ async fn resolve_fees(
                     .get_max_priority_fee_per_gas()
                     .await
                     .map_err(|error| {
-                        SimulationServiceError::transaction_resolution(format!(
-                            "failed to resolve max priority fee per gas: {error}"
+                        SimulationServiceError::transaction_completion(format!(
+                            "failed to fetch max priority fee per gas: {error}"
                         ))
                     })?,
             };
@@ -145,8 +133,8 @@ async fn suggested_gas_price(
     match gas_price {
         Some(value) => Ok(value),
         None => provider.get_gas_price().await.map_err(|error| {
-            SimulationServiceError::transaction_resolution(format!(
-                "failed to resolve gas price: {error}"
+            SimulationServiceError::transaction_completion(format!(
+                "failed to fetch gas price: {error}"
             ))
         }),
     }
@@ -157,8 +145,8 @@ fn suggested_dynamic_fee_cap(
     max_priority_fee_per_gas: u128,
 ) -> Result<u128, SimulationServiceError> {
     let base_fee = block.base_fee_per_gas().ok_or_else(|| {
-        SimulationServiceError::transaction_resolution(format!(
-            "block {} does not provide a base fee for dynamic fee resolution",
+        SimulationServiceError::transaction_completion(format!(
+            "block {} does not provide a base fee for dynamic fee completion",
             block.number()
         ))
     })?;
@@ -167,8 +155,9 @@ fn suggested_dynamic_fee_cap(
         .checked_mul(2)
         .and_then(|value| value.checked_add(max_priority_fee_per_gas))
         .ok_or_else(|| {
-            SimulationServiceError::transaction_resolution(
-                "resolved dynamic fee exceeds an unsigned 128-bit integer",
+            SimulationServiceError::transaction_completion(
+                "calculated dynamic fee exceeds the simulator maximum \
+                 340282366920938463463374607431768211455",
             )
         })
 }
@@ -181,8 +170,8 @@ fn estimation_request(
     input: Bytes,
     chain_id: u64,
     variant: &EvmTransactionVariant,
-) -> TransactionRequest {
-    let mut request = TransactionRequest {
+) -> RpcTransactionRequest {
+    let mut request = RpcTransactionRequest {
         from: Some(from),
         to: Some(to.map_or(TxKind::Create, TxKind::Call)),
         value: Some(value),
@@ -221,13 +210,5 @@ fn estimation_request(
 }
 
 fn rpc_access_list(items: &[AccessListItem]) -> RpcAccessList {
-    RpcAccessList(
-        items
-            .iter()
-            .map(|item| RpcAccessListItem {
-                address: item.address,
-                storage_keys: item.storage_keys.clone(),
-            })
-            .collect(),
-    )
+    RpcAccessList(items.to_vec())
 }

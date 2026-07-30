@@ -5,6 +5,8 @@ use cfx_types::{Address, H256, U64, U256};
 use conflux_service::core_space as service_core_space;
 use serde::Serialize;
 
+use super::u256_to_wire;
+
 #[derive(Debug, thiserror::Error)]
 #[error("failed to encode `{field}` as a Core Space address: {message}")]
 pub(crate) struct ResponseMappingError {
@@ -97,7 +99,7 @@ impl SimulateCoreSpaceTransactionResponse {
         network: Network,
     ) -> Result<Self, ResponseMappingError> {
         Ok(Self {
-            execution: CoreSpaceExecution::try_from_service(output.execution, network)?,
+            execution: CoreSpaceExecution::try_from_service(output, network)?,
         })
     }
 }
@@ -107,29 +109,103 @@ impl CoreSpaceExecution {
         execution: service_core_space::CoreSpaceExecution,
         network: Network,
     ) -> Result<Self, ResponseMappingError> {
+        let service_core_space::CoreSpaceExecution {
+            chain_id,
+            context: state,
+            gas_limit,
+            outcome,
+        } = execution;
+        let (
+            status,
+            gas_used,
+            gas_charged,
+            fee,
+            burnt_fee,
+            gas_covered_by_sponsor,
+            storage_covered_by_sponsor,
+            storage_collateralized,
+            storage_released,
+            output,
+            failure,
+        ) = match outcome {
+            service_core_space::CoreSpaceExecutionOutcome::Success(details) => {
+                let common = details.common;
+                (
+                    CoreSpaceExecutionStatus::Success,
+                    common.gas_used.into(),
+                    common.gas_charged.into(),
+                    u256_to_wire(common.fee),
+                    common.burnt_fee.map(u256_to_wire),
+                    details.gas_covered_by_sponsor,
+                    details.storage_covered_by_sponsor,
+                    map_core_space_storage_changes(
+                        details.storage_collateralized,
+                        network,
+                        "execution.storageCollateralized",
+                    )?,
+                    map_core_space_storage_changes(
+                        details.storage_released,
+                        network,
+                        "execution.storageReleased",
+                    )?,
+                    CoreSpaceRpcBytes::from(common.output.to_vec()),
+                    None,
+                )
+            }
+            service_core_space::CoreSpaceExecutionOutcome::Failed { details, failure } => {
+                let common = details.common;
+                (
+                    CoreSpaceExecutionStatus::Failed,
+                    common.gas_used.into(),
+                    common.gas_charged.into(),
+                    u256_to_wire(common.fee),
+                    common.burnt_fee.map(u256_to_wire),
+                    details.gas_covered_by_sponsor,
+                    details.storage_covered_by_sponsor,
+                    map_core_space_storage_changes(
+                        details.storage_collateralized,
+                        network,
+                        "execution.storageCollateralized",
+                    )?,
+                    map_core_space_storage_changes(
+                        details.storage_released,
+                        network,
+                        "execution.storageReleased",
+                    )?,
+                    CoreSpaceRpcBytes::from(common.output.to_vec()),
+                    Some(failure.into()),
+                )
+            }
+            service_core_space::CoreSpaceExecutionOutcome::NotExecuted(failure) => (
+                CoreSpaceExecutionStatus::NotExecuted,
+                U256::zero(),
+                U256::zero(),
+                U256::zero(),
+                Some(U256::zero()),
+                false,
+                false,
+                Vec::new(),
+                Vec::new(),
+                CoreSpaceRpcBytes::default(),
+                Some(failure.into()),
+            ),
+        };
+
         Ok(Self {
-            chain_id: execution.chain_id.into(),
-            state: execution.state.into(),
-            status: execution.status.into(),
-            gas_used: execution.gas_used,
-            gas_limit: execution.gas_limit,
-            gas_charged: execution.gas_charged,
-            fee: execution.fee,
-            burnt_fee: execution.burnt_fee,
-            gas_covered_by_sponsor: execution.gas_covered_by_sponsor,
-            storage_covered_by_sponsor: execution.storage_covered_by_sponsor,
-            storage_collateralized: map_core_space_storage_changes(
-                execution.storage_collateralized,
-                network,
-                "execution.storageCollateralized",
-            )?,
-            storage_released: map_core_space_storage_changes(
-                execution.storage_released,
-                network,
-                "execution.storageReleased",
-            )?,
-            output: CoreSpaceRpcBytes::from(execution.output),
-            failure: execution.failure.map(Into::into),
+            chain_id: chain_id.into(),
+            state: state.into(),
+            status,
+            gas_used,
+            gas_limit: gas_limit.into(),
+            gas_charged,
+            fee,
+            burnt_fee,
+            gas_covered_by_sponsor,
+            storage_covered_by_sponsor,
+            storage_collateralized,
+            storage_released,
+            output,
+            failure,
         })
     }
 }
@@ -139,16 +215,6 @@ impl From<service_core_space::CoreSpaceStateAnchor> for CoreSpaceStateAnchor {
         Self {
             epoch_number: state.epoch_number.into(),
             pivot_hash: state.pivot_hash,
-        }
-    }
-}
-
-impl From<service_core_space::CoreSpaceExecutionStatus> for CoreSpaceExecutionStatus {
-    fn from(status: service_core_space::CoreSpaceExecutionStatus) -> Self {
-        match status {
-            service_core_space::CoreSpaceExecutionStatus::Success => Self::Success,
-            service_core_space::CoreSpaceExecutionStatus::Failed => Self::Failed,
-            service_core_space::CoreSpaceExecutionStatus::NotExecuted => Self::NotExecuted,
         }
     }
 }
