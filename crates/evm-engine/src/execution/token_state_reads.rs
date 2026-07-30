@@ -1,9 +1,11 @@
-use alloy::{sol, sol_types::SolCall};
+use alloy::sol_types::SolCall;
 use alloy_primitives::{Address, B256, FixedBytes};
 use contract_standards::{
     CollectionStandards, ERC165_INTERFACE_ID, ERC721_INTERFACE_ID, ERC1155_INTERFACE_ID,
-    Erc721TokenKey, Erc721TokenState, INVALID_ERC165_INTERFACE_ID, StandardStateValues,
-    StateRequirements,
+    Erc20AllowanceCall, Erc20BalanceCall, Erc20TotalSupplyCall, Erc721GetApprovedCall,
+    Erc721OwnerCall, Erc721TokenKey, Erc721TokenState, Erc1155BalanceCall,
+    INVALID_ERC165_INTERFACE_ID, OperatorApprovalCall, StandardStateValues, StateRequirements,
+    SupportsInterfaceCall,
 };
 use revm::{Database, context_interface::result::EVMError, handler::EvmTr};
 
@@ -13,31 +15,6 @@ use super::{
     MainnetEvmWithDb,
     read_call::{ReadCallOutcome, execute_read_call, with_read_call_context},
 };
-
-sol! {
-    contract IERC165 {
-        function supportsInterface(bytes4 interfaceId) external view returns (bool);
-    }
-
-    contract IERC20 {
-        function balanceOf(address account) external view returns (uint256);
-        function totalSupply() external view returns (uint256);
-        function allowance(address owner, address spender) external view returns (uint256);
-    }
-
-    contract IERC721 {
-        function ownerOf(uint256 tokenId) external view returns (address);
-        function getApproved(uint256 tokenId) external view returns (address);
-    }
-
-    contract IERC1155 {
-        function balanceOf(address account, uint256 id) external view returns (uint256);
-    }
-
-    contract IOperatorApproval {
-        function isApprovedForAll(address owner, address operator) external view returns (bool);
-    }
-}
 
 pub(super) fn read_token_state_values<DB, INSP>(
     evm: &mut MainnetEvmWithDb<DB, INSP>,
@@ -83,7 +60,7 @@ where
             transaction,
             chain_id,
             key.token,
-            IERC20::balanceOfCall {
+            Erc20BalanceCall {
                 account: key.account,
             },
         )?;
@@ -91,13 +68,8 @@ where
     }
 
     for &token in &requirements.erc20_total_supplies {
-        let total_supply = read_required_value(
-            evm,
-            transaction,
-            chain_id,
-            token,
-            IERC20::totalSupplyCall {},
-        )?;
+        let total_supply =
+            read_required_value(evm, transaction, chain_id, token, Erc20TotalSupplyCall {})?;
         values.erc20_total_supplies.insert(token, total_supply);
     }
 
@@ -107,7 +79,7 @@ where
             transaction,
             chain_id,
             key.token,
-            IERC20::allowanceCall {
+            Erc20AllowanceCall {
                 owner: key.owner,
                 spender: key.spender,
             },
@@ -128,7 +100,7 @@ where
             transaction,
             chain_id,
             key.collection,
-            IERC1155::balanceOfCall {
+            Erc1155BalanceCall {
                 account: key.account,
                 id: key.token_id,
             },
@@ -142,7 +114,7 @@ where
             transaction,
             chain_id,
             key.collection,
-            IOperatorApproval::isApprovedForAllCall {
+            OperatorApprovalCall {
                 owner: key.owner,
                 operator: key.operator,
             },
@@ -158,21 +130,22 @@ fn execute_token_state_call<DB, INSP, C>(
     transaction: &EvmTransaction,
     chain_id: u64,
     target: Address,
-    call: &C,
+    call: C,
 ) -> Result<ReadCallOutcome, EvmEngineError>
 where
     DB: Database,
     C: SolCall,
 {
+    let signature = C::SIGNATURE;
     match execute_read_call(evm, transaction, chain_id, target, call.abi_encode().into()) {
         Ok(outcome) => Ok(outcome),
         Err(EVMError::Database(error)) => Err(EvmEngineError::state_access_error(format!(
             "state access failed while reading {} from {target}: {error}",
-            C::SIGNATURE,
+            signature,
         ))),
         Err(error) => Err(EvmEngineError::analysis_failed(format!(
             "token state read {} from {target} failed: {error}",
-            C::SIGNATURE,
+            signature,
         ))),
     }
 }
@@ -188,29 +161,29 @@ where
     DB: Database,
     C: SolCall,
 {
-    let outcome = execute_token_state_call(evm, transaction, chain_id, target, &call)?;
+    let signature = C::SIGNATURE;
+    let outcome = execute_token_state_call(evm, transaction, chain_id, target, call)?;
 
     let output = match outcome {
         ReadCallOutcome::Success(output) => output,
         ReadCallOutcome::Revert(_) => {
             return Err(EvmEngineError::analysis_failed(format!(
                 "required token state read {} from {target} reverted",
-                C::SIGNATURE,
+                signature,
             )));
         }
         ReadCallOutcome::Halt(reason) => {
             return Err(EvmEngineError::analysis_failed(format!(
                 "required token state read {} from {target} halted: {reason}",
-                C::SIGNATURE,
+                signature,
             )));
         }
     };
 
-    C::abi_decode_returns(output.as_ref()).map_err(|error| {
-        EvmEngineError::analysis_failed(format!(
-            "invalid return data from {} at {target}: {error}",
-            C::SIGNATURE,
-        ))
+    C::abi_decode_returns_validate(output.as_ref()).map_err(|_| {
+        EvmEngineError::analysis_failed(
+            format!("invalid return data from {signature} at {target}",),
+        )
     })
 }
 
@@ -229,8 +202,8 @@ where
         transaction,
         chain_id,
         collection,
-        IERC165::supportsInterfaceCall {
-            interfaceId: FixedBytes::<4>::from(interface_id),
+        SupportsInterfaceCall {
+            interfaceId: FixedBytes::from(interface_id),
         },
     )
 }
@@ -334,18 +307,18 @@ fn read_erc721_token_state<DB, INSP>(
 where
     DB: Database,
 {
-    let owner_call = IERC721::ownerOfCall {
+    let owner_call = Erc721OwnerCall {
         tokenId: key.token_id,
     };
 
     let owner =
-        match execute_token_state_call(evm, transaction, chain_id, key.collection, &owner_call)? {
+        match execute_token_state_call(evm, transaction, chain_id, key.collection, owner_call)? {
             ReadCallOutcome::Success(output) => {
-                IERC721::ownerOfCall::abi_decode_returns(output.as_ref()).map_err(|error| {
+                Erc721OwnerCall::abi_decode_returns_validate(output.as_ref()).map_err(|_| {
                     EvmEngineError::analysis_failed(format!(
-                        "invalid return data from {} at {}: {error}",
-                        IERC721::ownerOfCall::SIGNATURE,
-                        key.collection,
+                        "invalid return data from {} at {}",
+                        Erc721OwnerCall::SIGNATURE,
+                        key.collection
                     ))
                 })?
             }
@@ -355,7 +328,7 @@ where
             ReadCallOutcome::Halt(reason) => {
                 return Err(EvmEngineError::analysis_failed(format!(
                     "required token state read {} from {} halted: {reason}",
-                    IERC721::ownerOfCall::SIGNATURE,
+                    Erc721OwnerCall::SIGNATURE,
                     key.collection,
                 )));
             }
@@ -364,7 +337,7 @@ where
     if owner == Address::ZERO {
         return Err(EvmEngineError::analysis_failed(format!(
             "{} at {} returned the zero address",
-            IERC721::ownerOfCall::SIGNATURE,
+            Erc721OwnerCall::SIGNATURE,
             key.collection,
         )));
     }
@@ -374,7 +347,7 @@ where
         transaction,
         chain_id,
         key.collection,
-        IERC721::getApprovedCall {
+        Erc721GetApprovedCall {
             tokenId: key.token_id,
         },
     )?;

@@ -62,6 +62,10 @@ pub enum ExecutionBlockContextError {
     MissingBlockNumber,
     #[error("Core Space pivot block {field} exceeds u64: {value:?}")]
     U64Overflow { field: &'static str, value: U256 },
+    #[error("next execution block number overflows u64 after {pivot_block_number}")]
+    NextBlockNumberOverflow { pivot_block_number: BlockNumber },
+    #[error("next execution epoch height overflows u64 after {pivot_epoch_height}")]
+    NextEpochHeightOverflow { pivot_epoch_height: u64 },
 }
 
 pub(crate) fn build_core_space_pivot_block_context(

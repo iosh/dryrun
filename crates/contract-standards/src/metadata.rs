@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use alloy_primitives::{Address, Bytes, FixedBytes};
 use alloy_sol_types::{SolCall, sol};
 
-use crate::{PositionedStandardChange, StandardChange};
+use crate::{PositionedStandardChange, StandardChange, state_codec::SupportsInterfaceCall};
 
 pub const ERC721_METADATA_INTERFACE_ID: [u8; 4] = [0x5b, 0x5e, 0x13, 0x9f];
 
@@ -12,7 +12,6 @@ sol! {
         function name() external view returns (string);
         function symbol() external view returns (string);
         function decimals() external view returns (uint8);
-        function supportsInterface(bytes4 interfaceId) external view returns (bool);
     }
 }
 
@@ -149,7 +148,7 @@ pub fn decode_decimals(output: &[u8]) -> Option<u8> {
 }
 
 pub fn supports_interface_call(interface_id: [u8; 4]) -> Bytes {
-    IContractMetadata::supportsInterfaceCall {
+    SupportsInterfaceCall {
         interfaceId: FixedBytes::from(interface_id),
     }
     .abi_encode()
@@ -157,5 +156,5 @@ pub fn supports_interface_call(interface_id: [u8; 4]) -> Bytes {
 }
 
 pub fn decode_supports_interface(output: &[u8]) -> Option<bool> {
-    IContractMetadata::supportsInterfaceCall::abi_decode_returns(output).ok()
+    SupportsInterfaceCall::abi_decode_returns_validate(output).ok()
 }

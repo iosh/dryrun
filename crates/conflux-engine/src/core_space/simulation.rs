@@ -2,7 +2,10 @@ use tokio::runtime::Handle;
 
 use crate::{
     ConfluxEngineError,
-    execution::{build_mainnet_machine, build_rpc_backed_state, execute_transaction},
+    execution::{
+        build_mainnet_machine, build_rpc_backed_state, execute_transaction,
+        prepare_transaction_execution,
+    },
     preparation::{
         PreparedCoreSpaceSimulation, PreparedCoreSpaceSimulationState, ReadyCoreSpaceSimulation,
     },
@@ -31,7 +34,9 @@ pub(crate) fn simulate(
                     }
                 })?;
             let machine = build_mainnet_machine();
-            let outcome = execute_transaction(&mut state, &machine, execution_input)
+            let prepared_execution =
+                prepare_transaction_execution(&state, &machine, execution_input)?;
+            let outcome = execute_transaction(&mut state, &machine, &prepared_execution)
                 .map_err(ConfluxEngineError::from)?;
 
             Ok(build_core_space_execution(

@@ -12,7 +12,7 @@ use crate::{
         build_core_space_transaction_input,
     },
     espace::{
-        EspaceBlockRef, EspaceExecution, EspaceTransaction, build_espace_not_executed,
+        EspaceBlockRef, EspaceSimulation, EspaceTransaction, build_espace_not_executed,
         build_espace_transaction_input, validate_espace_transaction,
     },
     execution::{DryRunTransactionInput, TransactionExecutionInput},
@@ -93,7 +93,7 @@ impl ConfluxEngine {
     pub fn simulate_espace_transaction(
         &self,
         prepared: PreparedEspaceSimulation,
-    ) -> Result<EspaceExecution, ConfluxEngineError> {
+    ) -> Result<EspaceSimulation, ConfluxEngineError> {
         crate::espace::simulation::simulate(prepared, &self.runtime_handle)
     }
 

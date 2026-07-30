@@ -1,3 +1,4 @@
+use contract_standards::ContractStandardsError;
 use thiserror::Error;
 
 use crate::{
@@ -25,8 +26,19 @@ pub enum ConfluxEngineError {
     #[error("state access failed: {message}")]
     StateAccess { message: String },
 
+    #[error("standard change analysis failed: {message}")]
+    Analysis { message: String },
+
     #[error("engine execution failed: {message}")]
     ExecutionInternal { message: String },
+}
+
+impl From<ContractStandardsError> for ConfluxEngineError {
+    fn from(error: ContractStandardsError) -> Self {
+        Self::Analysis {
+            message: error.to_string(),
+        }
+    }
 }
 
 impl From<TransactionExecutionError> for ConfluxEngineError {

@@ -69,7 +69,8 @@ enum ExecutionFailureCode {
 }
 
 impl From<service_espace::SimulateEspaceTransactionOutput> for SimulateEspaceTransactionResponse {
-    fn from(execution: service_espace::SimulateEspaceTransactionOutput) -> Self {
+    fn from(simulation: service_espace::SimulateEspaceTransactionOutput) -> Self {
+        let (execution, _changes) = simulation.into_parts();
         Self {
             execution: execution.into(),
         }

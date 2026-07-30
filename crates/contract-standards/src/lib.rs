@@ -10,6 +10,7 @@ mod event_codec;
 mod metadata;
 mod operator_approval;
 mod state;
+mod state_codec;
 mod token_contract;
 
 pub(crate) use candidate::StandardCandidateKind;
@@ -28,6 +29,10 @@ pub use state::{
     CollectionStandards, Erc20AllowanceKey, Erc20BalanceKey, Erc721TokenKey, Erc721TokenState,
     Erc1155BalanceKey, OperatorApprovalKey, StandardStateValues, StateArithmeticOperation,
     StatePhase, StateRequirement, StateRequirements, state_requirements,
+};
+pub use state_codec::{
+    Erc20AllowanceCall, Erc20BalanceCall, Erc20TotalSupplyCall, Erc721GetApprovedCall,
+    Erc721OwnerCall, Erc1155BalanceCall, OperatorApprovalCall, SupportsInterfaceCall,
 };
 
 pub const ERC165_INTERFACE_ID: [u8; 4] = [0x01, 0xff, 0xc9, 0xa7];

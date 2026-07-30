@@ -7,6 +7,10 @@ pub(crate) fn address_to_cfx(address: Address) -> CfxAddress {
     CfxAddress::from_slice(address.as_slice())
 }
 
+pub(crate) fn address_from_cfx(address: CfxAddress) -> Address {
+    Address::from_slice(address.as_bytes())
+}
+
 pub(crate) fn b256_to_cfx(value: B256) -> CfxH256 {
     CfxH256::from_slice(value.as_slice())
 }

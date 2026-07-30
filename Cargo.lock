@@ -2242,6 +2242,7 @@ name = "conflux-engine"
 version = "0.1.0"
 dependencies = [
  "alloy-primitives",
+ "alloy-sol-types",
  "cfx-addr",
  "cfx-bytes",
  "cfx-executor",
@@ -2254,6 +2255,7 @@ dependencies = [
  "cfx-storage",
  "cfx-types",
  "cfx-vm-types",
+ "contract-standards",
  "hex",
  "jsonrpsee",
  "keccak-hash",

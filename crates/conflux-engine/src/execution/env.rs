@@ -11,7 +11,7 @@ use tokio::runtime::Handle;
 
 use crate::state::{RemoteStateReader, new_rpc_backed_state};
 
-use super::{ExecutionBlockContext, params::mainnet_common_params};
+use super::{ExecutionBlockContext, ExecutionBlockContextError, params::mainnet_common_params};
 
 pub(crate) fn build_rpc_backed_state(
     reader: RemoteStateReader,
@@ -20,16 +20,22 @@ pub(crate) fn build_rpc_backed_state(
     new_rpc_backed_state(reader, runtime_handle)
 }
 
-fn next_execution_block_number(pivot_block_number: BlockNumber) -> BlockNumber {
+fn next_execution_block_number(
+    pivot_block_number: BlockNumber,
+) -> Result<BlockNumber, ExecutionBlockContextError> {
     // The loaded context points at the parent state. The simulated
     // transaction executes in the next block, matching Conflux block assembly.
-    pivot_block_number + 1
+    pivot_block_number
+        .checked_add(1)
+        .ok_or(ExecutionBlockContextError::NextBlockNumberOverflow { pivot_block_number })
 }
 
-fn next_execution_epoch_height(pivot_epoch_height: u64) -> u64 {
+fn next_execution_epoch_height(pivot_epoch_height: u64) -> Result<u64, ExecutionBlockContextError> {
     // Epoch-dependent fork rules are evaluated at the execution epoch, not the
     // parent state epoch used for reads.
-    pivot_epoch_height + 1
+    pivot_epoch_height
+        .checked_add(1)
+        .ok_or(ExecutionBlockContextError::NextEpochHeightOverflow { pivot_epoch_height })
 }
 
 pub fn build_transaction_env(
@@ -37,14 +43,14 @@ pub fn build_transaction_env(
     state: &State,
     tx: &SignedTransaction,
     input: &ExecutionBlockContext,
-) -> Env {
-    let execution_block_number = next_execution_block_number(input.pivot_block_number);
-    let epoch_height = next_execution_epoch_height(input.pivot_epoch_height);
+) -> Result<Env, ExecutionBlockContextError> {
+    let execution_block_number = next_execution_block_number(input.pivot_block_number)?;
+    let epoch_height = next_execution_epoch_height(input.pivot_epoch_height)?;
     let base_gas_price = input.base_fees.into_space_map();
     // Derived from state, not from public block RPC.
     let burnt_gas_price = base_gas_price.map_all(|x| state.burnt_gas_price(x));
 
-    Env {
+    Ok(Env {
         chain_id: machine.params().chain_id_map(epoch_height),
         number: execution_block_number,
         author: input.author,
@@ -61,7 +67,7 @@ pub fn build_transaction_env(
         base_gas_price,
         burnt_gas_price,
         transaction_hash: tx.hash(),
-    }
+    })
 }
 
 pub fn build_mainnet_machine() -> Machine {
