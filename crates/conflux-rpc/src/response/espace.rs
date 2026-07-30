@@ -3,12 +3,13 @@ use cfx_types::{H256, U64, U256};
 use conflux_service::espace as service_espace;
 use serde::Serialize;
 
-use super::{b256_to_wire, u256_to_wire};
+use super::{b256_to_wire, change::Change, u256_to_wire};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SimulateEspaceTransactionResponse {
     execution: Execution,
+    changes: Vec<Change>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -70,9 +71,10 @@ enum ExecutionFailureCode {
 
 impl From<service_espace::SimulateEspaceTransactionOutput> for SimulateEspaceTransactionResponse {
     fn from(simulation: service_espace::SimulateEspaceTransactionOutput) -> Self {
-        let (execution, _changes) = simulation.into_parts();
+        let (execution, changes) = simulation.into_parts();
         Self {
             execution: execution.into(),
+            changes: changes.into_iter().map(Into::into).collect(),
         }
     }
 }

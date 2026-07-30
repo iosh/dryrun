@@ -4,6 +4,7 @@ use jsonrpsee::types::{
     error::{INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
 };
 use serde::Serialize;
+use tracing::error;
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum ValidationError {
@@ -77,11 +78,17 @@ fn internal_error(
     )
 }
 
-pub(super) fn response_mapping_error(details: impl Into<String>) -> ErrorObjectOwned {
+pub(super) fn core_space_response_mapping_error(details: impl Into<String>) -> ErrorObjectOwned {
     internal_error(Some("response_mapping_error"), details)
 }
 
-pub(super) fn map_service_error(error: ConfluxServiceError) -> ErrorObjectOwned {
+pub(super) fn map_core_space_service_error(error: ConfluxServiceError) -> ErrorObjectOwned {
     let details = error.details();
     internal_error(Some(error.rpc_error_code()), details)
+}
+
+pub(super) fn map_espace_service_error(error: ConfluxServiceError) -> ErrorObjectOwned {
+    let subkind = error.rpc_error_code();
+    error!(subkind, error = ?error, "Conflux eSpace simulation failed");
+    internal_error(Some(subkind), "internal simulation error")
 }

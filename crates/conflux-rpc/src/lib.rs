@@ -9,7 +9,10 @@ use conflux_service::ConfluxService;
 use jsonrpsee::{RpcModule, types::ErrorObjectOwned};
 
 use self::{
-    error::{invalid_params, map_service_error, response_mapping_error},
+    error::{
+        core_space_response_mapping_error, invalid_params, map_core_space_service_error,
+        map_espace_service_error,
+    },
     request::{SimulateCoreSpaceTransactionRequest, SimulateEspaceTransactionRequest},
     response::{SimulateCoreSpaceTransactionResponse, SimulateEspaceTransactionResponse},
 };
@@ -34,7 +37,7 @@ pub fn build_rpc_module(
                 let output = service
                     .simulate_espace_transaction(request.try_into()?)
                     .await
-                    .map_err(map_service_error)?;
+                    .map_err(map_espace_service_error)?;
 
                 Ok::<_, ErrorObjectOwned>(SimulateEspaceTransactionResponse::from(output))
             },
@@ -54,13 +57,13 @@ pub fn build_rpc_module(
                 let output = service
                     .simulate_core_space_transaction(input)
                     .await
-                    .map_err(map_service_error)?;
+                    .map_err(map_core_space_service_error)?;
 
                 SimulateCoreSpaceTransactionResponse::try_from_output(
                     output,
                     core_space_address_network,
                 )
-                .map_err(|error| response_mapping_error(error.to_string()))
+                .map_err(|error| core_space_response_mapping_error(error.to_string()))
             },
         )
         .expect("RPC method names must be unique");

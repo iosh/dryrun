@@ -176,8 +176,7 @@ fn engine_error_code(error: &conflux_engine::ConfluxEngineError) -> &'static str
         | ConfluxEngineError::StateAnchorInconsistent => "block_context_error",
         ConfluxEngineError::Provider(_) => "rpc_error",
         ConfluxEngineError::StateAccess { .. } => "state_access_error",
-        ConfluxEngineError::Analysis { .. } | ConfluxEngineError::ExecutionInternal { .. } => {
-            "engine_execution_error"
-        }
+        ConfluxEngineError::Analysis { .. } => "analysis_failed",
+        ConfluxEngineError::ExecutionInternal { .. } => "engine_execution_error",
     }
 }

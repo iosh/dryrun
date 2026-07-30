@@ -29,8 +29,9 @@ keccak-hash = "0.5"
 rlp = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-simulation-transaction = { workspace = true }
+simulation-changes = { workspace = true }
 simulation-execution = { workspace = true }
+simulation-transaction = { workspace = true }
 thiserror = "2"
 typemap = { package = "typemap-ors", version = "1.0" }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }

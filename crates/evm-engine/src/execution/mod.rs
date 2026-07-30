@@ -19,8 +19,8 @@ use crate::{
     EvmEngineError, EvmExecutionInput, EvmSimulation, EvmTransaction, ResolvedBlock,
     chain_spec::resolve_execution_spec_id,
     changes::{
-        ChangeObservationInspector, build_changes, check_native_balances,
-        collect_contract_candidates, collect_native_candidates, map_contract_changes,
+        ChangeObservationInspector, PositionedChange, check_native_balances,
+        collect_contract_candidates, collect_native_candidates, into_enriched_changes,
         sort_changes_by_position,
     },
 };
@@ -95,23 +95,20 @@ fn execute_transaction(
         Ok(result_and_state) => {
             let result = result_and_state.result;
             let state = result_and_state.state;
+            let fee_settlement =
+                TransactionFeeSettlement::new(result.gas(), effective_gas_price, base_fee_per_gas)?;
+            let succeeded = matches!(&result, ExecutionResult::Success { .. });
+            let execution = build_execution(result, chain_id, resolved_block, &fee_settlement);
+
+            if !succeeded {
+                return Ok(EvmSimulation::new(execution, Vec::new()));
+            }
 
             let observation_inspector = std::mem::take(&mut evm.inspector);
             let observations = observation_inspector.into_observations();
-            let fee_settlement =
-                TransactionFeeSettlement::new(result.gas(), effective_gas_price, base_fee_per_gas)?;
-
-            let (native_candidates, candidates) =
-                if matches!(&result, ExecutionResult::Success { .. }) {
-                    (
-                        collect_native_candidates(&observations)?,
-                        collect_contract_candidates(&observations)?,
-                    )
-                } else {
-                    (Vec::new(), Vec::new())
-                };
+            let native_candidates = collect_native_candidates(&observations)?;
+            let candidates = collect_contract_candidates(&observations)?;
             let requirements = state_requirements(&candidates);
-            let execution = build_execution(result, chain_id, resolved_block, &fee_settlement);
 
             let mut positioned_changes = check_native_balances(
                 &state,
@@ -133,15 +130,14 @@ fn execute_transaction(
 
             let standard_changes = verify(&candidates, &before_token_state, &after_token_state)?;
             let metadata_requests = MetadataRequests::from_changes(&standard_changes);
-            positioned_changes.extend(map_contract_changes(standard_changes));
+            positioned_changes.extend(standard_changes.into_iter().map(PositionedChange::from));
 
             (execution, positioned_changes, metadata_requests)
         }
-        Err(EVMError::Transaction(error)) => (
-            build_not_executed(chain_id, resolved_block, transaction, error),
-            Vec::new(),
-            MetadataRequests::default(),
-        ),
+        Err(EVMError::Transaction(error)) => {
+            let execution = build_not_executed(chain_id, resolved_block, transaction, error);
+            return Ok(EvmSimulation::new(execution, Vec::new()));
+        }
         Err(EVMError::Header(error)) => {
             return Err(EvmEngineError::block_context_error(format!(
                 "engine header validation failed: {error}"
@@ -163,9 +159,9 @@ fn execute_transaction(
         Vec::new()
     } else {
         sort_changes_by_position(&mut positioned_changes);
-        let metadata = load_change_metadata(&mut evm, transaction, chain_id, metadata_requests);
+        let metadata = load_change_metadata(&mut evm, transaction, chain_id, metadata_requests)?;
 
-        build_changes(positioned_changes, &metadata)
+        into_enriched_changes(positioned_changes, &metadata)
     };
 
     Ok(EvmSimulation::new(execution, changes))

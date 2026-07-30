@@ -128,7 +128,7 @@ pub fn name_call() -> Bytes {
 }
 
 pub fn decode_name(output: &[u8]) -> Option<String> {
-    IContractMetadata::nameCall::abi_decode_returns(output).ok()
+    IContractMetadata::nameCall::abi_decode_returns_validate(output).ok()
 }
 
 pub fn symbol_call() -> Bytes {
@@ -136,7 +136,7 @@ pub fn symbol_call() -> Bytes {
 }
 
 pub fn decode_symbol(output: &[u8]) -> Option<String> {
-    IContractMetadata::symbolCall::abi_decode_returns(output).ok()
+    IContractMetadata::symbolCall::abi_decode_returns_validate(output).ok()
 }
 
 pub fn decimals_call() -> Bytes {
@@ -144,7 +144,7 @@ pub fn decimals_call() -> Bytes {
 }
 
 pub fn decode_decimals(output: &[u8]) -> Option<u8> {
-    IContractMetadata::decimalsCall::abi_decode_returns(output).ok()
+    IContractMetadata::decimalsCall::abi_decode_returns_validate(output).ok()
 }
 
 pub fn supports_interface_call(interface_id: [u8; 4]) -> Bytes {

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use evm_service::{SimulationService, SimulationServiceError};
 use jsonrpsee::core::{RpcResult, async_trait};
 use jsonrpsee::types::ErrorObjectOwned;
-use tracing::instrument;
+use tracing::{error, instrument};
 
 use crate::{
     errors::{internal_error, not_supported},
@@ -64,11 +64,11 @@ impl DryrunRpcServer for RpcHandler {
 }
 
 fn map_service_error(error: SimulationServiceError) -> ErrorObjectOwned {
-    let details = error.details();
-
     if error.is_not_supported() {
-        not_supported(details)
+        not_supported(error.details())
     } else {
-        internal_error(error.kind_code(), details)
+        let subkind = error.kind_code();
+        error!(subkind, error = ?error, "EVM simulation failed");
+        internal_error(subkind, "internal simulation error")
     }
 }

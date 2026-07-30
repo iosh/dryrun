@@ -10,9 +10,9 @@ use contract_standards::{
     StateRequirements, SupportsInterfaceCall, validate_collection_standards,
 };
 
-use super::read_call::{ReadCallOutcome, execute_read_call};
 use crate::{
     ConfluxEngineError,
+    espace::read_call::{ReadCallOutcome, execute_read_call},
     execution::PreparedTransactionExecution,
     primitive::{address_to_cfx, b256_from_cfx},
 };
@@ -133,19 +133,19 @@ fn read_required_value<C: SolCall>(
         match execute_read_call(state, machine, prepared, target, call.abi_encode().into())? {
             ReadCallOutcome::Success(output) => output,
             ReadCallOutcome::Revert => {
-                return Err(analysis_failed(format!(
+                return Err(ConfluxEngineError::analysis_failed(format!(
                     "{phase} required state read {signature} from {target} reverted"
                 )));
             }
             ReadCallOutcome::Halt(reason) => {
-                return Err(analysis_failed(format!(
+                return Err(ConfluxEngineError::analysis_failed(format!(
                     "{phase} required state read {signature} from {target} halted: {reason}"
                 )));
             }
         };
 
     C::abi_decode_returns_validate(output.as_ref()).map_err(|_| {
-        analysis_failed(format!(
+        ConfluxEngineError::analysis_failed(format!(
             "invalid {phase} return data from {signature} at {target}"
         ))
     })
@@ -244,7 +244,7 @@ fn read_contract_code_hash(
     })?;
 
     if code.as_ref().is_none_or(|code| code.is_empty()) {
-        return Err(analysis_failed(format!(
+        return Err(ConfluxEngineError::analysis_failed(format!(
             "{phase} token contract {contract} has no runtime code"
         )));
     }
@@ -272,7 +272,7 @@ fn read_erc721_token_state(
     )? {
         ReadCallOutcome::Success(output) => {
             Erc721OwnerCall::abi_decode_returns_validate(output.as_ref()).map_err(|_| {
-                analysis_failed(format!(
+                ConfluxEngineError::analysis_failed(format!(
                     "invalid {phase} return data from {} at {}",
                     Erc721OwnerCall::SIGNATURE,
                     key.collection
@@ -281,7 +281,7 @@ fn read_erc721_token_state(
         }
         ReadCallOutcome::Revert => return Ok(Erc721TokenState::OwnerOfReverted),
         ReadCallOutcome::Halt(reason) => {
-            return Err(analysis_failed(format!(
+            return Err(ConfluxEngineError::analysis_failed(format!(
                 "{phase} required state read {} from {} halted: {reason}",
                 Erc721OwnerCall::SIGNATURE,
                 key.collection
@@ -290,7 +290,7 @@ fn read_erc721_token_state(
     };
 
     if owner == Address::ZERO {
-        return Err(analysis_failed(format!(
+        return Err(ConfluxEngineError::analysis_failed(format!(
             "{phase} {} at {} returned the zero address",
             Erc721OwnerCall::SIGNATURE,
             key.collection
@@ -312,10 +312,4 @@ fn read_erc721_token_state(
         owner,
         approved_address: (approved_address != Address::ZERO).then_some(approved_address),
     })
-}
-
-fn analysis_failed(message: impl Into<String>) -> ConfluxEngineError {
-    ConfluxEngineError::Analysis {
-        message: message.into(),
-    }
 }

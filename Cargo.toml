@@ -9,6 +9,7 @@ members = [
     "crates/conflux-engine",
     "crates/conflux-rpc",
     "crates/conflux-service",
+    "crates/simulation-changes",
     "crates/simulation-execution",
     "crates/simulation-transaction",
     "crates/simulation-tasks",
@@ -26,9 +27,10 @@ evm-service = { path = "crates/evm-service" }
 conflux-engine = { path = "crates/conflux-engine" }
 conflux-rpc = { path = "crates/conflux-rpc" }
 conflux-service = { path = "crates/conflux-service" }
+simulation-changes = { path = "crates/simulation-changes" }
+simulation-execution = { path = "crates/simulation-execution" }
 simulation-transaction = { path = "crates/simulation-transaction" }
 simulation-tasks = { path = "crates/simulation-tasks" }
-simulation-execution = { path = "crates/simulation-execution" }
 
 jsonrpsee = "0.26"
 thiserror = "2"

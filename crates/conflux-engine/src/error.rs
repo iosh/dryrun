@@ -26,18 +26,24 @@ pub enum ConfluxEngineError {
     #[error("state access failed: {message}")]
     StateAccess { message: String },
 
-    #[error("standard change analysis failed: {message}")]
+    #[error("change analysis failed: {message}")]
     Analysis { message: String },
 
     #[error("engine execution failed: {message}")]
     ExecutionInternal { message: String },
 }
 
+impl ConfluxEngineError {
+    pub(crate) fn analysis_failed(message: impl Into<String>) -> Self {
+        Self::Analysis {
+            message: message.into(),
+        }
+    }
+}
+
 impl From<ContractStandardsError> for ConfluxEngineError {
     fn from(error: ContractStandardsError) -> Self {
-        Self::Analysis {
-            message: error.to_string(),
-        }
+        Self::analysis_failed(error.to_string())
     }
 }
 

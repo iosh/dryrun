@@ -27,6 +27,13 @@ pub(crate) enum Observation {
         input_len: usize,
         input_prefix: Vec<u8>,
     },
+    CreateTransfer {
+        position: Position,
+        space: Space,
+        from: Address,
+        to: Address,
+        value: U256,
+    },
     Log {
         position: Position,
         space: Space,
@@ -113,6 +120,15 @@ impl ObservationJournal {
 
     fn push_create_frame(&mut self, params: &ActionParams) {
         self.push_frame(FrameKind::Create, params.space);
+
+        let position = self.take_position();
+        self.entries.push(Observation::CreateTransfer {
+            position,
+            space: params.space,
+            from: params.sender,
+            to: params.address,
+            value: actual_transfer_value(&params.value),
+        });
     }
 
     fn push_frame(&mut self, kind: FrameKind, space: Space) {
@@ -399,6 +415,7 @@ mod tests {
     fn observation_position(observation: &Observation) -> Position {
         match observation {
             Observation::Call { position, .. }
+            | Observation::CreateTransfer { position, .. }
             | Observation::Log { position, .. }
             | Observation::InternalTransfer { position, .. } => *position,
         }

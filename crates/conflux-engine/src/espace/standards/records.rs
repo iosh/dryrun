@@ -50,6 +50,7 @@ fn collect_records(observations: Vec<Observation>) -> Vec<Record> {
                 data: Bytes::from(data),
             }),
             Observation::Call { .. }
+            | Observation::CreateTransfer { .. }
             | Observation::Log { .. }
             | Observation::InternalTransfer { .. } => None,
         })

@@ -33,9 +33,9 @@ pub(super) fn execute_read_call(
 ) -> Result<ReadCallOutcome, ConfluxEngineError> {
     let sender = prepared.transaction.sender();
     if sender.space != Space::Ethereum {
-        return Err(ConfluxEngineError::Analysis {
-            message: "eSpace state getter received a non-eSpace transaction sender".to_owned(),
-        });
+        return Err(ConfluxEngineError::analysis_failed(
+            "eSpace state getter received a non-eSpace transaction sender",
+        ));
     }
 
     let chain_id = prepared
@@ -43,8 +43,10 @@ pub(super) fn execute_read_call(
         .chain_id
         .get(&Space::Ethereum)
         .copied()
-        .ok_or_else(|| ConfluxEngineError::Analysis {
-            message: "eSpace execution environment is missing its chain id".to_owned(),
+        .ok_or_else(|| {
+            ConfluxEngineError::analysis_failed(
+                "eSpace execution environment is missing its chain id",
+            )
         })?;
     let nonce = state
         .nonce(&sender)

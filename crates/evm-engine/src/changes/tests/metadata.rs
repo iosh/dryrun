@@ -6,7 +6,7 @@ use contract_standards::{Position, StandardMetadata};
 use crate::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
 
 use super::super::{
-    PositionedChange, build_changes, metadata::ChangeMetadata, sort_changes_by_position,
+    ChangeMetadata, PositionedChange, into_enriched_changes, sort_changes_by_position,
 };
 
 fn positioned(observation_index: usize, change: Change) -> PositionedChange {
@@ -82,7 +82,7 @@ fn sorts_before_metadata() {
             HashMap::new(),
         ),
     );
-    let changes = build_changes(changes, &metadata);
+    let changes = into_enriched_changes(changes, &metadata);
 
     assert!(matches!(
         &changes[0],

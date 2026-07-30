@@ -1,8 +1,8 @@
 mod types;
 
 pub use types::{
-    ConfluxTransactionRequest, EspaceBlockRef, EspaceExecutedDetails, EspaceExecution,
-    EspaceExecutionFailure, EspaceExecutionFailureCode, EspaceExecutionOutcome, EspaceSimulation,
-    SimulateEspaceTransactionInput, SimulateEspaceTransactionOutput, SimulatedBlock,
-    StandardChange,
+    Change, ConfluxTransactionRequest, Erc20Metadata, Erc721CollectionMetadata, EspaceBlockRef,
+    EspaceExecutedDetails, EspaceExecution, EspaceExecutionFailure, EspaceExecutionFailureCode,
+    EspaceExecutionOutcome, EspaceSimulation, NativeMetadata, SimulateEspaceTransactionInput,
+    SimulateEspaceTransactionOutput, SimulatedBlock,
 };

@@ -1,17 +1,18 @@
 use std::collections::HashMap;
 
-use alloy_primitives::Address;
+use alloy_primitives::{Address, Bytes};
 use contract_standards::{
     ERC721_METADATA_INTERFACE_ID, Erc20Metadata, Erc721CollectionMetadata, MetadataRequests,
     StandardMetadata, decimals_call, decode_decimals, decode_name, decode_supports_interface,
     decode_symbol, name_call, supports_interface_call, symbol_call,
 };
+use revm::context_interface::result::EVMError;
 
-use crate::{EvmTransaction, NativeMetadata, changes::ChangeMetadata};
+use crate::{EvmEngineError, EvmTransaction, NativeMetadata, changes::ChangeMetadata};
 
 use super::{
     MainnetAlloyEvm,
-    read_call::{execute_optional_read_call, with_read_call_context},
+    read_call::{ReadCallOutcome, execute_read_call, with_read_call_context},
 };
 
 pub(super) fn load_change_metadata<INSP>(
@@ -19,43 +20,27 @@ pub(super) fn load_change_metadata<INSP>(
     transaction: &EvmTransaction,
     chain_id: u64,
     requests: MetadataRequests,
-) -> ChangeMetadata {
+) -> Result<ChangeMetadata, EvmEngineError> {
     let native = native_metadata(chain_id);
 
     if requests.is_empty() {
-        return ChangeMetadata::new(native, StandardMetadata::default());
+        return Ok(ChangeMetadata::new(native, StandardMetadata::default()));
     }
 
     with_read_call_context(evm, |evm| {
-        read_change_metadata(evm, transaction, chain_id, native, requests)
+        MetadataReader {
+            evm,
+            transaction,
+            chain_id,
+        }
+        .read(native, &requests)
     })
 }
 
-fn read_change_metadata<INSP>(
-    evm: &mut MainnetAlloyEvm<INSP>,
-    transaction: &EvmTransaction,
+struct MetadataReader<'evm, 'transaction, INSP> {
+    evm: &'evm mut MainnetAlloyEvm<INSP>,
+    transaction: &'transaction EvmTransaction,
     chain_id: u64,
-    native: NativeMetadata,
-    requests: MetadataRequests,
-) -> ChangeMetadata {
-    let mut erc20 = HashMap::new();
-    let mut erc721 = HashMap::new();
-
-    for &contract in requests.erc20_contracts() {
-        erc20.insert(
-            contract,
-            read_erc20_metadata(evm, transaction, chain_id, contract),
-        );
-    }
-
-    for &collection in requests.erc721_collections() {
-        erc721.insert(
-            collection,
-            read_erc721_collection_metadata(evm, transaction, chain_id, collection),
-        );
-    }
-
-    ChangeMetadata::new(native, StandardMetadata::new(erc20, erc721))
 }
 
 fn native_metadata(chain_id: u64) -> NativeMetadata {
@@ -69,113 +54,76 @@ fn native_metadata(chain_id: u64) -> NativeMetadata {
     }
 }
 
-fn read_erc20_metadata<INSP>(
-    evm: &mut MainnetAlloyEvm<INSP>,
-    transaction: &EvmTransaction,
-    chain_id: u64,
-    contract: Address,
-) -> Erc20Metadata {
-    // Contract metadata is optional. Individual read failures leave only that field absent.
-    Erc20Metadata {
-        name: read_erc20_name(evm, transaction, chain_id, contract),
-        symbol: read_erc20_symbol(evm, transaction, chain_id, contract),
-        decimals: read_erc20_decimals(evm, transaction, chain_id, contract),
-    }
-}
+impl<INSP> MetadataReader<'_, '_, INSP> {
+    fn read(
+        &mut self,
+        native: NativeMetadata,
+        requests: &MetadataRequests,
+    ) -> Result<ChangeMetadata, EvmEngineError> {
+        let mut erc20 = HashMap::new();
+        let mut erc721 = HashMap::new();
 
-fn read_erc721_collection_metadata<INSP>(
-    evm: &mut MainnetAlloyEvm<INSP>,
-    transaction: &EvmTransaction,
-    chain_id: u64,
-    collection: Address,
-) -> Erc721CollectionMetadata {
-    let supports_metadata = read_interface_support(
-        evm,
-        transaction,
-        chain_id,
-        collection,
-        ERC721_METADATA_INTERFACE_ID,
-    );
+        for &contract in requests.erc20_contracts() {
+            erc20.insert(contract, self.read_erc20(contract)?);
+        }
 
-    if supports_metadata != Some(true) {
-        return Erc721CollectionMetadata::default();
+        for &collection in requests.erc721_collections() {
+            erc721.insert(collection, self.read_erc721(collection)?);
+        }
+
+        Ok(ChangeMetadata::new(
+            native,
+            StandardMetadata::new(erc20, erc721),
+        ))
     }
 
-    Erc721CollectionMetadata {
-        name: read_erc721_name(evm, transaction, chain_id, collection),
-        symbol: read_erc721_symbol(evm, transaction, chain_id, collection),
+    fn read_erc20(&mut self, contract: Address) -> Result<Erc20Metadata, EvmEngineError> {
+        Ok(Erc20Metadata {
+            name: self.read_optional(contract, name_call(), decode_name)?,
+            symbol: self.read_optional(contract, symbol_call(), decode_symbol)?,
+            decimals: self.read_optional(contract, decimals_call(), decode_decimals)?,
+        })
     }
-}
 
-fn read_interface_support<INSP>(
-    evm: &mut MainnetAlloyEvm<INSP>,
-    transaction: &EvmTransaction,
-    chain_id: u64,
-    contract: Address,
-    interface_id: [u8; 4],
-) -> Option<bool> {
-    let output = execute_optional_read_call(
-        evm,
-        transaction,
-        chain_id,
-        contract,
-        supports_interface_call(interface_id),
-    )?;
+    fn read_erc721(
+        &mut self,
+        collection: Address,
+    ) -> Result<Erc721CollectionMetadata, EvmEngineError> {
+        let supports_metadata = self.read_optional(
+            collection,
+            supports_interface_call(ERC721_METADATA_INTERFACE_ID),
+            decode_supports_interface,
+        )?;
 
-    decode_supports_interface(output.as_ref())
-}
+        if supports_metadata != Some(true) {
+            return Ok(Erc721CollectionMetadata::default());
+        }
 
-fn read_erc20_name<INSP>(
-    evm: &mut MainnetAlloyEvm<INSP>,
-    transaction: &EvmTransaction,
-    chain_id: u64,
-    contract: Address,
-) -> Option<String> {
-    let output = execute_optional_read_call(evm, transaction, chain_id, contract, name_call())?;
+        Ok(Erc721CollectionMetadata {
+            name: self.read_optional(collection, name_call(), decode_name)?,
+            symbol: self.read_optional(collection, symbol_call(), decode_symbol)?,
+        })
+    }
 
-    decode_name(output.as_ref())
-}
+    fn read_optional<T>(
+        &mut self,
+        target: Address,
+        data: Bytes,
+        decode: impl FnOnce(&[u8]) -> Option<T>,
+    ) -> Result<Option<T>, EvmEngineError> {
+        let outcome = execute_read_call(self.evm, self.transaction, self.chain_id, target, data)
+            .map_err(|error| match error {
+                EVMError::Database(error) => EvmEngineError::state_access_error(format!(
+                    "state access failed during metadata read from {target}: {error}"
+                )),
+                error => EvmEngineError::analysis_failed(format!(
+                    "metadata read from {target} failed: {error}"
+                )),
+            })?;
 
-fn read_erc20_symbol<INSP>(
-    evm: &mut MainnetAlloyEvm<INSP>,
-    transaction: &EvmTransaction,
-    chain_id: u64,
-    contract: Address,
-) -> Option<String> {
-    let output = execute_optional_read_call(evm, transaction, chain_id, contract, symbol_call())?;
-
-    decode_symbol(output.as_ref())
-}
-
-fn read_erc20_decimals<INSP>(
-    evm: &mut MainnetAlloyEvm<INSP>,
-    transaction: &EvmTransaction,
-    chain_id: u64,
-    contract: Address,
-) -> Option<u8> {
-    let output = execute_optional_read_call(evm, transaction, chain_id, contract, decimals_call())?;
-
-    decode_decimals(output.as_ref())
-}
-
-fn read_erc721_name<INSP>(
-    evm: &mut MainnetAlloyEvm<INSP>,
-    transaction: &EvmTransaction,
-    chain_id: u64,
-    collection: Address,
-) -> Option<String> {
-    let output = execute_optional_read_call(evm, transaction, chain_id, collection, name_call())?;
-
-    decode_name(output.as_ref())
-}
-
-fn read_erc721_symbol<INSP>(
-    evm: &mut MainnetAlloyEvm<INSP>,
-    transaction: &EvmTransaction,
-    chain_id: u64,
-    collection: Address,
-) -> Option<String> {
-    let output = execute_optional_read_call(evm, transaction, chain_id, collection, symbol_call())?;
-
-    decode_symbol(output.as_ref())
+        Ok(match outcome {
+            ReadCallOutcome::Success(output) => decode(output.as_ref()),
+            ReadCallOutcome::Revert(_) | ReadCallOutcome::Halt(_) => None,
+        })
+    }
 }

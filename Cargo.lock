@@ -2263,6 +2263,7 @@ dependencies = [
  "rlp 0.4.6",
  "serde",
  "serde_json",
+ "simulation-changes",
  "simulation-execution",
  "simulation-transaction",
  "thiserror 2.0.18",
@@ -2288,6 +2289,7 @@ dependencies = [
  "serde_json",
  "simulation-transaction",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -3181,6 +3183,7 @@ dependencies = [
  "alloy-primitives",
  "contract-standards",
  "revm",
+ "simulation-changes",
  "simulation-execution",
  "simulation-transaction",
  "thiserror 2.0.18",
@@ -7229,6 +7232,14 @@ dependencies = [
  "num-traits",
  "thiserror 2.0.18",
  "time",
+]
+
+[[package]]
+name = "simulation-changes"
+version = "0.1.0"
+dependencies = [
+ "alloy-primitives",
+ "contract-standards",
 ]
 
 [[package]]

@@ -71,22 +71,6 @@ where
     })
 }
 
-pub(super) fn execute_optional_read_call<DB, INSP>(
-    evm: &mut MainnetEvmWithDb<DB, INSP>,
-    transaction: &EvmTransaction,
-    chain_id: u64,
-    target: Address,
-    data: Bytes,
-) -> Option<Bytes>
-where
-    DB: Database,
-{
-    match execute_read_call(evm, transaction, chain_id, target, data).ok()? {
-        ReadCallOutcome::Success(output) => Some(output),
-        ReadCallOutcome::Revert(_) | ReadCallOutcome::Halt(_) => None,
-    }
-}
-
 fn build_read_call_tx(
     transaction: &EvmTransaction,
     chain_id: u64,
@@ -127,9 +111,7 @@ mod tests {
 
     use crate::{EvmTransaction, EvmTransactionVariant};
 
-    use super::{
-        ReadCallOutcome, execute_optional_read_call, execute_read_call, with_read_call_context,
-    };
+    use super::{ReadCallOutcome, execute_read_call, with_read_call_context};
 
     #[test]
     fn restores_read_call_context_without_committing_state() {
@@ -191,10 +173,13 @@ mod tests {
             assert!(evm.ctx().cfg.disable_base_fee);
             assert!(evm.ctx().cfg.disable_fee_charge);
 
-            execute_optional_read_call(evm, &transaction, 1, contract, Bytes::new())
+            execute_read_call(evm, &transaction, 1, contract, Bytes::new())
         });
 
-        assert_eq!(output, Some(Bytes::new()));
+        assert!(matches!(
+            output,
+            Ok(ReadCallOutcome::Success(output)) if output.is_empty()
+        ));
         assert_eq!(evm.ctx().cfg, original_cfg);
         assert_eq!(evm.ctx().tx, original_tx);
 
