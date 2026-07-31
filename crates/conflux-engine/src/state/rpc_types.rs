@@ -93,4 +93,19 @@ pub(crate) struct CoreSpaceRpcBlock {
     pub(crate) block_number: Option<U256>,
     pub(crate) base_fee_per_gas: Option<U256>,
     pub(crate) timestamp: U256,
+    pub(crate) pos_reference: Option<H256>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CoreSpaceRpcPoSBlock {
+    pub(crate) hash: H256,
+    pub(crate) height: U64,
+    pub(crate) pivot_decision: Option<CoreSpaceRpcPoSPivotDecision>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CoreSpaceRpcPoSPivotDecision {
+    pub(crate) height: U64,
 }

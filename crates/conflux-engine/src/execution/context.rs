@@ -4,10 +4,9 @@ use thiserror::Error;
 
 use crate::state::{CoreSpaceRpcBlock, EspaceRpcBlock};
 
-// Used by Core Space Context / PoS internal contracts. Upstream derives these
-// values from a pivot block's PoS reference; ordinary eSpace execution does not
-// depend on them, so the RPC-backed path keeps them optional until that
-// data is loaded.
+// Core preparation resolves these values from the pivot block's PoS reference.
+// They remain optional because pre-PoS pivots have no such reference and ordinary
+// eSpace execution does not depend on this consensus context.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ExecutionConsensusContext {
     pub pos_view: Option<u64>,

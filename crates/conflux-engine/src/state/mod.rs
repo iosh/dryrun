@@ -14,7 +14,7 @@ pub use self::http_provider::{ConfluxRpcError, CoreSpaceResourceEstimate, HttpCo
 
 pub(crate) use self::{
     reader::RemoteStateReader,
-    rpc_types::{CoreSpaceRpcBlock, EspaceRpcBlock},
+    rpc_types::{CoreSpaceRpcBlock, CoreSpaceRpcPoSBlock, EspaceRpcBlock},
     storage::new_rpc_backed_state,
 };
 

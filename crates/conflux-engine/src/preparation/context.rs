@@ -1,6 +1,6 @@
 use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;
 use cfx_rpc_eth_types::BlockId as EthBlockId;
-use cfx_types::U256;
+use cfx_types::{H256, U256};
 
 use crate::{
     ConfluxEngineError,
@@ -12,7 +12,10 @@ use crate::{
         build_execution_block_context,
     },
     primitive::b256_from_cfx,
-    state::{ConfluxStateAnchor, CoreSpaceRpcBlock, EspaceRpcBlock, HttpConfluxProvider},
+    state::{
+        ConfluxStateAnchor, CoreSpaceRpcBlock, CoreSpaceRpcPoSBlock, EspaceRpcBlock,
+        HttpConfluxProvider,
+    },
 };
 
 pub struct EspaceSimulationContext {
@@ -104,15 +107,57 @@ pub(crate) async fn load_core_space_context(
     let espace_block = load_espace_block(provider, state_anchor).await?;
     validate_same_state_anchor(state_anchor, state_anchor_from_espace_block(&espace_block)?)?;
     let espace = build_espace_block_context(&espace_block);
-    let block_context = build_execution_block_context(
-        &core_space_pivot,
-        &espace,
-        ExecutionConsensusContext::default(),
-    );
+    let consensus = load_core_space_consensus_context(provider, &core_space_pivot_block).await?;
+    let block_context = build_execution_block_context(&core_space_pivot, &espace, consensus);
 
     Ok(CoreSpaceSimulationContext {
         block_context,
         state_anchor,
+    })
+}
+
+async fn load_core_space_consensus_context(
+    provider: &HttpConfluxProvider,
+    pivot_block: &CoreSpaceRpcBlock,
+) -> Result<ExecutionConsensusContext, ConfluxEngineError> {
+    let Some(pos_reference) = pivot_block.pos_reference else {
+        return Ok(ExecutionConsensusContext::default());
+    };
+
+    let pos_block = provider
+        .pos_get_block_by_hash(pos_reference)
+        .await?
+        .ok_or_else(|| ConfluxEngineError::BlockNotFound {
+            block: format!("PoS block referenced by Core Space pivot {pos_reference:?}"),
+        })?;
+
+    consensus_context_from_pos_block(pos_reference, pos_block)
+}
+
+fn consensus_context_from_pos_block(
+    pos_reference: H256,
+    pos_block: CoreSpaceRpcPoSBlock,
+) -> Result<ExecutionConsensusContext, ConfluxEngineError> {
+    if pos_block.hash != pos_reference {
+        return Err(ConfluxEngineError::InvalidBlockContext {
+            message: format!(
+                "PoS block hash does not match Core Space pivot reference: expected {pos_reference:?}, got {:?}",
+                pos_block.hash
+            ),
+        });
+    }
+
+    let finalized_epoch = pos_block
+        .pivot_decision
+        .ok_or_else(|| ConfluxEngineError::InvalidBlockContext {
+            message: format!("referenced PoS block {pos_reference:?} is missing pivotDecision"),
+        })?
+        .height
+        .as_u64();
+
+    Ok(ExecutionConsensusContext {
+        pos_view: Some(pos_block.height.as_u64()),
+        finalized_epoch: Some(finalized_epoch),
     })
 }
 
