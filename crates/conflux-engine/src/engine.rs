@@ -6,8 +6,8 @@ use crate::{
     ConfluxEngineError, PreparedCoreSpaceSimulation, PreparedEspaceSimulation,
     config::ConfluxChainConfig,
     core_space::{
-        CoreSpaceEpochRef, CoreSpaceExecution, CoreSpaceExecutionFailure,
-        CoreSpaceExecutionFailureCode, CoreSpaceStateAnchor, CoreSpaceTransaction,
+        CoreSpaceEpochRef, CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode,
+        CoreSpaceSimulation, CoreSpaceStateAnchor, CoreSpaceTransaction,
         CoreSpaceTransactionVariant, build_core_space_not_executed,
         build_core_space_transaction_input,
     },
@@ -145,9 +145,9 @@ impl ConfluxEngine {
 
     pub fn simulate_core_space_transaction(
         &self,
-        prepared: PreparedCoreSpaceSimulation,
-    ) -> Result<CoreSpaceExecution, ConfluxEngineError> {
-        crate::core_space::simulation::simulate(prepared, &self.runtime_handle)
+        prepared_simulation: PreparedCoreSpaceSimulation,
+    ) -> Result<CoreSpaceSimulation, ConfluxEngineError> {
+        crate::core_space::simulation::simulate(prepared_simulation, &self.runtime_handle)
     }
 
     async fn prepare_state_reader(

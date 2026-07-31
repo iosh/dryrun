@@ -11,20 +11,20 @@ use simulation_changes::{ChangeMetadata, NativeMetadata};
 
 use crate::{
     ConfluxEngineError,
-    espace::read_call::{ReadCallOutcome, execute_read_call},
     execution::PreparedTransactionExecution,
+    standards::{StandardReadCallOutcome, execute_standard_read_call},
 };
 
 pub(crate) fn load_change_metadata(
     state: &mut State,
     machine: &Machine,
-    prepared: &PreparedTransactionExecution,
+    prepared_execution: &PreparedTransactionExecution,
     requests: &MetadataRequests,
 ) -> Result<ChangeMetadata, ConfluxEngineError> {
     let mut reader = MetadataReader {
         state,
         machine,
-        prepared,
+        prepared_execution,
     };
     let mut erc20 = HashMap::new();
     let mut erc721 = HashMap::new();
@@ -50,7 +50,7 @@ pub(crate) fn load_change_metadata(
 struct MetadataReader<'a> {
     state: &'a mut State,
     machine: &'a Machine,
-    prepared: &'a PreparedTransactionExecution,
+    prepared_execution: &'a PreparedTransactionExecution,
 }
 
 impl MetadataReader<'_> {
@@ -84,15 +84,23 @@ impl MetadataReader<'_> {
 
     fn read_optional<T>(
         &mut self,
-        target: Address,
-        data: Bytes,
-        decode: impl FnOnce(&[u8]) -> Option<T>,
+        target_contract: Address,
+        call_data: Bytes,
+        decode_return_data: impl FnOnce(&[u8]) -> Option<T>,
     ) -> Result<Option<T>, ConfluxEngineError> {
-        let outcome = execute_read_call(self.state, self.machine, self.prepared, target, data)?;
+        let getter_outcome = execute_standard_read_call(
+            self.state,
+            self.machine,
+            self.prepared_execution,
+            target_contract,
+            call_data,
+        )?;
 
-        Ok(match outcome {
-            ReadCallOutcome::Success(output) => decode(output.as_ref()),
-            ReadCallOutcome::Revert | ReadCallOutcome::Halt(_) => None,
+        Ok(match getter_outcome {
+            StandardReadCallOutcome::Success(return_data) => {
+                decode_return_data(return_data.as_ref())
+            }
+            StandardReadCallOutcome::Revert | StandardReadCallOutcome::Halt(_) => None,
         })
     }
 }

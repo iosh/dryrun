@@ -79,12 +79,15 @@ fn internal_error(
 }
 
 pub(super) fn core_space_response_mapping_error(details: impl Into<String>) -> ErrorObjectOwned {
-    internal_error(Some("response_mapping_error"), details)
+    let details = details.into();
+    error!(details, "Conflux Core Space response mapping failed");
+    internal_error(Some("response_mapping_error"), "internal simulation error")
 }
 
 pub(super) fn map_core_space_service_error(error: ConfluxServiceError) -> ErrorObjectOwned {
-    let details = error.details();
-    internal_error(Some(error.rpc_error_code()), details)
+    let subkind = error.rpc_error_code();
+    error!(subkind, error = ?error, "Conflux Core Space simulation failed");
+    internal_error(Some(subkind), "internal simulation error")
 }
 
 pub(super) fn map_espace_service_error(error: ConfluxServiceError) -> ErrorObjectOwned {

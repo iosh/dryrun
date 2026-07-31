@@ -10,44 +10,52 @@ use crate::{
 };
 
 pub(crate) fn collect_standard_candidates(
-    observations: Vec<Observation>,
+    execution_observations: Vec<Observation>,
+    analysis_space: Space,
 ) -> Result<Vec<StandardCandidate>, ConfluxEngineError> {
-    collect_candidates(&collect_records(observations)).map_err(ConfluxEngineError::from)
+    collect_candidates(&collect_standard_records(
+        execution_observations,
+        analysis_space,
+    ))
+    .map_err(ConfluxEngineError::from)
 }
 
-fn collect_records(observations: Vec<Observation>) -> Vec<Record> {
-    observations
+fn collect_standard_records(
+    execution_observations: Vec<Observation>,
+    analysis_space: Space,
+) -> Vec<Record> {
+    execution_observations
         .into_iter()
         .filter_map(|observation| match observation {
             Observation::Call {
-                position,
-                space: Space::Ethereum,
+                position: observation_position,
+                space: observation_space,
                 call_type: CallType::Call,
                 caller,
-                target,
+                target: call_target,
                 transferred_value,
                 input_len,
                 input_prefix,
                 ..
-            } => Some(Record::Call {
-                position: Position::new(position, 0),
+            } if observation_space == analysis_space => Some(Record::Call {
+                position: Position::new(observation_position, 0),
                 caller: address_from_cfx(caller),
-                target: address_from_cfx(target),
+                target: address_from_cfx(call_target),
                 value: u256_from_cfx(transferred_value),
                 input_len,
                 input_prefix: Bytes::from(input_prefix),
             }),
             Observation::Log {
-                position,
-                space: Space::Ethereum,
+                position: observation_position,
+                space: observation_space,
                 address,
                 topics,
-                data,
-            } => Some(Record::Log {
-                position: Position::new(position, 0),
+                data: log_data,
+            } if observation_space == analysis_space => Some(Record::Log {
+                position: Position::new(observation_position, 0),
                 address: address_from_cfx(address),
                 topics: topics.into_iter().map(b256_from_cfx).collect(),
-                data: Bytes::from(data),
+                data: Bytes::from(log_data),
             }),
             Observation::Call { .. }
             | Observation::CreateTransfer { .. }

@@ -3,8 +3,8 @@ use conflux_engine as engine;
 pub use crate::ConfluxTransactionRequest;
 pub use engine::core_space::{
     CoreSpaceEpochRef, CoreSpaceExecutedDetails, CoreSpaceExecution, CoreSpaceExecutionFailure,
-    CoreSpaceExecutionFailureCode, CoreSpaceExecutionOutcome, CoreSpaceStateAnchor,
-    CoreSpaceStorageChange,
+    CoreSpaceExecutionFailureCode, CoreSpaceExecutionOutcome, CoreSpaceSimulation,
+    CoreSpaceStateAnchor, CoreSpaceStorageChange, StandardChange,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,4 +20,4 @@ pub struct SimulateCoreSpaceTransactionInput {
     pub transaction: CoreSpaceTransactionRequest,
 }
 
-pub type SimulateCoreSpaceTransactionOutput = CoreSpaceExecution;
+pub type SimulateCoreSpaceTransactionOutput = CoreSpaceSimulation;

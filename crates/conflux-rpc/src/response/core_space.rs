@@ -95,11 +95,12 @@ enum CoreSpaceExecutionFailureCode {
 
 impl SimulateCoreSpaceTransactionResponse {
     pub(crate) fn try_from_output(
-        output: service_core_space::SimulateCoreSpaceTransactionOutput,
+        simulation: service_core_space::SimulateCoreSpaceTransactionOutput,
         network: Network,
     ) -> Result<Self, ResponseMappingError> {
+        let (execution, _internal_standard_changes) = simulation.into_parts();
         Ok(Self {
-            execution: CoreSpaceExecution::try_from_service(output, network)?,
+            execution: CoreSpaceExecution::try_from_service(execution, network)?,
         })
     }
 }

@@ -1,3 +1,4 @@
+use cfx_types::Space;
 use contract_standards::{MetadataRequests, StatePhase, state_requirements, verify};
 use simulation_changes::{PositionedChange, into_enriched_changes, sort_changes_by_position};
 use tokio::runtime::Handle;
@@ -9,6 +10,7 @@ use crate::{
         execute_transaction, prepare_transaction_execution,
     },
     preparation::{PreparedEspaceSimulation, PreparedEspaceSimulationState, ReadyEspaceSimulation},
+    standards::{collect_standard_candidates, read_standard_state_values},
 };
 
 use super::{
@@ -16,7 +18,6 @@ use super::{
     changes::{
         collect_native_evidence, load_change_metadata, read_native_balances, verify_native_changes,
     },
-    standards::{collect_standard_candidates, read_standard_state_values},
 };
 
 pub(crate) fn simulate(
@@ -61,7 +62,7 @@ pub(crate) fn simulate(
                 }
             };
             let native_evidence = collect_native_evidence(&observations)?;
-            let candidates = collect_standard_candidates(observations)?;
+            let candidates = collect_standard_candidates(observations, Space::Ethereum)?;
 
             let requirements = state_requirements(&candidates);
             let after_snapshot = state.save();
