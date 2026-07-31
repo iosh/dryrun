@@ -67,9 +67,16 @@ pub(crate) struct CoreSpaceRpcAccount {
     pub(crate) nonce: U256,
     pub(crate) code_hash: H256,
     pub(crate) staking_balance: U256,
-    pub(crate) collateral_for_storage: U256,
+    #[serde(rename = "collateralForStorage")]
+    pub(crate) total_collateral_for_storage: U256,
     pub(crate) accumulated_interest_return: U256,
     pub(crate) admin: RpcAddress,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct CoreSpaceAccountState {
+    pub(crate) account: CoreSpaceRpcAccount,
+    pub(crate) token_collateral_for_storage: U256,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -80,8 +87,8 @@ pub(crate) struct CoreSpaceSponsorInfo {
     pub(crate) sponsor_gas_bound: U256,
     pub(crate) sponsor_balance_for_gas: U256,
     pub(crate) sponsor_balance_for_collateral: U256,
-    pub(crate) available_storage_points: U256,
-    pub(crate) used_storage_points: U256,
+    #[serde(rename = "availableStoragePoints")]
+    pub(crate) available_storage_point_units: U256,
 }
 
 #[derive(Debug, Clone, Deserialize)]

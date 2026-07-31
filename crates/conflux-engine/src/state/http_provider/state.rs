@@ -11,9 +11,9 @@ use serde::Serialize;
 use crate::state::{
     ConfluxRpcError,
     rpc_types::{
-        CoreSpaceGlobals, CoreSpacePoSEconomics, CoreSpaceRpcAccount, CoreSpaceSponsorInfo,
-        CoreSpaceStorageCollateralInfo, CoreSpaceSupplyInfo, CoreSpaceVoteParamsInfo,
-        EspaceAccountData,
+        CoreSpaceAccountState, CoreSpaceGlobals, CoreSpacePoSEconomics, CoreSpaceRpcAccount,
+        CoreSpaceSponsorInfo, CoreSpaceStorageCollateralInfo, CoreSpaceSupplyInfo,
+        CoreSpaceVoteParamsInfo, EspaceAccountData,
     },
 };
 
@@ -155,15 +155,48 @@ impl HttpConfluxProvider {
         })
     }
 
-    pub(crate) async fn cfx_get_account(
+    pub(crate) async fn load_core_space_account_state(
         &self,
         address: Address,
         epoch: EpochNumber,
-    ) -> Result<CoreSpaceRpcAccount, ConfluxRpcError> {
-        let address = self.cfx_rpc_address(address)?;
+    ) -> Result<CoreSpaceAccountState, ConfluxRpcError> {
+        const BATCH_NAME: &str = "Core Space account state";
+        const BATCH_LEN: usize = 2;
 
-        self.core_space_rpc_request("cfx_getAccount", rpc_params![address, epoch])
-            .await
+        let address = self.cfx_rpc_address(address)?;
+        let mut batch = BatchRequestBuilder::new();
+        Self::insert_batch_request(
+            &mut batch,
+            "cfx_getAccount",
+            rpc_params![address.clone(), epoch.clone()],
+        )?;
+        Self::insert_batch_request(
+            &mut batch,
+            "cfx_getCollateralForStorage",
+            rpc_params![address, epoch],
+        )?;
+
+        let response = Self::rpc_batch_request(
+            &self.core_space_client,
+            "core_space",
+            BATCH_NAME,
+            BATCH_LEN,
+            batch,
+        )
+        .await?;
+        Self::validate_batch_len(BATCH_NAME, BATCH_LEN, response.len())?;
+        let mut entries = response.into_iter();
+
+        Ok(CoreSpaceAccountState {
+            account: Self::decode_batch_result::<CoreSpaceRpcAccount>(
+                &mut entries,
+                "cfx_getAccount",
+            )?,
+            token_collateral_for_storage: Self::decode_batch_result(
+                &mut entries,
+                "cfx_getCollateralForStorage",
+            )?,
+        })
     }
 
     pub(crate) async fn cfx_get_deposit_list(

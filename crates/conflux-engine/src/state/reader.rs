@@ -1,23 +1,26 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::{Arc, Mutex as SyncMutex},
+};
 
 use cfx_parameters::staking::DRIPS_PER_STORAGE_COLLATERAL_UNIT;
 use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;
 use cfx_rpc_eth_types::BlockId as EthBlockId;
 use cfx_storage::{Error as StorageError, Result as StorageResult};
-use tokio::sync::Mutex;
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::state::{
     ConfluxRpcError, ConfluxStateAnchor, HttpConfluxProvider,
     core_space_internal::{
         CoreSpaceInternalStateItem, SponsorWhitelistStorageKey, decode_abi_bool,
     },
-    rpc_types::{CoreSpaceGlobals, EspaceAccountData},
+    rpc_types::{CoreSpaceAccountState, CoreSpaceGlobals, EspaceAccountData},
     state_item::{CoreSpaceStateItem, EspaceStateItem, StateItem},
     state_value_encoding::{
         StateValueEncodingError, encode_code, encode_core_space_basic_account,
         encode_core_space_contract_account, encode_core_space_deposit_list, encode_core_space_u256,
         encode_core_space_vote_list, encode_espace_account, encode_storage_slot,
-        should_encode_core_space_contract_account,
+        should_encode_core_space_contract_account, used_storage_point_collateral,
     },
 };
 use cfx_types::{Address, H256, U256};
@@ -25,11 +28,40 @@ use cfx_types::{Address, H256, U256};
 type RawStateValue = Box<[u8]>;
 type StateRead = Option<RawStateValue>;
 
+#[derive(Clone, Default)]
+pub(crate) struct StoragePointInitializationUncertainty {
+    uncertain_account_addresses: Arc<SyncMutex<HashSet<Address>>>,
+}
+
+impl StoragePointInitializationUncertainty {
+    fn record_uncertain_account(&self, address: Address) -> StorageResult<()> {
+        self.uncertain_account_addresses
+            .lock()
+            .map_err(|_| Self::lock_error())?
+            .insert(address);
+        Ok(())
+    }
+
+    pub(crate) fn uncertain_account_addresses(&self) -> StorageResult<HashSet<Address>> {
+        self.uncertain_account_addresses
+            .lock()
+            .map_err(|_| Self::lock_error())
+            .map(|addresses| addresses.clone())
+    }
+
+    fn lock_error() -> StorageError {
+        StorageError::Msg(
+            "failed to access request-local Core Space storage-point state".to_owned(),
+        )
+    }
+}
+
 pub(crate) struct RemoteStateReader {
     state_anchor: ConfluxStateAnchor,
     provider: Arc<HttpConfluxProvider>,
     core_space_globals: CoreSpaceGlobals,
-    espace_account_cache: Mutex<HashMap<Address, Arc<EspaceAccountData>>>,
+    espace_account_cache: AsyncMutex<HashMap<Address, Arc<EspaceAccountData>>>,
+    storage_point_initialization_uncertainty: StoragePointInitializationUncertainty,
 }
 
 impl RemoteStateReader {
@@ -49,12 +81,20 @@ impl RemoteStateReader {
             state_anchor,
             provider,
             core_space_globals,
-            espace_account_cache: Mutex::new(HashMap::new()),
+            espace_account_cache: AsyncMutex::new(HashMap::new()),
+            storage_point_initialization_uncertainty:
+                StoragePointInitializationUncertainty::default(),
         })
     }
 
     pub(crate) fn state_anchor(&self) -> ConfluxStateAnchor {
         self.state_anchor
+    }
+
+    pub(crate) fn storage_point_initialization_uncertainty(
+        &self,
+    ) -> StoragePointInitializationUncertainty {
+        self.storage_point_initialization_uncertainty.clone()
     }
 
     pub(crate) async fn read(&self, item: &StateItem) -> StorageResult<StateRead> {
@@ -195,11 +235,19 @@ impl RemoteStateReader {
     }
 
     async fn fetch_core_space_account(&self, address: Address) -> StorageResult<StateRead> {
-        let account = self
+        let CoreSpaceAccountState {
+            account,
+            token_collateral_for_storage,
+        } = self
             .provider
-            .cfx_get_account(address, self.core_space_epoch())
+            .load_core_space_account_state(address, self.core_space_epoch())
             .await
-            .map_err(|error| self.provider_error("cfx_getAccount", error))?;
+            .map_err(|error| self.provider_error("load_core_space_account_state", error))?;
+        let used_storage_point_collateral = used_storage_point_collateral(
+            account.total_collateral_for_storage,
+            token_collateral_for_storage,
+        )
+        .map_err(|error| self.encoding_error("derive_core_space_collateral", error))?;
 
         if should_encode_core_space_contract_account(address, account.code_hash) {
             let sponsor_info = self
@@ -208,15 +256,36 @@ impl RemoteStateReader {
                 .await
                 .map_err(|error| self.provider_error("cfx_getSponsorInfo", error))?;
 
-            return Ok(encode_core_space_contract_account(
+            let storage_point_initialization_is_unknown =
+                sponsor_info.available_storage_point_units.is_zero()
+                    && used_storage_point_collateral.is_zero();
+            let encoded_account = encode_core_space_contract_account(
                 account.balance,
                 account.nonce,
                 account.code_hash,
                 account.staking_balance,
-                account.collateral_for_storage,
+                token_collateral_for_storage,
+                used_storage_point_collateral,
                 account.accumulated_interest_return,
                 account.admin.hex_address,
                 sponsor_info,
+            )
+            .map_err(|error| self.encoding_error("encode_core_space_contract_account", error))?;
+
+            if encoded_account.is_some() && storage_point_initialization_is_unknown {
+                self.storage_point_initialization_uncertainty
+                    .record_uncertain_account(address)?;
+            }
+
+            return Ok(encoded_account);
+        }
+
+        if !used_storage_point_collateral.is_zero() {
+            return Err(self.encoding_error(
+                "encode_core_space_basic_account",
+                StateValueEncodingError::BasicAccountStoragePointCollateral {
+                    value: used_storage_point_collateral,
+                },
             ));
         }
 
@@ -224,7 +293,7 @@ impl RemoteStateReader {
             account.balance,
             account.nonce,
             account.staking_balance,
-            account.collateral_for_storage,
+            token_collateral_for_storage,
             account.accumulated_interest_return,
         ))
     }

@@ -18,6 +18,27 @@ use crate::state::rpc_types::CoreSpaceSponsorInfo;
 pub(crate) enum StateValueEncodingError {
     #[error("code hash mismatch: expected {expected:?}, got {actual:?}")]
     CodeHashMismatch { expected: H256, actual: H256 },
+
+    #[error("Core Space account collateral total {total} is less than token collateral {token}")]
+    StorageCollateralUnderflow { total: U256, token: U256 },
+
+    #[error("basic Core Space account has storage-point collateral {value}")]
+    BasicAccountStoragePointCollateral { value: U256 },
+
+    #[error("available storage-point units {units} overflow when converted to collateral in drips")]
+    AvailableStoragePointCollateralOverflow { units: U256 },
+}
+
+pub(crate) fn used_storage_point_collateral(
+    total_collateral_for_storage: U256,
+    token_collateral_for_storage: U256,
+) -> Result<U256, StateValueEncodingError> {
+    total_collateral_for_storage
+        .checked_sub(token_collateral_for_storage)
+        .ok_or(StateValueEncodingError::StorageCollateralUnderflow {
+            total: total_collateral_for_storage,
+            token: token_collateral_for_storage,
+        })
 }
 
 pub(crate) fn encode_core_space_u256(value: U256) -> Box<[u8]> {
@@ -28,13 +49,13 @@ pub(crate) fn encode_core_space_basic_account(
     balance: U256,
     nonce: U256,
     staking_balance: U256,
-    collateral_for_storage: U256,
+    token_collateral_for_storage: U256,
     accumulated_interest_return: U256,
 ) -> Option<Box<[u8]>> {
     if balance.is_zero()
         && nonce.is_zero()
         && staking_balance.is_zero()
-        && collateral_for_storage.is_zero()
+        && token_collateral_for_storage.is_zero()
         && accumulated_interest_return.is_zero()
     {
         return None;
@@ -45,7 +66,7 @@ pub(crate) fn encode_core_space_basic_account(
             balance,
             nonce,
             staking_balance,
-            collateral_for_storage,
+            collateral_for_storage: token_collateral_for_storage,
             accumulated_interest_return,
         })
         .to_vec()
@@ -58,39 +79,41 @@ pub(crate) fn encode_core_space_contract_account(
     nonce: U256,
     code_hash: H256,
     staking_balance: U256,
-    collateral_for_storage: U256,
+    token_collateral_for_storage: U256,
+    used_storage_point_collateral: U256,
     accumulated_interest_return: U256,
     admin: Address,
     sponsor_info: CoreSpaceSponsorInfo,
-) -> Option<Box<[u8]>> {
-    let sponsor_info = core_space_sponsor_info_from_rpc(sponsor_info);
+) -> Result<Option<Box<[u8]>>, StateValueEncodingError> {
+    let sponsor_info =
+        core_space_sponsor_info_from_rpc(sponsor_info, used_storage_point_collateral)?;
 
     if balance.is_zero()
         && nonce.is_zero()
         && code_hash == KECCAK_EMPTY
         && staking_balance.is_zero()
-        && collateral_for_storage.is_zero()
+        && token_collateral_for_storage.is_zero()
         && accumulated_interest_return.is_zero()
         && admin.is_zero()
         && sponsor_info == SponsorInfo::default()
     {
-        return None;
+        return Ok(None);
     }
 
-    Some(
+    Ok(Some(
         rlp::encode(&ContractAccount {
             balance,
             nonce,
             code_hash,
             staking_balance,
-            collateral_for_storage,
+            collateral_for_storage: token_collateral_for_storage,
             accumulated_interest_return,
             admin,
             sponsor_info,
         })
         .to_vec()
         .into_boxed_slice(),
-    )
+    ))
 }
 
 pub(crate) fn should_encode_core_space_contract_account(address: Address, code_hash: H256) -> bool {
@@ -148,19 +171,32 @@ pub(crate) fn encode_storage_slot(value: U256) -> Box<[u8]> {
         .into_boxed_slice()
 }
 
-fn core_space_sponsor_info_from_rpc(info: CoreSpaceSponsorInfo) -> SponsorInfo {
-    let unused = info.available_storage_points * *DRIPS_PER_STORAGE_COLLATERAL_UNIT;
-    let used = info.used_storage_points * *DRIPS_PER_STORAGE_COLLATERAL_UNIT;
+fn core_space_sponsor_info_from_rpc(
+    info: CoreSpaceSponsorInfo,
+    used_storage_point_collateral: U256,
+) -> Result<SponsorInfo, StateValueEncodingError> {
+    let unused_storage_point_collateral = info
+        .available_storage_point_units
+        .checked_mul(*DRIPS_PER_STORAGE_COLLATERAL_UNIT)
+        .ok_or(
+            StateValueEncodingError::AvailableStoragePointCollateralOverflow {
+                units: info.available_storage_point_units,
+            },
+        )?;
 
-    SponsorInfo {
+    Ok(SponsorInfo {
         sponsor_for_gas: info.sponsor_for_gas.into(),
         sponsor_for_collateral: info.sponsor_for_collateral.into(),
         sponsor_gas_bound: info.sponsor_gas_bound,
         sponsor_balance_for_gas: info.sponsor_balance_for_gas,
         sponsor_balance_for_collateral: info.sponsor_balance_for_collateral,
-        storage_points: (!unused.is_zero() || !used.is_zero())
-            .then_some(StoragePoints { unused, used }),
-    }
+        storage_points: (!unused_storage_point_collateral.is_zero()
+            || !used_storage_point_collateral.is_zero())
+        .then_some(StoragePoints {
+            unused: unused_storage_point_collateral,
+            used: used_storage_point_collateral,
+        }),
+    })
 }
 
 pub(crate) fn encode_espace_account(balance: U256, nonce: U256, code: &[u8]) -> Option<Box<[u8]>> {

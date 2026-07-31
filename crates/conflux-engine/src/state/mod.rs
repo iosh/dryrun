@@ -13,7 +13,7 @@ use cfx_types::{H256, U64};
 pub use self::http_provider::{ConfluxRpcError, CoreSpaceResourceEstimate, HttpConfluxProvider};
 
 pub(crate) use self::{
-    reader::RemoteStateReader,
+    reader::{RemoteStateReader, StoragePointInitializationUncertainty},
     rpc_types::{CoreSpaceRpcBlock, CoreSpaceRpcPoSBlock, EspaceRpcBlock},
     storage::new_rpc_backed_state,
 };
