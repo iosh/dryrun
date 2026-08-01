@@ -57,6 +57,28 @@ pub(crate) enum CoreSpaceChange {
         pos_identifier: B256,
         requested_vote_count: u64,
     },
+    SponsorshipDeposit {
+        sponsored_resource: SponsoredResource,
+        sponsor: Address,
+        contract_address: Address,
+        raw_amount: U256,
+    },
+    SponsorshipRefund {
+        sponsored_resource: SponsoredResource,
+        sponsor: Address,
+        contract_address: Address,
+        raw_amount: U256,
+    },
+    StoragePointConversion {
+        contract_address: Address,
+        converted_cfx_raw_amount: U256,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum SponsoredResource {
+    Gas,
+    StorageCollateral,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

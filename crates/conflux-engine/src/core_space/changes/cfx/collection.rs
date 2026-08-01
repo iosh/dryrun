@@ -4,7 +4,13 @@ use cfx_types::{AddressSpaceUtil, Space};
 use cfx_vm_types::{CallType, Spec};
 use contract_standards::Position;
 
-use super::{CfxBalanceLocation, CfxOperation, CfxOperations};
+use super::{
+    CfxBalanceLocation, CfxOperation, CfxOperations,
+    sponsorship::{
+        collect_sponsorship_call, collect_standalone_sponsorship_refund,
+        collect_storage_point_conversion,
+    },
+};
 use crate::{
     ConfluxEngineError,
     execution::Observation,
@@ -28,8 +34,17 @@ pub(crate) fn collect_cfx_operations(
         let observation = &observations[observation_index];
         match observation {
             Observation::Call { .. } => {
+                if let Some((operation, consumed)) =
+                    collect_sponsorship_call(observations, observation_index, machine, spec)?
+                {
+                    collector
+                        .operations
+                        .push(CfxOperation::SponsorshipCall(operation));
+                    observation_index = advance_observation_index(observation_index, consumed)?;
+                    continue;
+                }
                 collector.collect_call_value_transfer(observation, machine, spec)?;
-                observation_index += 1;
+                observation_index = advance_observation_index(observation_index, 1)?;
             }
             Observation::CreateTransfer {
                 position,
@@ -45,19 +60,31 @@ pub(crate) fn collect_cfx_operations(
                     *to,
                     u256_from_cfx(*value),
                 )?;
-                observation_index += 1;
+                observation_index = advance_observation_index(observation_index, 1)?;
             }
             Observation::InternalTransfer { .. } => {
-                observation_index +=
+                let consumed =
                     collector.collect_internal_transfer(observations, observation_index)?;
+                observation_index = advance_observation_index(observation_index, consumed)?;
             }
             Observation::Log { .. } => {
-                observation_index += 1;
+                observation_index = advance_observation_index(observation_index, 1)?;
             }
         }
     }
 
     Ok(collector.into_operations())
+}
+
+fn advance_observation_index(
+    observation_index: usize,
+    consumed: usize,
+) -> Result<usize, ConfluxEngineError> {
+    observation_index.checked_add(consumed).ok_or_else(|| {
+        ConfluxEngineError::analysis_failed(
+            "Core Space CFX observation index overflowed during collection",
+        )
+    })
 }
 
 impl CfxOperationCollector {
@@ -163,6 +190,25 @@ impl CfxOperationCollector {
                 "Core Space CFX collector received an inconsistent observation index",
             ));
         };
+        if let Some((conversion, consumed)) =
+            collect_storage_point_conversion(observations, observation_index)?
+        {
+            self.operations
+                .push(CfxOperation::StoragePointConversion(conversion));
+            return Ok(consumed);
+        }
+        if let Some(refund) = collect_standalone_sponsorship_refund(
+            observations.get(observation_index).ok_or_else(|| {
+                ConfluxEngineError::analysis_failed(
+                    "Core Space CFX collector received an inconsistent observation index",
+                )
+            })?,
+        )? {
+            self.operations
+                .push(CfxOperation::SponsorshipStandaloneRefund(refund));
+            return Ok(1);
+        }
+
         let amount = u256_from_cfx(*value);
 
         if matches!(

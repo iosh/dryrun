@@ -1,4 +1,5 @@
 mod collection;
+mod sponsorship;
 mod verification;
 
 use std::{
@@ -13,17 +14,25 @@ use primitives::{Action, SignedTransaction};
 pub(crate) use collection::collect_cfx_operations;
 pub(crate) use verification::{read_cfx_state_values, verify_cfx_changes};
 
-use crate::{ConfluxEngineError, primitive::address_from_cfx};
+use crate::{
+    ConfluxEngineError, core_space::changes::SponsoredResource, primitive::address_from_cfx,
+};
 
 #[derive(Debug)]
 pub(crate) struct CfxOperations {
     balance_locations: Vec<CfxBalanceLocation>,
+    sponsor_resources: Vec<SponsorResourceLocation>,
+    storage_point_accounts: Vec<Address>,
+    requires_storage_point_globals: bool,
     operations: Vec<CfxOperation>,
 }
 
 impl CfxOperations {
     fn from_operations(operations: Vec<CfxOperation>) -> Self {
         let mut balance_locations = BTreeSet::new();
+        let mut sponsor_resources = BTreeSet::new();
+        let mut storage_point_accounts = BTreeSet::new();
+        let mut requires_storage_point_globals = false;
 
         for operation in &operations {
             match operation {
@@ -48,11 +57,68 @@ impl CfxOperations {
                 CfxOperation::StakingBurn { account, .. } => {
                     balance_locations.insert(CfxBalanceLocation::Staking { account: *account });
                 }
+                CfxOperation::SponsorshipCall(call) => {
+                    balance_locations.insert(CfxBalanceLocation::Account {
+                        account: call.sponsor,
+                    });
+                    balance_locations.insert(call.resource.pool_location(call.contract_address));
+                    sponsor_resources.insert(SponsorResourceLocation {
+                        resource: call.resource,
+                        contract_address: call.contract_address,
+                    });
+                    if let Some(refund) = call.refund {
+                        balance_locations.insert(CfxBalanceLocation::Account {
+                            account: refund.sponsor,
+                        });
+                    }
+                    if call.resource == SponsoredResource::StorageCollateral {
+                        add_storage_point_requirements(
+                            call.contract_address,
+                            &mut balance_locations,
+                            &mut storage_point_accounts,
+                            &mut requires_storage_point_globals,
+                        );
+                    }
+                }
+                CfxOperation::SponsorshipStandaloneRefund(refund) => {
+                    balance_locations.insert(CfxBalanceLocation::Account {
+                        account: refund.sponsor,
+                    });
+                    balance_locations
+                        .insert(refund.resource.pool_location(refund.contract_address));
+                    sponsor_resources.insert(SponsorResourceLocation {
+                        resource: refund.resource,
+                        contract_address: refund.contract_address,
+                    });
+                    if refund.resource == SponsoredResource::StorageCollateral {
+                        add_storage_point_requirements(
+                            refund.contract_address,
+                            &mut balance_locations,
+                            &mut storage_point_accounts,
+                            &mut requires_storage_point_globals,
+                        );
+                    }
+                }
+                CfxOperation::StoragePointConversion(conversion) => {
+                    add_storage_point_requirements(
+                        conversion.contract_address,
+                        &mut balance_locations,
+                        &mut storage_point_accounts,
+                        &mut requires_storage_point_globals,
+                    );
+                    sponsor_resources.insert(SponsorResourceLocation {
+                        resource: SponsoredResource::StorageCollateral,
+                        contract_address: conversion.contract_address,
+                    });
+                }
             }
         }
 
         Self {
             balance_locations: balance_locations.into_iter().collect(),
+            sponsor_resources: sponsor_resources.into_iter().collect(),
+            storage_point_accounts: storage_point_accounts.into_iter().collect(),
+            requires_storage_point_globals,
             operations,
         }
     }
@@ -86,6 +152,18 @@ impl CfxOperations {
 
         Ok(())
     }
+}
+
+fn add_storage_point_requirements(
+    contract_address: Address,
+    balance_locations: &mut BTreeSet<CfxBalanceLocation>,
+    storage_point_accounts: &mut BTreeSet<Address>,
+    requires_storage_point_globals: &mut bool,
+) {
+    balance_locations.insert(CfxBalanceLocation::StorageSponsor { contract_address });
+    balance_locations.insert(CfxBalanceLocation::StorageCollateral { contract_address });
+    storage_point_accounts.insert(contract_address);
+    *requires_storage_point_globals = true;
 }
 
 fn credit_staking_balance_if_present(
@@ -126,6 +204,8 @@ pub(crate) enum CfxBalanceLocation {
     Account { account: Address },
     Staking { account: Address },
     GasSponsor { contract_address: Address },
+    StorageSponsor { contract_address: Address },
+    StorageCollateral { contract_address: Address },
 }
 
 impl fmt::Display for CfxBalanceLocation {
@@ -143,6 +223,33 @@ impl fmt::Display for CfxBalanceLocation {
                     "gas sponsor balance for contract {contract_address}"
                 )
             }
+            Self::StorageSponsor { contract_address } => {
+                write!(
+                    formatter,
+                    "storage sponsor balance for contract {contract_address}"
+                )
+            }
+            Self::StorageCollateral { contract_address } => {
+                write!(
+                    formatter,
+                    "token storage collateral for contract {contract_address}"
+                )
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct SponsorResourceLocation {
+    resource: SponsoredResource,
+    contract_address: Address,
+}
+
+impl SponsoredResource {
+    const fn pool_location(self, contract_address: Address) -> CfxBalanceLocation {
+        match self {
+            Self::Gas => CfxBalanceLocation::GasSponsor { contract_address },
+            Self::StorageCollateral => CfxBalanceLocation::StorageSponsor { contract_address },
         }
     }
 }
@@ -184,6 +291,38 @@ enum CfxOperation {
         account: Address,
         amount: U256,
     },
+    SponsorshipCall(SponsorshipCallOperation),
+    SponsorshipStandaloneRefund(SponsorshipRefundOperation),
+    StoragePointConversion(StoragePointConversionOperation),
+}
+
+#[derive(Debug)]
+struct SponsorshipCallOperation {
+    position: Position,
+    resource: SponsoredResource,
+    sponsor: Address,
+    contract_address: Address,
+    gross_deposit_amount: U256,
+    pool_deposit_amount: U256,
+    refund: Option<SponsorshipRefundOperation>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SponsorshipRefundOperation {
+    position: Position,
+    resource: SponsoredResource,
+    sponsor: Address,
+    contract_address: Address,
+    gross_refund_amount: U256,
+    pool_refund_amount: U256,
+}
+
+#[derive(Debug)]
+struct StoragePointConversionOperation {
+    position: Position,
+    contract_address: Address,
+    from_sponsor_pool: U256,
+    from_storage_collateral: U256,
 }
 
 pub(crate) fn determine_gas_fee_payer(

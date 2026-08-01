@@ -287,11 +287,9 @@ fn validate_storage_point_state_dependencies(
         return Ok(());
     };
 
-    Err(ConfluxEngineError::StateAccess {
-        message: format!(
-            "Core Space execution depends on storage-point initialization state unavailable from public RPC for account {account_address:?}"
-        ),
-    })
+    Err(ConfluxEngineError::analysis_failed(format!(
+        "Core Space execution depends on storage-point initialization state unavailable from public RPC for account {account_address:?}"
+    )))
 }
 
 fn storage_point_dependent_account(
