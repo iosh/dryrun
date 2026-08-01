@@ -4,9 +4,9 @@ pub use crate::ConfluxTransactionRequest;
 pub use engine::core_space::{
     Change, CoreSpaceChange, CoreSpaceEpochRef, CoreSpaceExecutedDetails, CoreSpaceExecution,
     CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode, CoreSpaceExecutionOutcome,
-    CoreSpaceSimulation, CoreSpaceStateAnchor, CoreSpaceStorageChange, CrossSpaceAddress,
-    Erc20Metadata, Erc721CollectionMetadata, NativeMetadata, SponsoredResource,
-    SponsorshipConfiguration, SponsorshipEligibilityTarget,
+    CoreSpaceSimulation, CoreSpaceStateAnchor, CrossSpaceAddress, Erc20Metadata,
+    Erc721CollectionMetadata, NativeMetadata, SponsoredResource, SponsorshipConfiguration,
+    SponsorshipEligibilityTarget,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

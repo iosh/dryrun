@@ -34,8 +34,6 @@ struct CoreSpaceExecution {
     burnt_fee: Option<U256>,
     gas_covered_by_sponsor: bool,
     storage_covered_by_sponsor: bool,
-    storage_collateralized: Vec<CoreSpaceStorageChange>,
-    storage_released: Vec<CoreSpaceStorageChange>,
     output: CoreSpaceRpcBytes,
     failure: Option<CoreSpaceExecutionFailure>,
 }
@@ -53,13 +51,6 @@ enum CoreSpaceExecutionStatus {
     Success,
     Failed,
     NotExecuted,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct CoreSpaceStorageChange {
-    address: RpcAddress,
-    collateral_units: U64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -101,17 +92,14 @@ impl SimulateCoreSpaceTransactionResponse {
     ) -> Result<Self, ResponseMappingError> {
         let (execution, changes) = simulation.into_parts();
         Ok(Self {
-            execution: CoreSpaceExecution::try_from_service(execution, network)?,
+            execution: CoreSpaceExecution::from_service(execution),
             changes: core_space_change::try_map_changes(changes, network)?,
         })
     }
 }
 
 impl CoreSpaceExecution {
-    fn try_from_service(
-        execution: service_core_space::CoreSpaceExecution,
-        network: Network,
-    ) -> Result<Self, ResponseMappingError> {
+    fn from_service(execution: service_core_space::CoreSpaceExecution) -> Self {
         let service_core_space::CoreSpaceExecution {
             chain_id,
             context: state,
@@ -126,8 +114,6 @@ impl CoreSpaceExecution {
             burnt_fee,
             gas_covered_by_sponsor,
             storage_covered_by_sponsor,
-            storage_collateralized,
-            storage_released,
             output,
             failure,
         ) = match outcome {
@@ -141,16 +127,6 @@ impl CoreSpaceExecution {
                     common.burnt_fee.map(u256_to_wire),
                     details.gas_covered_by_sponsor,
                     details.storage_covered_by_sponsor,
-                    map_core_space_storage_changes(
-                        details.storage_collateralized,
-                        network,
-                        "execution.storageCollateralized",
-                    )?,
-                    map_core_space_storage_changes(
-                        details.storage_released,
-                        network,
-                        "execution.storageReleased",
-                    )?,
                     CoreSpaceRpcBytes::from(common.output.to_vec()),
                     None,
                 )
@@ -165,16 +141,6 @@ impl CoreSpaceExecution {
                     common.burnt_fee.map(u256_to_wire),
                     details.gas_covered_by_sponsor,
                     details.storage_covered_by_sponsor,
-                    map_core_space_storage_changes(
-                        details.storage_collateralized,
-                        network,
-                        "execution.storageCollateralized",
-                    )?,
-                    map_core_space_storage_changes(
-                        details.storage_released,
-                        network,
-                        "execution.storageReleased",
-                    )?,
                     CoreSpaceRpcBytes::from(common.output.to_vec()),
                     Some(failure.into()),
                 )
@@ -187,14 +153,12 @@ impl CoreSpaceExecution {
                 Some(U256::zero()),
                 false,
                 false,
-                Vec::new(),
-                Vec::new(),
                 CoreSpaceRpcBytes::default(),
                 Some(failure.into()),
             ),
         };
 
-        Ok(Self {
+        Self {
             chain_id: chain_id.into(),
             state: state.into(),
             status,
@@ -205,11 +169,9 @@ impl CoreSpaceExecution {
             burnt_fee,
             gas_covered_by_sponsor,
             storage_covered_by_sponsor,
-            storage_collateralized,
-            storage_released,
             output,
             failure,
-        })
+        }
     }
 }
 
@@ -280,27 +242,6 @@ impl From<service_core_space::CoreSpaceExecutionFailureCode> for CoreSpaceExecut
             service_core_space::CoreSpaceExecutionFailureCode::VmError => Self::VmError,
         }
     }
-}
-
-fn map_core_space_storage_changes(
-    changes: Vec<service_core_space::CoreSpaceStorageChange>,
-    network: Network,
-    field: &str,
-) -> Result<Vec<CoreSpaceStorageChange>, ResponseMappingError> {
-    changes
-        .into_iter()
-        .enumerate()
-        .map(|(index, change)| {
-            Ok(CoreSpaceStorageChange {
-                address: map_core_space_address(
-                    change.address,
-                    network,
-                    format!("{field}[{index}].address"),
-                )?,
-                collateral_units: change.collateral_units.into(),
-            })
-        })
-        .collect()
 }
 
 pub(super) fn map_core_space_address(

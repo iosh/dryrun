@@ -10,7 +10,8 @@ use super::{
     CfxBalanceLocation, CfxOperation, CfxOperations, CrossSpaceTransferOperation,
     SponsorResourceLocation, SponsorshipAccessCallerRole, SponsorshipAccessRuleKey,
     SponsorshipAccessRuleUpdate, SponsorshipFundingOperation, SponsorshipFundingTerms,
-    SponsorshipRefundOperation, StoragePointConversionOperation, cross_space_balance_location,
+    SponsorshipRefundOperation, StorageCollateralReleaseOperation, StoragePointConversionOperation,
+    cross_space_balance_location,
 };
 use crate::{
     ConfluxEngineError,
@@ -427,6 +428,9 @@ pub(crate) fn verify_cfx_changes(
             CfxOperation::StoragePointConversion(conversion) => {
                 replayed_state
                     .apply_storage_point_conversion(conversion, &mut positioned_core_changes)?;
+            }
+            CfxOperation::StorageCollateralRelease(release) => {
+                replayed_state.apply_storage_collateral_release(release)?;
             }
         }
     }
@@ -869,6 +873,125 @@ impl CfxStateValues {
                 converted_cfx_raw_amount: converted_amount,
             },
         ));
+        Ok(())
+    }
+
+    fn apply_storage_collateral_release(
+        &mut self,
+        release: &StorageCollateralReleaseOperation,
+    ) -> Result<(), ConfluxEngineError> {
+        let collateral_location = CfxBalanceLocation::StorageCollateral {
+            contract_address: release.contract_address,
+        };
+        let token_collateral = self
+            .balances
+            .get(&collateral_location)
+            .copied()
+            .ok_or_else(|| {
+                ConfluxEngineError::analysis_failed(format!(
+                    "before Core Space token storage collateral is missing for contract {}",
+                    release.contract_address
+                ))
+            })?;
+        let refundable_amount = token_collateral.min(release.total_released_amount);
+        let burnt_amount = release
+            .total_released_amount
+            .checked_sub(refundable_amount)
+            .ok_or_else(|| {
+                ConfluxEngineError::analysis_failed(
+                    "Core Space storage release refundable amount exceeded its total",
+                )
+            })?;
+
+        let storage_point_refund = match self.storage_points.get_mut(&release.contract_address) {
+            Some(Some(points)) => {
+                let refund = points.used.min(refundable_amount);
+                points.used = points.used.checked_sub(refund).ok_or_else(|| {
+                    ConfluxEngineError::analysis_failed(format!(
+                        "Core Space used storage points underflowed for contract {}",
+                        release.contract_address
+                    ))
+                })?;
+                points.unused = points.unused.checked_add(refund).ok_or_else(|| {
+                    ConfluxEngineError::analysis_failed(format!(
+                        "Core Space unused storage points overflowed for contract {}",
+                        release.contract_address
+                    ))
+                })?;
+                refund
+            }
+            Some(None) => U256::ZERO,
+            None => {
+                return Err(ConfluxEngineError::analysis_failed(format!(
+                    "before Core Space storage points are missing for contract {}",
+                    release.contract_address
+                )));
+            }
+        };
+
+        let expected_non_point_amount = release
+            .total_released_amount
+            .checked_sub(storage_point_refund)
+            .ok_or_else(|| {
+                ConfluxEngineError::analysis_failed(
+                    "Core Space storage-point refund exceeded its total release",
+                )
+            })?;
+        if release.observed_non_point_amount != expected_non_point_amount {
+            return Err(ConfluxEngineError::analysis_failed(format!(
+                "Core Space storage release movement mismatch for contract {}: observed {}, expected {}",
+                release.contract_address,
+                release.observed_non_point_amount,
+                expected_non_point_amount
+            )));
+        }
+
+        let token_refund = refundable_amount
+            .checked_sub(storage_point_refund)
+            .ok_or_else(|| {
+                ConfluxEngineError::analysis_failed(
+                    "Core Space storage-point refund exceeded refundable token collateral",
+                )
+            })?;
+        self.debit_balance(collateral_location, token_refund)?;
+        self.credit_balance(
+            CfxBalanceLocation::StorageSponsor {
+                contract_address: release.contract_address,
+            },
+            token_refund,
+        )?;
+        self.debit_total_issued(burnt_amount, "a storage collateral release")?;
+
+        let total_storage_debit = release
+            .total_released_amount
+            .checked_sub(storage_point_refund)
+            .ok_or_else(|| {
+                ConfluxEngineError::analysis_failed(
+                    "Core Space storage-point refund exceeded total storage release",
+                )
+            })?;
+        let globals = self.storage_point_globals.as_mut().ok_or_else(|| {
+            ConfluxEngineError::analysis_failed(
+                "before Core Space storage-point globals are missing for a storage release",
+            )
+        })?;
+        globals.total_storage = globals
+            .total_storage
+            .checked_sub(total_storage_debit)
+            .ok_or_else(|| {
+                ConfluxEngineError::analysis_failed(
+                    "Core Space total storage underflowed during a storage release",
+                )
+            })?;
+        globals.used_storage_points = globals
+            .used_storage_points
+            .checked_sub(storage_point_refund)
+            .ok_or_else(|| {
+                ConfluxEngineError::analysis_failed(
+                    "Core Space used storage points underflowed during a storage release",
+                )
+            })?;
+
         Ok(())
     }
 

@@ -1,13 +1,15 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use alloy_primitives::{Address, U256};
 use cfx_executor::{executive_observer::AddressPocket, machine::Machine};
-use cfx_types::{AddressSpaceUtil, AddressWithSpace, Space};
+use cfx_parameters::staking::DRIPS_PER_STORAGE_COLLATERAL_UNIT;
+use cfx_types::{AddressSpaceUtil, AddressWithSpace, Space, address_util::AddressUtil};
 use cfx_vm_types::{CallType, Spec};
 use contract_standards::Position;
+use primitives::receipt::StorageChange;
 
 use super::{
-    CfxBalanceLocation, CfxOperation, CfxOperations,
+    CfxBalanceLocation, CfxOperation, CfxOperations, StorageCollateralReleaseOperation,
     cross_space::collect_cross_space_call,
     sponsorship::{
         CollectedSponsorshipCall, collect_admin_change_attempt, collect_sponsorship_call,
@@ -20,18 +22,20 @@ use crate::{
     primitive::{address_from_cfx, u256_from_cfx},
 };
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct CfxOperationCollector {
     operations: Vec<CfxOperation>,
+    pending_storage_releases: BTreeMap<cfx_types::Address, U256>,
 }
 
 pub(crate) fn collect_cfx_operations(
     observations: &[Observation],
     contracts_created: &[AddressWithSpace],
+    storage_released: &[StorageChange],
     machine: &Machine,
     spec: &Spec,
 ) -> Result<CfxOperations, ConfluxEngineError> {
-    let mut collector = CfxOperationCollector::default();
+    let mut collector = CfxOperationCollector::new(storage_released)?;
     let mut contracts_with_admin_change_attempts = BTreeSet::new();
     for observation in observations {
         let Some(attempt) = collect_admin_change_attempt(observation, machine, spec)? else {
@@ -107,7 +111,7 @@ pub(crate) fn collect_cfx_operations(
         &contracts_with_admin_change_attempts,
         contracts_created,
     )?;
-    Ok(collector.into_operations())
+    collector.into_operations()
 }
 
 fn advance_observation_index(
@@ -122,8 +126,59 @@ fn advance_observation_index(
 }
 
 impl CfxOperationCollector {
-    fn into_operations(self) -> CfxOperations {
-        CfxOperations::from_operations(self.operations)
+    fn new(storage_released: &[StorageChange]) -> Result<Self, ConfluxEngineError> {
+        let drip_per_unit = u256_from_cfx(*DRIPS_PER_STORAGE_COLLATERAL_UNIT);
+        let mut pending_storage_releases = BTreeMap::new();
+
+        for release in storage_released {
+            if !release.address.is_contract_address() {
+                return Err(ConfluxEngineError::analysis_failed(format!(
+                    "Core Space storage release for non-contract owner {:?} is not supported",
+                    release.address
+                )));
+            }
+            let total_released_amount = U256::from(release.collaterals.as_u64())
+                .checked_mul(drip_per_unit)
+                .ok_or_else(|| {
+                    ConfluxEngineError::analysis_failed(format!(
+                        "Core Space storage release amount overflowed for contract {:?}",
+                        release.address
+                    ))
+                })?;
+            if total_released_amount.is_zero() {
+                return Err(ConfluxEngineError::analysis_failed(format!(
+                    "Core Space execution reported a zero storage release for contract {:?}",
+                    release.address
+                )));
+            }
+            if pending_storage_releases
+                .insert(release.address, total_released_amount)
+                .is_some()
+            {
+                return Err(ConfluxEngineError::analysis_failed(format!(
+                    "Core Space execution reported duplicate storage releases for contract {:?}",
+                    release.address
+                )));
+            }
+        }
+
+        Ok(Self {
+            operations: Vec::new(),
+            pending_storage_releases,
+        })
+    }
+
+    fn into_operations(mut self) -> Result<CfxOperations, ConfluxEngineError> {
+        for (contract_address, total_released_amount) in self.pending_storage_releases {
+            self.operations.push(CfxOperation::StorageCollateralRelease(
+                StorageCollateralReleaseOperation {
+                    contract_address: address_from_cfx(contract_address),
+                    total_released_amount,
+                    observed_non_point_amount: U256::ZERO,
+                },
+            ));
+        }
+        Ok(CfxOperations::from_operations(self.operations))
     }
 
     fn validate_sponsorship_access_admin_context(
@@ -280,6 +335,34 @@ impl CfxOperationCollector {
         }
 
         let amount = u256_from_cfx(*value);
+
+        if let (
+            AddressPocket::StorageCollateral(collateral_contract),
+            AddressPocket::SponsorBalanceForStorage(sponsor_contract),
+        ) = (from, to)
+        {
+            if collateral_contract != sponsor_contract {
+                return Err(ConfluxEngineError::analysis_failed(format!(
+                    "Core Space storage release moved collateral between different contracts: {collateral_contract:?} -> {sponsor_contract:?}"
+                )));
+            }
+            let total_released_amount = self
+                .pending_storage_releases
+                .remove(collateral_contract)
+                .ok_or_else(|| {
+                    ConfluxEngineError::analysis_failed(format!(
+                        "Core Space storage release movement for contract {collateral_contract:?} had no matching execution fact"
+                    ))
+                })?;
+            self.operations.push(CfxOperation::StorageCollateralRelease(
+                StorageCollateralReleaseOperation {
+                    contract_address: address_from_cfx(*collateral_contract),
+                    total_released_amount,
+                    observed_non_point_amount: amount,
+                },
+            ));
+            return Ok(1);
+        }
 
         if matches!(
             (from, to),

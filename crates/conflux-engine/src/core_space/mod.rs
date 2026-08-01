@@ -17,7 +17,6 @@ pub use changes::{
 pub use execution::{
     CoreSpaceExecutedDetails, CoreSpaceExecution, CoreSpaceExecutionFailure,
     CoreSpaceExecutionFailureCode, CoreSpaceExecutionOutcome, CoreSpaceStateAnchor,
-    CoreSpaceStorageChange,
 };
 pub use result::CoreSpaceSimulation;
 pub use simulation_changes::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};

@@ -77,6 +77,7 @@ pub(crate) fn simulate(
                 execution_fee,
                 burnt_fee,
                 gas_paid_by_sponsor,
+                storage_released,
             ) = match &mut transaction_outcome {
                 TransactionExecutionOutcome::Success(executed_details) => (
                     std::mem::take(&mut executed_details.observations),
@@ -85,6 +86,7 @@ pub(crate) fn simulate(
                     executed_details.common.fee,
                     executed_details.common.burnt_fee,
                     executed_details.gas_sponsor_paid,
+                    executed_details.storage_released.clone(),
                 ),
                 _ => {
                     let storage_payer = storage_payer_for_outcome(
@@ -107,6 +109,7 @@ pub(crate) fn simulate(
             let cfx_operations = collect_cfx_operations(
                 &execution_observations,
                 &contracts_created,
+                &storage_released,
                 &machine,
                 &prepared_execution.spec,
             )?;

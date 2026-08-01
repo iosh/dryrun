@@ -1,11 +1,9 @@
 use cfx_executor::executive::{ExecutionError, ToRepackError, TxDropError};
 use cfx_vm_types as vm;
-use primitives::receipt::StorageChange;
 
 use super::{
     CoreSpaceExecutedDetails, CoreSpaceExecution, CoreSpaceExecutionFailure,
     CoreSpaceExecutionFailureCode, CoreSpaceExecutionOutcome, CoreSpaceStateAnchor,
-    CoreSpaceStorageChange,
 };
 use crate::execution::{ExecutedTransactionDetails, TransactionExecutionOutcome};
 
@@ -19,14 +17,14 @@ pub(crate) fn build_core_space_execution(
     storage_payer: Option<PreparedStoragePayer>,
 ) -> CoreSpaceExecution {
     let outcome = match outcome {
-        TransactionExecutionOutcome::Success(details) => CoreSpaceExecutionOutcome::Success(
-            into_core_space_details(details, true, storage_payer),
-        ),
+        TransactionExecutionOutcome::Success(details) => {
+            CoreSpaceExecutionOutcome::Success(into_core_space_details(details, storage_payer))
+        }
         TransactionExecutionOutcome::Failed { error, details } => {
             let failure =
                 build_core_space_execution_error_failure(&error, details.common.output.as_ref());
             CoreSpaceExecutionOutcome::Failed {
-                details: into_core_space_details(details, false, storage_payer),
+                details: into_core_space_details(details, storage_payer),
                 failure,
             }
         }
@@ -62,39 +60,15 @@ pub(crate) fn build_core_space_not_executed(
 
 fn into_core_space_details(
     details: ExecutedTransactionDetails,
-    include_storage_changes: bool,
     storage_payer: Option<PreparedStoragePayer>,
 ) -> CoreSpaceExecutedDetails {
-    let storage_collateralized = if include_storage_changes {
-        into_core_space_storage_changes(details.storage_collateralized)
-    } else {
-        Vec::new()
-    };
-    let storage_released = if include_storage_changes {
-        into_core_space_storage_changes(details.storage_released)
-    } else {
-        Vec::new()
-    };
-
     CoreSpaceExecutedDetails {
         common: details.common,
         gas_covered_by_sponsor: details.gas_sponsor_paid,
         storage_covered_by_sponsor: storage_payer
             .map(PreparedStoragePayer::storage_covered_by_sponsor)
             .unwrap_or(details.storage_sponsor_paid),
-        storage_collateralized,
-        storage_released,
     }
-}
-
-fn into_core_space_storage_changes(changes: Vec<StorageChange>) -> Vec<CoreSpaceStorageChange> {
-    changes
-        .into_iter()
-        .map(|change| CoreSpaceStorageChange {
-            address: change.address,
-            collateral_units: change.collaterals.as_u64(),
-        })
-        .collect()
 }
 
 fn build_core_space_drop_failure(error: &TxDropError) -> CoreSpaceExecutionFailure {

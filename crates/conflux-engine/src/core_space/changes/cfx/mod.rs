@@ -136,6 +136,14 @@ impl CfxOperations {
                         contract_address: conversion.contract_address,
                     });
                 }
+                CfxOperation::StorageCollateralRelease(release) => {
+                    add_storage_point_requirements(
+                        release.contract_address,
+                        &mut balance_locations,
+                        &mut storage_point_accounts,
+                        &mut requires_storage_point_globals,
+                    );
+                }
                 CfxOperation::SponsorshipAccessRule(update) => {
                     sponsorship_access_rule_keys.insert(update.key());
                     if update.caller_role == SponsorshipAccessCallerRole::ContractAdmin {
@@ -377,6 +385,7 @@ enum CfxOperation {
     SponsorshipStandaloneRefund(SponsorshipRefundOperation),
     SponsorshipAccessRule(SponsorshipAccessRuleUpdate),
     StoragePointConversion(StoragePointConversionOperation),
+    StorageCollateralRelease(StorageCollateralReleaseOperation),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -436,6 +445,13 @@ struct StoragePointConversionOperation {
     contract_address: Address,
     from_sponsor_pool: U256,
     from_storage_collateral: U256,
+}
+
+#[derive(Debug)]
+struct StorageCollateralReleaseOperation {
+    contract_address: Address,
+    total_released_amount: U256,
+    observed_non_point_amount: U256,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

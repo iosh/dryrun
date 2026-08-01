@@ -1,5 +1,5 @@
 use alloy_primitives::U256;
-use cfx_types::{Address, H256};
+use cfx_types::H256;
 use simulation_execution::{ExecutedDetails, Execution, ExecutionOutcome};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,18 +39,10 @@ pub struct CoreSpaceStateAnchor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoreSpaceStorageChange {
-    pub address: Address,
-    pub collateral_units: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreSpaceExecutedDetails {
     pub common: ExecutedDetails<Option<U256>>,
     pub gas_covered_by_sponsor: bool,
     pub storage_covered_by_sponsor: bool,
-    pub storage_collateralized: Vec<CoreSpaceStorageChange>,
-    pub storage_released: Vec<CoreSpaceStorageChange>,
 }
 
 pub type CoreSpaceExecution =
