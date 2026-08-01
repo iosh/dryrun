@@ -8,6 +8,7 @@ use contract_standards::Position;
 
 use super::{
     CfxBalanceLocation, CfxOperation, CfxOperations,
+    cross_space::collect_cross_space_call,
     sponsorship::{
         CollectedSponsorshipCall, collect_admin_change_attempt, collect_sponsorship_call,
         collect_standalone_sponsorship_refund, collect_storage_point_conversion,
@@ -49,6 +50,15 @@ pub(crate) fn collect_cfx_operations(
         let observation = &observations[observation_index];
         match observation {
             Observation::Call { .. } => {
+                if let Some((operation, consumed)) =
+                    collect_cross_space_call(observations, observation_index, machine, spec)?
+                {
+                    collector
+                        .operations
+                        .push(CfxOperation::CrossSpaceTransfer(operation));
+                    observation_index = advance_observation_index(observation_index, consumed)?;
+                    continue;
+                }
                 if let Some((collected_call, consumed)) =
                     collect_sponsorship_call(observations, observation_index, machine, spec)?
                 {
@@ -171,10 +181,18 @@ impl CfxOperationCollector {
         if amount.is_zero() {
             return Ok(());
         }
-        if *space != Space::Native {
-            return Err(ConfluxEngineError::analysis_failed(
-                "nonzero eSpace call value is not supported by Core Space CFX analysis",
-            ));
+        if *space == Space::Ethereum {
+            if *call_type != CallType::Call {
+                return Err(ConfluxEngineError::analysis_failed(format!(
+                    "nonzero eSpace {call_type:?} value is not a balance transfer"
+                )));
+            }
+            self.push_espace_balance_transfer(
+                address_from_cfx(*caller),
+                address_from_cfx(*target),
+                amount,
+            );
+            return Ok(());
         }
         if *call_type != CallType::Call {
             return Err(ConfluxEngineError::analysis_failed(format!(
@@ -191,7 +209,7 @@ impl CfxOperationCollector {
             )));
         }
 
-        self.push_account_transfer(
+        self.push_core_space_balance_transfer(
             *position,
             address_from_cfx(*caller),
             address_from_cfx(*target),
@@ -211,13 +229,12 @@ impl CfxOperationCollector {
         if amount.is_zero() {
             return Ok(());
         }
-        if space != Space::Native {
-            return Err(ConfluxEngineError::analysis_failed(
-                "nonzero eSpace create value is not supported by Core Space CFX analysis",
-            ));
+        if space == Space::Ethereum {
+            self.push_espace_balance_transfer(address_from_cfx(from), address_from_cfx(to), amount);
+            return Ok(());
         }
 
-        self.push_account_transfer(
+        self.push_core_space_balance_transfer(
             position,
             address_from_cfx(from),
             address_from_cfx(to),
@@ -274,6 +291,23 @@ impl CfxOperationCollector {
         if amount.is_zero() {
             return Ok(1);
         }
+
+        if *space == Space::Ethereum {
+            return match (from, to) {
+                (AddressPocket::Balance(from), AddressPocket::Balance(to))
+                    if from.space == Space::Ethereum && to.space == Space::Ethereum =>
+                {
+                    self.push_espace_balance_transfer(
+                        address_from_cfx(from.address),
+                        address_from_cfx(to.address),
+                        amount,
+                    );
+                    Ok(1)
+                }
+                _ => Err(unsupported_internal_transfer(from, to)),
+            };
+        }
+
         if *space != Space::Native {
             return Err(unsupported_internal_transfer(from, to));
         }
@@ -282,7 +316,7 @@ impl CfxOperationCollector {
             (AddressPocket::Balance(from), AddressPocket::Balance(to))
                 if from.space == Space::Native && to.space == Space::Native =>
             {
-                self.push_account_transfer(
+                self.push_core_space_balance_transfer(
                     *position,
                     address_from_cfx(from.address),
                     address_from_cfx(to.address),
@@ -293,7 +327,7 @@ impl CfxOperationCollector {
                 if payer.space == Space::Native =>
             {
                 self.operations.push(CfxOperation::GasPrecharge {
-                    payer: CfxBalanceLocation::Account {
+                    payer: CfxBalanceLocation::CoreSpaceAccount {
                         account: address_from_cfx(payer.address),
                     },
                     amount,
@@ -311,7 +345,7 @@ impl CfxOperationCollector {
                 if recipient.space == Space::Native =>
             {
                 self.operations.push(CfxOperation::GasRefund {
-                    recipient: CfxBalanceLocation::Account {
+                    recipient: CfxBalanceLocation::CoreSpaceAccount {
                         account: address_from_cfx(recipient.address),
                     },
                     amount,
@@ -434,7 +468,7 @@ impl CfxOperationCollector {
         Ok(2)
     }
 
-    fn push_account_transfer(
+    fn push_core_space_balance_transfer(
         &mut self,
         position: usize,
         from: alloy_primitives::Address,
@@ -445,12 +479,27 @@ impl CfxOperationCollector {
             return;
         }
 
-        self.operations.push(CfxOperation::AccountTransfer {
-            position: Position::new(position, 0),
-            from,
-            to,
-            amount,
-        });
+        self.operations
+            .push(CfxOperation::CoreSpaceBalanceTransfer {
+                position: Position::new(position, 0),
+                from,
+                to,
+                amount,
+            });
+    }
+
+    fn push_espace_balance_transfer(
+        &mut self,
+        from: alloy_primitives::Address,
+        to: alloy_primitives::Address,
+        amount: U256,
+    ) {
+        if amount.is_zero() {
+            return;
+        }
+
+        self.operations
+            .push(CfxOperation::EspaceBalanceTransfer { from, to, amount });
     }
 }
 

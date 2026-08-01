@@ -1,4 +1,5 @@
 mod collection;
+mod cross_space;
 mod sponsorship;
 mod verification;
 
@@ -16,7 +17,7 @@ pub(crate) use verification::{read_cfx_state_values, verify_cfx_changes};
 
 use crate::{
     ConfluxEngineError,
-    core_space::changes::{SponsoredResource, SponsorshipAccessScope},
+    core_space::changes::{CrossSpaceAddress, SponsoredResource, SponsorshipAccessScope},
     primitive::{address_from_cfx, address_to_cfx},
     state::{MaskedSponsorWhitelistEntries, SponsorWhitelistStorageKey},
 };
@@ -30,6 +31,7 @@ pub(crate) struct CfxOperations {
     admin_managed_sponsorship_contracts: Vec<Address>,
     storage_point_accounts: Vec<Address>,
     requires_storage_point_globals: bool,
+    requires_total_espace_tokens: bool,
     operations: Vec<CfxOperation>,
 }
 
@@ -41,12 +43,23 @@ impl CfxOperations {
         let mut admin_managed_sponsorship_contracts = BTreeSet::new();
         let mut storage_point_accounts = BTreeSet::new();
         let mut requires_storage_point_globals = false;
+        let mut requires_total_espace_tokens = false;
 
         for operation in &operations {
             match operation {
-                CfxOperation::AccountTransfer { from, to, .. } => {
-                    balance_locations.insert(CfxBalanceLocation::Account { account: *from });
-                    balance_locations.insert(CfxBalanceLocation::Account { account: *to });
+                CfxOperation::CoreSpaceBalanceTransfer { from, to, .. } => {
+                    balance_locations
+                        .insert(CfxBalanceLocation::CoreSpaceAccount { account: *from });
+                    balance_locations.insert(CfxBalanceLocation::CoreSpaceAccount { account: *to });
+                }
+                CfxOperation::EspaceBalanceTransfer { from, to, .. } => {
+                    balance_locations.insert(CfxBalanceLocation::EspaceAccount { account: *from });
+                    balance_locations.insert(CfxBalanceLocation::EspaceAccount { account: *to });
+                }
+                CfxOperation::CrossSpaceTransfer(transfer) => {
+                    balance_locations.insert(cross_space_balance_location(transfer.from));
+                    balance_locations.insert(cross_space_balance_location(transfer.to));
+                    requires_total_espace_tokens = true;
                 }
                 CfxOperation::GasPrecharge { payer, .. } => {
                     balance_locations.insert(*payer);
@@ -56,17 +69,19 @@ impl CfxOperations {
                 }
                 CfxOperation::StakingDeposit { account, .. }
                 | CfxOperation::StakingWithdrawal { account, .. } => {
-                    balance_locations.insert(CfxBalanceLocation::Account { account: *account });
+                    balance_locations
+                        .insert(CfxBalanceLocation::CoreSpaceAccount { account: *account });
                     balance_locations.insert(CfxBalanceLocation::Staking { account: *account });
                 }
                 CfxOperation::NativeBurn { account, .. } => {
-                    balance_locations.insert(CfxBalanceLocation::Account { account: *account });
+                    balance_locations
+                        .insert(CfxBalanceLocation::CoreSpaceAccount { account: *account });
                 }
                 CfxOperation::StakingBurn { account, .. } => {
                     balance_locations.insert(CfxBalanceLocation::Staking { account: *account });
                 }
                 CfxOperation::SponsorshipFunding(funding) => {
-                    balance_locations.insert(CfxBalanceLocation::Account {
+                    balance_locations.insert(CfxBalanceLocation::CoreSpaceAccount {
                         account: funding.sponsor,
                     });
                     let sponsored_resource = funding.funding_terms.sponsored_resource();
@@ -77,7 +92,7 @@ impl CfxOperations {
                         contract_address: funding.contract_address,
                     });
                     if let Some(refund) = funding.refund {
-                        balance_locations.insert(CfxBalanceLocation::Account {
+                        balance_locations.insert(CfxBalanceLocation::CoreSpaceAccount {
                             account: refund.sponsor,
                         });
                     }
@@ -91,7 +106,7 @@ impl CfxOperations {
                     }
                 }
                 CfxOperation::SponsorshipStandaloneRefund(refund) => {
-                    balance_locations.insert(CfxBalanceLocation::Account {
+                    balance_locations.insert(CfxBalanceLocation::CoreSpaceAccount {
                         account: refund.sponsor,
                     });
                     balance_locations
@@ -147,6 +162,7 @@ impl CfxOperations {
                 .collect(),
             storage_point_accounts: storage_point_accounts.into_iter().collect(),
             requires_storage_point_globals,
+            requires_total_espace_tokens,
             operations,
         }
     }
@@ -257,7 +273,8 @@ fn debit_staking_balance_if_present(
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum CfxBalanceLocation {
-    Account { account: Address },
+    CoreSpaceAccount { account: Address },
+    EspaceAccount { account: Address },
     Staking { account: Address },
     GasSponsor { contract_address: Address },
     StorageSponsor { contract_address: Address },
@@ -267,8 +284,11 @@ pub(crate) enum CfxBalanceLocation {
 impl fmt::Display for CfxBalanceLocation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Account { account } => {
-                write!(formatter, "balance for account {account}")
+            Self::CoreSpaceAccount { account } => {
+                write!(formatter, "Core Space balance for account {account}")
+            }
+            Self::EspaceAccount { account } => {
+                write!(formatter, "eSpace balance for account {account}")
             }
             Self::Staking { account } => {
                 write!(formatter, "staking balance for account {account}")
@@ -312,12 +332,18 @@ impl SponsoredResource {
 
 #[derive(Debug)]
 enum CfxOperation {
-    AccountTransfer {
+    CoreSpaceBalanceTransfer {
         position: Position,
         from: Address,
         to: Address,
         amount: U256,
     },
+    EspaceBalanceTransfer {
+        from: Address,
+        to: Address,
+        amount: U256,
+    },
+    CrossSpaceTransfer(CrossSpaceTransferOperation),
     GasPrecharge {
         payer: CfxBalanceLocation,
         amount: U256,
@@ -351,6 +377,21 @@ enum CfxOperation {
     SponsorshipStandaloneRefund(SponsorshipRefundOperation),
     SponsorshipAccessRule(SponsorshipAccessRuleUpdate),
     StoragePointConversion(StoragePointConversionOperation),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CrossSpaceTransferOperation {
+    position: Position,
+    from: CrossSpaceAddress,
+    to: CrossSpaceAddress,
+    amount: U256,
+}
+
+const fn cross_space_balance_location(address: CrossSpaceAddress) -> CfxBalanceLocation {
+    match address {
+        CrossSpaceAddress::CoreSpace(account) => CfxBalanceLocation::CoreSpaceAccount { account },
+        CrossSpaceAddress::Espace(account) => CfxBalanceLocation::EspaceAccount { account },
+    }
 }
 
 #[derive(Debug)]
@@ -433,7 +474,7 @@ pub(crate) fn determine_gas_fee_payer(
     gas_paid_by_sponsor: bool,
 ) -> Result<CfxBalanceLocation, ConfluxEngineError> {
     if !gas_paid_by_sponsor {
-        return Ok(CfxBalanceLocation::Account {
+        return Ok(CfxBalanceLocation::CoreSpaceAccount {
             account: address_from_cfx(transaction.sender().address),
         });
     }

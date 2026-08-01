@@ -7,16 +7,16 @@ use contract_standards::StatePhase;
 use simulation_changes::{Change, NativeMetadata};
 
 use super::{
-    CfxBalanceLocation, CfxOperation, CfxOperations, SponsorResourceLocation,
-    SponsorshipAccessCallerRole, SponsorshipAccessRuleKey, SponsorshipAccessRuleUpdate,
-    SponsorshipFundingOperation, SponsorshipFundingTerms, SponsorshipRefundOperation,
-    StoragePointConversionOperation,
+    CfxBalanceLocation, CfxOperation, CfxOperations, CrossSpaceTransferOperation,
+    SponsorResourceLocation, SponsorshipAccessCallerRole, SponsorshipAccessRuleKey,
+    SponsorshipAccessRuleUpdate, SponsorshipFundingOperation, SponsorshipFundingTerms,
+    SponsorshipRefundOperation, StoragePointConversionOperation, cross_space_balance_location,
 };
 use crate::{
     ConfluxEngineError,
     core_space::changes::{
-        CoreSpaceChange, PositionedCoreSpaceChange, SponsoredResource, SponsorshipAccessScope,
-        SponsorshipConfiguration,
+        CoreSpaceChange, CrossSpaceAddress, PositionedCoreSpaceChange, SponsoredResource,
+        SponsorshipAccessScope, SponsorshipConfiguration,
     },
     primitive::{address_to_cfx, u256_from_cfx},
     state::SponsorWhitelistStorageKey,
@@ -32,6 +32,7 @@ pub(crate) struct CfxStateValues {
     storage_points: BTreeMap<Address, Option<StoragePointValues>>,
     total_issued: U256,
     total_staking: U256,
+    total_espace_tokens: Option<U256>,
     storage_point_globals: Option<StoragePointGlobalValues>,
 }
 
@@ -56,11 +57,18 @@ pub(crate) fn read_cfx_state_values(
     let mut balances = BTreeMap::new();
     for &location in &cfx_operations.balance_locations {
         let balance = match location {
-            CfxBalanceLocation::Account { account } => state
+            CfxBalanceLocation::CoreSpaceAccount { account } => state
                 .balance(&address_to_cfx(account).with_native_space())
                 .map_err(|error| ConfluxEngineError::StateAccess {
                     message: format!(
                         "failed to read {phase} Core Space balance for {location}: {error}"
+                    ),
+                })?,
+            CfxBalanceLocation::EspaceAccount { account } => state
+                .balance(&address_to_cfx(account).with_evm_space())
+                .map_err(|error| ConfluxEngineError::StateAccess {
+                    message: format!(
+                        "failed to read {phase} Core simulation balance for {location}: {error}"
                     ),
                 })?,
             CfxBalanceLocation::Staking { account } => state
@@ -199,6 +207,9 @@ pub(crate) fn read_cfx_state_values(
                 used_storage_points: u256_from_cfx(state.used_storage_points()),
                 converted_storage_points: u256_from_cfx(state.converted_storage_points()),
             });
+    let total_espace_tokens = cfx_operations
+        .requires_total_espace_tokens
+        .then(|| u256_from_cfx(state.total_espace_tokens()));
 
     Ok(CfxStateValues {
         balances,
@@ -209,6 +220,7 @@ pub(crate) fn read_cfx_state_values(
         storage_points,
         total_issued: u256_from_cfx(state.total_issued_tokens()),
         total_staking: u256_from_cfx(state.total_staking_tokens()),
+        total_espace_tokens,
         storage_point_globals,
     })
 }
@@ -236,16 +248,20 @@ pub(crate) fn verify_cfx_changes(
 
     for operation in &cfx_operations.operations {
         match operation {
-            CfxOperation::AccountTransfer {
+            CfxOperation::CoreSpaceBalanceTransfer {
                 position,
                 from,
                 to,
                 amount,
             } => {
-                replayed_state
-                    .debit_balance(CfxBalanceLocation::Account { account: *from }, *amount)?;
-                replayed_state
-                    .credit_balance(CfxBalanceLocation::Account { account: *to }, *amount)?;
+                replayed_state.debit_balance(
+                    CfxBalanceLocation::CoreSpaceAccount { account: *from },
+                    *amount,
+                )?;
+                replayed_state.credit_balance(
+                    CfxBalanceLocation::CoreSpaceAccount { account: *to },
+                    *amount,
+                )?;
                 positioned_core_changes.push(PositionedCoreSpaceChange::new(
                     *position,
                     CoreSpaceChange::StandardOrNative(Change::NativeTransfer {
@@ -255,6 +271,18 @@ pub(crate) fn verify_cfx_changes(
                         metadata: NativeMetadata::default(),
                     }),
                 ));
+            }
+            CfxOperation::EspaceBalanceTransfer { from, to, amount } => {
+                replayed_state.debit_balance(
+                    CfxBalanceLocation::EspaceAccount { account: *from },
+                    *amount,
+                )?;
+                replayed_state
+                    .credit_balance(CfxBalanceLocation::EspaceAccount { account: *to }, *amount)?;
+            }
+            CfxOperation::CrossSpaceTransfer(transfer) => {
+                replayed_state
+                    .apply_cross_space_transfer(transfer, &mut positioned_core_changes)?;
             }
             CfxOperation::GasPrecharge { payer, amount } => {
                 verify_gas_fee_location("precharge payer", *payer, expected_gas_fee_payer)?;
@@ -279,8 +307,10 @@ pub(crate) fn verify_cfx_changes(
                 account,
                 amount,
             } => {
-                replayed_state
-                    .debit_balance(CfxBalanceLocation::Account { account: *account }, *amount)?;
+                replayed_state.debit_balance(
+                    CfxBalanceLocation::CoreSpaceAccount { account: *account },
+                    *amount,
+                )?;
                 replayed_state
                     .credit_balance(CfxBalanceLocation::Staking { account: *account }, *amount)?;
                 replayed_state.total_staking = replayed_state
@@ -318,7 +348,7 @@ pub(crate) fn verify_cfx_changes(
                             ))
                         })?;
                 replayed_state.credit_balance(
-                    CfxBalanceLocation::Account { account: *account },
+                    CfxBalanceLocation::CoreSpaceAccount { account: *account },
                     withdrawal_credit,
                 )?;
                 replayed_state.total_staking = replayed_state
@@ -351,8 +381,10 @@ pub(crate) fn verify_cfx_changes(
                 account,
                 amount,
             } => {
-                replayed_state
-                    .debit_balance(CfxBalanceLocation::Account { account: *account }, *amount)?;
+                replayed_state.debit_balance(
+                    CfxBalanceLocation::CoreSpaceAccount { account: *account },
+                    *amount,
+                )?;
                 replayed_state.debit_total_issued(*amount, "a native balance burn")?;
                 positioned_core_changes.push(PositionedCoreSpaceChange::new(
                     *position,
@@ -414,6 +446,55 @@ pub(crate) fn verify_cfx_changes(
 }
 
 impl CfxStateValues {
+    fn apply_cross_space_transfer(
+        &mut self,
+        transfer: &CrossSpaceTransferOperation,
+        positioned_changes: &mut Vec<PositionedCoreSpaceChange>,
+    ) -> Result<(), ConfluxEngineError> {
+        self.debit_balance(cross_space_balance_location(transfer.from), transfer.amount)?;
+        self.credit_balance(cross_space_balance_location(transfer.to), transfer.amount)?;
+
+        let total_espace_tokens = self.total_espace_tokens.as_mut().ok_or_else(|| {
+            ConfluxEngineError::analysis_failed(
+                "before Core cross-space total eSpace tokens are missing",
+            )
+        })?;
+        match (transfer.from, transfer.to) {
+            (CrossSpaceAddress::CoreSpace(_), CrossSpaceAddress::Espace(_)) => {
+                *total_espace_tokens = total_espace_tokens
+                    .checked_add(transfer.amount)
+                    .ok_or_else(|| {
+                        ConfluxEngineError::analysis_failed(
+                            "Core total eSpace tokens overflowed during a cross-space transfer",
+                        )
+                    })?;
+            }
+            (CrossSpaceAddress::Espace(_), CrossSpaceAddress::CoreSpace(_)) => {
+                *total_espace_tokens = total_espace_tokens
+                    .checked_sub(transfer.amount)
+                    .ok_or_else(|| {
+                        ConfluxEngineError::analysis_failed(
+                            "Core total eSpace tokens underflowed during a cross-space withdrawal",
+                        )
+                    })?;
+            }
+            _ => {
+                return Err(ConfluxEngineError::analysis_failed(
+                    "Core cross-space transfer used two endpoints in the same space",
+                ));
+            }
+        }
+        positioned_changes.push(PositionedCoreSpaceChange::new(
+            transfer.position,
+            CoreSpaceChange::CrossSpaceTransfer {
+                from: transfer.from,
+                to: transfer.to,
+                raw_amount: transfer.amount,
+            },
+        ));
+        Ok(())
+    }
+
     fn apply_sponsorship_funding(
         &mut self,
         funding: &SponsorshipFundingOperation,
@@ -432,7 +513,7 @@ impl CfxStateValues {
         }
 
         self.debit_balance(
-            CfxBalanceLocation::Account {
+            CfxBalanceLocation::CoreSpaceAccount {
                 account: funding.sponsor,
             },
             funding.gross_deposit_amount,
@@ -483,7 +564,7 @@ impl CfxStateValues {
             }
             self.debit_balance(pool_location, refund.pool_refund_amount)?;
             self.credit_balance(
-                CfxBalanceLocation::Account {
+                CfxBalanceLocation::CoreSpaceAccount {
                     account: refund.sponsor,
                 },
                 refund.gross_refund_amount,
@@ -585,7 +666,7 @@ impl CfxStateValues {
         )?;
         self.debit_balance(pool_location, refund.pool_refund_amount)?;
         self.credit_balance(
-            CfxBalanceLocation::Account {
+            CfxBalanceLocation::CoreSpaceAccount {
                 account: refund.sponsor,
             },
             refund.gross_refund_amount,
@@ -872,12 +953,12 @@ impl CfxStateValues {
     ) -> Result<(), ConfluxEngineError> {
         let balance = self.balances.get_mut(&location).ok_or_else(|| {
             ConfluxEngineError::analysis_failed(format!(
-                "before Core Space CFX balance is missing for {location}"
+                "before Core simulation CFX balance is missing for {location}"
             ))
         })?;
         *balance = balance.checked_sub(amount).ok_or_else(|| {
             ConfluxEngineError::analysis_failed(format!(
-                "Core Space CFX balance underflow for {location}: balance {balance}, debit {amount}"
+                "Core simulation CFX balance underflow for {location}: balance {balance}, debit {amount}"
             ))
         })?;
         Ok(())
@@ -890,12 +971,12 @@ impl CfxStateValues {
     ) -> Result<(), ConfluxEngineError> {
         let balance = self.balances.get_mut(&location).ok_or_else(|| {
             ConfluxEngineError::analysis_failed(format!(
-                "before Core Space CFX balance is missing for {location}"
+                "before Core simulation CFX balance is missing for {location}"
             ))
         })?;
         *balance = balance.checked_add(amount).ok_or_else(|| {
             ConfluxEngineError::analysis_failed(format!(
-                "Core Space CFX balance overflow for {location}: balance {balance}, credit {amount}"
+                "Core simulation CFX balance overflow for {location}: balance {balance}, credit {amount}"
             ))
         })?;
         Ok(())
@@ -918,12 +999,12 @@ impl CfxStateValues {
         for (location, replayed_balance) in &self.balances {
             let after_balance = after_state.balances.get(location).ok_or_else(|| {
                 ConfluxEngineError::analysis_failed(format!(
-                    "after Core Space CFX balance is missing for {location}"
+                    "after Core simulation CFX balance is missing for {location}"
                 ))
             })?;
             if replayed_balance != after_balance {
                 return Err(ConfluxEngineError::analysis_failed(format!(
-                    "Core Space CFX balance mismatch for {location}: replayed {replayed_balance}, after {after_balance}"
+                    "Core simulation CFX balance mismatch for {location}: replayed {replayed_balance}, after {after_balance}"
                 )));
             }
         }
@@ -1019,6 +1100,12 @@ impl CfxStateValues {
             return Err(ConfluxEngineError::analysis_failed(format!(
                 "Core Space total staking mismatch: replayed {}, after {}",
                 self.total_staking, after_state.total_staking
+            )));
+        }
+        if self.total_espace_tokens != after_state.total_espace_tokens {
+            return Err(ConfluxEngineError::analysis_failed(format!(
+                "Core total eSpace tokens mismatch: replayed {:?}, after {:?}",
+                self.total_espace_tokens, after_state.total_espace_tokens
             )));
         }
         if self.storage_point_globals != after_state.storage_point_globals {

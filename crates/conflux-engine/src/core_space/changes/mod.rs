@@ -83,6 +83,17 @@ pub(crate) enum CoreSpaceChange {
         contract_address: Address,
         converted_cfx_raw_amount: U256,
     },
+    CrossSpaceTransfer {
+        from: CrossSpaceAddress,
+        to: CrossSpaceAddress,
+        raw_amount: U256,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CrossSpaceAddress {
+    CoreSpace(Address),
+    Espace(Address),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
