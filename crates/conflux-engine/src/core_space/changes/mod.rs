@@ -1,11 +1,17 @@
 mod cfx;
+mod staking;
 
-use alloy_primitives::{Address, U256};
+use alloy_primitives::{Address, B256, U256};
 use contract_standards::{Position, PositionedStandardChange};
 use simulation_changes::Change;
 
 pub(crate) use cfx::{
-    collect_cfx_operations, determine_gas_fee_payer, read_cfx_state_snapshot, verify_cfx_changes,
+    collect_cfx_operations, determine_gas_fee_payer, read_cfx_state_values, verify_cfx_changes,
+};
+pub(crate) use staking::{
+    PoSStateRequirements, StakingContractActivation, collect_committed_staking_calls,
+    decode_pos_staking_events, read_pos_state_values, verify_pos_staking_changes,
+    verify_vote_lock_changes,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +33,29 @@ pub(crate) enum CoreSpaceChange {
     StakingBurn {
         account: Address,
         raw_amount: U256,
+    },
+    StakingVoteLock {
+        account: Address,
+        unlock_block_number: u64,
+        required_locked_raw_amount_before: U256,
+        required_locked_raw_amount_after: U256,
+    },
+    PoSRegistration {
+        account: Address,
+        pos_identifier: B256,
+        newly_locked_vote_count: u64,
+        newly_locked_raw_amount: U256,
+    },
+    PoSStakeIncrease {
+        account: Address,
+        pos_identifier: B256,
+        newly_locked_vote_count: u64,
+        newly_locked_raw_amount: U256,
+    },
+    PoSRetirementRequest {
+        account: Address,
+        pos_identifier: B256,
+        requested_vote_count: u64,
     },
 }
 

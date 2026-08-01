@@ -24,6 +24,7 @@ use crate::state::{
     },
 };
 use cfx_types::{Address, H256, U256};
+use primitives::VoteStakeInfo;
 
 type RawStateValue = Box<[u8]>;
 type StateRead = Option<RawStateValue>;
@@ -56,12 +57,55 @@ impl StoragePointInitializationUncertainty {
     }
 }
 
+/// Vote lists fetched by this request's anchored StateDB reads.
+#[derive(Clone, Default)]
+pub(crate) struct AnchoredVoteLists {
+    vote_lists_by_account: Arc<SyncMutex<HashMap<Address, Vec<VoteStakeInfo>>>>,
+}
+
+impl AnchoredVoteLists {
+    fn record(&self, address: Address, vote_list: Vec<VoteStakeInfo>) -> StorageResult<()> {
+        let mut vote_lists_by_account = self
+            .vote_lists_by_account
+            .lock()
+            .map_err(|_| Self::lock_error())?;
+        if let Some(existing) = vote_lists_by_account.get(&address) {
+            if existing != &vote_list {
+                return Err(StorageError::Msg(format!(
+                    "anchored cfx_getVoteList returned inconsistent results for {address:?}"
+                )));
+            }
+            return Ok(());
+        }
+        vote_lists_by_account.insert(address, vote_list);
+        Ok(())
+    }
+
+    pub(crate) fn for_account(&self, address: Address) -> StorageResult<Vec<VoteStakeInfo>> {
+        self.vote_lists_by_account
+            .lock()
+            .map_err(|_| Self::lock_error())?
+            .get(&address)
+            .cloned()
+            .ok_or_else(|| {
+                StorageError::Msg(format!(
+                    "anchored cfx_getVoteList result was not read during execution for {address:?}"
+                ))
+            })
+    }
+
+    fn lock_error() -> StorageError {
+        StorageError::Msg("failed to access request-local Core Space vote-list state".to_owned())
+    }
+}
+
 pub(crate) struct RemoteStateReader {
     state_anchor: ConfluxStateAnchor,
     provider: Arc<HttpConfluxProvider>,
     core_space_globals: CoreSpaceGlobals,
     espace_account_cache: AsyncMutex<HashMap<Address, Arc<EspaceAccountData>>>,
     storage_point_initialization_uncertainty: StoragePointInitializationUncertainty,
+    anchored_vote_lists: AnchoredVoteLists,
 }
 
 impl RemoteStateReader {
@@ -84,6 +128,7 @@ impl RemoteStateReader {
             espace_account_cache: AsyncMutex::new(HashMap::new()),
             storage_point_initialization_uncertainty:
                 StoragePointInitializationUncertainty::default(),
+            anchored_vote_lists: AnchoredVoteLists::default(),
         })
     }
 
@@ -95,6 +140,10 @@ impl RemoteStateReader {
         &self,
     ) -> StoragePointInitializationUncertainty {
         self.storage_point_initialization_uncertainty.clone()
+    }
+
+    pub(crate) fn anchored_vote_lists(&self) -> AnchoredVoteLists {
+        self.anchored_vote_lists.clone()
     }
 
     pub(crate) async fn read(&self, item: &StateItem) -> StorageResult<StateRead> {
@@ -113,12 +162,16 @@ impl RemoteStateReader {
                 .await
                 .map_err(|error| self.provider_error("cfx_getDepositList", error))
                 .map(encode_core_space_deposit_list),
-            CoreSpaceStateItem::VoteList { address } => self
-                .provider
-                .cfx_get_vote_list(address, self.core_space_epoch())
-                .await
-                .map_err(|error| self.provider_error("cfx_getVoteList", error))
-                .map(encode_core_space_vote_list),
+            CoreSpaceStateItem::VoteList { address } => {
+                let vote_list = self
+                    .provider
+                    .cfx_get_vote_list(address, self.core_space_epoch())
+                    .await
+                    .map_err(|error| self.provider_error("cfx_getVoteList", error))?;
+                self.anchored_vote_lists
+                    .record(address, vote_list.clone())?;
+                Ok(encode_core_space_vote_list(vote_list))
+            }
             CoreSpaceStateItem::InterestRate => Ok(Some(encode_core_space_u256(
                 self.core_space_globals.interest_rate,
             ))),

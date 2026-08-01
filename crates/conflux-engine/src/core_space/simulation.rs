@@ -22,8 +22,11 @@ use crate::{
 use super::{
     CoreSpaceSimulation, build_core_space_execution,
     changes::{
-        PositionedCoreSpaceChange, collect_cfx_operations, determine_gas_fee_payer,
-        into_ordered_core_space_changes, read_cfx_state_snapshot, verify_cfx_changes,
+        PoSStateRequirements, PositionedCoreSpaceChange, StakingContractActivation,
+        collect_cfx_operations, collect_committed_staking_calls, decode_pos_staking_events,
+        determine_gas_fee_payer, into_ordered_core_space_changes, read_cfx_state_values,
+        read_pos_state_values, verify_cfx_changes, verify_pos_staking_changes,
+        verify_vote_lock_changes,
     },
 };
 
@@ -45,6 +48,7 @@ pub(crate) fn simulate(
             } = *ready_simulation;
             let storage_point_initialization_uncertainty =
                 state_reader.storage_point_initialization_uncertainty();
+            let anchored_vote_lists = state_reader.anchored_vote_lists();
             let mut state =
                 build_rpc_backed_state(state_reader, runtime_handle.clone()).map_err(|error| {
                     ConfluxEngineError::StateAccess {
@@ -63,10 +67,11 @@ pub(crate) fn simulate(
                 &storage_point_initialization_uncertainty,
             )?;
 
-            let (execution_observations, execution_fee, burnt_fee, gas_paid_by_sponsor) =
+            let (execution_observations, final_logs, execution_fee, burnt_fee, gas_paid_by_sponsor) =
                 match &mut transaction_outcome {
                     TransactionExecutionOutcome::Success(executed_details) => (
                         std::mem::take(&mut executed_details.observations),
+                        std::mem::take(&mut executed_details.logs),
                         executed_details.common.fee,
                         executed_details.common.burnt_fee,
                         executed_details.gas_sponsor_paid,
@@ -88,6 +93,20 @@ pub(crate) fn simulate(
                 &machine,
                 &prepared_execution.spec,
             )?;
+            let staking_contract_activation = StakingContractActivation::from_machine_and_spec(
+                &machine,
+                &prepared_execution.spec,
+            );
+            let committed_staking_calls = collect_committed_staking_calls(
+                &execution_observations,
+                staking_contract_activation,
+            )?;
+            let pos_staking_events = decode_pos_staking_events(
+                &final_logs,
+                staking_contract_activation.pos_register_is_active(),
+            )?;
+            let pos_state_requirements =
+                PoSStateRequirements::from_committed_calls(&committed_staking_calls);
             let standard_candidates =
                 collect_standard_candidates(execution_observations, Space::Native)?;
 
@@ -95,8 +114,12 @@ pub(crate) fn simulate(
             let after_execution_snapshot = state.save();
 
             state.restore(before_execution_snapshot);
-            let before_cfx_snapshot =
-                read_cfx_state_snapshot(&state, StatePhase::Before, &cfx_operations)?;
+            let before_cfx_state =
+                read_cfx_state_values(&state, StatePhase::Before, &cfx_operations)?;
+            let before_pos_state = committed_staking_calls
+                .has_pos_calls()
+                .then(|| read_pos_state_values(&state, StatePhase::Before, &pos_state_requirements))
+                .transpose()?;
             let before_standard_state = read_standard_state_values(
                 &mut state,
                 &machine,
@@ -106,8 +129,19 @@ pub(crate) fn simulate(
             )?;
 
             state.restore(after_execution_snapshot);
-            let after_cfx_snapshot =
-                read_cfx_state_snapshot(&state, StatePhase::After, &cfx_operations)?;
+            let after_cfx_state =
+                read_cfx_state_values(&state, StatePhase::After, &cfx_operations)?;
+            let pos_states = match before_pos_state {
+                Some(before_pos_state) => {
+                    let after_pos_state = read_pos_state_values(
+                        &state,
+                        StatePhase::After,
+                        &pos_state_requirements.including_identifiers_from(&before_pos_state),
+                    )?;
+                    Some((before_pos_state, after_pos_state))
+                }
+                None => None,
+            };
             let after_standard_state = read_standard_state_values(
                 &mut state,
                 &machine,
@@ -123,12 +157,35 @@ pub(crate) fn simulate(
             )?;
             let mut positioned_core_changes = verify_cfx_changes(
                 &cfx_operations,
-                &before_cfx_snapshot,
-                &after_cfx_snapshot,
+                &before_cfx_state,
+                &after_cfx_state,
                 expected_gas_fee_payer,
                 execution_fee,
                 burnt_fee,
             )?;
+            positioned_core_changes.extend(verify_vote_lock_changes(
+                &state,
+                &committed_staking_calls,
+                &anchored_vote_lists,
+                prepared_execution.env.number,
+            )?);
+            match pos_states {
+                Some((before_pos_state, after_pos_state)) => {
+                    positioned_core_changes.extend(verify_pos_staking_changes(
+                        &committed_staking_calls,
+                        &pos_staking_events,
+                        &before_pos_state,
+                        &after_pos_state,
+                        &cfx_operations,
+                    )?);
+                }
+                None if pos_staking_events.is_empty() => {}
+                None => {
+                    return Err(ConfluxEngineError::analysis_failed(
+                        "Core Space PoS final logs had no matching committed call",
+                    ));
+                }
+            }
             positioned_core_changes.extend(
                 positioned_standard_changes
                     .into_iter()

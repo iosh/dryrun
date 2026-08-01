@@ -14,17 +14,17 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub(crate) struct CfxStateSnapshot {
+pub(crate) struct CfxStateValues {
     balances: BTreeMap<CfxBalanceLocation, U256>,
     total_issued: U256,
     total_staking: U256,
 }
 
-pub(crate) fn read_cfx_state_snapshot(
+pub(crate) fn read_cfx_state_values(
     state: &State,
     phase: StatePhase,
     cfx_operations: &CfxOperations,
-) -> Result<CfxStateSnapshot, ConfluxEngineError> {
+) -> Result<CfxStateValues, ConfluxEngineError> {
     let mut balances = BTreeMap::new();
     for &location in &cfx_operations.balance_locations {
         let balance = match location {
@@ -53,7 +53,7 @@ pub(crate) fn read_cfx_state_snapshot(
         balances.insert(location, u256_from_cfx(balance));
     }
 
-    Ok(CfxStateSnapshot {
+    Ok(CfxStateValues {
         balances,
         total_issued: u256_from_cfx(state.total_issued_tokens()),
         total_staking: u256_from_cfx(state.total_staking_tokens()),
@@ -62,8 +62,8 @@ pub(crate) fn read_cfx_state_snapshot(
 
 pub(crate) fn verify_cfx_changes(
     cfx_operations: &CfxOperations,
-    before_state: &CfxStateSnapshot,
-    after_state: &CfxStateSnapshot,
+    before_state: &CfxStateValues,
+    after_state: &CfxStateValues,
     expected_gas_fee_payer: CfxBalanceLocation,
     execution_fee: U256,
     burnt_fee: Option<U256>,
@@ -245,7 +245,7 @@ pub(crate) fn verify_cfx_changes(
     Ok(positioned_core_changes)
 }
 
-impl CfxStateSnapshot {
+impl CfxStateValues {
     fn debit_balance(
         &mut self,
         location: CfxBalanceLocation,

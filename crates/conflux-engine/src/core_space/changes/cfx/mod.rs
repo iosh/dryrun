@@ -1,14 +1,17 @@
 mod collection;
 mod verification;
 
-use std::{collections::BTreeSet, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+};
 
 use alloy_primitives::{Address, U256};
 use contract_standards::Position;
 use primitives::{Action, SignedTransaction};
 
 pub(crate) use collection::collect_cfx_operations;
-pub(crate) use verification::{read_cfx_state_snapshot, verify_cfx_changes};
+pub(crate) use verification::{read_cfx_state_values, verify_cfx_changes};
 
 use crate::{ConfluxEngineError, primitive::address_from_cfx};
 
@@ -53,6 +56,69 @@ impl CfxOperations {
             operations,
         }
     }
+
+    /// Applies already-collected CFX operations that affect staking balances.
+    pub(crate) fn apply_staking_balance_effects(
+        &self,
+        staking_balances: &mut BTreeMap<Address, U256>,
+    ) -> Result<(), ConfluxEngineError> {
+        for operation in &self.operations {
+            match operation {
+                CfxOperation::StakingDeposit {
+                    account, amount, ..
+                } => credit_staking_balance_if_present(staking_balances, *account, *amount)?,
+                CfxOperation::StakingWithdrawal {
+                    account,
+                    principal_amount,
+                    ..
+                } => debit_staking_balance_if_present(
+                    staking_balances,
+                    *account,
+                    *principal_amount,
+                    "withdrawal",
+                )?,
+                CfxOperation::StakingBurn {
+                    account, amount, ..
+                } => debit_staking_balance_if_present(staking_balances, *account, *amount, "burn")?,
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+}
+
+fn credit_staking_balance_if_present(
+    staking_balances: &mut BTreeMap<Address, U256>,
+    account: Address,
+    amount: U256,
+) -> Result<(), ConfluxEngineError> {
+    let Some(balance) = staking_balances.get_mut(&account) else {
+        return Ok(());
+    };
+    *balance = balance.checked_add(amount).ok_or_else(|| {
+        ConfluxEngineError::analysis_failed(format!(
+            "Core Space staking balance overflowed while replaying a deposit for {account}"
+        ))
+    })?;
+    Ok(())
+}
+
+fn debit_staking_balance_if_present(
+    staking_balances: &mut BTreeMap<Address, U256>,
+    account: Address,
+    amount: U256,
+    operation: &str,
+) -> Result<(), ConfluxEngineError> {
+    let Some(balance) = staking_balances.get_mut(&account) else {
+        return Ok(());
+    };
+    *balance = balance.checked_sub(amount).ok_or_else(|| {
+        ConfluxEngineError::analysis_failed(format!(
+            "Core Space staking balance underflowed while replaying a {operation} for {account}"
+        ))
+    })?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
