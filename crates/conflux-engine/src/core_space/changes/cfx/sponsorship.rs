@@ -1,27 +1,53 @@
+use alloy_sol_types::{SolCall, sol};
 use cfx_executor::{executive_observer::AddressPocket, machine::Machine};
 use cfx_types::{Address, AddressSpaceUtil, Space};
 use cfx_vm_types::{CallType, Spec};
 use contract_standards::Position;
 
 use super::{
-    SponsoredResource, SponsorshipCallOperation, SponsorshipRefundOperation,
-    StoragePointConversionOperation,
+    SponsoredResource, SponsorshipAccessCallerRole, SponsorshipAccessRuleUpdate,
+    SponsorshipAccessScope, SponsorshipFundingOperation, SponsorshipFundingTerms,
+    SponsorshipRefundOperation, StoragePointConversionOperation,
 };
 use crate::{
     ConfluxEngineError,
     execution::Observation,
-    primitive::{address_from_cfx, u256_from_cfx},
+    primitive::{address_from_cfx, address_to_cfx, u256_from_cfx},
 };
 
-const SET_SPONSOR_FOR_GAS_SELECTOR: [u8; 4] = [0x3e, 0x3e, 0x64, 0x28];
-const SET_SPONSOR_FOR_COLLATERAL_SELECTOR: [u8; 4] = [0xe6, 0x6c, 0x1b, 0xea];
+sol! {
+    interface ISponsorWhitelistControlCalls {
+        function setSponsorForGas(address contract_address, uint256 upper_bound) external payable;
+        function setSponsorForCollateral(address contract_address) external payable;
+        function addPrivilege(address[] account_addresses) external;
+        function removePrivilege(address[] account_addresses) external;
+        function addPrivilegeByAdmin(address contract_address, address[] account_addresses) external;
+        function removePrivilegeByAdmin(address contract_address, address[] account_addresses) external;
+    }
+
+    interface IAdminControlCalls {
+        function setAdmin(address contract_address, address new_admin_address) external;
+        function destroy(address contract_address) external;
+    }
+}
+
+pub(super) enum CollectedSponsorshipCall {
+    Funding(Box<SponsorshipFundingOperation>),
+    AccessRuleUpdates(Vec<SponsorshipAccessRuleUpdate>),
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct AdminChangeAttempt {
+    pub(super) contract_address: alloy_primitives::Address,
+    pub(super) is_destroy: bool,
+}
 
 pub(super) fn collect_sponsorship_call(
     observations: &[Observation],
     observation_index: usize,
     machine: &Machine,
     spec: &Spec,
-) -> Result<Option<(SponsorshipCallOperation, usize)>, ConfluxEngineError> {
+) -> Result<Option<(CollectedSponsorshipCall, usize)>, ConfluxEngineError> {
     let Some(Observation::Call {
         position,
         space,
@@ -50,8 +76,7 @@ pub(super) fn collect_sponsorship_call(
         return Ok(None);
     }
 
-    let Some((resource, contract_address)) = decode_sponsorship_call(*input_len, input_prefix)?
-    else {
+    let Some(decoded_call) = decode_sponsorship_call(*input_len, input_prefix)? else {
         return Ok(None);
     };
     if *space != Space::Native
@@ -60,25 +85,136 @@ pub(super) fn collect_sponsorship_call(
         || *code_address != sponsor_contract
     {
         return Err(ConfluxEngineError::analysis_failed(
-            "Core Space sponsorship funding call did not use the canonical active internal-contract form",
+            "Core Space sponsorship call did not use the canonical active internal-contract form",
         ));
     }
 
-    let common = SponsorshipCallFacts {
+    if decoded_call.must_not_transfer_value() && !transferred_value.is_zero() {
+        return Err(ConfluxEngineError::analysis_failed(
+            "Core Space sponsorship access-rule call transferred a nonzero value",
+        ));
+    }
+
+    let caller_address = address_from_cfx(*caller);
+    if let DecodedSponsorshipCall::AccessRuleUpdates {
+        caller_role,
+        contract_address,
+        account_addresses,
+        enabled_after,
+    } = decoded_call
+    {
+        let contract_address = if caller_role == SponsorshipAccessCallerRole::SponsoredContract {
+            caller_address
+        } else {
+            contract_address
+        };
+        let updates = account_addresses
+            .into_iter()
+            .enumerate()
+            .map(
+                |(item_index, account_address)| SponsorshipAccessRuleUpdate {
+                    position: Position::new(*position, item_index),
+                    caller_role,
+                    caller_address,
+                    contract_address,
+                    account_scope: if account_address.is_zero() {
+                        SponsorshipAccessScope::AllAccounts
+                    } else {
+                        SponsorshipAccessScope::Account(account_address)
+                    },
+                    enabled_after,
+                },
+            )
+            .collect();
+        return Ok(Some((
+            CollectedSponsorshipCall::AccessRuleUpdates(updates),
+            1,
+        )));
+    }
+
+    let DecodedSponsorshipCall::Funding {
+        funding_terms,
+        contract_address,
+    } = decoded_call
+    else {
+        return Err(ConfluxEngineError::analysis_failed(
+            "Core Space sponsorship call classification was inconsistent",
+        ));
+    };
+
+    let common = SponsorshipFundingCallFacts {
         call_position: *position,
         sponsor_contract,
-        sponsor: *caller,
-        contract_address,
+        sponsor: address_to_cfx(caller_address),
+        contract_address: address_to_cfx(contract_address),
         gross_deposit_amount: u256_from_cfx(*transferred_value),
     };
-    match resource {
-        SponsoredResource::Gas => {
-            collect_gas_sponsorship_call(observations, observation_index, common).map(Some)
+    let (operation, consumed) = match funding_terms {
+        SponsorshipFundingTerms::Gas {
+            gas_fee_upper_bound,
+        } => {
+            let (mut operation, consumed) =
+                collect_gas_sponsorship_call(observations, observation_index, common)?;
+            operation.funding_terms = SponsorshipFundingTerms::Gas {
+                gas_fee_upper_bound,
+            };
+            (operation, consumed)
         }
-        SponsoredResource::StorageCollateral => {
-            collect_storage_sponsorship_call(observations, observation_index, common).map(Some)
+        SponsorshipFundingTerms::StorageCollateral => {
+            collect_storage_sponsorship_call(observations, observation_index, common)?
         }
+    };
+    Ok(Some((
+        CollectedSponsorshipCall::Funding(Box::new(operation)),
+        consumed,
+    )))
+}
+
+pub(super) fn collect_admin_change_attempt(
+    observation: &Observation,
+    machine: &Machine,
+    spec: &Spec,
+) -> Result<Option<AdminChangeAttempt>, ConfluxEngineError> {
+    let Observation::Call {
+        space,
+        call_type,
+        target,
+        code_address,
+        transferred_value,
+        input_len,
+        input_prefix,
+        ..
+    } = observation
+    else {
+        return Ok(None);
+    };
+    let admin_contract =
+        cfx_parameters::internal_contract_addresses::ADMIN_CONTROL_CONTRACT_ADDRESS;
+    if *target != admin_contract && *code_address != admin_contract {
+        return Ok(None);
     }
+    if machine
+        .internal_contracts()
+        .contract(&admin_contract.with_native_space(), spec)
+        .is_none()
+    {
+        return Ok(None);
+    }
+
+    let Some(attempt) = decode_admin_change_call(*input_len, input_prefix)? else {
+        return Ok(None);
+    };
+    if *space != Space::Native
+        || *call_type != CallType::Call
+        || *target != admin_contract
+        || *code_address != admin_contract
+        || !transferred_value.is_zero()
+    {
+        return Err(ConfluxEngineError::analysis_failed(
+            "Core Space admin mutation call did not use the canonical active internal-contract form",
+        ));
+    }
+    Ok(Some(attempt))
 }
 
 pub(super) fn collect_standalone_sponsorship_refund(
@@ -195,7 +331,7 @@ pub(super) fn collect_storage_point_conversion(
 }
 
 #[derive(Clone, Copy)]
-struct SponsorshipCallFacts {
+struct SponsorshipFundingCallFacts {
     call_position: usize,
     sponsor_contract: Address,
     sponsor: Address,
@@ -206,8 +342,8 @@ struct SponsorshipCallFacts {
 fn collect_gas_sponsorship_call(
     observations: &[Observation],
     observation_index: usize,
-    facts: SponsorshipCallFacts,
-) -> Result<(SponsorshipCallOperation, usize), ConfluxEngineError> {
+    facts: SponsorshipFundingCallFacts,
+) -> Result<(SponsorshipFundingOperation, usize), ConfluxEngineError> {
     let first = required_transfer(observations, observation_index, 1, "gas sponsorship")?;
     verify_next_position(facts.call_position, first.position, "gas sponsorship")?;
 
@@ -240,9 +376,11 @@ fn collect_gas_sponsorship_call(
         };
 
     Ok((
-        SponsorshipCallOperation {
+        SponsorshipFundingOperation {
             position: Position::new(facts.call_position, 0),
-            resource: SponsoredResource::Gas,
+            funding_terms: SponsorshipFundingTerms::Gas {
+                gas_fee_upper_bound: alloy_primitives::U256::ZERO,
+            },
             sponsor: address_from_cfx(facts.sponsor),
             contract_address: address_from_cfx(facts.contract_address),
             gross_deposit_amount: facts.gross_deposit_amount,
@@ -256,8 +394,8 @@ fn collect_gas_sponsorship_call(
 fn collect_storage_sponsorship_call(
     observations: &[Observation],
     observation_index: usize,
-    facts: SponsorshipCallFacts,
-) -> Result<(SponsorshipCallOperation, usize), ConfluxEngineError> {
+    facts: SponsorshipFundingCallFacts,
+) -> Result<(SponsorshipFundingOperation, usize), ConfluxEngineError> {
     let first = required_transfer(observations, observation_index, 1, "storage sponsorship")?;
     verify_next_position(facts.call_position, first.position, "storage sponsorship")?;
 
@@ -314,9 +452,9 @@ fn collect_storage_sponsorship_call(
     };
 
     Ok((
-        SponsorshipCallOperation {
+        SponsorshipFundingOperation {
             position: Position::new(facts.call_position, 0),
-            resource: SponsoredResource::StorageCollateral,
+            funding_terms: SponsorshipFundingTerms::StorageCollateral,
             sponsor: address_from_cfx(facts.sponsor),
             contract_address: address_from_cfx(facts.contract_address),
             gross_deposit_amount: facts.gross_deposit_amount,
@@ -383,7 +521,7 @@ fn observation_at_offset<'a>(
 
 fn gas_pool_refund(
     transfer: TransferFacts<'_>,
-    facts: SponsorshipCallFacts,
+    facts: SponsorshipFundingCallFacts,
 ) -> Result<Option<(Address, alloy_primitives::U256)>, ConfluxEngineError> {
     match (transfer.from, transfer.to) {
         (
@@ -401,7 +539,7 @@ fn gas_pool_refund(
 
 fn gas_pool_deposit(
     transfer: TransferFacts<'_>,
-    facts: SponsorshipCallFacts,
+    facts: SponsorshipFundingCallFacts,
 ) -> Result<alloy_primitives::U256, ConfluxEngineError> {
     match (transfer.from, transfer.to) {
         (AddressPocket::Balance(source), AddressPocket::SponsorBalanceForGas(contract_address))
@@ -417,7 +555,7 @@ fn gas_pool_deposit(
 
 fn storage_pool_refund(
     transfer: TransferFacts<'_>,
-    facts: SponsorshipCallFacts,
+    facts: SponsorshipFundingCallFacts,
 ) -> Result<Option<(Address, alloy_primitives::U256)>, ConfluxEngineError> {
     match (transfer.from, transfer.to) {
         (
@@ -435,7 +573,7 @@ fn storage_pool_refund(
 
 fn storage_collateral_compensation(
     transfer: TransferFacts<'_>,
-    facts: SponsorshipCallFacts,
+    facts: SponsorshipFundingCallFacts,
     old_sponsor: Address,
 ) -> Result<alloy_primitives::U256, ConfluxEngineError> {
     match (transfer.from, transfer.to) {
@@ -453,7 +591,7 @@ fn storage_collateral_compensation(
 
 fn storage_pool_deposit(
     transfer: TransferFacts<'_>,
-    facts: SponsorshipCallFacts,
+    facts: SponsorshipFundingCallFacts,
 ) -> Result<alloy_primitives::U256, ConfluxEngineError> {
     match (transfer.from, transfer.to) {
         (
@@ -469,43 +607,164 @@ fn storage_pool_deposit(
     }
 }
 
+enum DecodedSponsorshipCall {
+    Funding {
+        funding_terms: SponsorshipFundingTerms,
+        contract_address: alloy_primitives::Address,
+    },
+    AccessRuleUpdates {
+        caller_role: SponsorshipAccessCallerRole,
+        contract_address: alloy_primitives::Address,
+        account_addresses: Vec<alloy_primitives::Address>,
+        enabled_after: bool,
+    },
+}
+
+impl DecodedSponsorshipCall {
+    const fn must_not_transfer_value(&self) -> bool {
+        matches!(self, Self::AccessRuleUpdates { .. })
+    }
+}
+
 fn decode_sponsorship_call(
     input_len: usize,
     input_prefix: &[u8],
-) -> Result<Option<(SponsoredResource, Address)>, ConfluxEngineError> {
-    if input_len < 4 || input_prefix.len() < 4 {
+) -> Result<Option<DecodedSponsorshipCall>, ConfluxEngineError> {
+    let Some(selector) = call_selector(input_len, input_prefix) else {
         return Ok(None);
-    }
-    let selector = &input_prefix[..4];
-    if selector == SET_SPONSOR_FOR_GAS_SELECTOR {
-        require_call_bytes(input_len, input_prefix, 68, "gas sponsorship")?;
-        Ok(Some((
-            SponsoredResource::Gas,
-            Address::from_slice(&input_prefix[16..36]),
-        )))
-    } else if selector == SET_SPONSOR_FOR_COLLATERAL_SELECTOR {
-        require_call_bytes(input_len, input_prefix, 36, "storage sponsorship")?;
-        Ok(Some((
-            SponsoredResource::StorageCollateral,
-            Address::from_slice(&input_prefix[16..36]),
-        )))
+    };
+    let input = complete_call_input(input_len, input_prefix, "sponsorship")?;
+
+    if selector == ISponsorWhitelistControlCalls::setSponsorForGasCall::SELECTOR {
+        let call = decode_canonical_call::<ISponsorWhitelistControlCalls::setSponsorForGasCall>(
+            input,
+            "setSponsorForGas",
+        )?;
+        Ok(Some(DecodedSponsorshipCall::Funding {
+            funding_terms: SponsorshipFundingTerms::Gas {
+                gas_fee_upper_bound: call.upper_bound,
+            },
+            contract_address: call.contract_address,
+        }))
+    } else if selector == ISponsorWhitelistControlCalls::setSponsorForCollateralCall::SELECTOR {
+        let call = decode_canonical_call::<
+            ISponsorWhitelistControlCalls::setSponsorForCollateralCall,
+        >(input, "setSponsorForCollateral")?;
+        Ok(Some(DecodedSponsorshipCall::Funding {
+            funding_terms: SponsorshipFundingTerms::StorageCollateral,
+            contract_address: call.contract_address,
+        }))
+    } else if selector == ISponsorWhitelistControlCalls::addPrivilegeCall::SELECTOR {
+        let call = decode_canonical_call::<ISponsorWhitelistControlCalls::addPrivilegeCall>(
+            input,
+            "addPrivilege",
+        )?;
+        Ok(Some(DecodedSponsorshipCall::AccessRuleUpdates {
+            caller_role: SponsorshipAccessCallerRole::SponsoredContract,
+            contract_address: alloy_primitives::Address::ZERO,
+            account_addresses: call.account_addresses,
+            enabled_after: true,
+        }))
+    } else if selector == ISponsorWhitelistControlCalls::removePrivilegeCall::SELECTOR {
+        let call = decode_canonical_call::<ISponsorWhitelistControlCalls::removePrivilegeCall>(
+            input,
+            "removePrivilege",
+        )?;
+        Ok(Some(DecodedSponsorshipCall::AccessRuleUpdates {
+            caller_role: SponsorshipAccessCallerRole::SponsoredContract,
+            contract_address: alloy_primitives::Address::ZERO,
+            account_addresses: call.account_addresses,
+            enabled_after: false,
+        }))
+    } else if selector == ISponsorWhitelistControlCalls::addPrivilegeByAdminCall::SELECTOR {
+        let call = decode_canonical_call::<ISponsorWhitelistControlCalls::addPrivilegeByAdminCall>(
+            input,
+            "addPrivilegeByAdmin",
+        )?;
+        Ok(Some(DecodedSponsorshipCall::AccessRuleUpdates {
+            caller_role: SponsorshipAccessCallerRole::ContractAdmin,
+            contract_address: call.contract_address,
+            account_addresses: call.account_addresses,
+            enabled_after: true,
+        }))
+    } else if selector == ISponsorWhitelistControlCalls::removePrivilegeByAdminCall::SELECTOR {
+        let call = decode_canonical_call::<
+            ISponsorWhitelistControlCalls::removePrivilegeByAdminCall,
+        >(input, "removePrivilegeByAdmin")?;
+        Ok(Some(DecodedSponsorshipCall::AccessRuleUpdates {
+            caller_role: SponsorshipAccessCallerRole::ContractAdmin,
+            contract_address: call.contract_address,
+            account_addresses: call.account_addresses,
+            enabled_after: false,
+        }))
     } else {
         Ok(None)
     }
 }
 
-fn require_call_bytes(
+fn decode_admin_change_call(
     input_len: usize,
     input_prefix: &[u8],
-    required_len: usize,
+) -> Result<Option<AdminChangeAttempt>, ConfluxEngineError> {
+    let Some(selector) = call_selector(input_len, input_prefix) else {
+        return Ok(None);
+    };
+    if selector == IAdminControlCalls::setAdminCall::SELECTOR {
+        let input = complete_call_input(input_len, input_prefix, "setAdmin")?;
+        let call = decode_canonical_call::<IAdminControlCalls::setAdminCall>(input, "setAdmin")?;
+        Ok(Some(AdminChangeAttempt {
+            contract_address: call.contract_address,
+            is_destroy: false,
+        }))
+    } else if selector == IAdminControlCalls::destroyCall::SELECTOR {
+        let input = complete_call_input(input_len, input_prefix, "destroy")?;
+        let call = decode_canonical_call::<IAdminControlCalls::destroyCall>(input, "destroy")?;
+        Ok(Some(AdminChangeAttempt {
+            contract_address: call.contract_address,
+            is_destroy: true,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+fn call_selector(input_len: usize, input_prefix: &[u8]) -> Option<[u8; 4]> {
+    if input_len < 4 || input_prefix.len() < 4 {
+        return None;
+    }
+    let mut selector = [0_u8; 4];
+    selector.copy_from_slice(&input_prefix[..4]);
+    Some(selector)
+}
+
+fn complete_call_input<'a>(
+    input_len: usize,
+    input_prefix: &'a [u8],
     operation: &str,
-) -> Result<(), ConfluxEngineError> {
-    if input_len < required_len || input_prefix.len() < required_len {
+) -> Result<&'a [u8], ConfluxEngineError> {
+    if input_prefix.len() != input_len {
         return Err(ConfluxEngineError::analysis_failed(format!(
-            "Core Space {operation} arguments were not fully captured in the call prefix"
+            "Core Space {operation} input was not fully captured"
         )));
     }
-    Ok(())
+    Ok(input_prefix)
+}
+
+fn decode_canonical_call<C: SolCall>(
+    input: &[u8],
+    operation: &str,
+) -> Result<C, ConfluxEngineError> {
+    let call = C::abi_decode_validate(input).map_err(|error| {
+        ConfluxEngineError::analysis_failed(format!(
+            "Core Space {operation} call is not valid ABI data: {error}"
+        ))
+    })?;
+    if call.abi_encode() != input {
+        return Err(ConfluxEngineError::analysis_failed(format!(
+            "Core Space {operation} call is not canonical ABI data"
+        )));
+    }
+    Ok(call)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

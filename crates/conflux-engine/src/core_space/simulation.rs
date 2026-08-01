@@ -50,6 +50,7 @@ pub(crate) fn simulate(
             } = *ready_simulation;
             let storage_point_initialization_uncertainty =
                 state_reader.storage_point_initialization_uncertainty();
+            let masked_sponsor_whitelist_entries = state_reader.masked_sponsor_whitelist_entries();
             let anchored_vote_lists = state_reader.anchored_vote_lists();
             let mut state =
                 build_rpc_backed_state(state_reader, runtime_handle.clone()).map_err(|error| {
@@ -69,38 +70,48 @@ pub(crate) fn simulate(
                 &storage_point_initialization_uncertainty,
             )?;
 
-            let (execution_observations, final_logs, execution_fee, burnt_fee, gas_paid_by_sponsor) =
-                match &mut transaction_outcome {
-                    TransactionExecutionOutcome::Success(executed_details) => (
-                        std::mem::take(&mut executed_details.observations),
-                        std::mem::take(&mut executed_details.logs),
-                        executed_details.common.fee,
-                        executed_details.common.burnt_fee,
-                        executed_details.gas_sponsor_paid,
-                    ),
-                    _ => {
-                        let storage_payer = storage_payer_for_outcome(
-                            storage_payer,
-                            &transaction_outcome,
-                            &prepared_execution.spec,
-                        );
-                        let core_execution = build_core_space_execution(
-                            chain_id,
-                            state_anchor,
-                            gas_limit,
-                            transaction_outcome,
-                            storage_payer,
-                        );
-                        return Ok(CoreSpaceSimulation::new(core_execution, Vec::new()));
-                    }
-                };
+            let (
+                execution_observations,
+                final_logs,
+                contracts_created,
+                execution_fee,
+                burnt_fee,
+                gas_paid_by_sponsor,
+            ) = match &mut transaction_outcome {
+                TransactionExecutionOutcome::Success(executed_details) => (
+                    std::mem::take(&mut executed_details.observations),
+                    std::mem::take(&mut executed_details.logs),
+                    executed_details.contracts_created.clone(),
+                    executed_details.common.fee,
+                    executed_details.common.burnt_fee,
+                    executed_details.gas_sponsor_paid,
+                ),
+                _ => {
+                    let storage_payer = storage_payer_for_outcome(
+                        storage_payer,
+                        &transaction_outcome,
+                        &prepared_execution.spec,
+                    );
+                    let core_execution = build_core_space_execution(
+                        chain_id,
+                        state_anchor,
+                        gas_limit,
+                        transaction_outcome,
+                        storage_payer,
+                    );
+                    return Ok(CoreSpaceSimulation::new(core_execution, Vec::new()));
+                }
+            };
             let expected_gas_fee_payer =
                 determine_gas_fee_payer(&prepared_execution.transaction, gas_paid_by_sponsor)?;
             let cfx_operations = collect_cfx_operations(
                 &execution_observations,
+                &contracts_created,
                 &machine,
                 &prepared_execution.spec,
             )?;
+            cfx_operations
+                .reject_masked_sponsorship_access_dependencies(&masked_sponsor_whitelist_entries)?;
             let staking_contract_activation = StakingContractActivation::from_machine_and_spec(
                 &machine,
                 &prepared_execution.spec,

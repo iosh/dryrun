@@ -69,6 +69,16 @@ pub(crate) enum CoreSpaceChange {
         contract_address: Address,
         raw_amount: U256,
     },
+    SponsorshipConfiguration {
+        contract_address: Address,
+        configuration: SponsorshipConfiguration,
+    },
+    SponsorshipAccessRule {
+        contract_address: Address,
+        account_scope: SponsorshipAccessScope,
+        enabled_before: bool,
+        enabled_after: bool,
+    },
     StoragePointConversion {
         contract_address: Address,
         converted_cfx_raw_amount: U256,
@@ -79,6 +89,26 @@ pub(crate) enum CoreSpaceChange {
 pub(crate) enum SponsoredResource {
     Gas,
     StorageCollateral,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SponsorshipConfiguration {
+    Gas {
+        sponsor_before: Option<Address>,
+        sponsor_after: Option<Address>,
+        max_sponsored_gas_fee_raw_amount_before: U256,
+        max_sponsored_gas_fee_raw_amount_after: U256,
+    },
+    StorageCollateral {
+        sponsor_before: Option<Address>,
+        sponsor_after: Option<Address>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum SponsorshipAccessScope {
+    Account(Address),
+    AllAccounts,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,14 +1,16 @@
-use alloy_primitives::U256;
+use std::collections::BTreeSet;
+
+use alloy_primitives::{Address, U256};
 use cfx_executor::{executive_observer::AddressPocket, machine::Machine};
-use cfx_types::{AddressSpaceUtil, Space};
+use cfx_types::{AddressSpaceUtil, AddressWithSpace, Space};
 use cfx_vm_types::{CallType, Spec};
 use contract_standards::Position;
 
 use super::{
     CfxBalanceLocation, CfxOperation, CfxOperations,
     sponsorship::{
-        collect_sponsorship_call, collect_standalone_sponsorship_refund,
-        collect_storage_point_conversion,
+        CollectedSponsorshipCall, collect_admin_change_attempt, collect_sponsorship_call,
+        collect_standalone_sponsorship_refund, collect_storage_point_conversion,
     },
 };
 use crate::{
@@ -24,22 +26,40 @@ struct CfxOperationCollector {
 
 pub(crate) fn collect_cfx_operations(
     observations: &[Observation],
+    contracts_created: &[AddressWithSpace],
     machine: &Machine,
     spec: &Spec,
 ) -> Result<CfxOperations, ConfluxEngineError> {
     let mut collector = CfxOperationCollector::default();
+    let mut contracts_with_admin_change_attempts = BTreeSet::new();
+    for observation in observations {
+        let Some(attempt) = collect_admin_change_attempt(observation, machine, spec)? else {
+            continue;
+        };
+        if attempt.is_destroy && !spec.cip131 {
+            return Err(ConfluxEngineError::analysis_failed(
+                "pre-CIP-131 Core Space contract destruction may delete sponsorship access-rule entries that public RPC cannot enumerate",
+            ));
+        }
+        contracts_with_admin_change_attempts.insert(attempt.contract_address);
+    }
     let mut observation_index = 0;
 
     while observation_index < observations.len() {
         let observation = &observations[observation_index];
         match observation {
             Observation::Call { .. } => {
-                if let Some((operation, consumed)) =
+                if let Some((collected_call, consumed)) =
                     collect_sponsorship_call(observations, observation_index, machine, spec)?
                 {
-                    collector
-                        .operations
-                        .push(CfxOperation::SponsorshipCall(operation));
+                    match collected_call {
+                        CollectedSponsorshipCall::Funding(operation) => collector
+                            .operations
+                            .push(CfxOperation::SponsorshipFunding(*operation)),
+                        CollectedSponsorshipCall::AccessRuleUpdates(updates) => collector
+                            .operations
+                            .extend(updates.into_iter().map(CfxOperation::SponsorshipAccessRule)),
+                    }
                     observation_index = advance_observation_index(observation_index, consumed)?;
                     continue;
                 }
@@ -73,6 +93,10 @@ pub(crate) fn collect_cfx_operations(
         }
     }
 
+    collector.validate_sponsorship_access_admin_context(
+        &contracts_with_admin_change_attempts,
+        contracts_created,
+    )?;
     Ok(collector.into_operations())
 }
 
@@ -90,6 +114,35 @@ fn advance_observation_index(
 impl CfxOperationCollector {
     fn into_operations(self) -> CfxOperations {
         CfxOperations::from_operations(self.operations)
+    }
+
+    fn validate_sponsorship_access_admin_context(
+        &self,
+        contracts_with_admin_change_attempts: &BTreeSet<Address>,
+        contracts_created: &[AddressWithSpace],
+    ) -> Result<(), ConfluxEngineError> {
+        let created_native_contracts: BTreeSet<_> = contracts_created
+            .iter()
+            .filter(|created| created.space == Space::Native)
+            .map(|created| address_from_cfx(created.address))
+            .collect();
+        for operation in &self.operations {
+            let CfxOperation::SponsorshipAccessRule(update) = operation else {
+                continue;
+            };
+            if update.caller_role != super::SponsorshipAccessCallerRole::ContractAdmin {
+                continue;
+            }
+            if contracts_with_admin_change_attempts.contains(&update.contract_address)
+                || created_native_contracts.contains(&update.contract_address)
+            {
+                return Err(ConfluxEngineError::analysis_failed(format!(
+                    "Core Space sponsorship access-rule admin was not stable during the transaction for contract {}",
+                    update.contract_address
+                )));
+            }
+        }
+        Ok(())
     }
 
     fn collect_call_value_transfer(

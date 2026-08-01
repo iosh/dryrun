@@ -13,7 +13,11 @@ use cfx_types::{H256, U64};
 pub use self::http_provider::{ConfluxRpcError, CoreSpaceResourceEstimate, HttpConfluxProvider};
 
 pub(crate) use self::{
-    reader::{AnchoredVoteLists, RemoteStateReader, StoragePointInitializationUncertainty},
+    core_space_internal::SponsorWhitelistStorageKey,
+    reader::{
+        AnchoredVoteLists, MaskedSponsorWhitelistEntries, RemoteStateReader,
+        StoragePointInitializationUncertainty,
+    },
     rpc_types::{CoreSpaceRpcBlock, CoreSpaceRpcPoSBlock, EspaceRpcBlock},
     storage::new_rpc_backed_state,
 };

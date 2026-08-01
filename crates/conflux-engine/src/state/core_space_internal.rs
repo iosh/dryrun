@@ -14,10 +14,10 @@ pub(crate) enum CoreSpaceInternalStateItem {
     SponsorWhitelist(SponsorWhitelistStorageKey),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct SponsorWhitelistStorageKey {
-    pub(crate) contract: Address,
-    pub(crate) user: Address,
+    pub(crate) contract_address: Address,
+    pub(crate) account_address: Address,
 }
 
 impl SponsorWhitelistStorageKey {
@@ -26,22 +26,29 @@ impl SponsorWhitelistStorageKey {
     }
 
     pub(crate) fn is_all_whitelist_key(self) -> bool {
-        self.user.is_zero()
+        self.account_address.is_zero()
     }
 
     pub(crate) fn is_all_whitelisted_call_data(self) -> Vec<u8> {
         let mut data = Vec::with_capacity(4 + ABI_WORD_BYTES);
         data.extend_from_slice(&IS_ALL_WHITELISTED_SELECTOR);
-        append_abi_address(&mut data, self.contract);
+        append_abi_address(&mut data, self.contract_address);
         data
     }
 
     pub(crate) fn is_user_whitelisted_call_data(self) -> Vec<u8> {
         let mut data = Vec::with_capacity(4 + ABI_WORD_BYTES * 2);
         data.extend_from_slice(&IS_WHITELISTED_SELECTOR);
-        append_abi_address(&mut data, self.contract);
-        append_abi_address(&mut data, self.user);
+        append_abi_address(&mut data, self.contract_address);
+        append_abi_address(&mut data, self.account_address);
         data
+    }
+
+    pub(crate) fn raw_storage_key(self) -> Vec<u8> {
+        let mut key = Vec::with_capacity(SPONSOR_WHITELIST_KEY_BYTES);
+        key.extend_from_slice(self.contract_address.as_bytes());
+        key.extend_from_slice(self.account_address.as_bytes());
+        key
     }
 }
 
@@ -76,11 +83,11 @@ pub(crate) fn parse_core_space_internal_storage(
     if address == SPONSOR_WHITELIST_CONTROL_CONTRACT_ADDRESS
         && storage_key.len() == SPONSOR_WHITELIST_KEY_BYTES
     {
-        let (contract, user) = storage_key.split_at(ADDRESS_BYTES);
+        let (contract_address, account_address) = storage_key.split_at(ADDRESS_BYTES);
         return Some(CoreSpaceInternalStateItem::SponsorWhitelist(
             SponsorWhitelistStorageKey {
-                contract: Address::from_slice(contract),
-                user: Address::from_slice(user),
+                contract_address: Address::from_slice(contract_address),
+                account_address: Address::from_slice(account_address),
             },
         ));
     }

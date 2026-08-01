@@ -113,7 +113,11 @@ impl ObservationJournal {
             input_prefix: input
                 .iter()
                 .copied()
-                .take(CALL_INPUT_PREFIX_LIMIT)
+                .take(call_input_bytes_to_capture(
+                    params.space,
+                    params.address,
+                    params.code_address,
+                ))
                 .collect(),
         });
     }
@@ -240,6 +244,16 @@ fn actual_transfer_value(value: &ActionValue) -> U256 {
     match value {
         ActionValue::Transfer(value) => *value,
         ActionValue::Apparent(_) => U256::zero(),
+    }
+}
+
+fn call_input_bytes_to_capture(space: Space, target: Address, code_address: Address) -> usize {
+    let sponsor_contract =
+        cfx_parameters::internal_contract_addresses::SPONSOR_WHITELIST_CONTROL_CONTRACT_ADDRESS;
+    if space == Space::Native && (target == sponsor_contract || code_address == sponsor_contract) {
+        usize::MAX
+    } else {
+        CALL_INPUT_PREFIX_LIMIT
     }
 }
 

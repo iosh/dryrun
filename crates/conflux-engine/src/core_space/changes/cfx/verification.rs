@@ -2,24 +2,33 @@ use std::collections::BTreeMap;
 
 use alloy_primitives::{Address, U256};
 use cfx_executor::state::State;
-use cfx_types::AddressSpaceUtil;
+use cfx_types::{AddressSpaceUtil, address_util::AddressUtil};
 use contract_standards::StatePhase;
 use simulation_changes::{Change, NativeMetadata};
 
 use super::{
     CfxBalanceLocation, CfxOperation, CfxOperations, SponsorResourceLocation,
-    SponsorshipCallOperation, SponsorshipRefundOperation, StoragePointConversionOperation,
+    SponsorshipAccessCallerRole, SponsorshipAccessRuleKey, SponsorshipAccessRuleUpdate,
+    SponsorshipFundingOperation, SponsorshipFundingTerms, SponsorshipRefundOperation,
+    StoragePointConversionOperation,
 };
 use crate::{
     ConfluxEngineError,
-    core_space::changes::{CoreSpaceChange, PositionedCoreSpaceChange, SponsoredResource},
+    core_space::changes::{
+        CoreSpaceChange, PositionedCoreSpaceChange, SponsoredResource, SponsorshipAccessScope,
+        SponsorshipConfiguration,
+    },
     primitive::{address_to_cfx, u256_from_cfx},
+    state::SponsorWhitelistStorageKey,
 };
 
 #[derive(Debug, Clone)]
 pub(crate) struct CfxStateValues {
     balances: BTreeMap<CfxBalanceLocation, U256>,
     sponsor_identities: BTreeMap<SponsorResourceLocation, Option<Address>>,
+    gas_fee_upper_bounds: BTreeMap<Address, U256>,
+    sponsorship_access_rules: BTreeMap<SponsorshipAccessRuleKey, bool>,
+    sponsorship_contract_admins: BTreeMap<Address, Address>,
     storage_points: BTreeMap<Address, Option<StoragePointValues>>,
     total_issued: U256,
     total_staking: U256,
@@ -103,6 +112,67 @@ pub(crate) fn read_cfx_state_values(
         sponsor_identities.insert(location, sponsor);
     }
 
+    let mut gas_fee_upper_bounds = BTreeMap::new();
+    for &contract_address in &cfx_operations.contracts_requiring_gas_fee_upper_bound {
+        let gas_fee_upper_bound = state
+            .sponsor_gas_bound(&address_to_cfx(contract_address))
+            .map_err(|error| ConfluxEngineError::StateAccess {
+                message: format!(
+                    "failed to read {phase} Core Space gas sponsor bound for contract {contract_address}: {error}"
+                ),
+            })?;
+        gas_fee_upper_bounds.insert(contract_address, u256_from_cfx(gas_fee_upper_bound));
+    }
+
+    let mut sponsorship_contract_admins = BTreeMap::new();
+    for &contract_address in &cfx_operations.admin_managed_sponsorship_contracts {
+        let admin = state.admin(&address_to_cfx(contract_address)).map_err(|error| {
+            ConfluxEngineError::StateAccess {
+                message: format!(
+                    "failed to read {phase} Core Space admin for sponsorship access rules on contract {contract_address}: {error}"
+                ),
+            }
+        })?;
+        sponsorship_contract_admins
+            .insert(contract_address, crate::primitive::address_from_cfx(admin));
+    }
+
+    let sponsor_contract =
+        cfx_parameters::internal_contract_addresses::SPONSOR_WHITELIST_CONTROL_CONTRACT_ADDRESS;
+    let mut sponsorship_access_rules = BTreeMap::new();
+    for &rule_key in &cfx_operations.sponsorship_access_rule_keys {
+        let account_address = match rule_key.account_scope {
+            SponsorshipAccessScope::Account(account_address) => address_to_cfx(account_address),
+            SponsorshipAccessScope::AllAccounts => cfx_types::Address::zero(),
+        };
+        let storage_key = SponsorWhitelistStorageKey {
+            contract_address: address_to_cfx(rule_key.contract_address),
+            account_address,
+        };
+        let raw_value = state
+            .storage_at(
+                &sponsor_contract.with_native_space(),
+                &storage_key.raw_storage_key(),
+            )
+            .map_err(|error| ConfluxEngineError::StateAccess {
+                message: format!(
+                    "failed to read {phase} Core Space sponsorship access rule for contract {}: {error}",
+                    rule_key.contract_address
+                ),
+            })?;
+        let enabled = match raw_value {
+            value if value.is_zero() => false,
+            value if value == cfx_types::U256::one() => true,
+            value => {
+                return Err(ConfluxEngineError::analysis_failed(format!(
+                    "{phase} Core Space sponsorship access rule for contract {} had non-boolean raw value {value}",
+                    rule_key.contract_address
+                )));
+            }
+        };
+        sponsorship_access_rules.insert(rule_key, enabled);
+    }
+
     let mut storage_points = BTreeMap::new();
     for &account in &cfx_operations.storage_point_accounts {
         let sponsor_info = state
@@ -133,6 +203,9 @@ pub(crate) fn read_cfx_state_values(
     Ok(CfxStateValues {
         balances,
         sponsor_identities,
+        gas_fee_upper_bounds,
+        sponsorship_access_rules,
+        sponsorship_contract_admins,
         storage_points,
         total_issued: u256_from_cfx(state.total_issued_tokens()),
         total_staking: u256_from_cfx(state.total_staking_tokens()),
@@ -305,12 +378,16 @@ pub(crate) fn verify_cfx_changes(
                     },
                 ));
             }
-            CfxOperation::SponsorshipCall(call) => {
-                replayed_state.apply_sponsorship_call(call, &mut positioned_core_changes)?;
+            CfxOperation::SponsorshipFunding(funding) => {
+                replayed_state.apply_sponsorship_funding(funding, &mut positioned_core_changes)?;
             }
             CfxOperation::SponsorshipStandaloneRefund(refund) => {
                 replayed_state
                     .apply_standalone_sponsorship_refund(refund, &mut positioned_core_changes)?;
+            }
+            CfxOperation::SponsorshipAccessRule(update) => {
+                replayed_state
+                    .apply_sponsorship_access_rule_update(update, &mut positioned_core_changes)?;
             }
             CfxOperation::StoragePointConversion(conversion) => {
                 replayed_state
@@ -337,17 +414,18 @@ pub(crate) fn verify_cfx_changes(
 }
 
 impl CfxStateValues {
-    fn apply_sponsorship_call(
+    fn apply_sponsorship_funding(
         &mut self,
-        call: &SponsorshipCallOperation,
+        funding: &SponsorshipFundingOperation,
         positioned_changes: &mut Vec<PositionedCoreSpaceChange>,
     ) -> Result<(), ConfluxEngineError> {
+        let sponsored_resource = funding.funding_terms.sponsored_resource();
         let resource_location = SponsorResourceLocation {
-            resource: call.resource,
-            contract_address: call.contract_address,
+            resource: sponsored_resource,
+            contract_address: funding.contract_address,
         };
-        let new_sponsor = (!call.sponsor.is_zero()).then_some(call.sponsor);
-        if !call.gross_deposit_amount.is_zero() && new_sponsor.is_none() {
+        let new_sponsor = (!funding.sponsor.is_zero()).then_some(funding.sponsor);
+        if !funding.gross_deposit_amount.is_zero() && new_sponsor.is_none() {
             return Err(ConfluxEngineError::analysis_failed(
                 "Core Space nonzero sponsorship deposit had no sponsor identity",
             ));
@@ -355,24 +433,24 @@ impl CfxStateValues {
 
         self.debit_balance(
             CfxBalanceLocation::Account {
-                account: call.sponsor,
+                account: funding.sponsor,
             },
-            call.gross_deposit_amount,
+            funding.gross_deposit_amount,
         )?;
 
         let current_sponsor = self.sponsor_identity(resource_location)?;
-        if let Some(refund) = call.refund {
-            if refund.resource != call.resource
-                || refund.contract_address != call.contract_address
+        if let Some(refund) = funding.refund {
+            if refund.resource != sponsored_resource
+                || refund.contract_address != funding.contract_address
                 || current_sponsor != Some(refund.sponsor)
                 || Some(refund.sponsor) == new_sponsor
             {
                 return Err(ConfluxEngineError::analysis_failed(format!(
                     "Core Space {:?} sponsorship replacement identity did not match its refund",
-                    call.resource
+                    sponsored_resource
                 )));
             }
-            let pool_location = call.resource.pool_location(call.contract_address);
+            let pool_location = sponsored_resource.pool_location(funding.contract_address);
             self.verify_exact_balance(
                 pool_location,
                 refund.pool_refund_amount,
@@ -386,7 +464,7 @@ impl CfxStateValues {
                         "Core Space sponsorship gross refund was smaller than its pool refund",
                     )
                 })?;
-            match call.resource {
+            match sponsored_resource {
                 SponsoredResource::Gas if !direct_compensation.is_zero() => {
                     return Err(ConfluxEngineError::analysis_failed(
                         "Core Space gas sponsorship replacement contained direct collateral compensation",
@@ -395,7 +473,7 @@ impl CfxStateValues {
                 SponsoredResource::StorageCollateral => {
                     self.verify_exact_balance(
                         CfxBalanceLocation::StorageCollateral {
-                            contract_address: call.contract_address,
+                            contract_address: funding.contract_address,
                         },
                         direct_compensation,
                         "replacement collateral compensation",
@@ -424,23 +502,60 @@ impl CfxStateValues {
         } else if current_sponsor.is_some() && current_sponsor != new_sponsor {
             return Err(ConfluxEngineError::analysis_failed(format!(
                 "Core Space {:?} sponsorship identity changed without a refund transit",
-                call.resource
+                sponsored_resource
             )));
         }
 
         self.credit_balance(
-            call.resource.pool_location(call.contract_address),
-            call.pool_deposit_amount,
+            sponsored_resource.pool_location(funding.contract_address),
+            funding.pool_deposit_amount,
         )?;
         self.set_sponsor_identity(resource_location, new_sponsor)?;
-        if !call.gross_deposit_amount.is_zero() {
+        let changed_configuration = match funding.funding_terms {
+            SponsorshipFundingTerms::Gas {
+                gas_fee_upper_bound,
+            } => {
+                let gas_fee_upper_bound_before =
+                    self.gas_fee_upper_bound(funding.contract_address)?;
+                let gas_fee_upper_bound_after =
+                    if current_sponsor == new_sponsor && funding.pool_deposit_amount.is_zero() {
+                        gas_fee_upper_bound_before
+                    } else {
+                        gas_fee_upper_bound
+                    };
+                self.set_gas_fee_upper_bound(funding.contract_address, gas_fee_upper_bound_after)?;
+                (current_sponsor != new_sponsor
+                    || gas_fee_upper_bound_before != gas_fee_upper_bound_after)
+                    .then_some(SponsorshipConfiguration::Gas {
+                        sponsor_before: current_sponsor,
+                        sponsor_after: new_sponsor,
+                        max_sponsored_gas_fee_raw_amount_before: gas_fee_upper_bound_before,
+                        max_sponsored_gas_fee_raw_amount_after: gas_fee_upper_bound_after,
+                    })
+            }
+            SponsorshipFundingTerms::StorageCollateral => (current_sponsor != new_sponsor)
+                .then_some(SponsorshipConfiguration::StorageCollateral {
+                    sponsor_before: current_sponsor,
+                    sponsor_after: new_sponsor,
+                }),
+        };
+        if let Some(configuration) = changed_configuration {
             positioned_changes.push(PositionedCoreSpaceChange::new(
-                call.position,
+                funding.position,
+                CoreSpaceChange::SponsorshipConfiguration {
+                    contract_address: funding.contract_address,
+                    configuration,
+                },
+            ));
+        }
+        if !funding.gross_deposit_amount.is_zero() {
+            positioned_changes.push(PositionedCoreSpaceChange::new(
+                funding.position,
                 CoreSpaceChange::SponsorshipDeposit {
-                    sponsored_resource: call.resource,
-                    sponsor: call.sponsor,
-                    contract_address: call.contract_address,
-                    raw_amount: call.gross_deposit_amount,
+                    sponsored_resource,
+                    sponsor: funding.sponsor,
+                    contract_address: funding.contract_address,
+                    raw_amount: funding.gross_deposit_amount,
                 },
             ));
         }
@@ -476,6 +591,30 @@ impl CfxStateValues {
             refund.gross_refund_amount,
         )?;
         self.set_sponsor_identity(resource_location, None)?;
+        let configuration = match refund.resource {
+            SponsoredResource::Gas => {
+                let gas_fee_upper_bound_before =
+                    self.gas_fee_upper_bound(refund.contract_address)?;
+                self.set_gas_fee_upper_bound(refund.contract_address, U256::ZERO)?;
+                SponsorshipConfiguration::Gas {
+                    sponsor_before: Some(refund.sponsor),
+                    sponsor_after: None,
+                    max_sponsored_gas_fee_raw_amount_before: gas_fee_upper_bound_before,
+                    max_sponsored_gas_fee_raw_amount_after: U256::ZERO,
+                }
+            }
+            SponsoredResource::StorageCollateral => SponsorshipConfiguration::StorageCollateral {
+                sponsor_before: Some(refund.sponsor),
+                sponsor_after: None,
+            },
+        };
+        positioned_changes.push(PositionedCoreSpaceChange::new(
+            refund.position,
+            CoreSpaceChange::SponsorshipConfiguration {
+                contract_address: refund.contract_address,
+                configuration,
+            },
+        ));
         if !refund.gross_refund_amount.is_zero() {
             positioned_changes.push(PositionedCoreSpaceChange::new(
                 refund.position,
@@ -487,6 +626,57 @@ impl CfxStateValues {
                 },
             ));
         }
+        Ok(())
+    }
+
+    fn apply_sponsorship_access_rule_update(
+        &mut self,
+        update: &SponsorshipAccessRuleUpdate,
+        positioned_changes: &mut Vec<PositionedCoreSpaceChange>,
+    ) -> Result<(), ConfluxEngineError> {
+        if update.caller_role == SponsorshipAccessCallerRole::ContractAdmin {
+            if !address_to_cfx(update.contract_address).is_contract_address() {
+                return Ok(());
+            }
+            let admin = self
+                .sponsorship_contract_admins
+                .get(&update.contract_address)
+                .copied()
+                .ok_or_else(|| {
+                    ConfluxEngineError::analysis_failed(format!(
+                        "before Core Space sponsorship access-rule admin is missing for contract {}",
+                        update.contract_address
+                    ))
+                })?;
+            if admin != update.caller_address {
+                return Ok(());
+            }
+        }
+
+        let rule_key = update.key();
+        let enabled_before = self
+            .sponsorship_access_rules
+            .get_mut(&rule_key)
+            .ok_or_else(|| {
+                ConfluxEngineError::analysis_failed(format!(
+                    "before Core Space sponsorship access rule is missing for contract {}",
+                    update.contract_address
+                ))
+            })?;
+        if *enabled_before == update.enabled_after {
+            return Ok(());
+        }
+        let previous = *enabled_before;
+        *enabled_before = update.enabled_after;
+        positioned_changes.push(PositionedCoreSpaceChange::new(
+            update.position,
+            CoreSpaceChange::SponsorshipAccessRule {
+                contract_address: update.contract_address,
+                account_scope: update.account_scope,
+                enabled_before: previous,
+                enabled_after: update.enabled_after,
+            },
+        ));
         Ok(())
     }
 
@@ -628,6 +818,34 @@ impl CfxStateValues {
         Ok(())
     }
 
+    fn gas_fee_upper_bound(&self, contract_address: Address) -> Result<U256, ConfluxEngineError> {
+        self.gas_fee_upper_bounds
+            .get(&contract_address)
+            .copied()
+            .ok_or_else(|| {
+                ConfluxEngineError::analysis_failed(format!(
+                    "before Core Space gas sponsor bound is missing for contract {contract_address}"
+                ))
+            })
+    }
+
+    fn set_gas_fee_upper_bound(
+        &mut self,
+        contract_address: Address,
+        gas_fee_upper_bound: U256,
+    ) -> Result<(), ConfluxEngineError> {
+        let current = self
+            .gas_fee_upper_bounds
+            .get_mut(&contract_address)
+            .ok_or_else(|| {
+                ConfluxEngineError::analysis_failed(format!(
+                    "before Core Space gas sponsor bound is missing for contract {contract_address}"
+                ))
+            })?;
+        *current = gas_fee_upper_bound;
+        Ok(())
+    }
+
     fn verify_exact_balance(
         &self,
         location: CfxBalanceLocation,
@@ -724,6 +942,56 @@ impl CfxStateValues {
                 return Err(ConfluxEngineError::analysis_failed(format!(
                     "Core Space {:?} sponsor identity mismatch for contract {}: replayed {:?}, after {:?}",
                     location.resource, location.contract_address, replayed_sponsor, after_sponsor
+                )));
+            }
+        }
+
+        for (contract_address, replayed_gas_fee_upper_bound) in &self.gas_fee_upper_bounds {
+            let after_gas_fee_upper_bound = after_state
+                .gas_fee_upper_bounds
+                .get(contract_address)
+                .ok_or_else(|| {
+                    ConfluxEngineError::analysis_failed(format!(
+                        "after Core Space gas sponsor bound is missing for contract {contract_address}"
+                    ))
+                })?;
+            if replayed_gas_fee_upper_bound != after_gas_fee_upper_bound {
+                return Err(ConfluxEngineError::analysis_failed(format!(
+                    "Core Space gas sponsor bound mismatch for contract {contract_address}: replayed {replayed_gas_fee_upper_bound}, after {after_gas_fee_upper_bound}"
+                )));
+            }
+        }
+
+        for (rule_key, replayed_rule) in &self.sponsorship_access_rules {
+            let after_rule = after_state
+                .sponsorship_access_rules
+                .get(rule_key)
+                .ok_or_else(|| {
+                    ConfluxEngineError::analysis_failed(format!(
+                        "after Core Space sponsorship access rule is missing for contract {}",
+                        rule_key.contract_address
+                    ))
+                })?;
+            if replayed_rule != after_rule {
+                return Err(ConfluxEngineError::analysis_failed(format!(
+                    "Core Space sponsorship access rule mismatch for contract {}: replayed {replayed_rule}, after {after_rule}",
+                    rule_key.contract_address
+                )));
+            }
+        }
+
+        for (contract_address, before_admin) in &self.sponsorship_contract_admins {
+            let after_admin = after_state
+                .sponsorship_contract_admins
+                .get(contract_address)
+                .ok_or_else(|| {
+                    ConfluxEngineError::analysis_failed(format!(
+                        "after Core Space sponsorship access-rule admin is missing for contract {contract_address}"
+                    ))
+                })?;
+            if before_admin != after_admin {
+                return Err(ConfluxEngineError::analysis_failed(format!(
+                    "Core Space sponsorship access-rule admin changed during analysis for contract {contract_address}"
                 )));
             }
         }

@@ -57,6 +57,34 @@ impl StoragePointInitializationUncertainty {
     }
 }
 
+#[derive(Clone, Default)]
+pub(crate) struct MaskedSponsorWhitelistEntries {
+    entries: Arc<SyncMutex<HashSet<SponsorWhitelistStorageKey>>>,
+}
+
+impl MaskedSponsorWhitelistEntries {
+    fn record(&self, key: SponsorWhitelistStorageKey) -> StorageResult<()> {
+        self.entries
+            .lock()
+            .map_err(|_| Self::lock_error())?
+            .insert(key);
+        Ok(())
+    }
+
+    pub(crate) fn snapshot(&self) -> StorageResult<HashSet<SponsorWhitelistStorageKey>> {
+        self.entries
+            .lock()
+            .map_err(|_| Self::lock_error())
+            .map(|entries| entries.clone())
+    }
+
+    fn lock_error() -> StorageError {
+        StorageError::Msg(
+            "failed to access request-local Core Space sponsor whitelist state".to_owned(),
+        )
+    }
+}
+
 /// Vote lists fetched by this request's anchored StateDB reads.
 #[derive(Clone, Default)]
 pub(crate) struct AnchoredVoteLists {
@@ -105,6 +133,7 @@ pub(crate) struct RemoteStateReader {
     core_space_globals: CoreSpaceGlobals,
     espace_account_cache: AsyncMutex<HashMap<Address, Arc<EspaceAccountData>>>,
     storage_point_initialization_uncertainty: StoragePointInitializationUncertainty,
+    masked_sponsor_whitelist_entries: MaskedSponsorWhitelistEntries,
     anchored_vote_lists: AnchoredVoteLists,
 }
 
@@ -128,6 +157,7 @@ impl RemoteStateReader {
             espace_account_cache: AsyncMutex::new(HashMap::new()),
             storage_point_initialization_uncertainty:
                 StoragePointInitializationUncertainty::default(),
+            masked_sponsor_whitelist_entries: MaskedSponsorWhitelistEntries::default(),
             anchored_vote_lists: AnchoredVoteLists::default(),
         })
     }
@@ -144,6 +174,10 @@ impl RemoteStateReader {
 
     pub(crate) fn anchored_vote_lists(&self) -> AnchoredVoteLists {
         self.anchored_vote_lists.clone()
+    }
+
+    pub(crate) fn masked_sponsor_whitelist_entries(&self) -> MaskedSponsorWhitelistEntries {
+        self.masked_sponsor_whitelist_entries.clone()
     }
 
     pub(crate) async fn read(&self, item: &StateItem) -> StorageResult<StateRead> {
@@ -404,10 +438,11 @@ impl RemoteStateReader {
 
         // The raw user key is only read after the all-whitelist key is zero.
         if is_all_whitelisted {
+            self.masked_sponsor_whitelist_entries.record(key)?;
             tracing::warn!(
-                contract = ?key.contract,
-                user = ?key.user,
-                "sponsor whitelist user key is approximate because all-whitelist is enabled"
+                contract_address = ?key.contract_address,
+                account_address = ?key.account_address,
+                "sponsor whitelist user key is masked because all-whitelist is enabled"
             );
             return Ok(None);
         }

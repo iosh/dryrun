@@ -15,13 +15,19 @@ pub(crate) use collection::collect_cfx_operations;
 pub(crate) use verification::{read_cfx_state_values, verify_cfx_changes};
 
 use crate::{
-    ConfluxEngineError, core_space::changes::SponsoredResource, primitive::address_from_cfx,
+    ConfluxEngineError,
+    core_space::changes::{SponsoredResource, SponsorshipAccessScope},
+    primitive::{address_from_cfx, address_to_cfx},
+    state::{MaskedSponsorWhitelistEntries, SponsorWhitelistStorageKey},
 };
 
 #[derive(Debug)]
 pub(crate) struct CfxOperations {
     balance_locations: Vec<CfxBalanceLocation>,
     sponsor_resources: Vec<SponsorResourceLocation>,
+    contracts_requiring_gas_fee_upper_bound: Vec<Address>,
+    sponsorship_access_rule_keys: Vec<SponsorshipAccessRuleKey>,
+    admin_managed_sponsorship_contracts: Vec<Address>,
     storage_point_accounts: Vec<Address>,
     requires_storage_point_globals: bool,
     operations: Vec<CfxOperation>,
@@ -31,6 +37,8 @@ impl CfxOperations {
     fn from_operations(operations: Vec<CfxOperation>) -> Self {
         let mut balance_locations = BTreeSet::new();
         let mut sponsor_resources = BTreeSet::new();
+        let mut sponsorship_access_rule_keys = BTreeSet::new();
+        let mut admin_managed_sponsorship_contracts = BTreeSet::new();
         let mut storage_point_accounts = BTreeSet::new();
         let mut requires_storage_point_globals = false;
 
@@ -57,23 +65,25 @@ impl CfxOperations {
                 CfxOperation::StakingBurn { account, .. } => {
                     balance_locations.insert(CfxBalanceLocation::Staking { account: *account });
                 }
-                CfxOperation::SponsorshipCall(call) => {
+                CfxOperation::SponsorshipFunding(funding) => {
                     balance_locations.insert(CfxBalanceLocation::Account {
-                        account: call.sponsor,
+                        account: funding.sponsor,
                     });
-                    balance_locations.insert(call.resource.pool_location(call.contract_address));
+                    let sponsored_resource = funding.funding_terms.sponsored_resource();
+                    balance_locations
+                        .insert(sponsored_resource.pool_location(funding.contract_address));
                     sponsor_resources.insert(SponsorResourceLocation {
-                        resource: call.resource,
-                        contract_address: call.contract_address,
+                        resource: sponsored_resource,
+                        contract_address: funding.contract_address,
                     });
-                    if let Some(refund) = call.refund {
+                    if let Some(refund) = funding.refund {
                         balance_locations.insert(CfxBalanceLocation::Account {
                             account: refund.sponsor,
                         });
                     }
-                    if call.resource == SponsoredResource::StorageCollateral {
+                    if sponsored_resource == SponsoredResource::StorageCollateral {
                         add_storage_point_requirements(
-                            call.contract_address,
+                            funding.contract_address,
                             &mut balance_locations,
                             &mut storage_point_accounts,
                             &mut requires_storage_point_globals,
@@ -111,12 +121,30 @@ impl CfxOperations {
                         contract_address: conversion.contract_address,
                     });
                 }
+                CfxOperation::SponsorshipAccessRule(update) => {
+                    sponsorship_access_rule_keys.insert(update.key());
+                    if update.caller_role == SponsorshipAccessCallerRole::ContractAdmin {
+                        admin_managed_sponsorship_contracts.insert(update.contract_address);
+                    }
+                }
             }
         }
+
+        let contracts_requiring_gas_fee_upper_bound = sponsor_resources
+            .iter()
+            .filter_map(|location| {
+                (location.resource == SponsoredResource::Gas).then_some(location.contract_address)
+            })
+            .collect();
 
         Self {
             balance_locations: balance_locations.into_iter().collect(),
             sponsor_resources: sponsor_resources.into_iter().collect(),
+            contracts_requiring_gas_fee_upper_bound,
+            sponsorship_access_rule_keys: sponsorship_access_rule_keys.into_iter().collect(),
+            admin_managed_sponsorship_contracts: admin_managed_sponsorship_contracts
+                .into_iter()
+                .collect(),
             storage_point_accounts: storage_point_accounts.into_iter().collect(),
             requires_storage_point_globals,
             operations,
@@ -150,6 +178,34 @@ impl CfxOperations {
             }
         }
 
+        Ok(())
+    }
+
+    pub(crate) fn reject_masked_sponsorship_access_dependencies(
+        &self,
+        masked_entries: &MaskedSponsorWhitelistEntries,
+    ) -> Result<(), ConfluxEngineError> {
+        let masked_entries =
+            masked_entries
+                .snapshot()
+                .map_err(|error| ConfluxEngineError::StateAccess {
+                    message: error.to_string(),
+                })?;
+        for key in &self.sponsorship_access_rule_keys {
+            let SponsorshipAccessScope::Account(account_address) = key.account_scope else {
+                continue;
+            };
+            let storage_key = SponsorWhitelistStorageKey {
+                contract_address: address_to_cfx(key.contract_address),
+                account_address: address_to_cfx(account_address),
+            };
+            if masked_entries.contains(&storage_key) {
+                return Err(ConfluxEngineError::analysis_failed(format!(
+                    "Core Space sponsorship access depends on a raw whitelist entry masked by the all-accounts rule for contract {} and account {account_address}",
+                    key.contract_address
+                )));
+            }
+        }
         Ok(())
     }
 }
@@ -291,20 +347,36 @@ enum CfxOperation {
         account: Address,
         amount: U256,
     },
-    SponsorshipCall(SponsorshipCallOperation),
+    SponsorshipFunding(SponsorshipFundingOperation),
     SponsorshipStandaloneRefund(SponsorshipRefundOperation),
+    SponsorshipAccessRule(SponsorshipAccessRuleUpdate),
     StoragePointConversion(StoragePointConversionOperation),
 }
 
 #[derive(Debug)]
-struct SponsorshipCallOperation {
+struct SponsorshipFundingOperation {
     position: Position,
-    resource: SponsoredResource,
+    funding_terms: SponsorshipFundingTerms,
     sponsor: Address,
     contract_address: Address,
     gross_deposit_amount: U256,
     pool_deposit_amount: U256,
     refund: Option<SponsorshipRefundOperation>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SponsorshipFundingTerms {
+    Gas { gas_fee_upper_bound: U256 },
+    StorageCollateral,
+}
+
+impl SponsorshipFundingTerms {
+    const fn sponsored_resource(self) -> SponsoredResource {
+        match self {
+            Self::Gas { .. } => SponsoredResource::Gas,
+            Self::StorageCollateral => SponsoredResource::StorageCollateral,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -323,6 +395,37 @@ struct StoragePointConversionOperation {
     contract_address: Address,
     from_sponsor_pool: U256,
     from_storage_collateral: U256,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SponsorshipAccessCallerRole {
+    SponsoredContract,
+    ContractAdmin,
+}
+
+#[derive(Debug)]
+struct SponsorshipAccessRuleUpdate {
+    position: Position,
+    caller_role: SponsorshipAccessCallerRole,
+    caller_address: Address,
+    contract_address: Address,
+    account_scope: SponsorshipAccessScope,
+    enabled_after: bool,
+}
+
+impl SponsorshipAccessRuleUpdate {
+    const fn key(&self) -> SponsorshipAccessRuleKey {
+        SponsorshipAccessRuleKey {
+            contract_address: self.contract_address,
+            account_scope: self.account_scope,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct SponsorshipAccessRuleKey {
+    contract_address: Address,
+    account_scope: SponsorshipAccessScope,
 }
 
 pub(crate) fn determine_gas_fee_payer(
