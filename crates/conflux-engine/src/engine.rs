@@ -9,7 +9,7 @@ use crate::{
         CoreSpaceEpochRef, CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode,
         CoreSpaceSimulation, CoreSpaceStateAnchor, CoreSpaceTransaction,
         CoreSpaceTransactionVariant, build_core_space_not_executed,
-        build_core_space_transaction_input,
+        build_core_space_transaction_input, prepare_storage_payer,
     },
     espace::{
         EspaceBlockRef, EspaceSimulation, EspaceTransaction, build_espace_not_executed,
@@ -124,6 +124,12 @@ impl ConfluxEngine {
             });
         }
 
+        let storage_payer = prepare_storage_payer(
+            self.provider.as_ref(),
+            context.state_anchor.core_space_epoch(),
+            &transaction,
+        )
+        .await?;
         let transaction = build_core_space_transaction_input(transaction, chain_id);
 
         let execution_input = TransactionExecutionInput {
@@ -137,6 +143,7 @@ impl ConfluxEngine {
                 chain_id,
                 state_anchor,
                 gas_limit,
+                storage_payer,
                 execution_input,
                 state_reader,
             })),

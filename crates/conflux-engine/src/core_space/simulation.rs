@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
-use cfx_executor::executive_observer::AddressPocket;
+use cfx_executor::{executive::ExecutionError, executive_observer::AddressPocket};
 use cfx_types::{Address, Space};
+use cfx_vm_types as vm;
 use contract_standards::{StatePhase, state_requirements, verify};
 use tokio::runtime::Handle;
 
@@ -20,7 +21,7 @@ use crate::{
 };
 
 use super::{
-    CoreSpaceSimulation, build_core_space_execution,
+    CoreSpaceSimulation, PreparedStoragePayer, build_core_space_execution,
     changes::{
         PoSStateRequirements, PositionedCoreSpaceChange, StakingContractActivation,
         collect_cfx_operations, collect_committed_staking_calls, decode_pos_staking_events,
@@ -43,6 +44,7 @@ pub(crate) fn simulate(
                 chain_id,
                 state_anchor,
                 gas_limit,
+                storage_payer,
                 execution_input,
                 state_reader,
             } = *ready_simulation;
@@ -77,11 +79,17 @@ pub(crate) fn simulate(
                         executed_details.gas_sponsor_paid,
                     ),
                     _ => {
+                        let storage_payer = storage_payer_for_outcome(
+                            storage_payer,
+                            &transaction_outcome,
+                            &prepared_execution.spec,
+                        );
                         let core_execution = build_core_space_execution(
                             chain_id,
                             state_anchor,
                             gas_limit,
                             transaction_outcome,
+                            storage_payer,
                         );
                         return Ok(CoreSpaceSimulation::new(core_execution, Vec::new()));
                     }
@@ -193,14 +201,70 @@ pub(crate) fn simulate(
             );
             let ordered_core_changes = into_ordered_core_space_changes(positioned_core_changes);
 
-            let core_execution =
-                build_core_space_execution(chain_id, state_anchor, gas_limit, transaction_outcome);
+            let storage_payer = storage_payer_for_outcome(
+                storage_payer,
+                &transaction_outcome,
+                &prepared_execution.spec,
+            );
+            let core_execution = build_core_space_execution(
+                chain_id,
+                state_anchor,
+                gas_limit,
+                transaction_outcome,
+                storage_payer,
+            );
 
             Ok(CoreSpaceSimulation::new(
                 core_execution,
                 ordered_core_changes,
             ))
         }
+    }
+}
+
+fn storage_payer_for_outcome(
+    storage_payer: PreparedStoragePayer,
+    outcome: &TransactionExecutionOutcome,
+    spec: &cfx_vm_types::Spec,
+) -> Option<PreparedStoragePayer> {
+    let outcome = match outcome {
+        TransactionExecutionOutcome::Success(_) => StoragePayerOutcome::Success,
+        TransactionExecutionOutcome::Failed {
+            error: ExecutionError::VmError(vm::Error::Reverted),
+            ..
+        } => StoragePayerOutcome::Reverted,
+        TransactionExecutionOutcome::Failed { .. } => StoragePayerOutcome::FullyChargedError,
+        TransactionExecutionOutcome::NotExecutedDrop(_)
+        | TransactionExecutionOutcome::NotExecutedToReconsiderPacking(_) => {
+            StoragePayerOutcome::NotExecuted
+        }
+    };
+
+    if storage_payer_is_reported(outcome, spec.cip78a, spec.cip78b) {
+        Some(storage_payer)
+    } else {
+        None
+    }
+}
+
+#[derive(Clone, Copy)]
+enum StoragePayerOutcome {
+    Success,
+    Reverted,
+    FullyChargedError,
+    NotExecuted,
+}
+
+const fn storage_payer_is_reported(
+    outcome: StoragePayerOutcome,
+    cip78a: bool,
+    cip78b: bool,
+) -> bool {
+    match outcome {
+        StoragePayerOutcome::Success => cip78a,
+        StoragePayerOutcome::Reverted => cip78a,
+        StoragePayerOutcome::FullyChargedError => cip78b,
+        StoragePayerOutcome::NotExecuted => false,
     }
 }
 

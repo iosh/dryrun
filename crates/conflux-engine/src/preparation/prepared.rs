@@ -1,5 +1,5 @@
 use crate::{
-    core_space::{CoreSpaceExecution, CoreSpaceStateAnchor},
+    core_space::{CoreSpaceExecution, CoreSpaceStateAnchor, PreparedStoragePayer},
     espace::{EspaceExecution, SimulatedBlock},
     execution::TransactionExecutionInput,
     state::RemoteStateReader,
@@ -35,6 +35,7 @@ pub(crate) struct ReadyCoreSpaceSimulation {
     pub(crate) chain_id: u32,
     pub(crate) state_anchor: CoreSpaceStateAnchor,
     pub(crate) gas_limit: u64,
+    pub(crate) storage_payer: PreparedStoragePayer,
     pub(crate) execution_input: TransactionExecutionInput,
     pub(crate) state_reader: RemoteStateReader,
 }

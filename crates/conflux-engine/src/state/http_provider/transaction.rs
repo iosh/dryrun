@@ -127,6 +127,38 @@ impl HttpConfluxProvider {
             storage_limit: estimate.storage_collateralized.as_u64(),
         })
     }
+
+    pub(crate) async fn cfx_check_balance_against_transaction(
+        &self,
+        account: Address,
+        contract: Address,
+        gas_limit: u64,
+        gas_price: u128,
+        storage_limit: u64,
+        epoch: EpochNumber,
+    ) -> Result<CoreSpaceBalanceCheck, ConfluxRpcError> {
+        let account = self.cfx_rpc_address(account)?;
+        let contract = self.cfx_rpc_address(contract)?;
+
+        self.core_space_rpc_request(
+            "cfx_checkBalanceAgainstTransaction",
+            rpc_params![
+                account,
+                contract,
+                U256::from(gas_limit),
+                U256::from(gas_price),
+                U256::from(storage_limit),
+                Some(epoch)
+            ],
+        )
+        .await
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CoreSpaceBalanceCheck {
+    pub(crate) will_pay_collateral: bool,
 }
 
 #[derive(Clone, Copy)]

@@ -1,12 +1,14 @@
+use cfx_rpc_cfx_types::EpochNumber;
 use primitives::transaction::{
     Action, Cip1559Transaction, Cip2930Transaction,
     NativeTransaction as PrimitiveNativeTransaction, TypedNativeTransaction,
 };
 
 use crate::{
-    ConfluxTransaction, ConfluxTransactionVariant,
+    ConfluxEngineError, ConfluxTransaction, ConfluxTransactionVariant,
     execution::CoreSpaceTransactionInput,
     primitive::{access_list_to_cfx, address_to_cfx, u256_to_cfx},
+    state::HttpConfluxProvider,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +24,64 @@ pub struct CoreSpaceTransaction {
     pub transaction: ConfluxTransaction,
     pub storage_limit: u64,
     pub epoch_height: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PreparedStoragePayer {
+    storage_covered_by_sponsor: bool,
+}
+
+impl PreparedStoragePayer {
+    pub(crate) const fn storage_covered_by_sponsor(self) -> bool {
+        self.storage_covered_by_sponsor
+    }
+}
+
+pub(crate) async fn prepare_storage_payer(
+    provider: &HttpConfluxProvider,
+    epoch: EpochNumber,
+    transaction: &CoreSpaceTransaction,
+) -> Result<PreparedStoragePayer, ConfluxEngineError> {
+    let Some(target) = transaction.transaction.to else {
+        return Ok(PreparedStoragePayer {
+            storage_covered_by_sponsor: false,
+        });
+    };
+
+    let target = address_to_cfx(target);
+    let code = provider.cfx_get_code(target, epoch.clone()).await?;
+    if code.is_empty() {
+        return Ok(PreparedStoragePayer {
+            storage_covered_by_sponsor: false,
+        });
+    }
+
+    let storage_limit = transaction.storage_limit;
+    let transaction = &transaction.transaction;
+    let balance_check = provider
+        .cfx_check_balance_against_transaction(
+            address_to_cfx(transaction.from),
+            target,
+            transaction.gas_limit,
+            storage_payer_gas_price(&transaction.variant),
+            storage_limit,
+            epoch,
+        )
+        .await?;
+
+    Ok(PreparedStoragePayer {
+        storage_covered_by_sponsor: !balance_check.will_pay_collateral,
+    })
+}
+
+fn storage_payer_gas_price(variant: &CoreSpaceTransactionVariant) -> u128 {
+    match variant {
+        CoreSpaceTransactionVariant::Legacy { gas_price }
+        | CoreSpaceTransactionVariant::AccessList { gas_price, .. } => *gas_price,
+        CoreSpaceTransactionVariant::DynamicFee {
+            max_fee_per_gas, ..
+        } => *max_fee_per_gas,
+    }
 }
 
 pub(crate) fn build_core_space_transaction_input(

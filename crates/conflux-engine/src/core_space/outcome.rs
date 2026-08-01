@@ -9,21 +9,24 @@ use super::{
 };
 use crate::execution::{ExecutedTransactionDetails, TransactionExecutionOutcome};
 
+use super::PreparedStoragePayer;
+
 pub(crate) fn build_core_space_execution(
     chain_id: u32,
     state: CoreSpaceStateAnchor,
     gas_limit: u64,
     outcome: TransactionExecutionOutcome,
+    storage_payer: Option<PreparedStoragePayer>,
 ) -> CoreSpaceExecution {
     let outcome = match outcome {
-        TransactionExecutionOutcome::Success(details) => {
-            CoreSpaceExecutionOutcome::Success(into_core_space_details(details, true))
-        }
+        TransactionExecutionOutcome::Success(details) => CoreSpaceExecutionOutcome::Success(
+            into_core_space_details(details, true, storage_payer),
+        ),
         TransactionExecutionOutcome::Failed { error, details } => {
             let failure =
                 build_core_space_execution_error_failure(&error, details.common.output.as_ref());
             CoreSpaceExecutionOutcome::Failed {
-                details: into_core_space_details(details, false),
+                details: into_core_space_details(details, false, storage_payer),
                 failure,
             }
         }
@@ -60,6 +63,7 @@ pub(crate) fn build_core_space_not_executed(
 fn into_core_space_details(
     details: ExecutedTransactionDetails,
     include_storage_changes: bool,
+    storage_payer: Option<PreparedStoragePayer>,
 ) -> CoreSpaceExecutedDetails {
     let storage_collateralized = if include_storage_changes {
         into_core_space_storage_changes(details.storage_collateralized)
@@ -75,7 +79,9 @@ fn into_core_space_details(
     CoreSpaceExecutedDetails {
         common: details.common,
         gas_covered_by_sponsor: details.gas_sponsor_paid,
-        storage_covered_by_sponsor: details.storage_sponsor_paid,
+        storage_covered_by_sponsor: storage_payer
+            .map(PreparedStoragePayer::storage_covered_by_sponsor)
+            .unwrap_or(details.storage_sponsor_paid),
         storage_collateralized,
         storage_released,
     }
