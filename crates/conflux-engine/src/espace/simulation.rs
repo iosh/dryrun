@@ -10,15 +10,12 @@ use crate::{
         execute_transaction, prepare_transaction_execution,
     },
     preparation::{PreparedEspaceSimulation, PreparedEspaceSimulationState, ReadyEspaceSimulation},
-    standards::{collect_standard_candidates, read_standard_state_values},
+    standards::{collect_standard_candidates, load_change_metadata, read_standard_state_values},
 };
 
 use super::{
     EspaceSimulation, build_espace_execution,
-    changes::{
-        collect_native_operations, load_change_metadata, read_native_balances,
-        verify_native_changes,
-    },
+    changes::{collect_native_operations, read_native_balances, verify_native_changes},
 };
 
 pub(crate) fn simulate(

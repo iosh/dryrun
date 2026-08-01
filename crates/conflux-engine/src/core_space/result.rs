@@ -15,12 +15,11 @@ impl CoreSpaceSimulation {
         &self.execution
     }
 
-    pub fn into_execution_only(self) -> CoreSpaceExecution {
-        let Self {
-            execution,
-            changes: unpublished_changes,
-        } = self;
-        drop(unpublished_changes);
-        execution
+    pub fn changes(&self) -> &[CoreSpaceChange] {
+        &self.changes
+    }
+
+    pub fn into_parts(self) -> (CoreSpaceExecution, Vec<CoreSpaceChange>) {
+        (self.execution, self.changes)
     }
 }

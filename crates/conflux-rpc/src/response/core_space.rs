@@ -5,7 +5,7 @@ use cfx_types::{Address, H256, U64, U256};
 use conflux_service::core_space as service_core_space;
 use serde::Serialize;
 
-use super::u256_to_wire;
+use super::{core_space_change, u256_to_wire};
 
 #[derive(Debug, thiserror::Error)]
 #[error("failed to encode `{field}` as a Core Space address: {message}")]
@@ -18,6 +18,7 @@ pub(crate) struct ResponseMappingError {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SimulateCoreSpaceTransactionResponse {
     execution: CoreSpaceExecution,
+    changes: Vec<core_space_change::Change>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -98,11 +99,10 @@ impl SimulateCoreSpaceTransactionResponse {
         simulation: service_core_space::SimulateCoreSpaceTransactionOutput,
         network: Network,
     ) -> Result<Self, ResponseMappingError> {
+        let (execution, changes) = simulation.into_parts();
         Ok(Self {
-            execution: CoreSpaceExecution::try_from_service(
-                simulation.into_execution_only(),
-                network,
-            )?,
+            execution: CoreSpaceExecution::try_from_service(execution, network)?,
+            changes: core_space_change::try_map_changes(changes, network)?,
         })
     }
 }
@@ -303,7 +303,7 @@ fn map_core_space_storage_changes(
         .collect()
 }
 
-fn map_core_space_address(
+pub(super) fn map_core_space_address(
     address: Address,
     network: Network,
     field: String,

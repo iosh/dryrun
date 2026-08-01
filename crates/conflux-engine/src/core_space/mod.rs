@@ -10,10 +10,15 @@ pub(crate) use transaction::{
     PreparedStoragePayer, build_core_space_transaction_input, prepare_storage_payer,
 };
 
+pub use changes::{
+    CoreSpaceChange, CrossSpaceAddress, SponsoredResource, SponsorshipConfiguration,
+    SponsorshipEligibilityTarget,
+};
 pub use execution::{
     CoreSpaceExecutedDetails, CoreSpaceExecution, CoreSpaceExecutionFailure,
     CoreSpaceExecutionFailureCode, CoreSpaceExecutionOutcome, CoreSpaceStateAnchor,
     CoreSpaceStorageChange,
 };
 pub use result::CoreSpaceSimulation;
+pub use simulation_changes::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
 pub use transaction::{CoreSpaceEpochRef, CoreSpaceTransaction, CoreSpaceTransactionVariant};

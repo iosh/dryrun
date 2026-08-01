@@ -6,7 +6,7 @@ use contract_standards::Position;
 
 use super::{
     SponsoredResource, SponsorshipAccessCallerRole, SponsorshipAccessRuleUpdate,
-    SponsorshipAccessScope, SponsorshipFundingOperation, SponsorshipFundingTerms,
+    SponsorshipEligibilityTarget, SponsorshipFundingOperation, SponsorshipFundingTerms,
     SponsorshipRefundOperation, StoragePointConversionOperation,
 };
 use crate::{
@@ -118,9 +118,9 @@ pub(super) fn collect_sponsorship_call(
                     caller_address,
                     contract_address,
                     account_scope: if account_address.is_zero() {
-                        SponsorshipAccessScope::AllAccounts
+                        SponsorshipEligibilityTarget::AllAccounts
                     } else {
-                        SponsorshipAccessScope::Account(account_address)
+                        SponsorshipEligibilityTarget::Account(account_address)
                     },
                     enabled_after,
                 },

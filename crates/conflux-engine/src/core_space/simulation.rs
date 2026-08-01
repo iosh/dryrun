@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use cfx_executor::{executive::ExecutionError, executive_observer::AddressPocket};
 use cfx_types::{Address, Space};
 use cfx_vm_types as vm;
-use contract_standards::{StatePhase, state_requirements, verify};
+use contract_standards::{MetadataRequests, StatePhase, state_requirements, verify};
 use tokio::runtime::Handle;
 
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
     preparation::{
         PreparedCoreSpaceSimulation, PreparedCoreSpaceSimulationState, ReadyCoreSpaceSimulation,
     },
-    standards::{collect_standard_candidates, read_standard_state_values},
+    standards::{collect_standard_candidates, load_change_metadata, read_standard_state_values},
     state::StoragePointInitializationUncertainty,
 };
 
@@ -25,7 +25,7 @@ use super::{
     changes::{
         PoSStateRequirements, PositionedCoreSpaceChange, StakingContractActivation,
         collect_cfx_operations, collect_committed_staking_calls, decode_pos_staking_events,
-        determine_gas_fee_payer, into_ordered_core_space_changes, read_cfx_state_values,
+        determine_gas_fee_payer, into_enriched_ordered_core_space_changes, read_cfx_state_values,
         read_pos_state_values, verify_cfx_changes, verify_pos_staking_changes,
         verify_vote_lock_changes,
     },
@@ -174,6 +174,7 @@ pub(crate) fn simulate(
                 &before_standard_state,
                 &after_standard_state,
             )?;
+            let metadata_requests = MetadataRequests::from_changes(&positioned_standard_changes);
             let mut positioned_core_changes = verify_cfx_changes(
                 &cfx_operations,
                 &before_cfx_state,
@@ -210,7 +211,17 @@ pub(crate) fn simulate(
                     .into_iter()
                     .map(PositionedCoreSpaceChange::from),
             );
-            let ordered_core_changes = into_ordered_core_space_changes(positioned_core_changes);
+            let ordered_core_changes = if positioned_core_changes.is_empty() {
+                Vec::new()
+            } else {
+                let metadata = load_change_metadata(
+                    &mut state,
+                    &machine,
+                    &prepared_execution,
+                    &metadata_requests,
+                )?;
+                into_enriched_ordered_core_space_changes(positioned_core_changes, &metadata)
+            };
 
             let storage_payer = storage_payer_for_outcome(
                 storage_payer,

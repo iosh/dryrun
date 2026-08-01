@@ -295,7 +295,11 @@ impl ChangeMetadata {
         Self { native, standard }
     }
 
-    fn enrich(&self, change: &mut Change) {
+    pub const fn native_metadata(&self) -> &NativeMetadata {
+        &self.native
+    }
+
+    pub fn enrich_change(&self, change: &mut Change) {
         match change {
             Change::NativeTransfer { metadata, .. } => {
                 *metadata = self.native.clone();
@@ -376,7 +380,7 @@ pub fn into_enriched_changes(
     positioned_changes
         .into_iter()
         .map(|mut positioned| {
-            metadata.enrich(&mut positioned.change);
+            metadata.enrich_change(&mut positioned.change);
             positioned.change
         })
         .collect()

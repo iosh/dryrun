@@ -9,11 +9,9 @@ use contract_standards::{
 };
 use simulation_changes::{ChangeMetadata, NativeMetadata};
 
-use crate::{
-    ConfluxEngineError,
-    execution::PreparedTransactionExecution,
-    standards::{StandardReadCallOutcome, execute_standard_read_call},
-};
+use crate::{ConfluxEngineError, execution::PreparedTransactionExecution};
+
+use super::{StandardReadCallOutcome, execute_standard_read_call};
 
 pub(crate) fn load_change_metadata(
     state: &mut State,

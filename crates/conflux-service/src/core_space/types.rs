@@ -2,9 +2,11 @@ use conflux_engine as engine;
 
 pub use crate::ConfluxTransactionRequest;
 pub use engine::core_space::{
-    CoreSpaceEpochRef, CoreSpaceExecutedDetails, CoreSpaceExecution, CoreSpaceExecutionFailure,
-    CoreSpaceExecutionFailureCode, CoreSpaceExecutionOutcome, CoreSpaceSimulation,
-    CoreSpaceStateAnchor, CoreSpaceStorageChange,
+    Change, CoreSpaceChange, CoreSpaceEpochRef, CoreSpaceExecutedDetails, CoreSpaceExecution,
+    CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode, CoreSpaceExecutionOutcome,
+    CoreSpaceSimulation, CoreSpaceStateAnchor, CoreSpaceStorageChange, CrossSpaceAddress,
+    Erc20Metadata, Erc721CollectionMetadata, NativeMetadata, SponsoredResource,
+    SponsorshipConfiguration, SponsorshipEligibilityTarget,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

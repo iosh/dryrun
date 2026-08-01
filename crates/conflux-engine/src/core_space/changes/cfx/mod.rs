@@ -17,7 +17,7 @@ pub(crate) use verification::{read_cfx_state_values, verify_cfx_changes};
 
 use crate::{
     ConfluxEngineError,
-    core_space::changes::{CrossSpaceAddress, SponsoredResource, SponsorshipAccessScope},
+    core_space::changes::{CrossSpaceAddress, SponsoredResource, SponsorshipEligibilityTarget},
     primitive::{address_from_cfx, address_to_cfx},
     state::{MaskedSponsorWhitelistEntries, SponsorWhitelistStorageKey},
 };
@@ -208,7 +208,7 @@ impl CfxOperations {
                     message: error.to_string(),
                 })?;
         for key in &self.sponsorship_access_rule_keys {
-            let SponsorshipAccessScope::Account(account_address) = key.account_scope else {
+            let SponsorshipEligibilityTarget::Account(account_address) = key.account_scope else {
                 continue;
             };
             let storage_key = SponsorWhitelistStorageKey {
@@ -450,7 +450,7 @@ struct SponsorshipAccessRuleUpdate {
     caller_role: SponsorshipAccessCallerRole,
     caller_address: Address,
     contract_address: Address,
-    account_scope: SponsorshipAccessScope,
+    account_scope: SponsorshipEligibilityTarget,
     enabled_after: bool,
 }
 
@@ -466,7 +466,7 @@ impl SponsorshipAccessRuleUpdate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct SponsorshipAccessRuleKey {
     contract_address: Address,
-    account_scope: SponsorshipAccessScope,
+    account_scope: SponsorshipEligibilityTarget,
 }
 
 pub(crate) fn determine_gas_fee_payer(

@@ -3,7 +3,7 @@ mod staking;
 
 use alloy_primitives::{Address, B256, U256};
 use contract_standards::{Position, PositionedStandardChange};
-use simulation_changes::Change;
+use simulation_changes::{Change, ChangeMetadata, NativeMetadata};
 
 pub(crate) use cfx::{
     collect_cfx_operations, determine_gas_fee_payer, read_cfx_state_values, verify_cfx_changes,
@@ -15,8 +15,8 @@ pub(crate) use staking::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CoreSpaceChange {
-    StandardOrNative(Change),
+pub enum CoreSpaceChange {
+    Asset(Change),
     StakingDeposit {
         account: Address,
         raw_amount: U256,
@@ -29,6 +29,7 @@ pub(crate) enum CoreSpaceChange {
     NativeBurn {
         from: Address,
         raw_amount: U256,
+        metadata: NativeMetadata,
     },
     StakingBurn {
         account: Address,
@@ -73,9 +74,9 @@ pub(crate) enum CoreSpaceChange {
         contract_address: Address,
         configuration: SponsorshipConfiguration,
     },
-    SponsorshipAccessRule {
+    SponsorshipEligibilityRule {
         contract_address: Address,
-        account_scope: SponsorshipAccessScope,
+        applies_to: SponsorshipEligibilityTarget,
         enabled_before: bool,
         enabled_after: bool,
     },
@@ -91,19 +92,19 @@ pub(crate) enum CoreSpaceChange {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CrossSpaceAddress {
+pub enum CrossSpaceAddress {
     CoreSpace(Address),
     Espace(Address),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum SponsoredResource {
+pub enum SponsoredResource {
     Gas,
     StorageCollateral,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum SponsorshipConfiguration {
+pub enum SponsorshipConfiguration {
     Gas {
         sponsor_before: Option<Address>,
         sponsor_after: Option<Address>,
@@ -117,7 +118,7 @@ pub(crate) enum SponsorshipConfiguration {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum SponsorshipAccessScope {
+pub enum SponsorshipEligibilityTarget {
     Account(Address),
     AllAccounts,
 }
@@ -138,17 +139,29 @@ impl From<PositionedStandardChange> for PositionedCoreSpaceChange {
     fn from(positioned: PositionedStandardChange) -> Self {
         Self::new(
             positioned.position,
-            CoreSpaceChange::StandardOrNative(positioned.change.into()),
+            CoreSpaceChange::Asset(positioned.change.into()),
         )
     }
 }
 
-pub(crate) fn into_ordered_core_space_changes(
+pub(crate) fn into_enriched_ordered_core_space_changes(
     mut positioned_changes: Vec<PositionedCoreSpaceChange>,
+    metadata: &ChangeMetadata,
 ) -> Vec<CoreSpaceChange> {
     positioned_changes.sort_by_key(|positioned| positioned.position);
     positioned_changes
         .into_iter()
-        .map(|positioned| positioned.change)
+        .map(|mut positioned| {
+            if let CoreSpaceChange::Asset(change) = &mut positioned.change {
+                metadata.enrich_change(change);
+            } else if let CoreSpaceChange::NativeBurn {
+                metadata: native_metadata,
+                ..
+            } = &mut positioned.change
+            {
+                *native_metadata = metadata.native_metadata().clone();
+            }
+            positioned.change
+        })
         .collect()
 }

@@ -16,7 +16,7 @@ use crate::{
     ConfluxEngineError,
     core_space::changes::{
         CoreSpaceChange, CrossSpaceAddress, PositionedCoreSpaceChange, SponsoredResource,
-        SponsorshipAccessScope, SponsorshipConfiguration,
+        SponsorshipConfiguration, SponsorshipEligibilityTarget,
     },
     primitive::{address_to_cfx, u256_from_cfx},
     state::SponsorWhitelistStorageKey,
@@ -150,8 +150,10 @@ pub(crate) fn read_cfx_state_values(
     let mut sponsorship_access_rules = BTreeMap::new();
     for &rule_key in &cfx_operations.sponsorship_access_rule_keys {
         let account_address = match rule_key.account_scope {
-            SponsorshipAccessScope::Account(account_address) => address_to_cfx(account_address),
-            SponsorshipAccessScope::AllAccounts => cfx_types::Address::zero(),
+            SponsorshipEligibilityTarget::Account(account_address) => {
+                address_to_cfx(account_address)
+            }
+            SponsorshipEligibilityTarget::AllAccounts => cfx_types::Address::zero(),
         };
         let storage_key = SponsorWhitelistStorageKey {
             contract_address: address_to_cfx(rule_key.contract_address),
@@ -264,7 +266,7 @@ pub(crate) fn verify_cfx_changes(
                 )?;
                 positioned_core_changes.push(PositionedCoreSpaceChange::new(
                     *position,
-                    CoreSpaceChange::StandardOrNative(Change::NativeTransfer {
+                    CoreSpaceChange::Asset(Change::NativeTransfer {
                         from: *from,
                         to: *to,
                         raw_amount: *amount,
@@ -391,6 +393,7 @@ pub(crate) fn verify_cfx_changes(
                     CoreSpaceChange::NativeBurn {
                         from: *account,
                         raw_amount: *amount,
+                        metadata: NativeMetadata::default(),
                     },
                 ));
             }
@@ -751,9 +754,9 @@ impl CfxStateValues {
         *enabled_before = update.enabled_after;
         positioned_changes.push(PositionedCoreSpaceChange::new(
             update.position,
-            CoreSpaceChange::SponsorshipAccessRule {
+            CoreSpaceChange::SponsorshipEligibilityRule {
                 contract_address: update.contract_address,
-                account_scope: update.account_scope,
+                applies_to: update.account_scope,
                 enabled_before: previous,
                 enabled_after: update.enabled_after,
             },
