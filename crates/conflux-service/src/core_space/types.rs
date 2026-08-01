@@ -4,7 +4,7 @@ pub use crate::ConfluxTransactionRequest;
 pub use engine::core_space::{
     CoreSpaceEpochRef, CoreSpaceExecutedDetails, CoreSpaceExecution, CoreSpaceExecutionFailure,
     CoreSpaceExecutionFailureCode, CoreSpaceExecutionOutcome, CoreSpaceSimulation,
-    CoreSpaceStateAnchor, CoreSpaceStorageChange, StandardChange,
+    CoreSpaceStateAnchor, CoreSpaceStorageChange,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -98,9 +98,11 @@ impl SimulateCoreSpaceTransactionResponse {
         simulation: service_core_space::SimulateCoreSpaceTransactionOutput,
         network: Network,
     ) -> Result<Self, ResponseMappingError> {
-        let (execution, _internal_standard_changes) = simulation.into_parts();
         Ok(Self {
-            execution: CoreSpaceExecution::try_from_service(execution, network)?,
+            execution: CoreSpaceExecution::try_from_service(
+                simulation.into_execution_only(),
+                network,
+            )?,
         })
     }
 }

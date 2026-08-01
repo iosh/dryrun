@@ -1,30 +1,26 @@
-use contract_standards::StandardChange;
-
-use super::CoreSpaceExecution;
+use super::{CoreSpaceExecution, changes::CoreSpaceChange};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreSpaceSimulation {
-    pub execution: CoreSpaceExecution,
-    pub standard_changes: Vec<StandardChange>,
+    execution: CoreSpaceExecution,
+    changes: Vec<CoreSpaceChange>,
 }
 
 impl CoreSpaceSimulation {
-    pub fn new(execution: CoreSpaceExecution, standard_changes: Vec<StandardChange>) -> Self {
-        Self {
-            execution,
-            standard_changes,
-        }
+    pub(crate) fn new(execution: CoreSpaceExecution, changes: Vec<CoreSpaceChange>) -> Self {
+        Self { execution, changes }
     }
 
     pub fn execution(&self) -> &CoreSpaceExecution {
         &self.execution
     }
 
-    pub fn standard_changes(&self) -> &[StandardChange] {
-        &self.standard_changes
-    }
-
-    pub fn into_parts(self) -> (CoreSpaceExecution, Vec<StandardChange>) {
-        (self.execution, self.standard_changes)
+    pub fn into_execution_only(self) -> CoreSpaceExecution {
+        let Self {
+            execution,
+            changes: unpublished_changes,
+        } = self;
+        drop(unpublished_changes);
+        execution
     }
 }

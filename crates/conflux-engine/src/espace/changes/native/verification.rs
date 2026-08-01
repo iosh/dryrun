@@ -6,7 +6,7 @@ use cfx_types::AddressSpaceUtil;
 use contract_standards::StatePhase;
 use simulation_changes::{Change, NativeMetadata, PositionedChange};
 
-use super::{NativeEvidence, NativeOperation};
+use super::{NativeOperation, NativeOperations};
 use crate::{
     ConfluxEngineError,
     primitive::{address_to_cfx, u256_from_cfx},
@@ -17,10 +17,10 @@ pub(crate) type NativeBalances = BTreeMap<Address, U256>;
 pub(crate) fn read_native_balances(
     state: &State,
     phase: StatePhase,
-    evidence: &NativeEvidence,
+    native_operations: &NativeOperations,
 ) -> Result<NativeBalances, ConfluxEngineError> {
-    evidence
-        .accounts
+    native_operations
+        .balance_accounts
         .iter()
         .map(|&address| {
             let balance = state
@@ -36,36 +36,36 @@ pub(crate) fn read_native_balances(
 }
 
 pub(crate) fn verify_native_changes(
-    evidence: &NativeEvidence,
-    before: &NativeBalances,
-    after: &NativeBalances,
-    fee: U256,
+    native_operations: &NativeOperations,
+    before_balances: &NativeBalances,
+    after_balances: &NativeBalances,
+    execution_fee: U256,
     burnt_fee: Option<U256>,
 ) -> Result<Vec<PositionedChange>, ConfluxEngineError> {
     if let Some(burnt_fee) = burnt_fee
-        && burnt_fee > fee
+        && burnt_fee > execution_fee
     {
         return Err(ConfluxEngineError::analysis_failed(format!(
-            "eSpace burnt fee exceeds total fee: burnt {burnt_fee}, total {fee}"
+            "eSpace burnt fee exceeds total fee: burnt {burnt_fee}, total {execution_fee}"
         )));
     }
 
-    let mut replayed = before.clone();
-    let mut changes = Vec::new();
-    let mut gas_precharge = U256::ZERO;
-    let mut gas_refund = U256::ZERO;
+    let mut replayed_balances = before_balances.clone();
+    let mut positioned_changes = Vec::new();
+    let mut precharged_fee = U256::ZERO;
+    let mut refunded_fee = U256::ZERO;
 
-    for operation in &evidence.operations {
+    for operation in &native_operations.operations {
         match operation {
-            NativeOperation::Transfer {
+            NativeOperation::AccountTransfer {
                 position,
                 from,
                 to,
                 amount,
             } => {
-                decrease_balance(&mut replayed, *from, *amount)?;
-                increase_balance(&mut replayed, *to, *amount)?;
-                changes.push(PositionedChange::new(
+                decrease_balance(&mut replayed_balances, *from, *amount)?;
+                increase_balance(&mut replayed_balances, *to, *amount)?;
+                positioned_changes.push(PositionedChange::new(
                     *position,
                     Change::NativeTransfer {
                         from: *from,
@@ -76,40 +76,40 @@ pub(crate) fn verify_native_changes(
                 ));
             }
             NativeOperation::GasPrecharge { payer, amount } => {
-                gas_precharge = gas_precharge.checked_add(*amount).ok_or_else(|| {
+                precharged_fee = precharged_fee.checked_add(*amount).ok_or_else(|| {
                     ConfluxEngineError::analysis_failed(
                         "eSpace gas precharge overflowed during native analysis",
                     )
                 })?;
-                decrease_balance(&mut replayed, *payer, *amount)?;
+                decrease_balance(&mut replayed_balances, *payer, *amount)?;
             }
             NativeOperation::GasRefund { recipient, amount } => {
-                gas_refund = gas_refund.checked_add(*amount).ok_or_else(|| {
+                refunded_fee = refunded_fee.checked_add(*amount).ok_or_else(|| {
                     ConfluxEngineError::analysis_failed(
                         "eSpace gas refund overflowed during native analysis",
                     )
                 })?;
-                increase_balance(&mut replayed, *recipient, *amount)?;
+                increase_balance(&mut replayed_balances, *recipient, *amount)?;
             }
         }
     }
 
-    let traced_fee = gas_precharge.checked_sub(gas_refund).ok_or_else(|| {
+    let net_fee_from_operations = precharged_fee.checked_sub(refunded_fee).ok_or_else(|| {
         ConfluxEngineError::analysis_failed("eSpace gas refund exceeded precharge")
     })?;
-    if traced_fee != fee {
+    if net_fee_from_operations != execution_fee {
         return Err(ConfluxEngineError::analysis_failed(format!(
-            "eSpace gas settlement mismatch: traced {traced_fee}, execution fee {fee}"
+            "eSpace gas settlement mismatch: traced {net_fee_from_operations}, execution fee {execution_fee}"
         )));
     }
 
-    for &address in &evidence.accounts {
-        let replayed_balance = replayed.get(&address).copied().ok_or_else(|| {
+    for &address in &native_operations.balance_accounts {
+        let replayed_balance = replayed_balances.get(&address).copied().ok_or_else(|| {
             ConfluxEngineError::analysis_failed(format!(
                 "replayed eSpace balance is missing for {address}"
             ))
         })?;
-        let after_balance = after.get(&address).copied().ok_or_else(|| {
+        let after_balance = after_balances.get(&address).copied().ok_or_else(|| {
             ConfluxEngineError::analysis_failed(format!(
                 "after eSpace balance is missing for {address}"
             ))
@@ -122,7 +122,7 @@ pub(crate) fn verify_native_changes(
         }
     }
 
-    Ok(changes)
+    Ok(positioned_changes)
 }
 
 fn decrease_balance(

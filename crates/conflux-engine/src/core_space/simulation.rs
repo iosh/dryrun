@@ -19,7 +19,13 @@ use crate::{
     state::StoragePointInitializationUncertainty,
 };
 
-use super::{CoreSpaceSimulation, build_core_space_execution};
+use super::{
+    CoreSpaceSimulation, build_core_space_execution,
+    changes::{
+        PositionedCoreSpaceChange, collect_cfx_operations, determine_gas_fee_payer,
+        into_ordered_core_space_changes, read_cfx_state_snapshot, verify_cfx_changes,
+    },
+};
 
 pub(crate) fn simulate(
     prepared_simulation: PreparedCoreSpaceSimulation,
@@ -48,7 +54,7 @@ pub(crate) fn simulate(
             let machine = build_mainnet_machine();
             let prepared_execution =
                 prepare_transaction_execution(&state, &machine, execution_input)?;
-            let before_snapshot = state.save();
+            let before_execution_snapshot = state.save();
             let mut transaction_outcome =
                 execute_transaction(&mut state, &machine, &prepared_execution)
                     .map_err(ConfluxEngineError::from)?;
@@ -57,36 +63,40 @@ pub(crate) fn simulate(
                 &storage_point_initialization_uncertainty,
             )?;
 
-            let execution_observations = match &mut transaction_outcome {
-                TransactionExecutionOutcome::Success(executed_details) => {
-                    std::mem::take(&mut executed_details.observations)
-                }
-                _ => {
-                    let core_execution = build_core_space_execution(
-                        chain_id,
-                        state_anchor,
-                        gas_limit,
-                        transaction_outcome,
-                    );
-                    return Ok(CoreSpaceSimulation::new(core_execution, Vec::new()));
-                }
-            };
+            let (execution_observations, execution_fee, burnt_fee, gas_paid_by_sponsor) =
+                match &mut transaction_outcome {
+                    TransactionExecutionOutcome::Success(executed_details) => (
+                        std::mem::take(&mut executed_details.observations),
+                        executed_details.common.fee,
+                        executed_details.common.burnt_fee,
+                        executed_details.gas_sponsor_paid,
+                    ),
+                    _ => {
+                        let core_execution = build_core_space_execution(
+                            chain_id,
+                            state_anchor,
+                            gas_limit,
+                            transaction_outcome,
+                        );
+                        return Ok(CoreSpaceSimulation::new(core_execution, Vec::new()));
+                    }
+                };
+            let expected_gas_fee_payer =
+                determine_gas_fee_payer(&prepared_execution.transaction, gas_paid_by_sponsor)?;
+            let cfx_operations = collect_cfx_operations(
+                &execution_observations,
+                &machine,
+                &prepared_execution.spec,
+            )?;
             let standard_candidates =
                 collect_standard_candidates(execution_observations, Space::Native)?;
-            if standard_candidates.is_empty() {
-                let core_execution = build_core_space_execution(
-                    chain_id,
-                    state_anchor,
-                    gas_limit,
-                    transaction_outcome,
-                );
-                return Ok(CoreSpaceSimulation::new(core_execution, Vec::new()));
-            }
 
             let standard_state_requirements = state_requirements(&standard_candidates);
-            let after_snapshot = state.save();
+            let after_execution_snapshot = state.save();
 
-            state.restore(before_snapshot);
+            state.restore(before_execution_snapshot);
+            let before_cfx_snapshot =
+                read_cfx_state_snapshot(&state, StatePhase::Before, &cfx_operations)?;
             let before_standard_state = read_standard_state_values(
                 &mut state,
                 &machine,
@@ -95,7 +105,9 @@ pub(crate) fn simulate(
                 &standard_state_requirements,
             )?;
 
-            state.restore(after_snapshot);
+            state.restore(after_execution_snapshot);
+            let after_cfx_snapshot =
+                read_cfx_state_snapshot(&state, StatePhase::After, &cfx_operations)?;
             let after_standard_state = read_standard_state_values(
                 &mut state,
                 &machine,
@@ -104,21 +116,33 @@ pub(crate) fn simulate(
                 &standard_state_requirements,
             )?;
 
-            let mut positioned_standard_changes = verify(
+            let positioned_standard_changes = verify(
                 &standard_candidates,
                 &before_standard_state,
                 &after_standard_state,
             )?;
-            positioned_standard_changes.sort_by_key(|change| change.position);
-            let standard_changes = positioned_standard_changes
-                .into_iter()
-                .map(|change| change.change)
-                .collect();
+            let mut positioned_core_changes = verify_cfx_changes(
+                &cfx_operations,
+                &before_cfx_snapshot,
+                &after_cfx_snapshot,
+                expected_gas_fee_payer,
+                execution_fee,
+                burnt_fee,
+            )?;
+            positioned_core_changes.extend(
+                positioned_standard_changes
+                    .into_iter()
+                    .map(PositionedCoreSpaceChange::from),
+            );
+            let ordered_core_changes = into_ordered_core_space_changes(positioned_core_changes);
 
             let core_execution =
                 build_core_space_execution(chain_id, state_anchor, gas_limit, transaction_outcome);
 
-            Ok(CoreSpaceSimulation::new(core_execution, standard_changes))
+            Ok(CoreSpaceSimulation::new(
+                core_execution,
+                ordered_core_changes,
+            ))
         }
     }
 }

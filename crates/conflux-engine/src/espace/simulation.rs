@@ -16,26 +16,27 @@ use crate::{
 use super::{
     EspaceSimulation, build_espace_execution,
     changes::{
-        collect_native_evidence, load_change_metadata, read_native_balances, verify_native_changes,
+        collect_native_operations, load_change_metadata, read_native_balances,
+        verify_native_changes,
     },
 };
 
 pub(crate) fn simulate(
-    prepared: PreparedEspaceSimulation,
+    prepared_simulation: PreparedEspaceSimulation,
     runtime_handle: &Handle,
 ) -> Result<EspaceSimulation, ConfluxEngineError> {
-    match prepared.state {
-        PreparedEspaceSimulationState::Finished(execution) => {
-            Ok(EspaceSimulation::new(*execution, Vec::new()))
+    match prepared_simulation.state {
+        PreparedEspaceSimulationState::Finished(espace_execution) => {
+            Ok(EspaceSimulation::new(*espace_execution, Vec::new()))
         }
-        PreparedEspaceSimulationState::Ready(ready) => {
+        PreparedEspaceSimulationState::Ready(ready_simulation) => {
             let ReadyEspaceSimulation {
                 chain_id,
                 simulated_block,
                 gas_limit,
                 execution_input,
                 state_reader,
-            } = *ready;
+            } = *ready_simulation;
             let mut state =
                 build_rpc_backed_state(state_reader, runtime_handle.clone()).map_err(|error| {
                     ConfluxEngineError::StateAccess {
@@ -45,61 +46,74 @@ pub(crate) fn simulate(
             let machine = build_mainnet_machine();
             let prepared_execution =
                 prepare_transaction_execution(&state, &machine, execution_input)?;
-            let before_snapshot = state.save();
-            let mut outcome = execute_transaction(&mut state, &machine, &prepared_execution)
-                .map_err(ConfluxEngineError::from)?;
+            let before_execution_snapshot = state.save();
+            let mut transaction_outcome =
+                execute_transaction(&mut state, &machine, &prepared_execution)
+                    .map_err(ConfluxEngineError::from)?;
 
-            let (observations, fee, burnt_fee) = match &mut outcome {
-                TransactionExecutionOutcome::Success(details) => (
-                    std::mem::take(&mut details.observations),
-                    details.common.fee,
-                    details.common.burnt_fee,
+            let (execution_observations, execution_fee, burnt_fee) = match &mut transaction_outcome
+            {
+                TransactionExecutionOutcome::Success(executed_details) => (
+                    std::mem::take(&mut executed_details.observations),
+                    executed_details.common.fee,
+                    executed_details.common.burnt_fee,
                 ),
                 _ => {
-                    let execution =
-                        build_espace_execution(chain_id, simulated_block, gas_limit, outcome)?;
-                    return Ok(EspaceSimulation::new(execution, Vec::new()));
+                    let espace_execution = build_espace_execution(
+                        chain_id,
+                        simulated_block,
+                        gas_limit,
+                        transaction_outcome,
+                    )?;
+                    return Ok(EspaceSimulation::new(espace_execution, Vec::new()));
                 }
             };
-            let native_evidence = collect_native_evidence(&observations)?;
-            let candidates = collect_standard_candidates(observations, Space::Ethereum)?;
+            let native_operations = collect_native_operations(&execution_observations)?;
+            let standard_candidates =
+                collect_standard_candidates(execution_observations, Space::Ethereum)?;
 
-            let requirements = state_requirements(&candidates);
-            let after_snapshot = state.save();
+            let standard_state_requirements = state_requirements(&standard_candidates);
+            let after_execution_snapshot = state.save();
 
-            state.restore(before_snapshot);
-            let before_native = read_native_balances(&state, StatePhase::Before, &native_evidence)?;
-            let before = read_standard_state_values(
+            state.restore(before_execution_snapshot);
+            let before_native_balances =
+                read_native_balances(&state, StatePhase::Before, &native_operations)?;
+            let before_standard_state = read_standard_state_values(
                 &mut state,
                 &machine,
                 &prepared_execution,
                 StatePhase::Before,
-                &requirements,
+                &standard_state_requirements,
             )?;
 
-            state.restore(after_snapshot);
-            let after_native = read_native_balances(&state, StatePhase::After, &native_evidence)?;
-            let after = read_standard_state_values(
+            state.restore(after_execution_snapshot);
+            let after_native_balances =
+                read_native_balances(&state, StatePhase::After, &native_operations)?;
+            let after_standard_state = read_standard_state_values(
                 &mut state,
                 &machine,
                 &prepared_execution,
                 StatePhase::After,
-                &requirements,
+                &standard_state_requirements,
             )?;
 
-            let standard_changes = verify(&candidates, &before, &after)?;
+            let standard_changes = verify(
+                &standard_candidates,
+                &before_standard_state,
+                &after_standard_state,
+            )?;
             let metadata_requests = MetadataRequests::from_changes(&standard_changes);
             let mut positioned_changes = verify_native_changes(
-                &native_evidence,
-                &before_native,
-                &after_native,
-                fee,
+                &native_operations,
+                &before_native_balances,
+                &after_native_balances,
+                execution_fee,
                 burnt_fee,
             )?;
             positioned_changes.extend(standard_changes.into_iter().map(PositionedChange::from));
             sort_changes_by_position(&mut positioned_changes);
 
-            let changes = if positioned_changes.is_empty() {
+            let enriched_changes = if positioned_changes.is_empty() {
                 Vec::new()
             } else {
                 let metadata = load_change_metadata(
@@ -110,9 +124,10 @@ pub(crate) fn simulate(
                 )?;
                 into_enriched_changes(positioned_changes, &metadata)
             };
-            let execution = build_espace_execution(chain_id, simulated_block, gas_limit, outcome)?;
+            let espace_execution =
+                build_espace_execution(chain_id, simulated_block, gas_limit, transaction_outcome)?;
 
-            Ok(EspaceSimulation::new(execution, changes))
+            Ok(EspaceSimulation::new(espace_execution, enriched_changes))
         }
     }
 }

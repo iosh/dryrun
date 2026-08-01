@@ -3,7 +3,7 @@ use cfx_executor::executive_observer::AddressPocket;
 use cfx_types::Space;
 use contract_standards::Position;
 
-use super::{NativeEvidence, NativeOperation};
+use super::{NativeOperation, NativeOperations};
 use crate::{
     ConfluxEngineError,
     execution::Observation,
@@ -11,14 +11,14 @@ use crate::{
 };
 
 #[derive(Debug, Default)]
-struct NativeCollector {
+struct NativeOperationCollector {
     operations: Vec<NativeOperation>,
 }
 
-pub(crate) fn collect_native_evidence(
+pub(crate) fn collect_native_operations(
     observations: &[Observation],
-) -> Result<NativeEvidence, ConfluxEngineError> {
-    let mut collector = NativeCollector::default();
+) -> Result<NativeOperations, ConfluxEngineError> {
+    let mut collector = NativeOperationCollector::default();
 
     for observation in observations {
         match observation {
@@ -29,7 +29,7 @@ pub(crate) fn collect_native_evidence(
                 target,
                 transferred_value,
                 ..
-            } => collector.push_transfer(
+            } => collector.push_account_transfer(
                 *position,
                 address_from_cfx(*caller),
                 address_from_cfx(*target),
@@ -41,7 +41,7 @@ pub(crate) fn collect_native_evidence(
                 from,
                 to,
                 value,
-            } => collector.push_transfer(
+            } => collector.push_account_transfer(
                 *position,
                 address_from_cfx(*from),
                 address_from_cfx(*to),
@@ -60,12 +60,12 @@ pub(crate) fn collect_native_evidence(
         }
     }
 
-    Ok(collector.finish())
+    Ok(collector.into_operations())
 }
 
-impl NativeCollector {
-    fn finish(self) -> NativeEvidence {
-        NativeEvidence::from_operations(self.operations)
+impl NativeOperationCollector {
+    fn into_operations(self) -> NativeOperations {
+        NativeOperations::from_operations(self.operations)
     }
 
     fn collect_internal_transfer(
@@ -75,11 +75,11 @@ impl NativeCollector {
         to: &AddressPocket,
         amount: U256,
     ) -> Result<(), ConfluxEngineError> {
-        let from_balance = espace_balance(from);
-        let to_balance = espace_balance(to);
+        let source_account = espace_balance_account(from);
+        let destination_account = espace_balance_account(to);
 
-        match (from_balance, to_balance, from, to) {
-            (Some(from), Some(to), _, _) => self.push_transfer(position, from, to, amount),
+        match (source_account, destination_account, from, to) {
+            (Some(from), Some(to), _, _) => self.push_account_transfer(position, from, to, amount),
             (Some(payer), None, _, AddressPocket::GasPayment) => {
                 self.push_gas_precharge(payer, amount);
             }
@@ -108,12 +108,12 @@ impl NativeCollector {
         Ok(())
     }
 
-    fn push_transfer(&mut self, position: usize, from: Address, to: Address, amount: U256) {
+    fn push_account_transfer(&mut self, position: usize, from: Address, to: Address, amount: U256) {
         if amount.is_zero() {
             return;
         }
 
-        self.operations.push(NativeOperation::Transfer {
+        self.operations.push(NativeOperation::AccountTransfer {
             position: Position::new(position, 0),
             from,
             to,
@@ -140,7 +140,7 @@ impl NativeCollector {
     }
 }
 
-fn espace_balance(pocket: &AddressPocket) -> Option<Address> {
+fn espace_balance_account(pocket: &AddressPocket) -> Option<Address> {
     match pocket {
         AddressPocket::Balance(address) if address.space == Space::Ethereum => {
             Some(address_from_cfx(address.address))
