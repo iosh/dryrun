@@ -1,7 +1,5 @@
-use std::collections::HashSet;
-
-use cfx_executor::{executive::ExecutionError, executive_observer::AddressPocket};
-use cfx_types::{Address, Space};
+use cfx_executor::executive::ExecutionError;
+use cfx_types::Space;
 use cfx_vm_types as vm;
 use contract_standards::{MetadataRequests, StatePhase, state_requirements, verify};
 use tokio::runtime::Handle;
@@ -9,15 +7,13 @@ use tokio::runtime::Handle;
 use crate::{
     ConfluxEngineError,
     execution::{
-        ExecutedTransactionDetails, Observation, TransactionExecutionOutcome,
-        build_mainnet_machine, build_rpc_backed_state, execute_transaction,
-        prepare_transaction_execution,
+        TransactionExecutionOutcome, build_mainnet_machine, build_rpc_backed_state,
+        execute_transaction, prepare_transaction_execution,
     },
     preparation::{
         PreparedCoreSpaceSimulation, PreparedCoreSpaceSimulationState, ReadyCoreSpaceSimulation,
     },
     standards::{collect_standard_candidates, load_change_metadata, read_standard_state_values},
-    state::StoragePointInitializationUncertainty,
 };
 
 use super::{
@@ -48,8 +44,6 @@ pub(crate) fn simulate(
                 execution_input,
                 state_reader,
             } = *ready_simulation;
-            let storage_point_initialization_uncertainty =
-                state_reader.storage_point_initialization_uncertainty();
             let masked_sponsor_whitelist_entries = state_reader.masked_sponsor_whitelist_entries();
             let anchored_vote_lists = state_reader.anchored_vote_lists();
             let mut state =
@@ -65,10 +59,6 @@ pub(crate) fn simulate(
             let mut transaction_outcome =
                 execute_transaction(&mut state, &machine, &prepared_execution)
                     .map_err(ConfluxEngineError::from)?;
-            validate_storage_point_state_dependencies(
-                &transaction_outcome,
-                &storage_point_initialization_uncertainty,
-            )?;
 
             let (
                 execution_observations,
@@ -290,68 +280,5 @@ const fn storage_payer_is_reported(
         StoragePayerOutcome::Reverted => cip78a,
         StoragePayerOutcome::FullyChargedError => cip78b,
         StoragePayerOutcome::NotExecuted => false,
-    }
-}
-
-fn validate_storage_point_state_dependencies(
-    transaction_outcome: &TransactionExecutionOutcome,
-    initialization_uncertainty: &StoragePointInitializationUncertainty,
-) -> Result<(), ConfluxEngineError> {
-    let TransactionExecutionOutcome::Success(executed_details) = transaction_outcome else {
-        return Ok(());
-    };
-    let uncertain_account_addresses = initialization_uncertainty
-        .uncertain_account_addresses()
-        .map_err(|error| ConfluxEngineError::StateAccess {
-            message: error.to_string(),
-        })?;
-
-    let Some(account_address) =
-        storage_point_dependent_account(executed_details, &uncertain_account_addresses)
-    else {
-        return Ok(());
-    };
-
-    Err(ConfluxEngineError::analysis_failed(format!(
-        "Core Space execution depends on storage-point initialization state unavailable from public RPC for account {account_address:?}"
-    )))
-}
-
-fn storage_point_dependent_account(
-    executed_details: &ExecutedTransactionDetails,
-    uncertain_account_addresses: &HashSet<Address>,
-) -> Option<Address> {
-    executed_details
-        .storage_collateralized
-        .iter()
-        .chain(&executed_details.storage_released)
-        .find_map(|change| {
-            uncertain_account_addresses
-                .contains(&change.address)
-                .then_some(change.address)
-        })
-        .or_else(|| {
-            executed_details
-                .observations
-                .iter()
-                .find_map(|observation| match observation {
-                    Observation::InternalTransfer { from, to, .. } => {
-                        storage_point_pocket_account(from)
-                            .filter(|address| uncertain_account_addresses.contains(address))
-                            .or_else(|| {
-                                storage_point_pocket_account(to)
-                                    .filter(|address| uncertain_account_addresses.contains(address))
-                            })
-                    }
-                    _ => None,
-                })
-        })
-}
-
-fn storage_point_pocket_account(pocket: &AddressPocket) -> Option<Address> {
-    match pocket {
-        AddressPocket::StorageCollateral(address)
-        | AddressPocket::SponsorBalanceForStorage(address) => Some(*address),
-        _ => None,
     }
 }

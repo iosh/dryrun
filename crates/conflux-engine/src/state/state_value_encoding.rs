@@ -190,9 +190,7 @@ fn core_space_sponsor_info_from_rpc(
         sponsor_gas_bound: info.sponsor_gas_bound,
         sponsor_balance_for_gas: info.sponsor_balance_for_gas,
         sponsor_balance_for_collateral: info.sponsor_balance_for_collateral,
-        storage_points: (!unused_storage_point_collateral.is_zero()
-            || !used_storage_point_collateral.is_zero())
-        .then_some(StoragePoints {
+        storage_points: Some(StoragePoints {
             unused: unused_storage_point_collateral,
             used: used_storage_point_collateral,
         }),

@@ -14,10 +14,7 @@ pub use self::http_provider::{ConfluxRpcError, CoreSpaceResourceEstimate, HttpCo
 
 pub(crate) use self::{
     core_space_internal::SponsorWhitelistStorageKey,
-    reader::{
-        AnchoredVoteLists, MaskedSponsorWhitelistEntries, RemoteStateReader,
-        StoragePointInitializationUncertainty,
-    },
+    reader::{AnchoredVoteLists, MaskedSponsorWhitelistEntries, RemoteStateReader},
     rpc_types::{CoreSpaceRpcBlock, CoreSpaceRpcPoSBlock, EspaceRpcBlock},
     storage::new_rpc_backed_state,
 };

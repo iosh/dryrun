@@ -30,34 +30,6 @@ type RawStateValue = Box<[u8]>;
 type StateRead = Option<RawStateValue>;
 
 #[derive(Clone, Default)]
-pub(crate) struct StoragePointInitializationUncertainty {
-    uncertain_account_addresses: Arc<SyncMutex<HashSet<Address>>>,
-}
-
-impl StoragePointInitializationUncertainty {
-    fn record_uncertain_account(&self, address: Address) -> StorageResult<()> {
-        self.uncertain_account_addresses
-            .lock()
-            .map_err(|_| Self::lock_error())?
-            .insert(address);
-        Ok(())
-    }
-
-    pub(crate) fn uncertain_account_addresses(&self) -> StorageResult<HashSet<Address>> {
-        self.uncertain_account_addresses
-            .lock()
-            .map_err(|_| Self::lock_error())
-            .map(|addresses| addresses.clone())
-    }
-
-    fn lock_error() -> StorageError {
-        StorageError::Msg(
-            "failed to access request-local Core Space storage-point state".to_owned(),
-        )
-    }
-}
-
-#[derive(Clone, Default)]
 pub(crate) struct MaskedSponsorWhitelistEntries {
     entries: Arc<SyncMutex<HashSet<SponsorWhitelistStorageKey>>>,
 }
@@ -132,7 +104,6 @@ pub(crate) struct RemoteStateReader {
     provider: Arc<HttpConfluxProvider>,
     core_space_globals: CoreSpaceGlobals,
     espace_account_cache: AsyncMutex<HashMap<Address, Arc<EspaceAccountData>>>,
-    storage_point_initialization_uncertainty: StoragePointInitializationUncertainty,
     masked_sponsor_whitelist_entries: MaskedSponsorWhitelistEntries,
     anchored_vote_lists: AnchoredVoteLists,
 }
@@ -155,8 +126,6 @@ impl RemoteStateReader {
             provider,
             core_space_globals,
             espace_account_cache: AsyncMutex::new(HashMap::new()),
-            storage_point_initialization_uncertainty:
-                StoragePointInitializationUncertainty::default(),
             masked_sponsor_whitelist_entries: MaskedSponsorWhitelistEntries::default(),
             anchored_vote_lists: AnchoredVoteLists::default(),
         })
@@ -164,12 +133,6 @@ impl RemoteStateReader {
 
     pub(crate) fn state_anchor(&self) -> ConfluxStateAnchor {
         self.state_anchor
-    }
-
-    pub(crate) fn storage_point_initialization_uncertainty(
-        &self,
-    ) -> StoragePointInitializationUncertainty {
-        self.storage_point_initialization_uncertainty.clone()
     }
 
     pub(crate) fn anchored_vote_lists(&self) -> AnchoredVoteLists {
@@ -343,10 +306,7 @@ impl RemoteStateReader {
                 .await
                 .map_err(|error| self.provider_error("cfx_getSponsorInfo", error))?;
 
-            let storage_point_initialization_is_unknown =
-                sponsor_info.available_storage_point_units.is_zero()
-                    && used_storage_point_collateral.is_zero();
-            let encoded_account = encode_core_space_contract_account(
+            return encode_core_space_contract_account(
                 account.balance,
                 account.nonce,
                 account.code_hash,
@@ -357,14 +317,7 @@ impl RemoteStateReader {
                 account.admin.hex_address,
                 sponsor_info,
             )
-            .map_err(|error| self.encoding_error("encode_core_space_contract_account", error))?;
-
-            if encoded_account.is_some() && storage_point_initialization_is_unknown {
-                self.storage_point_initialization_uncertainty
-                    .record_uncertain_account(address)?;
-            }
-
-            return Ok(encoded_account);
+            .map_err(|error| self.encoding_error("encode_core_space_contract_account", error));
         }
 
         if !used_storage_point_collateral.is_zero() {
