@@ -26,8 +26,10 @@ export function AddressValue({
             aria-label={`Highlight matching address ${address}`}
             aria-pressed={addressHighlight.pinnedAddress === normalized}
             className={cn(
-              'min-w-0 flex-1 break-all rounded px-1 py-0.5 text-left font-mono text-[11px] leading-5 text-ink-600 transition-colors hover:bg-brand-50 hover:text-brand-700 focus-visible:bg-brand-50',
-              active && 'bg-amber-100 text-amber-900 ring-1 ring-amber-300',
+              'min-w-0 flex-1 break-all rounded px-1 py-0.5 text-left font-mono text-[11px] leading-5 transition-colors',
+              active
+                ? 'bg-amber-100 text-amber-900 ring-1 ring-amber-300'
+                : 'text-ink-600 hover:bg-brand-50 hover:text-brand-700 focus-visible:bg-brand-50',
             )}
             data-address-value=""
             onBlur={addressHighlight.onAddressLeave}
@@ -66,8 +68,10 @@ export function AddressAliasValue({
           aria-label={`Highlight ${label}: ${address}`}
           aria-pressed={addressHighlight.pinnedAddress === normalized}
           className={cn(
-            'min-w-10 rounded border border-line bg-white px-2.5 py-1.5 text-xs font-semibold text-ink-600 transition-colors hover:border-brand-600/30 hover:bg-brand-50 hover:text-brand-700',
-            active && 'border-amber-300 bg-amber-100 text-amber-900',
+            'min-w-10 rounded border px-2.5 py-1.5 text-xs font-semibold transition-colors',
+            active
+              ? 'border-amber-300 bg-amber-100 text-amber-900'
+              : 'border-line bg-white text-ink-600 hover:border-brand-600/30 hover:bg-brand-50 hover:text-brand-700',
           )}
           data-address-value=""
           onBlur={addressHighlight.onAddressLeave}

@@ -146,8 +146,8 @@ function RequestError({ error }: Readonly<{ error: RequestErrorState }>) {
             </div>
           </div>
           <CopyButton
-            className="bg-white text-red-700 hover:bg-red-100 hover:text-red-900"
             label="Copy error report"
+            tone="error"
             value={() => formatErrorReport(error)}
           />
         </div>

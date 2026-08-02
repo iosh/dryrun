@@ -141,8 +141,9 @@ function ChangeRow({
         </summary>
         <div className="relative border-t border-line bg-code">
           <CopyButton
-            className="absolute right-3 top-3 z-10 bg-code text-code-ink hover:bg-white/10 hover:text-white"
+            className="absolute right-3 top-3 z-10"
             label="Copy raw change"
+            tone="code"
             value={rawChange}
           />
           <pre className="max-h-80 overflow-auto px-5 py-4 pr-14 font-mono text-[11px] leading-5 text-code-ink">

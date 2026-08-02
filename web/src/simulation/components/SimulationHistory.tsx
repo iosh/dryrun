@@ -67,7 +67,8 @@ export function SimulationHistoryMobile(
       <SheetTrigger asChild>
         <Button
           aria-label={`Open history, ${props.history.length} records`}
-          className="h-9 gap-2 px-3"
+          className="gap-2"
+          size="sm"
           variant="secondary"
         >
           <History aria-hidden="true" className="h-4 w-4 text-ink-600" />
@@ -81,9 +82,10 @@ export function SimulationHistoryMobile(
             {props.history.length} of {HISTORY_LIMIT} simulations
           </SheetDescription>
           <Button
-            className="mt-4 h-10 w-full gap-2"
+            className="mt-4 w-full gap-2"
             disabled={props.isBusy}
             onClick={startNewSimulation}
+            size="md"
           >
             <Plus aria-hidden="true" className="h-4 w-4" />
             New simulation
@@ -246,11 +248,10 @@ function HistoryEntry({
             <TooltipTrigger asChild>
               <Button
                 aria-label="Delete history record"
-                className="h-7 w-7 text-ink-400 hover:bg-red-50 hover:text-red-700"
                 disabled={disabled}
                 onClick={() => onDeleteHistoryEntry(record.id)}
-                size="icon"
-                variant="ghost"
+                size="iconSm"
+                variant="dangerGhost"
               >
                 <Trash2 aria-hidden="true" className="h-3.5 w-3.5" />
               </Button>

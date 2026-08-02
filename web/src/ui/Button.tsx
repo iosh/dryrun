@@ -18,10 +18,13 @@ const buttonVariants = cva(
       size: {
         default: 'h-11 px-5',
         icon: 'h-9 w-9',
+        iconSm: 'h-7 w-7',
+        md: 'h-10 px-5',
         sm: 'h-9 px-3',
       },
       variant: {
         default: 'bg-ink-950 text-white hover:bg-ink-800',
+        dangerGhost: 'text-ink-400 hover:bg-red-50 hover:text-red-700',
         ghost: 'text-ink-600 hover:bg-shell-100 hover:text-ink-950',
         secondary:
           'border border-line bg-white text-ink-600 hover:bg-shell-100 hover:text-ink-950',

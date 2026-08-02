@@ -60,9 +60,6 @@ export function TextInputField({
             <Input
               aria-invalid={issues.length > 0}
               autoComplete={autoComplete}
-              className={cn(
-                issues.length > 0 && 'border-red-400 focus:border-red-500',
-              )}
               disabled={disabled}
               inputMode={inputMode}
               onBlur={field.handleBlur}
@@ -119,7 +116,6 @@ export function TextAreaField({
               aria-invalid={issues.length > 0}
               className={cn(
                 monospace && 'font-mono text-xs',
-                issues.length > 0 && 'border-red-400 focus:border-red-500',
               )}
               disabled={disabled}
               onBlur={field.handleBlur}
