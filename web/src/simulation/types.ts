@@ -1,6 +1,8 @@
+import type { EnvironmentId } from './environment.ts';
 import type {
-  DryrunSimulateTransactionRequest,
-  DryrunSimulateTransactionResponse,
+  CoreChange,
+  HexChange,
+  RpcSimulationResponse,
 } from './rpc.ts';
 
 export type TxTypeOption =
@@ -9,33 +11,97 @@ export type TxTypeOption =
   | 'access-list'
   | 'dynamic-fee';
 
+export type ContextMode = 'latest' | 'safe' | 'finalized' | 'number';
+
 export interface SimulationFormValues {
-  chainId: string;
   from: string;
   to: string;
-  valueEth: string;
-  gasLimit: string;
-  calldata: string;
-  executionBlock: string;
+  value: string;
+  data: string;
+  contextMode: ContextMode;
+  contextNumber: string;
   nonce: string;
+  gasLimit: string;
   txType: TxTypeOption;
-  gasPriceGwei: string;
-  maxFeePerGasGwei: string;
-  maxPriorityFeePerGasGwei: string;
+  gasPrice: string;
+  maxFeePerGas: string;
+  maxPriorityFeePerGas: string;
   accessListJson: string;
+  storageLimit: string;
+  epochHeight: string;
 }
+
+export interface RpcAccessListItem {
+  address: string;
+  storageKeys: string[];
+}
+
+export interface HexTransactionRequest {
+  type?: string;
+  chainId: string;
+  from: string;
+  to?: string;
+  nonce?: string;
+  gas?: string;
+  value?: string;
+  data?: string;
+  accessList?: RpcAccessListItem[];
+  gasPrice?: string;
+  maxFeePerGas?: string;
+  maxPriorityFeePerGas?: string;
+}
+
+export interface HexSimulationRequest {
+  transaction: HexTransactionRequest;
+  block: string;
+}
+
+export interface CoreTransactionRequest extends HexTransactionRequest {
+  storageLimit?: string;
+  epochHeight?: string;
+}
+
+export interface CoreSimulationRequest {
+  transaction: CoreTransactionRequest;
+  epoch: string;
+}
+
+export type SimulationRequest = HexSimulationRequest | CoreSimulationRequest;
+
+export type SimulationResponse = RpcSimulationResponse;
+
+export type SimulationChange = HexChange | CoreChange;
 
 export interface SimulationRecord {
   id: string;
-  title: string;
-  subtitle: string;
-  capturedAt: string;
-  request: DryrunSimulateTransactionRequest;
-  response: DryrunSimulateTransactionResponse;
+  createdAt: string;
+  environmentId: EnvironmentId;
+  formValues: SimulationFormValues;
+  request: SimulationRequest;
+  response: SimulationResponse;
+  rawResponse: unknown;
 }
 
-export interface RunErrorState {
+export interface RequestErrorState {
+  context: Pick<
+    SimulationRecord,
+    'environmentId' | 'formValues' | 'request'
+  >;
+  kind: 'transport' | 'rpc' | 'invalid-response';
   title: string;
   detail: string;
   subkind?: string;
+  rawResponse?: unknown;
+}
+
+export interface ParsedFormResult {
+  fieldIssues: Partial<Record<keyof SimulationFormValues, string>>;
+  formIssues: string[];
+  request?: SimulationRequest;
+}
+
+export function isCoreEnvironment(
+  environmentId: EnvironmentId,
+): environmentId is 'conflux-core-mainnet' {
+  return environmentId === 'conflux-core-mainnet';
 }

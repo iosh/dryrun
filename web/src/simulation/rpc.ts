@@ -1,182 +1,351 @@
-export type DryrunRpcAddress = string;
-export type DryrunRpcHex = string;
-export type DryrunRpcQuantity = string;
-
-interface DryrunNamedDisplay {
+interface AssetMetadata {
   name?: string;
-}
-
-interface DryrunNamedSymbolDisplay extends DryrunNamedDisplay {
   symbol?: string;
 }
 
-type DryrunTokenDisplay = DryrunNamedDisplay;
-
-interface DryrunNativeDisplay {
-  symbol?: string;
+interface FungibleAssetMetadata extends AssetMetadata {
   decimals?: number;
 }
 
-interface DryrunFungibleTokenDisplay extends DryrunNamedSymbolDisplay {
-  decimals?: number;
+interface NativeAsset extends FungibleAssetMetadata {
+  assetType: 'NATIVE';
+  rawAmount: string;
 }
 
-interface DryrunContractAssetBase<TType extends string> {
-  type: TType;
-  contractAddress: DryrunRpcAddress;
+interface Erc20Asset extends FungibleAssetMetadata {
+  assetType: 'ERC20';
+  contractAddress: string;
+  rawAmount: string;
 }
 
-interface DryrunContractCollectionBase<TType extends string, TCollectionDisplay> {
-  type: TType;
-  contractAddress: DryrunRpcAddress;
-  collection?: TCollectionDisplay;
+interface Erc721Asset extends AssetMetadata {
+  assetType: 'ERC721';
+  contractAddress: string;
+  tokenId: string;
 }
 
-export interface DryrunAccessListItem {
-  address: DryrunRpcAddress;
-  storageKeys: readonly DryrunRpcHex[];
+interface Erc1155Asset {
+  assetType: 'ERC1155';
+  contractAddress: string;
+  tokenId: string;
+  rawAmount: string;
 }
 
-export type DryrunBlockRef = string | { blockHash: DryrunRpcHex };
+type TokenMovementAsset = Erc20Asset | Erc721Asset | Erc1155Asset;
+type TransferAsset = NativeAsset | TokenMovementAsset;
+type WithFields<TValue, TFields> = TValue extends unknown
+  ? TValue & TFields
+  : never;
 
-export interface DryrunSimulateTransactionOptions {
-  stateOverrides?: unknown;
-  blockOverrides?: unknown;
-  include?: unknown;
+export type TransferChange = WithFields<
+  TransferAsset,
+  {
+    changeType: 'TRANSFER';
+    from: string;
+    to: string;
+  }
+>;
+
+export type MintChange = WithFields<
+  TokenMovementAsset,
+  {
+    changeType: 'MINT';
+    to: string;
+  }
+>;
+
+export type BurnChange = WithFields<
+  TokenMovementAsset,
+  {
+    changeType: 'BURN';
+    from: string;
+  }
+>;
+
+export type NativeBurnChange = NativeAsset & {
+  changeType: 'BURN';
+  from: string;
+};
+
+export interface AllowanceChange extends FungibleAssetMetadata {
+  changeType: 'ALLOWANCE';
+  assetType: 'ERC20';
+  contractAddress: string;
+  rawAmountBefore: string;
+  rawAmountAfter: string;
+  owner: string;
+  spender: string;
 }
 
-export interface DryrunTransactionRequest {
-  type?: DryrunRpcQuantity;
-  chainId?: DryrunRpcQuantity;
-  from: DryrunRpcAddress;
-  to?: DryrunRpcAddress;
-  nonce?: DryrunRpcQuantity;
-  gas: DryrunRpcQuantity;
-  value?: DryrunRpcQuantity;
-  data?: DryrunRpcHex;
-  accessList?: readonly DryrunAccessListItem[];
-  gasPrice?: DryrunRpcQuantity;
-  maxFeePerGas?: DryrunRpcQuantity;
-  maxPriorityFeePerGas?: DryrunRpcQuantity;
+export interface TokenApprovalChange extends AssetMetadata {
+  changeType: 'TOKEN_APPROVAL';
+  assetType: 'ERC721';
+  contractAddress: string;
+  tokenId: string;
+  approvedAddressBefore: string | null;
+  approvedAddressAfter: string | null;
 }
 
-export interface DryrunSimulateTransactionRequest {
-  transaction: DryrunTransactionRequest;
-  block?: DryrunBlockRef;
-  options?: DryrunSimulateTransactionOptions;
+export interface Erc721OperatorApprovalChange extends AssetMetadata {
+  changeType: 'OPERATOR_APPROVAL';
+  assetType: 'ERC721';
+  contractAddress: string;
+  owner: string;
+  operator: string;
+  approvedBefore: boolean;
+  approvedAfter: boolean;
 }
 
-export interface DryrunExecutionError {
+export interface Erc1155OperatorApprovalChange {
+  changeType: 'OPERATOR_APPROVAL';
+  assetType: 'ERC1155';
+  contractAddress: string;
+  owner: string;
+  operator: string;
+  approvedBefore: boolean;
+  approvedAfter: boolean;
+}
+
+type CommonChange =
+  | TransferChange
+  | MintChange
+  | BurnChange
+  | AllowanceChange
+  | TokenApprovalChange
+  | Erc721OperatorApprovalChange
+  | Erc1155OperatorApprovalChange;
+
+export type HexChange = CommonChange;
+
+export interface StakingDepositChange {
+  changeType: 'STAKING_DEPOSIT';
+  account: string;
+  rawAmount: string;
+}
+
+export interface StakingWithdrawalChange {
+  changeType: 'STAKING_WITHDRAWAL';
+  account: string;
+  rawAmount: string;
+  rewardRawAmount: string;
+}
+
+export interface StakingBurnChange {
+  changeType: 'STAKING_BURN';
+  account: string;
+  rawAmount: string;
+}
+
+export interface StakingVoteLockChange {
+  changeType: 'STAKING_VOTE_LOCK';
+  account: string;
+  unlockBlockNumber: string;
+  requiredLockedRawAmountBefore: string;
+  requiredLockedRawAmountAfter: string;
+}
+
+export interface PosRegistrationChange {
+  changeType: 'POS_REGISTRATION';
+  account: string;
+  posIdentifier: string;
+  newlyLockedVoteCount: string;
+  newlyLockedRawAmount: string;
+}
+
+export interface PosStakeIncreaseChange {
+  changeType: 'POS_STAKE_INCREASE';
+  account: string;
+  posIdentifier: string;
+  newlyLockedVoteCount: string;
+  newlyLockedRawAmount: string;
+}
+
+export interface PosRetirementRequestChange {
+  changeType: 'POS_RETIREMENT_REQUEST';
+  account: string;
+  posIdentifier: string;
+  requestedVoteCount: string;
+}
+
+export type SponsoredResource = 'GAS' | 'STORAGE_COLLATERAL';
+
+export interface SponsorshipDepositChange {
+  changeType: 'SPONSORSHIP_DEPOSIT';
+  sponsoredResource: SponsoredResource;
+  sponsor: string;
+  contractAddress: string;
+  rawAmount: string;
+}
+
+export interface SponsorshipRefundChange {
+  changeType: 'SPONSORSHIP_REFUND';
+  sponsoredResource: SponsoredResource;
+  sponsor: string;
+  contractAddress: string;
+  rawAmount: string;
+}
+
+export interface GasSponsorshipConfigurationChange {
+  changeType: 'SPONSORSHIP_CONFIGURATION';
+  sponsoredResource: 'GAS';
+  contractAddress: string;
+  sponsorBefore: string | null;
+  sponsorAfter: string | null;
+  maxSponsoredGasFeeRawAmountBefore: string;
+  maxSponsoredGasFeeRawAmountAfter: string;
+}
+
+export interface StorageSponsorshipConfigurationChange {
+  changeType: 'SPONSORSHIP_CONFIGURATION';
+  sponsoredResource: 'STORAGE_COLLATERAL';
+  contractAddress: string;
+  sponsorBefore: string | null;
+  sponsorAfter: string | null;
+}
+
+export type SponsorshipEligibilityTarget =
+  | { type: 'ACCOUNT'; address: string }
+  | { type: 'ALL_ACCOUNTS' };
+
+export interface SponsorshipEligibilityRuleChange {
+  changeType: 'SPONSORSHIP_ELIGIBILITY_RULE';
+  contractAddress: string;
+  appliesTo: SponsorshipEligibilityTarget;
+  enabledBefore: boolean;
+  enabledAfter: boolean;
+}
+
+export interface StoragePointConversionChange {
+  changeType: 'STORAGE_POINT_CONVERSION';
+  contractAddress: string;
+  convertedCfxRawAmount: string;
+}
+
+export interface CrossSpaceEndpoint {
+  space: 'CORE_SPACE' | 'ESPACE';
+  address: string;
+}
+
+export interface CrossSpaceTransferChange {
+  changeType: 'CROSS_SPACE_TRANSFER';
+  from: CrossSpaceEndpoint;
+  to: CrossSpaceEndpoint;
+  rawAmount: string;
+}
+
+export type CoreChange =
+  | CommonChange
+  | NativeBurnChange
+  | StakingDepositChange
+  | StakingWithdrawalChange
+  | StakingBurnChange
+  | StakingVoteLockChange
+  | PosRegistrationChange
+  | PosStakeIncreaseChange
+  | PosRetirementRequestChange
+  | SponsorshipDepositChange
+  | SponsorshipRefundChange
+  | GasSponsorshipConfigurationChange
+  | StorageSponsorshipConfigurationChange
+  | SponsorshipEligibilityRuleChange
+  | StoragePointConversionChange
+  | CrossSpaceTransferChange;
+
+export type ExecutionStatus = 'SUCCESS' | 'FAILED' | 'NOT_EXECUTED';
+
+export interface ExecutionFailure {
   code: string;
   message: string;
-  reason?: string;
+  reason?: string | null;
 }
 
-export interface DryrunSimulatedBlock {
-  number: DryrunRpcQuantity;
-  hash: DryrunRpcHex;
+export interface SimulatedBlock {
+  number: string;
+  hash: string;
 }
 
-export type DryrunSimulationStatus = 'SUCCESS' | 'FAILED';
-
-export interface DryrunExecution {
-  chainId: DryrunRpcQuantity;
-  block: DryrunSimulatedBlock;
-  status: DryrunSimulationStatus;
-  gasUsed: DryrunRpcQuantity;
-  gasLimit: DryrunRpcQuantity;
-  output: DryrunRpcHex;
-  error?: DryrunExecutionError;
+export interface EvmExecution {
+  chainId: string;
+  block: SimulatedBlock;
+  status: ExecutionStatus;
+  gasUsed: string;
+  gasLimit: string;
+  fee: string;
+  burntFee: string;
+  output: string;
+  failure?: ExecutionFailure;
 }
 
-export interface DryrunNativeAsset {
-  type: 'NATIVE';
-  display?: DryrunNativeDisplay;
+export interface EspaceExecution {
+  chainId: string;
+  block: SimulatedBlock;
+  status: ExecutionStatus;
+  gasUsed: string;
+  gasLimit: string;
+  gasCharged: string;
+  fee: string;
+  burntFee: string | null;
+  output: string;
+  failure: ExecutionFailure | null;
 }
 
-export type DryrunErc20Asset = DryrunContractAssetBase<'ERC20'> & {
-  display?: DryrunFungibleTokenDisplay;
-};
-
-export type DryrunErc721Asset = DryrunContractAssetBase<'ERC721'> & {
-  tokenId: string;
-  collection?: DryrunNamedSymbolDisplay;
-  token?: DryrunTokenDisplay;
-};
-
-export type DryrunErc1155Asset = DryrunContractAssetBase<'ERC1155'> & {
-  tokenId: string;
-  collection?: DryrunNamedDisplay;
-  token?: DryrunTokenDisplay;
-};
-
-export type DryrunAsset =
-  | DryrunNativeAsset
-  | DryrunErc20Asset
-  | DryrunErc721Asset
-  | DryrunErc1155Asset;
-
-export type DryrunErc721Collection = DryrunContractCollectionBase<
-  'ERC721',
-  DryrunNamedSymbolDisplay
->;
-
-export type DryrunErc1155Collection = DryrunContractCollectionBase<
-  'ERC1155',
-  DryrunNamedDisplay
->;
-
-export type DryrunCollection =
-  | DryrunErc721Collection
-  | DryrunErc1155Collection;
-
-export type DryrunChange =
-  | {
-      kind: 'TRANSFER';
-      asset: DryrunAsset;
-      from: DryrunRpcAddress;
-      to: DryrunRpcAddress;
-      amount?: string;
-    }
-  | {
-      kind: 'MINT';
-      asset: DryrunAsset;
-      to: DryrunRpcAddress;
-      amount?: string;
-    }
-  | {
-      kind: 'BURN';
-      asset: DryrunAsset;
-      from: DryrunRpcAddress;
-      amount?: string;
-    }
-  | {
-      kind: 'APPROVAL';
-      asset: DryrunAsset;
-      owner: DryrunRpcAddress;
-      spender: DryrunRpcAddress;
-      amount?: string;
-    }
-  | {
-      kind: 'APPROVAL_FOR_ALL';
-      collection: DryrunCollection;
-      owner: DryrunRpcAddress;
-      operator: DryrunRpcAddress;
-      approved: boolean;
-    };
-
-export interface DryrunSimulateTransactionResponse {
-  execution: DryrunExecution;
-  changes: readonly DryrunChange[];
+export interface CoreExecution {
+  chainId: string;
+  state: {
+    epochNumber: string;
+    pivotHash: string;
+  };
+  status: ExecutionStatus;
+  gasUsed: string;
+  gasLimit: string;
+  gasCharged: string;
+  fee: string;
+  burntFee: string | null;
+  gasCoveredBySponsor: boolean;
+  storageCoveredBySponsor: boolean;
+  output: string;
+  failure: ExecutionFailure | null;
 }
 
-export interface DryrunRpcErrorData {
-  subkind?: string;
-  details: string;
+export interface EthereumResponse {
+  execution: EvmExecution;
+  changes: HexChange[];
 }
 
-export interface DryrunJsonRpcError {
+export interface EspaceResponse {
+  execution: EspaceExecution;
+  changes: HexChange[];
+}
+
+export interface CoreResponse {
+  execution: CoreExecution;
+  changes: CoreChange[];
+}
+
+export type RpcSimulationResponse =
+  | EthereumResponse
+  | EspaceResponse
+  | CoreResponse;
+
+export interface RpcErrorPayload {
   code: number;
   message: string;
-  data?: DryrunRpcErrorData;
+  data?: {
+    subkind?: string;
+    details?: string;
+  };
 }
+
+export interface RpcResultEnvelope {
+  jsonrpc: '2.0';
+  id: number;
+  result: unknown;
+}
+
+export interface RpcErrorEnvelope {
+  jsonrpc: '2.0';
+  id: number;
+  error: RpcErrorPayload;
+}
+
+export type RpcEnvelope = RpcResultEnvelope | RpcErrorEnvelope;

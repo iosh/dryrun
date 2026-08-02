@@ -1,261 +1,176 @@
-import { useMutation } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 
-import { formatHexQuantity, formatJson } from '../lib/formatting.ts';
 import {
-  DryrunRpcError,
-  DryrunTransportError,
+  InvalidResponseError,
+  RpcError,
   simulateTransaction,
+  TransportError,
 } from './client.ts';
-import { toChangeItemViewModel } from './changeView.ts';
-import { INITIAL_FORM_VALUES } from './defaults.ts';
-import { useSimulationForm } from './form.ts';
+import type { EnvironmentId } from './environment.ts';
 import {
-  hydrateSimulationFormValues,
-  serializeSimulationRequest,
-} from './requestCodec.ts';
+  addSimulationHistory,
+  loadSimulationHistory,
+  removeSimulationHistory,
+} from './history.ts';
+import { createInitialFormValues, parseSimulationForm } from './request.ts';
+import { useSimulationForm } from './form.ts';
 import type {
-  RunErrorState,
-  SimulationRecord,
+  RequestErrorState,
   SimulationFormValues,
+  SimulationRecord,
 } from './types.ts';
 
-const HISTORY_STORAGE_KEY = 'dryrun:web:simulation-history';
-const MAX_HISTORY_ITEMS = 8;
-
 export function useSimulationPage() {
-  const [activeRecord, setActiveRecord] = useState<SimulationRecord | null>(null);
-  const [history, setHistory] = useState<SimulationRecord[]>(loadHistory);
-  const [selectedHistoryId, setSelectedHistoryId] = useState<string | null>(null);
-  const [runError, setRunError] = useState<RunErrorState | null>(null);
+  const [environmentId, setEnvironmentId] =
+    useState<EnvironmentId>('ethereum-mainnet');
+  const [history, setHistory] = useState(loadSimulationHistory);
+  const [activeRecord, setActiveRecord] =
+    useState<SimulationRecord | null>(null);
+  const [runError, setRunError] = useState<RequestErrorState | null>(null);
+  const [isRunning, setIsRunning] = useState(false);
 
-  const simulationMutation = useMutation({
-    mutationFn: simulateTransaction,
-  });
-  const form = useSimulationForm(submitFormValues, clearRunError);
+  const form = useSimulationForm(environmentId, runSimulation);
 
-  useEffect(() => {
-    window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
-  }, [history]);
+  async function runSimulation(formValues: SimulationFormValues) {
+    const parsed = parseSimulationForm(environmentId, formValues);
+    if (!parsed.request) return;
 
-  async function submitFormValues(formValues: SimulationFormValues) {
-    const request = serializeSimulationRequest(formValues);
-
-    if (!request) {
-      clearActiveResult();
-      setRunError({
-        detail:
-          'Client-side validation and request serialization are out of sync.',
-        title: 'Unable to build request',
-      });
-      return;
-    }
-
+    const requestedEnvironment = environmentId;
+    const requestContext: RequestErrorState['context'] = {
+      environmentId: requestedEnvironment,
+      formValues: { ...formValues },
+      request: parsed.request,
+    };
+    setIsRunning(true);
     setRunError(null);
+    setActiveRecord(null);
 
     try {
-      const response = await simulationMutation.mutateAsync(request);
-      const record = createSimulationRecord(request, response);
+      const result = await simulateTransaction(
+        requestedEnvironment,
+        parsed.request,
+      );
+      const record: SimulationRecord = {
+        createdAt: new Date().toISOString(),
+        id: crypto.randomUUID(),
+        rawResponse: result.rawResponse,
+        response: result.response,
+        ...requestContext,
+      };
 
       setActiveRecord(record);
-      setSelectedHistoryId(record.id);
-      setHistory((currentHistory) => [
-        record,
-        ...currentHistory.filter((entry) => entry.id !== record.id),
-      ].slice(0, MAX_HISTORY_ITEMS));
+      setHistory((current) => addSimulationHistory(current, record));
     } catch (error) {
-      clearActiveResult();
-      setRunError(normalizeRunError(error));
+      setRunError(toRequestErrorState(error, requestContext));
+    } finally {
+      setIsRunning(false);
     }
   }
 
-  function clearRunError() {
-    setRunError(null);
-  }
-
-  function clearActiveResult() {
+  function changeEnvironment(nextEnvironmentId: EnvironmentId) {
+    if (isRunning || nextEnvironmentId === environmentId) return;
+    setEnvironmentId(nextEnvironmentId);
+    form.reset(createInitialFormValues());
     setActiveRecord(null);
-    setSelectedHistoryId(null);
-  }
-
-  function resetComposer() {
-    form.reset(INITIAL_FORM_VALUES, { keepDefaultValues: true });
     setRunError(null);
   }
 
   function startNewSimulation() {
-    resetComposer();
-    clearActiveResult();
+    if (isRunning) return;
+    form.reset(createInitialFormValues());
+    setActiveRecord(null);
+    setRunError(null);
   }
 
   function selectHistoryEntry(id: string) {
-    const nextRecord = history.find((entry) => entry.id === id);
+    if (isRunning) return;
+    const record = history.find((entry) => entry.id === id);
+    if (!record) return;
 
-    if (!nextRecord) {
-      return;
-    }
-
-    setSelectedHistoryId(id);
-    setActiveRecord(nextRecord);
-    form.reset(hydrateSimulationFormValues(nextRecord.request), {
-      keepDefaultValues: true,
-    });
+    setEnvironmentId(record.environmentId);
+    form.reset(record.formValues);
+    setActiveRecord(record);
     setRunError(null);
+  }
+
+  function deleteHistoryEntry(id: string) {
+    if (isRunning) return;
+    setHistory((current) => removeSimulationHistory(current, id));
+    setActiveRecord((current) => current?.id === id ? null : current);
   }
 
   return {
     activeRecord,
-    activeResponseJson: activeRecord ? formatJson(activeRecord.response) : '',
-    changeItems: activeRecord
-      ? activeRecord.response.changes.map(toChangeItemViewModel)
-      : [],
+    changeEnvironment,
+    deleteHistoryEntry,
+    environmentId,
     form,
     history,
-    isRunning: simulationMutation.isPending,
-    resetComposer,
+    isRunning,
     runError,
-    selectedHistoryId,
     selectHistoryEntry,
     startNewSimulation,
   };
 }
 
-function loadHistory() {
-  if (typeof window === 'undefined') {
-    return [];
-  }
-
-  const storedValue = window.localStorage.getItem(HISTORY_STORAGE_KEY);
-
-  if (!storedValue) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(storedValue) as unknown;
-    return Array.isArray(parsed)
-      ? parsed.filter(isStoredSimulationRecord).slice(0, MAX_HISTORY_ITEMS)
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function createSimulationRecord(
-  request: SimulationRecord['request'],
-  response: SimulationRecord['response'],
-) {
-  const firstChange = response.changes[0]
-    ? toChangeItemViewModel(response.changes[0])
-    : null;
-  const capturedAt = new Date().toISOString();
-
-  return {
-    capturedAt,
-    id: crypto.randomUUID(),
-    request,
-    response,
-    subtitle: firstChange?.title ?? 'No detected changes',
-    title: `Block ${formatHexQuantity(response.execution.block.number)} (${response.execution.status})`,
-  };
-}
-
-function isStoredSimulationRecord(value: unknown): value is SimulationRecord {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-
-  const candidate = value as {
-    id?: unknown;
-    title?: unknown;
-    subtitle?: unknown;
-    capturedAt?: unknown;
-    request?: unknown;
-    response?: unknown;
-    source?: unknown;
-  };
-
-  if (candidate.id === 'demo-record' || candidate.source === 'sample') {
-    return false;
-  }
-
-  return (
-    typeof candidate.id === 'string' &&
-    typeof candidate.title === 'string' &&
-    typeof candidate.subtitle === 'string' &&
-    typeof candidate.capturedAt === 'string' &&
-    hasStoredRequest(candidate.request) &&
-    hasStoredResponse(candidate.response)
-  );
-}
-
-function hasStoredRequest(value: unknown): value is SimulationRecord['request'] {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-
-  const candidate = value as {
-    transaction?: { from?: unknown; gas?: unknown } | null;
-  };
-
-  return (
-    !!candidate.transaction &&
-    typeof candidate.transaction.from === 'string' &&
-    typeof candidate.transaction.gas === 'string'
-  );
-}
-
-function hasStoredResponse(value: unknown): value is SimulationRecord['response'] {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
-
-  const candidate = value as {
-    execution?: {
-      chainId?: unknown;
-      gasUsed?: unknown;
-      gasLimit?: unknown;
-      output?: unknown;
-      status?: unknown;
-      block?: { number?: unknown; hash?: unknown } | null;
-    } | null;
-    changes?: unknown;
-  };
-
-  return (
-    !!candidate.execution &&
-    typeof candidate.execution.chainId === 'string' &&
-    typeof candidate.execution.gasUsed === 'string' &&
-    typeof candidate.execution.gasLimit === 'string' &&
-    typeof candidate.execution.output === 'string' &&
-    (candidate.execution.status === 'SUCCESS' ||
-      candidate.execution.status === 'FAILED') &&
-    !!candidate.execution.block &&
-    typeof candidate.execution.block.number === 'string' &&
-    typeof candidate.execution.block.hash === 'string' &&
-    Array.isArray(candidate.changes)
-  );
-}
-
-function normalizeRunError(error: unknown): RunErrorState {
-  if (error instanceof DryrunRpcError) {
+function toRequestErrorState(
+  error: unknown,
+  context: RequestErrorState['context'],
+): RequestErrorState {
+  if (error instanceof RpcError) {
     return {
-      detail: error.rpcError.data?.details ?? 'The RPC server rejected the request.',
-      subkind: error.rpcError.data?.subkind,
-      title: error.message,
+      context,
+      detail: error.payload.data?.details ?? error.payload.message,
+      kind: 'rpc',
+      rawResponse: error.rawResponse,
+      subkind: formatRpcErrorKind(error),
+      title: rpcErrorTitle(error.payload.code),
     };
   }
 
-  if (error instanceof DryrunTransportError) {
+  if (error instanceof TransportError) {
     return {
-      detail:
-        'The simulation page could not reach the RPC endpoint. Check the backend server and proxy configuration.',
-      title: error.message,
+      context,
+      detail: error.message,
+      kind: 'transport',
+      title: 'Service unavailable',
+    };
+  }
+
+  if (error instanceof InvalidResponseError) {
+    return {
+      context,
+      detail: error.message,
+      kind: 'invalid-response',
+      rawResponse: error.rawResponse,
+      title: 'Invalid service response',
     };
   }
 
   return {
-    detail: 'The simulation request failed unexpectedly.',
-    title: 'Unexpected error',
+    context,
+    detail: error instanceof Error ? error.message : 'The request failed.',
+    kind: 'transport',
+    title: 'Simulation failed',
   };
+}
+
+function rpcErrorTitle(code: number) {
+  switch (code) {
+    case -32602:
+      return 'Invalid request';
+    case -32603:
+      return 'Server error';
+    case -32004:
+      return 'Not supported';
+    default:
+      return 'RPC error';
+  }
+}
+
+function formatRpcErrorKind(error: RpcError) {
+  const code = `RPC ${error.payload.code}`;
+  return error.payload.data?.subkind
+    ? `${code} / ${error.payload.data.subkind}`
+    : code;
 }

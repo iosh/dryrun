@@ -1,135 +1,336 @@
-import { formatUnits } from 'viem';
+import {
+  formatHexQuantity,
+  formatNativeAmount,
+  formatRawAmount,
+} from '../lib/formatting.ts';
+import { getEnvironment, type EnvironmentId } from './environment.ts';
+import type { SimulationChange } from './types.ts';
 
-import { shortAddress } from '../lib/formatting.ts';
-import type {
-  DryrunAsset,
-  DryrunChange,
-  DryrunCollection,
-} from './rpc.ts';
+export type ChangeTone = 'amber' | 'blue' | 'green' | 'red' | 'violet';
 
 export interface ChangeItemViewModel {
-  badgeLabel: string;
-  badgeTone: 'amber' | 'blue' | 'green' | 'slate' | 'violet';
-  description: string;
+  detail?: string;
+  identifier?: string;
+  label: string;
   title: string;
+  tone: ChangeTone;
   value?: string;
 }
 
-export function toChangeItemViewModel(change: DryrunChange) {
-  switch (change.kind) {
+type AssetChange = Extract<
+  SimulationChange,
+  { changeType: 'TRANSFER' | 'MINT' | 'BURN' }
+>;
+
+export function toChangeItemViewModel(
+  change: SimulationChange,
+  environmentId: EnvironmentId,
+): ChangeItemViewModel {
+  switch (change.changeType) {
     case 'TRANSFER':
-      return {
-        badgeLabel: 'Transfer',
-        badgeTone: 'blue',
-        description: `Source ${shortAddress(change.from)} → Destination ${shortAddress(change.to)}`,
-        title: assetTitle(change.asset),
-        value: changeValue(change.asset, change.amount),
-      } satisfies ChangeItemViewModel;
+      return withAsset(change, environmentId, {
+        label: 'Transfer',
+        tone: 'blue',
+      });
     case 'MINT':
-      return {
-        badgeLabel: 'Mint',
-        badgeTone: 'violet',
-        description: `Minted to ${shortAddress(change.to)}`,
-        title: assetTitle(change.asset),
-        value: changeValue(change.asset, change.amount),
-      } satisfies ChangeItemViewModel;
+      return withAsset(change, environmentId, {
+        label: 'Mint',
+        tone: 'violet',
+      });
     case 'BURN':
+      return withAsset(change, environmentId, {
+        label: 'Burn',
+        tone: 'red',
+      });
+    case 'ALLOWANCE':
       return {
-        badgeLabel: 'Burn',
-        badgeTone: 'amber',
-        description: `Burned from ${shortAddress(change.from)}`,
-        title: assetTitle(change.asset),
-        value: changeValue(change.asset, change.amount),
-      } satisfies ChangeItemViewModel;
-    case 'APPROVAL':
+        identifier: change.contractAddress,
+        label: 'Allowance',
+        title: tokenName(change, 'ERC-20'),
+        tone:
+          BigInt(change.rawAmountAfter) >= BigInt(change.rawAmountBefore)
+            ? 'green'
+            : 'amber',
+        value: formatAllowanceDelta(change),
+      };
+    case 'TOKEN_APPROVAL':
       return {
-        badgeLabel: 'Approval',
-        badgeTone: 'green',
-        description: `Owner ${shortAddress(change.owner)} approved ${shortAddress(change.spender)}`,
-        title: assetTitle(change.asset),
-        value: changeValue(change.asset, change.amount),
-      } satisfies ChangeItemViewModel;
-    case 'APPROVAL_FOR_ALL':
+        detail: `Token #${formatHexQuantity(change.tokenId)}`,
+        identifier: change.contractAddress,
+        label: 'Token approval',
+        title: tokenName(change, 'ERC-721'),
+        tone: 'green',
+        value: addressTransition(
+          change.approvedAddressBefore,
+          change.approvedAddressAfter,
+        ),
+      };
+    case 'OPERATOR_APPROVAL':
       return {
-        badgeLabel: 'Approval For All',
-        badgeTone: 'green',
-        description: `Operator ${shortAddress(change.operator)} for ${shortAddress(change.owner)}`,
-        title: collectionTitle(change.collection),
-        value: change.approved ? 'Enabled' : 'Revoked',
-      } satisfies ChangeItemViewModel;
+        identifier: change.contractAddress,
+        label: 'Operator approval',
+        title: tokenName(change, change.assetType === 'ERC721' ? 'ERC-721' : 'ERC-1155'),
+        tone: 'green',
+        value: booleanTransition(change.approvedBefore, change.approvedAfter),
+      };
+    case 'STAKING_DEPOSIT':
+      return coreAmountChange(
+        'Staking deposit',
+        change.rawAmount,
+        'green',
+      );
+    case 'STAKING_WITHDRAWAL':
+      return {
+        ...coreAmountChange(
+          'Staking withdrawal',
+          change.rawAmount,
+          'amber',
+        ),
+        detail: `Reward ${formatNativeAmount(change.rewardRawAmount, 'CFX')}`,
+      };
+    case 'STAKING_BURN':
+      return coreAmountChange(
+        'Staking burn',
+        change.rawAmount,
+        'red',
+      );
+    case 'STAKING_VOTE_LOCK':
+      return {
+        detail: `Until block ${formatHexQuantity(change.unlockBlockNumber)}`,
+        label: 'Vote lock',
+        title: 'Required locked stake',
+        tone: 'violet',
+        value: `${formatNativeAmount(change.requiredLockedRawAmountBefore, 'CFX')} to ${formatNativeAmount(change.requiredLockedRawAmountAfter, 'CFX')}`,
+      };
+    case 'POS_REGISTRATION':
+      return posChange(
+        'PoS registration',
+        change.posIdentifier,
+        change.newlyLockedVoteCount,
+        change.newlyLockedRawAmount,
+      );
+    case 'POS_STAKE_INCREASE':
+      return posChange(
+        'PoS stake increase',
+        change.posIdentifier,
+        change.newlyLockedVoteCount,
+        change.newlyLockedRawAmount,
+      );
+    case 'POS_RETIREMENT_REQUEST':
+      return {
+        detail: 'Retirement requested',
+        identifier: change.posIdentifier,
+        label: 'PoS retirement',
+        title: 'Votes requested',
+        tone: 'amber',
+        value: formatHexQuantity(change.requestedVoteCount),
+      };
+    case 'SPONSORSHIP_DEPOSIT':
+      return sponsorshipAmountChange('Sponsor deposit', change);
+    case 'SPONSORSHIP_REFUND':
+      return sponsorshipAmountChange('Sponsor refund', change);
+    case 'SPONSORSHIP_CONFIGURATION':
+      return {
+        detail: sponsorTransition(change.sponsorBefore, change.sponsorAfter),
+        identifier: change.contractAddress,
+        label: 'Sponsor configuration',
+        title:
+          change.sponsoredResource === 'GAS'
+            ? 'Gas sponsorship'
+            : 'Storage sponsorship',
+        tone: 'violet',
+        ...('maxSponsoredGasFeeRawAmountAfter' in change
+          ? {
+              value: `${formatNativeAmount(change.maxSponsoredGasFeeRawAmountBefore, 'CFX')} to ${formatNativeAmount(change.maxSponsoredGasFeeRawAmountAfter, 'CFX')}`,
+            }
+          : {}),
+      };
+    case 'SPONSORSHIP_ELIGIBILITY_RULE':
+      return {
+        detail:
+          change.appliesTo.type === 'ALL_ACCOUNTS'
+            ? 'Applies to all accounts'
+            : 'Applies to one account',
+        identifier: change.contractAddress,
+        label: 'Sponsor eligibility',
+        title: 'Eligibility rule',
+        tone: 'violet',
+        value: booleanTransition(change.enabledBefore, change.enabledAfter),
+      };
+    case 'STORAGE_POINT_CONVERSION':
+      return {
+        detail: 'Converted to storage points',
+        identifier: change.contractAddress,
+        label: 'Storage points',
+        title: 'CFX conversion',
+        tone: 'blue',
+        value: formatNativeAmount(change.convertedCfxRawAmount, 'CFX'),
+      };
+    case 'CROSS_SPACE_TRANSFER':
+      return {
+        label: 'Cross-space transfer',
+        title: 'CFX',
+        tone: 'blue',
+        value: formatNativeAmount(change.rawAmount, 'CFX'),
+      };
   }
 }
 
-function assetTitle(asset: DryrunAsset) {
-  switch (asset.type) {
+function withAsset(
+  change: AssetChange,
+  environmentId: EnvironmentId,
+  base: Pick<ChangeItemViewModel, 'label' | 'tone'>,
+): ChangeItemViewModel {
+  return {
+    ...base,
+    identifier:
+      change.assetType === 'NATIVE' ? undefined : change.contractAddress,
+    title: assetTitle(change, environmentId),
+    value: assetValue(change, environmentId),
+  };
+}
+
+function assetTitle(change: AssetChange, environmentId: EnvironmentId) {
+  switch (change.assetType) {
     case 'NATIVE':
-      return asset.display?.symbol ?? 'Native Asset';
+      return metadataSymbol(change) ?? getEnvironment(environmentId).nativeSymbol;
     case 'ERC20':
-      return (
-        asset.display?.symbol ??
-        asset.display?.name ??
-        shortAddress(asset.contractAddress)
-      );
+      return tokenName(change, 'ERC-20');
     case 'ERC721':
-      return (
-        asset.token?.name ??
-        asset.collection?.name ??
-        asset.collection?.symbol ??
-        `ERC-721 #${BigInt(asset.tokenId).toString()}`
-      );
+      return `${tokenName(change, 'ERC-721')} #${formatHexQuantity(change.tokenId)}`;
     case 'ERC1155':
-      return (
-        asset.token?.name ??
-        asset.collection?.name ??
-        `ERC-1155 #${BigInt(asset.tokenId).toString()}`
-      );
+      return `ERC-1155 #${formatHexQuantity(change.tokenId)}`;
   }
 }
 
-function collectionTitle(collection: DryrunCollection) {
-  switch (collection.type) {
-    case 'ERC721':
-      return (
-        collection.collection?.name ??
-        collection.collection?.symbol ??
-        shortAddress(collection.contractAddress)
+function assetValue(change: AssetChange, environmentId: EnvironmentId) {
+  switch (change.assetType) {
+    case 'NATIVE':
+      return formatNativeAmount(
+        change.rawAmount,
+        metadataSymbol(change) ?? getEnvironment(environmentId).nativeSymbol,
       );
-    case 'ERC1155':
-      return (
-        collection.collection?.name ??
-        shortAddress(collection.contractAddress)
+    case 'ERC20': {
+      const symbol = metadataSymbol(change);
+      const amount = formatTokenAmount(
+        change.rawAmount,
+        metadataDecimals(change),
       );
-  }
-}
-
-function changeValue(asset: DryrunAsset, amount?: string) {
-  if (amount) {
-    if (asset.type === 'ERC20' || asset.type === 'NATIVE') {
-      const decimals = asset.display?.decimals ?? 0;
-      const symbol = asset.type === 'NATIVE'
-        ? asset.display?.symbol ?? 'ETH'
-        : asset.display?.symbol ?? '';
-
-      return `${compactNumber(formatUnits(BigInt(amount), decimals))}${symbol ? ` ${symbol}` : ''}`;
+      return symbol ? `${amount} ${symbol}` : amount;
     }
-
-    return compactNumber(BigInt(amount).toString());
+    case 'ERC721':
+      return undefined;
+    case 'ERC1155':
+      return formatHexQuantity(change.rawAmount);
   }
-
-  if (asset.type === 'ERC721' || asset.type === 'ERC1155') {
-    return `#${BigInt(asset.tokenId).toString()}`;
-  }
-
-  return undefined;
 }
 
-function compactNumber(value: string) {
-  const [whole, decimal] = value.split('.');
-  const groupedWhole = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+function tokenName(
+  change: object,
+  fallback: string,
+) {
+  return metadataSymbol(change) ?? metadataName(change) ?? fallback;
+}
 
-  if (!decimal) {
-    return groupedWhole;
-  }
+function metadataName(value: object) {
+  return 'name' in value && typeof value.name === 'string'
+    ? value.name
+    : undefined;
+}
 
-  return `${groupedWhole}.${decimal.slice(0, 4)}`;
+function metadataSymbol(value: object) {
+  return 'symbol' in value && typeof value.symbol === 'string'
+    ? value.symbol
+    : undefined;
+}
+
+function metadataDecimals(value: object) {
+  return 'decimals' in value && typeof value.decimals === 'number'
+    ? value.decimals
+    : 0;
+}
+
+function formatTokenAmount(rawAmount: string, decimals = 0) {
+  return formatRawAmount(rawAmount, decimals);
+}
+
+function formatAllowanceDelta(
+  change: Extract<SimulationChange, { changeType: 'ALLOWANCE' }>,
+) {
+  const delta =
+    BigInt(change.rawAmountAfter) - BigInt(change.rawAmountBefore);
+  if (delta === 0n) return 'No change';
+
+  const amount = formatTokenAmount(
+    (delta < 0n ? -delta : delta).toString(),
+    metadataDecimals(change),
+  );
+  const symbol = metadataSymbol(change);
+  return `${delta > 0n ? '+' : '-'}${amount}${symbol ? ` ${symbol}` : ''}`;
+}
+
+function addressTransition(before: string | null, after: string | null) {
+  if (before === after) return after ? 'Unchanged' : 'None';
+  if (!after) return 'Revoked';
+  return before ? 'Changed' : 'Approved';
+}
+
+function sponsorTransition(before: string | null, after: string | null) {
+  if (before === after) return after ? 'Sponsor unchanged' : 'No sponsor';
+  if (!after) return 'Sponsor removed';
+  return before ? 'Sponsor changed' : 'Sponsor added';
+}
+
+function booleanTransition(before: boolean, after: boolean) {
+  if (before === after) return after ? 'Enabled' : 'Disabled';
+  return `${before ? 'Enabled' : 'Disabled'} to ${after ? 'Enabled' : 'Disabled'}`;
+}
+
+function coreAmountChange(
+  label: string,
+  rawAmount: string,
+  tone: ChangeTone,
+): ChangeItemViewModel {
+  return {
+    label,
+    title: 'CFX',
+    tone,
+    value: formatNativeAmount(rawAmount, 'CFX'),
+  };
+}
+
+function posChange(
+  label: string,
+  identifier: string,
+  voteCount: string,
+  rawAmount: string,
+): ChangeItemViewModel {
+  return {
+    detail: `Locked ${formatNativeAmount(rawAmount, 'CFX')}`,
+    identifier,
+    label,
+    title: 'Newly locked votes',
+    tone: 'violet',
+    value: formatHexQuantity(voteCount),
+  };
+}
+
+function sponsorshipAmountChange(
+  label: string,
+  change: Extract<
+    SimulationChange,
+    { changeType: 'SPONSORSHIP_DEPOSIT' | 'SPONSORSHIP_REFUND' }
+  >,
+): ChangeItemViewModel {
+  return {
+    detail:
+      change.sponsoredResource === 'GAS'
+        ? 'Gas sponsorship'
+        : 'Storage sponsorship',
+    identifier: change.contractAddress,
+    label,
+    title: 'CFX',
+    tone: change.changeType === 'SPONSORSHIP_DEPOSIT' ? 'green' : 'amber',
+    value: formatNativeAmount(change.rawAmount, 'CFX'),
+  };
 }

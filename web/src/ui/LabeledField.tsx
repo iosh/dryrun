@@ -17,9 +17,9 @@ export function LabeledField({
 }: Readonly<LabeledFieldProps>) {
   return (
     <label className={cn('flex w-full flex-col gap-2', className)}>
-      <span className="font-mono text-[11px] font-medium uppercase tracking-[0.12em] text-ink-600">
+      <span className="text-xs font-medium text-ink-600">
         {label}
-        {optional ? ' (Optional)' : ''}
+        {optional ? <span className="font-normal text-ink-400"> · Optional</span> : null}
       </span>
       {children}
     </label>

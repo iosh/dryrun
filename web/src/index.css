@@ -1,33 +1,32 @@
-@import '@fontsource/space-grotesk/latin-500.css';
-@import '@fontsource/space-grotesk/latin-700.css';
 @import '@fontsource/ibm-plex-sans/latin-400.css';
 @import '@fontsource/ibm-plex-sans/latin-500.css';
 @import '@fontsource/ibm-plex-sans/latin-600.css';
+@import '@fontsource/ibm-plex-mono/latin-400.css';
 @import '@fontsource/ibm-plex-mono/latin-500.css';
-@import '@fontsource/ibm-plex-mono/latin-600.css';
 @import "tailwindcss";
 
 @theme {
   --font-sans: "IBM Plex Sans", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: "IBM Plex Mono", monospace;
-  --font-display: "Space Grotesk", "IBM Plex Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
 
-  --color-brand-600: #1d4ed8;
-  --color-brand-700: #1e40af;
-  --color-shell-50: #f6f8fb;
-  --color-shell-100: #f3f6fa;
-  --color-shell-150: #edf2f7;
-  --color-line: #d9e2ec;
-  --color-ink-950: #0b1220;
-  --color-ink-600: #66758a;
-  --color-ink-400: #94a3b8;
-
-  --shadow-card: 0 18px 40px rgba(11, 18, 32, 0.04);
+  --color-brand-50: #eef4ff;
+  --color-brand-600: #2357d9;
+  --color-brand-700: #1947bd;
+  --color-shell-50: #f5f7f9;
+  --color-shell-100: #eef1f4;
+  --color-line: #d8dee6;
+  --color-ink-950: #121820;
+  --color-ink-800: #2a3441;
+  --color-ink-600: #5f6c7b;
+  --color-ink-400: #8b97a5;
+  --color-code: #171c23;
+  --color-code-ink: #dce5ef;
 }
 
 @layer base {
   * {
     box-sizing: border-box;
+    letter-spacing: 0;
   }
 
   html {
@@ -36,10 +35,9 @@
 
   body {
     margin: 0;
+    min-width: 320px;
     min-height: 100vh;
-    background:
-      radial-gradient(circle at top left, rgba(219, 234, 254, 0.85), transparent 26%),
-      linear-gradient(180deg, #fbfdff 0%, var(--color-shell-50) 36%, #eef3f8 100%);
+    background: var(--color-shell-50);
     color: var(--color-ink-950);
     font-family: var(--font-sans);
     text-rendering: optimizeLegibility;
@@ -52,6 +50,21 @@
   select,
   textarea {
     font: inherit;
+  }
+
+  button,
+  summary,
+  select {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button:focus-visible,
+  summary:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid rgba(35, 87, 217, 0.35);
+    outline-offset: 2px;
   }
 
   #root {
@@ -69,6 +82,6 @@
   }
 
   ::selection {
-    background: rgba(29, 78, 216, 0.14);
+    background: rgba(35, 87, 217, 0.18);
   }
 }

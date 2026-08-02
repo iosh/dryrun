@@ -1,3 +1,5 @@
+import { formatUnits } from 'viem';
+
 export function shortAddress(
   value: string,
   leading = 6,
@@ -42,6 +44,32 @@ export function formatTimestampLabel(iso: string) {
 
   const days = Math.floor(hours / 24);
   return `${days}d ago`;
+}
+
+export function formatRawAmount(rawAmount: string | bigint, decimals = 0) {
+  return formatDecimal(formatUnits(BigInt(rawAmount), decimals));
+}
+
+export function formatAmount(
+  rawAmount: string | bigint,
+  decimals: number,
+  unit?: string,
+) {
+  const value = formatRawAmount(rawAmount, decimals);
+  return unit ? `${value} ${unit}` : value;
+}
+
+export function formatNativeAmount(
+  rawAmount: string | bigint,
+  symbol: string,
+) {
+  return formatAmount(rawAmount, 18, symbol);
+}
+
+export function formatDecimal(value: string) {
+  const [whole, fraction] = value.split('.');
+  const grouped = groupNumericString(whole);
+  return fraction ? `${grouped}.${fraction}` : grouped;
 }
 
 function groupNumericString(value: string) {

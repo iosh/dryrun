@@ -1,33 +1,44 @@
 import { useForm } from '@tanstack/react-form';
 
-import { INITIAL_FORM_VALUES } from './defaults.ts';
+import type { EnvironmentId } from './environment.ts';
 import {
-  parseSimulationFormValues,
+  createInitialFormValues,
+  parseSimulationForm,
   validateSimulationField,
-} from './requestCodec.ts';
+} from './request.ts';
 import type { SimulationFormValues } from './types.ts';
 
 type SubmitSimulationForm = (
   values: SimulationFormValues,
 ) => Promise<void> | void;
 
-type HandleInvalidSimulationForm = () => void;
-
 export function useSimulationForm(
+  environmentId: EnvironmentId,
   onSubmit: SubmitSimulationForm,
-  onSubmitInvalid: HandleInvalidSimulationForm,
 ) {
   return useForm({
-    defaultValues: INITIAL_FORM_VALUES,
-    onSubmitInvalid,
+    defaultValues: createInitialFormValues(),
     onSubmit: async ({ value }) => {
       await onSubmit(value);
     },
     validators: {
-      onChange: ({ value }) =>
-        toFormIssues(parseSimulationFormValues(value).formIssues),
-      onSubmit: ({ value }) =>
-        toFormIssues(parseSimulationFormValues(value).formIssues),
+      onSubmit: ({ value }) => {
+        const { fieldIssues, formIssues } = parseSimulationForm(
+          environmentId,
+          value,
+        );
+        if (
+          Object.keys(fieldIssues).length === 0 &&
+          formIssues.length === 0
+        ) {
+          return undefined;
+        }
+
+        return {
+          fields: fieldIssues,
+          form: formIssues,
+        };
+      },
     },
   });
 }
@@ -36,24 +47,12 @@ export type SimulationFormApi = ReturnType<typeof useSimulationForm>;
 
 export function getSimulationFieldValidators<
   TKey extends keyof SimulationFormValues,
->(field: TKey) {
-  return {
-    onBlur: ({ value }: { value: SimulationFormValues[TKey] }) =>
-      validateSimulationField(field, value),
-    onChange: ({ value }: { value: SimulationFormValues[TKey] }) =>
-      validateSimulationField(field, value),
-    onSubmit: ({ value }: { value: SimulationFormValues[TKey] }) =>
-      validateSimulationField(field, value),
-  };
-}
-
-function toFormIssues(issues: readonly string[]) {
-  if (issues.length === 0) {
-    return undefined;
-  }
+>(environmentId: EnvironmentId, field: TKey) {
+  const validate = ({ value }: { value: SimulationFormValues[TKey] }) =>
+    validateSimulationField(environmentId, field, value);
 
   return {
-    fields: {},
-    form: issues,
+    onBlur: validate,
+    onSubmit: validate,
   };
 }

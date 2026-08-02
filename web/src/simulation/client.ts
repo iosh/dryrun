@@ -1,124 +1,101 @@
-import { getAddress } from 'viem';
-
-import type {
-  DryrunJsonRpcError,
-  DryrunSimulateTransactionRequest,
-  DryrunSimulateTransactionResponse,
+import type { EnvironmentId } from './environment.ts';
+import { getEnvironment } from './environment.ts';
+import {
+  type RpcEnvelope,
+  type RpcErrorPayload,
+  type RpcSimulationResponse,
 } from './rpc.ts';
+import type { SimulationRequest } from './types.ts';
 
-const DEFAULT_RPC_URL = '/rpc';
-const METHOD_NAME = 'dryrun_evm_simulateTransaction';
+let nextRequestId = 1;
 
-let nextRpcId = 1;
-
-export class DryrunTransportError extends Error {
+export class TransportError extends Error {
   readonly status?: number;
 
   constructor(message: string, status?: number) {
     super(message);
-    this.name = 'DryrunTransportError';
+    this.name = 'TransportError';
     this.status = status;
   }
 }
 
-export class DryrunRpcError extends Error {
-  readonly rpcError: DryrunJsonRpcError;
+export class RpcError extends Error {
+  readonly payload: RpcErrorPayload;
+  readonly rawResponse: unknown;
 
-  constructor(rpcError: DryrunJsonRpcError) {
-    super(rpcError.message);
-    this.name = 'DryrunRpcError';
-    this.rpcError = rpcError;
+  constructor(payload: RpcErrorPayload, rawResponse: unknown) {
+    super(payload.message);
+    this.name = 'RpcError';
+    this.payload = payload;
+    this.rawResponse = rawResponse;
   }
 }
 
-export function getDryrunRpcUrl() {
-  return import.meta.env.VITE_DRYRUN_RPC_URL ?? DEFAULT_RPC_URL;
+export class InvalidResponseError extends Error {
+  readonly rawResponse: unknown;
+
+  constructor(message: string, rawResponse: unknown) {
+    super(message);
+    this.name = 'InvalidResponseError';
+    this.rawResponse = rawResponse;
+  }
+}
+
+export interface SimulationRpcResult {
+  response: RpcSimulationResponse;
+  rawResponse: unknown;
+}
+
+export function getRpcUrl() {
+  return import.meta.env.VITE_DRYRUN_RPC_URL ?? '/rpc';
 }
 
 export async function simulateTransaction(
-  request: DryrunSimulateTransactionRequest,
-) {
-  return callRpcMethod<DryrunSimulateTransactionResponse>(METHOD_NAME, request);
-}
-
-async function callRpcMethod<TResponse>(
-  method: string,
-  params: object,
-) {
+  environmentId: EnvironmentId,
+  request: SimulationRequest,
+): Promise<SimulationRpcResult> {
+  const environment = getEnvironment(environmentId);
+  const requestId = nextRequestId++;
   let response: Response;
 
   try {
-    response = await fetch(getDryrunRpcUrl(), {
-      body: JSON.stringify({
-        id: nextRpcId++,
-        jsonrpc: '2.0',
-        method,
-        params,
-      }),
-      headers: {
-        'content-type': 'application/json',
-      },
+    response = await fetch(getRpcUrl(), {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: requestId,
+        method: environment.method,
+        params: request,
+      }),
     });
   } catch {
-    throw new DryrunTransportError('Unable to reach RPC endpoint');
+    throw new TransportError('Unable to reach the simulation service.');
   }
 
   if (!response.ok) {
-    throw new DryrunTransportError(
-      `RPC endpoint responded with ${response.status}`,
+    throw new TransportError(
+      `The simulation service responded with HTTP ${response.status}.`,
       response.status,
     );
   }
 
-  let payload: unknown;
-
+  let payload: RpcEnvelope;
   try {
-    payload = await response.json();
+    payload = await response.json() as RpcEnvelope;
   } catch {
-    throw new DryrunTransportError(
-      'RPC endpoint returned invalid JSON',
-      response.status,
+    throw new InvalidResponseError(
+      'The simulation service returned invalid JSON.',
+      undefined,
     );
   }
 
-  if (isJsonRpcErrorPayload(payload)) {
-    throw new DryrunRpcError(payload.error);
+  if ('error' in payload) {
+    throw new RpcError(payload.error, payload);
   }
 
-  if (!isJsonRpcResultPayload<TResponse>(payload)) {
-    throw new DryrunTransportError(
-      'RPC endpoint returned an invalid JSON-RPC payload',
-      response.status,
-    );
-  }
-
-  return payload.result;
-}
-
-export function normalizeRpcAddress(value: string) {
-  return getAddress(value);
-}
-
-function isJsonRpcErrorPayload(
-  payload: unknown,
-): payload is { error: DryrunJsonRpcError; id: number; jsonrpc: '2.0' } {
-  return isJsonRpcBasePayload(payload) && 'error' in payload;
-}
-
-function isJsonRpcResultPayload<TResponse>(
-  payload: unknown,
-): payload is { id: number; jsonrpc: '2.0'; result: TResponse } {
-  return isJsonRpcBasePayload(payload) && 'result' in payload;
-}
-
-function isJsonRpcBasePayload(
-  payload: unknown,
-): payload is { id: number; jsonrpc: '2.0' } {
-  return (
-    !!payload &&
-    typeof payload === 'object' &&
-    'id' in payload &&
-    'jsonrpc' in payload
-  );
+  return {
+    response: payload.result as RpcSimulationResponse,
+    rawResponse: payload,
+  };
 }

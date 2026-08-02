@@ -1,195 +1,264 @@
-import { History } from 'lucide-react';
+import { History, Plus, Trash2 } from 'lucide-react';
+import { useState } from 'react';
 
 import { cn } from '../../lib/cn.ts';
-import { formatTimestampLabel } from '../../lib/formatting.ts';
+import {
+  formatTimestampLabel,
+  formatJson,
+  shortAddress,
+} from '../../lib/formatting.ts';
 import { Button } from '../../ui/Button.tsx';
-import { Panel } from '../../ui/Panel.tsx';
+import { CopyButton } from '../../ui/CopyButton.tsx';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+  SheetTrigger,
+} from '../../ui/Sheet.tsx';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from '../../ui/Tooltip.tsx';
+import { getEnvironment } from '../environment.ts';
+import { HISTORY_LIMIT } from '../history.ts';
 import type { SimulationRecord } from '../types.ts';
 
 export interface SimulationHistoryProps {
+  activeRecordId: string | null;
   history: readonly SimulationRecord[];
   isBusy: boolean;
+  onDeleteHistoryEntry: (id: string) => void;
   onNewSimulation: () => void;
   onSelectHistoryEntry: (id: string) => void;
-  selectedHistoryId: string | null;
 }
 
-export function SimulationHistorySidebar({
-  history,
-  isBusy,
-  onNewSimulation,
-  onSelectHistoryEntry,
-  selectedHistoryId,
-}: Readonly<SimulationHistoryProps>) {
-  const hasHistory = history.length > 0;
-
+export function SimulationHistorySidebar(
+  props: Readonly<SimulationHistoryProps>,
+) {
   return (
-    <aside className="hidden h-full min-w-0 flex-col gap-4 border-r border-line bg-shell-150 p-4 lg:flex">
-      <div className="space-y-1">
-        <h2 className="font-display text-xs font-bold uppercase tracking-[0.14em] text-ink-950">
-          History
-        </h2>
-        <p className="font-mono text-[10px] text-ink-600">
-          Saved in your browser
-        </p>
-      </div>
-
-      <Button
-        className="w-full"
-        disabled={isBusy}
-        onClick={onNewSimulation}
-      >
-        New Simulation
-      </Button>
-
-      <div className="min-h-0 space-y-3 overflow-y-auto pr-1">
-        {hasHistory ? (
-          <>
-            <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-600">
-              Recent Runs
-            </p>
-            {history.map((entry) => (
-              <HistoryEntryButton
-                entry={entry}
-                key={entry.id}
-                onSelectHistoryEntry={onSelectHistoryEntry}
-                selected={entry.id === selectedHistoryId}
-              />
-            ))}
-          </>
-        ) : (
-          <HistoryEmptyState />
-        )}
+    <aside className="hidden min-h-0 border-r border-line bg-shell-100 lg:flex lg:flex-col">
+      <HistoryHeading {...props} />
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
+        <HistoryList {...props} />
       </div>
     </aside>
   );
 }
 
-export function SimulationHistoryMobileToolbar({
+export function SimulationHistoryMobile(
+  props: Readonly<SimulationHistoryProps>,
+) {
+  const [open, setOpen] = useState(false);
+
+  function startNewSimulation() {
+    props.onNewSimulation();
+    setOpen(false);
+  }
+
+  function selectHistoryEntry(id: string) {
+    props.onSelectHistoryEntry(id);
+    setOpen(false);
+  }
+
+  return (
+    <Sheet onOpenChange={setOpen} open={open}>
+      <SheetTrigger asChild>
+        <Button
+          aria-label={`Open history, ${props.history.length} records`}
+          className="h-9 gap-2 px-3"
+          variant="secondary"
+        >
+          <History aria-hidden="true" className="h-4 w-4 text-ink-600" />
+          <span className="text-xs">{props.history.length}</span>
+        </Button>
+      </SheetTrigger>
+      <SheetContent>
+        <div className="border-b border-line px-5 pb-4 pt-5 pr-14">
+          <SheetTitle className="text-base font-semibold">History</SheetTitle>
+          <SheetDescription className="mt-1 text-xs text-ink-600">
+            {props.history.length} of {HISTORY_LIMIT} simulations
+          </SheetDescription>
+          <Button
+            className="mt-4 h-10 w-full gap-2"
+            disabled={props.isBusy}
+            onClick={startNewSimulation}
+          >
+            <Plus aria-hidden="true" className="h-4 w-4" />
+            New simulation
+          </Button>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto p-3">
+          <HistoryList
+            {...props}
+            onNewSimulation={startNewSimulation}
+            onSelectHistoryEntry={selectHistoryEntry}
+          />
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+function HistoryHeading({
+  history,
   isBusy,
   onNewSimulation,
-}: Readonly<Pick<SimulationHistoryProps, 'isBusy' | 'onNewSimulation'>>) {
+}: Readonly<SimulationHistoryProps>) {
   return (
-    <section className="border-b border-line bg-shell-150 p-4 lg:hidden">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="space-y-1">
-          <h2 className="font-display text-xs font-bold uppercase tracking-[0.14em] text-ink-950">
-            New Simulation
-          </h2>
-          <p className="font-mono text-[10px] text-ink-600">
-            Start a fresh request
+    <div className="p-4">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold">History</h2>
+          <p className="mt-1 text-xs text-ink-600">
+            {history.length} of {HISTORY_LIMIT}
           </p>
         </div>
-
-        <Button
-          className="sm:w-auto"
-          disabled={isBusy}
-          onClick={onNewSimulation}
-        >
-          New Simulation
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              aria-label="New simulation"
+              disabled={isBusy}
+              onClick={onNewSimulation}
+              size="icon"
+            >
+              <Plus aria-hidden="true" className="h-4 w-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>New simulation</TooltipContent>
+        </Tooltip>
       </div>
-    </section>
+    </div>
   );
 }
 
-export function SimulationHistoryMobileList({
+function HistoryList({
+  activeRecordId,
   history,
+  isBusy,
+  onDeleteHistoryEntry,
   onSelectHistoryEntry,
-  selectedHistoryId,
-}: Readonly<
-  Pick<
-    SimulationHistoryProps,
-    'history' | 'onSelectHistoryEntry' | 'selectedHistoryId'
-  >
->) {
-  const hasHistory = history.length > 0;
+}: Readonly<SimulationHistoryProps>) {
+  if (history.length === 0) {
+    return (
+      <div className="flex min-h-36 flex-col items-center justify-center border border-dashed border-line bg-white px-4 text-center">
+        <History aria-hidden="true" className="h-5 w-5 text-ink-400" />
+        <p className="mt-3 text-sm font-medium text-ink-600">No history</p>
+      </div>
+    );
+  }
 
   return (
-    <section className="space-y-3 lg:hidden">
-      <div className="space-y-1">
-        <h2 className="font-display text-xs font-bold uppercase tracking-[0.14em] text-ink-950">
-          History
-        </h2>
-        <p className="font-mono text-[10px] text-ink-600">
-          Saved in your browser
-        </p>
-      </div>
-
-      {hasHistory ? (
-        <>
-          {history.map((entry) => (
-            <HistoryEntryButton
-              entry={entry}
-              key={entry.id}
-              onSelectHistoryEntry={onSelectHistoryEntry}
-              selected={entry.id === selectedHistoryId}
-            />
-          ))}
-        </>
-      ) : (
-        <HistoryEmptyState />
-      )}
-    </section>
+    <div className="overflow-hidden rounded-lg border border-line bg-white">
+      {history.map((record) => (
+        <HistoryEntry
+          disabled={isBusy}
+          key={record.id}
+          onDeleteHistoryEntry={onDeleteHistoryEntry}
+          onSelectHistoryEntry={onSelectHistoryEntry}
+          record={record}
+          selected={record.id === activeRecordId}
+        />
+      ))}
+    </div>
   );
 }
 
-function HistoryEntryButton({
-  entry,
+function HistoryEntry({
+  disabled,
+  onDeleteHistoryEntry,
   onSelectHistoryEntry,
+  record,
   selected,
 }: Readonly<{
-  entry: SimulationRecord;
+  disabled: boolean;
+  onDeleteHistoryEntry: (id: string) => void;
   onSelectHistoryEntry: (id: string) => void;
+  record: SimulationRecord;
   selected: boolean;
 }>) {
-  return (
-    <button
-      className={cn(
-        'w-full rounded-[18px] border px-4 py-3 text-left transition',
-        selected
-          ? 'border-brand-600 bg-white ring-1 ring-brand-600/10 shadow-md'
-          : 'border-line bg-white hover:border-brand-600/40 hover:bg-white',
-      )}
-      onClick={() => onSelectHistoryEntry(entry.id)}
-      type="button"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="space-y-1">
-          <p
-            className={cn(
-              'font-display text-[13px] font-bold',
-              selected ? 'text-brand-600' : 'text-ink-950',
-            )}
-          >
-            {entry.title}
-          </p>
-          <p className="text-[11px] text-ink-600">
-            {entry.subtitle}
-          </p>
-        </div>
-        <span className="font-mono text-[10px] text-ink-400">
-          {formatTimestampLabel(entry.capturedAt)}
-        </span>
-      </div>
-    </button>
-  );
-}
+  const environment = getEnvironment(record.environmentId);
+  const transaction = record.request.transaction;
+  const status = record.response.execution.status;
 
-function HistoryEmptyState() {
   return (
-    <Panel className="space-y-3 rounded-[16px] p-4">
-      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
-        <History className="h-[18px] w-[18px]" strokeWidth={2.25} />
-      </div>
-      <div className="space-y-1">
-        <p className="text-sm font-semibold text-ink-950">
-          No history yet
+    <article
+      className={cn(
+        'border-b border-line transition-colors last:border-b-0',
+        selected ? 'bg-brand-50' : 'bg-white',
+      )}
+    >
+      <button
+        className={cn(
+          'block w-full px-3 pb-2 pt-3 text-left transition-colors disabled:cursor-not-allowed',
+          !selected && 'hover:bg-shell-50',
+        )}
+        disabled={disabled}
+        onClick={() => onSelectHistoryEntry(record.id)}
+        type="button"
+      >
+        <div className="flex items-center justify-between gap-3">
+          <span className="truncate text-xs font-semibold text-ink-950">
+            {environment.shortLabel}
+          </span>
+          <span className="shrink-0 text-[10px] text-ink-400">
+            {formatTimestampLabel(record.createdAt)}
+          </span>
+        </div>
+        <p className="mt-2 truncate font-mono text-[11px] text-ink-600">
+          {transaction.to ? shortAddress(transaction.to) : 'Contract creation'}
         </p>
-        <p className="text-[11px] leading-5 text-ink-600">
-          Submitted runs appear here after each simulation.
-        </p>
+      </button>
+
+      <div className="flex min-h-9 items-center justify-between gap-2 px-3 pb-2">
+        <div className="flex min-w-0 items-center gap-2 text-[11px]">
+          <span className="flex shrink-0 items-center gap-1.5 text-ink-600">
+            <span
+              className={cn(
+                'h-1.5 w-1.5 rounded-full',
+                status === 'SUCCESS'
+                  ? 'bg-emerald-500'
+                  : status === 'FAILED'
+                    ? 'bg-red-500'
+                    : 'bg-amber-500',
+              )}
+            />
+            {status.replace('_', ' ')}
+          </span>
+          <span className="truncate text-ink-400">
+            {record.response.changes.length} changes
+          </span>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-0.5">
+          <CopyButton
+            label="Copy simulation record"
+            value={() => formatJson({
+              createdAt: record.createdAt,
+              environmentId: record.environmentId,
+              formValues: record.formValues,
+              request: record.request,
+              rawResponse: record.rawResponse,
+            })}
+          />
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                aria-label="Delete history record"
+                className="h-7 w-7 text-ink-400 hover:bg-red-50 hover:text-red-700"
+                disabled={disabled}
+                onClick={() => onDeleteHistoryEntry(record.id)}
+                size="icon"
+                variant="ghost"
+              >
+                <Trash2 aria-hidden="true" className="h-3.5 w-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Delete history record</TooltipContent>
+          </Tooltip>
+        </div>
       </div>
-    </Panel>
+    </article>
   );
 }
