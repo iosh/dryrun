@@ -6,6 +6,7 @@ edition = { workspace = true }
 [dependencies]
 alloy-primitives = { workspace = true }
 alloy-sol-types = { workspace = true }
+conflux-provider = { workspace = true }
 contract-standards = { workspace = true }
 jsonrpsee = { workspace = true, features = ["http-client"] }
 hex = "0.4"

@@ -2255,6 +2255,7 @@ dependencies = [
  "cfx-storage",
  "cfx-types",
  "cfx-vm-types",
+ "conflux-provider",
  "contract-standards",
  "hex",
  "jsonrpsee",
@@ -2270,6 +2271,19 @@ dependencies = [
  "tokio",
  "tracing",
  "typemap-ors",
+]
+
+[[package]]
+name = "conflux-provider"
+version = "0.1.0"
+dependencies = [
+ "alloy-json-rpc",
+ "alloy-primitives",
+ "alloy-rpc-client",
+ "alloy-transport",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -2953,9 +2967,12 @@ name = "dryrun"
 version = "0.1.0"
 dependencies = [
  "alloy",
+ "alloy-rpc-client",
  "axum",
+ "cfx-addr",
  "config",
  "conflux-engine",
+ "conflux-provider",
  "conflux-rpc",
  "conflux-service",
  "evm-engine",

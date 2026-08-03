@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "apps/dryrun",
     "crates/contract-standards",
+    "crates/conflux-provider",
     "crates/evm-engine",
     "crates/evm-rpc",
     "crates/evm-service",
@@ -21,6 +22,7 @@ edition = "2024"
 
 [workspace.dependencies]
 contract-standards = { path = "crates/contract-standards" }
+conflux-provider = { path = "crates/conflux-provider" }
 evm-engine = { path = "crates/evm-engine" }
 evm-rpc = { path = "crates/evm-rpc" }
 evm-service = { path = "crates/evm-service" }
@@ -39,6 +41,9 @@ futures = "0.3"
 tokio = "1"
 
 alloy = { version = "1", features = ["full"] }
+alloy-json-rpc = "1"
+alloy-rpc-client = { version = "1", default-features = false }
+alloy-transport = { version = "1", default-features = false }
 alloy-chains = "0.2"
 alloy-eips = "1"
 alloy-hardforks = "0.4"

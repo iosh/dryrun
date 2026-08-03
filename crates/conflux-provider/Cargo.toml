@@ -1,0 +1,13 @@
+[package]
+name = "conflux-provider"
+version = { workspace = true }
+edition = { workspace = true }
+
+[dependencies]
+alloy-json-rpc = { workspace = true }
+alloy-primitives = { workspace = true }
+alloy-rpc-client = { workspace = true }
+alloy-transport = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

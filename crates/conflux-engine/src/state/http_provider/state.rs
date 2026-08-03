@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
-use cfx_rpc_cfx_types::{EpochNumber, RpcAddress, epoch_number::BlockHashOrEpochNumber};
+use cfx_rpc_cfx_types::EpochNumber;
 use cfx_rpc_eth_types::BlockId;
-use cfx_rpc_primitives::Bytes as RpcBytes;
 use cfx_types::{Address, H256, U256};
+use conflux_provider::{BlockHashOrEpochNumber, CoreCallRequest};
 use jsonrpsee::{core::params::BatchRequestBuilder, rpc_params};
 use primitives::{DepositInfo, VoteStakeInfo};
-use serde::Serialize;
 
 use crate::state::{
     ConfluxRpcError,
@@ -87,71 +86,79 @@ impl HttpConfluxProvider {
         epoch: EpochNumber,
     ) -> Result<CoreSpaceGlobals, ConfluxRpcError> {
         const BATCH_NAME: &str = "Core Space globals";
-        const BATCH_LEN: usize = 7;
+        let epoch = Self::provider_epoch(epoch)?;
+        let mut batch = self.core_space_provider.batch();
+        let interest_rate = batch
+            .cfx_get_interest_rate(epoch)
+            .map_err(|error| Self::convert_provider_error("cfx_getInterestRate", error))?;
+        let accumulate_interest_rate =
+            batch
+                .cfx_get_accumulate_interest_rate(epoch)
+                .map_err(|error| {
+                    Self::convert_provider_error("cfx_getAccumulateInterestRate", error)
+                })?;
+        let supply = batch
+            .cfx_get_supply_info(epoch)
+            .map_err(|error| Self::convert_provider_error("cfx_getSupplyInfo", error))?;
+        let collateral = batch
+            .cfx_get_collateral_info(epoch)
+            .map_err(|error| Self::convert_provider_error("cfx_getCollateralInfo", error))?;
+        let pos_economics = batch
+            .cfx_get_pos_economics(epoch)
+            .map_err(|error| Self::convert_provider_error("cfx_getPoSEconomics", error))?;
+        let vote_params = batch
+            .cfx_get_params_from_vote(epoch)
+            .map_err(|error| Self::convert_provider_error("cfx_getParamsFromVote", error))?;
+        let fee_burnt = batch
+            .cfx_get_fee_burnt(epoch)
+            .map_err(|error| Self::convert_provider_error("cfx_getFeeBurnt", error))?;
+        Self::core_request(BATCH_NAME, batch.send()).await?;
 
-        let mut batch = BatchRequestBuilder::new();
-        Self::insert_batch_request(
-            &mut batch,
-            "cfx_getInterestRate",
-            rpc_params![epoch.clone()],
-        )?;
-        Self::insert_batch_request(
-            &mut batch,
-            "cfx_getAccumulateInterestRate",
-            rpc_params![epoch.clone()],
-        )?;
-        Self::insert_batch_request(&mut batch, "cfx_getSupplyInfo", rpc_params![epoch.clone()])?;
-        Self::insert_batch_request(
-            &mut batch,
-            "cfx_getCollateralInfo",
-            rpc_params![epoch.clone()],
-        )?;
-        Self::insert_batch_request(
-            &mut batch,
-            "cfx_getPoSEconomics",
-            rpc_params![epoch.clone()],
-        )?;
-        Self::insert_batch_request(
-            &mut batch,
-            "cfx_getParamsFromVote",
-            rpc_params![epoch.clone()],
-        )?;
-        Self::insert_batch_request(&mut batch, "cfx_getFeeBurnt", rpc_params![epoch])?;
-
-        let response = Self::rpc_batch_request(
-            &self.core_space_client,
-            "core_space",
-            BATCH_NAME,
-            BATCH_LEN,
-            batch,
-        )
-        .await?;
-        Self::validate_batch_len(BATCH_NAME, BATCH_LEN, response.len())?;
-        let mut entries = response.into_iter();
+        let supply = Self::core_request("cfx_getSupplyInfo", supply).await?;
+        let collateral = Self::core_request("cfx_getCollateralInfo", collateral).await?;
+        let pos_economics = Self::core_request("cfx_getPoSEconomics", pos_economics).await?;
+        let vote_params = Self::core_request("cfx_getParamsFromVote", vote_params).await?;
 
         Ok(CoreSpaceGlobals {
-            interest_rate: Self::decode_batch_result(&mut entries, "cfx_getInterestRate")?,
-            accumulate_interest_rate: Self::decode_batch_result(
-                &mut entries,
-                "cfx_getAccumulateInterestRate",
-            )?,
-            supply: Self::decode_batch_result::<CoreSpaceSupplyInfo>(
-                &mut entries,
-                "cfx_getSupplyInfo",
-            )?,
-            collateral: Self::decode_batch_result::<CoreSpaceStorageCollateralInfo>(
-                &mut entries,
-                "cfx_getCollateralInfo",
-            )?,
-            pos_economics: Self::decode_batch_result::<CoreSpacePoSEconomics>(
-                &mut entries,
-                "cfx_getPoSEconomics",
-            )?,
-            vote_params: Self::decode_batch_result::<CoreSpaceVoteParamsInfo>(
-                &mut entries,
-                "cfx_getParamsFromVote",
-            )?,
-            fee_burnt: Self::decode_batch_result(&mut entries, "cfx_getFeeBurnt")?,
+            interest_rate: crate::primitive::u256_to_cfx(
+                Self::core_request("cfx_getInterestRate", interest_rate).await?,
+            ),
+            accumulate_interest_rate: crate::primitive::u256_to_cfx(
+                Self::core_request("cfx_getAccumulateInterestRate", accumulate_interest_rate)
+                    .await?,
+            ),
+            supply: CoreSpaceSupplyInfo {
+                total_issued: crate::primitive::u256_to_cfx(supply.total_issued),
+                total_staking: crate::primitive::u256_to_cfx(supply.total_staking),
+                total_espace_tokens: crate::primitive::u256_to_cfx(supply.total_espace_tokens),
+                total_collateral: crate::primitive::u256_to_cfx(supply.total_collateral),
+            },
+            collateral: CoreSpaceStorageCollateralInfo {
+                converted_storage_points: crate::primitive::u256_to_cfx(
+                    collateral.converted_storage_points,
+                ),
+                used_storage_points: crate::primitive::u256_to_cfx(collateral.used_storage_points),
+            },
+            pos_economics: CoreSpacePoSEconomics {
+                total_pos_staking_tokens: crate::primitive::u256_to_cfx(
+                    pos_economics.total_pos_staking_tokens,
+                ),
+                distributable_pos_interest: crate::primitive::u256_to_cfx(
+                    pos_economics.distributable_pos_interest,
+                ),
+                last_distribute_block: cfx_types::U64::from(Self::alloy_u256_to_u64(
+                    pos_economics.last_distribute_block,
+                    "cfx_getPoSEconomics",
+                    "lastDistributeBlock",
+                )?),
+            },
+            vote_params: CoreSpaceVoteParamsInfo {
+                pow_base_reward: crate::primitive::u256_to_cfx(vote_params.pow_base_reward),
+                base_fee_share_prop: crate::primitive::u256_to_cfx(vote_params.base_fee_share_prop),
+            },
+            fee_burnt: crate::primitive::u256_to_cfx(
+                Self::core_request("cfx_getFeeBurnt", fee_burnt).await?,
+            ),
         })
     }
 
@@ -161,41 +168,34 @@ impl HttpConfluxProvider {
         epoch: EpochNumber,
     ) -> Result<CoreSpaceAccountState, ConfluxRpcError> {
         const BATCH_NAME: &str = "Core Space account state";
-        const BATCH_LEN: usize = 2;
-
-        let address = self.cfx_rpc_address(address)?;
-        let mut batch = BatchRequestBuilder::new();
-        Self::insert_batch_request(
-            &mut batch,
-            "cfx_getAccount",
-            rpc_params![address.clone(), epoch.clone()],
-        )?;
-        Self::insert_batch_request(
-            &mut batch,
-            "cfx_getCollateralForStorage",
-            rpc_params![address, epoch],
-        )?;
-
-        let response = Self::rpc_batch_request(
-            &self.core_space_client,
-            "core_space",
-            BATCH_NAME,
-            BATCH_LEN,
-            batch,
-        )
-        .await?;
-        Self::validate_batch_len(BATCH_NAME, BATCH_LEN, response.len())?;
-        let mut entries = response.into_iter();
+        let address = self.core_address(address)?;
+        let epoch = Self::provider_epoch(epoch)?;
+        let mut batch = self.core_space_provider.batch();
+        let account = batch
+            .cfx_get_account(address, epoch)
+            .map_err(|error| Self::convert_provider_error("cfx_getAccount", error))?;
+        let collateral = batch
+            .cfx_get_collateral_for_storage(address, epoch)
+            .map_err(|error| Self::convert_provider_error("cfx_getCollateralForStorage", error))?;
+        Self::core_request(BATCH_NAME, batch.send()).await?;
+        let account = Self::core_request("cfx_getAccount", account).await?;
+        let collateral = Self::core_request("cfx_getCollateralForStorage", collateral).await?;
 
         Ok(CoreSpaceAccountState {
-            account: Self::decode_batch_result::<CoreSpaceRpcAccount>(
-                &mut entries,
-                "cfx_getAccount",
-            )?,
-            token_collateral_for_storage: Self::decode_batch_result(
-                &mut entries,
-                "cfx_getCollateralForStorage",
-            )?,
+            account: CoreSpaceRpcAccount {
+                balance: crate::primitive::u256_to_cfx(account.balance),
+                nonce: crate::primitive::u256_to_cfx(account.nonce),
+                code_hash: cfx_types::H256::from_slice(account.code_hash.as_slice()),
+                staking_balance: crate::primitive::u256_to_cfx(account.staking_balance),
+                total_collateral_for_storage: crate::primitive::u256_to_cfx(
+                    account.collateral_for_storage,
+                ),
+                accumulated_interest_return: crate::primitive::u256_to_cfx(
+                    account.accumulated_interest_return,
+                ),
+                admin: self.provider_address_to_rpc(account.admin)?,
+            },
+            token_collateral_for_storage: crate::primitive::u256_to_cfx(collateral),
         })
     }
 
@@ -204,10 +204,22 @@ impl HttpConfluxProvider {
         address: Address,
         epoch: EpochNumber,
     ) -> Result<Vec<DepositInfo>, ConfluxRpcError> {
-        let address = self.cfx_rpc_address(address)?;
-
-        self.core_space_rpc_request("cfx_getDepositList", rpc_params![address, epoch])
-            .await
+        let values = Self::core_request(
+            "cfx_getDepositList",
+            self.core_space_provider
+                .cfx_get_deposit_list(self.core_address(address)?, Self::provider_epoch(epoch)?),
+        )
+        .await?;
+        Ok(values
+            .into_iter()
+            .map(|value| DepositInfo {
+                amount: crate::primitive::u256_to_cfx(value.amount),
+                deposit_time: crate::primitive::u256_to_cfx(value.deposit_time),
+                accumulated_interest_rate: crate::primitive::u256_to_cfx(
+                    value.accumulated_interest_rate,
+                ),
+            })
+            .collect())
     }
 
     pub(crate) async fn cfx_get_vote_list(
@@ -215,10 +227,19 @@ impl HttpConfluxProvider {
         address: Address,
         epoch: EpochNumber,
     ) -> Result<Vec<VoteStakeInfo>, ConfluxRpcError> {
-        let address = self.cfx_rpc_address(address)?;
-
-        self.core_space_rpc_request("cfx_getVoteList", rpc_params![address, epoch])
-            .await
+        let values = Self::core_request(
+            "cfx_getVoteList",
+            self.core_space_provider
+                .cfx_get_vote_list(self.core_address(address)?, Self::provider_epoch(epoch)?),
+        )
+        .await?;
+        Ok(values
+            .into_iter()
+            .map(|value| VoteStakeInfo {
+                amount: crate::primitive::u256_to_cfx(value.amount),
+                unlock_block_number: crate::primitive::u256_to_cfx(value.unlock_block_number),
+            })
+            .collect())
     }
 
     pub(crate) async fn cfx_get_sponsor_info(
@@ -226,10 +247,24 @@ impl HttpConfluxProvider {
         address: Address,
         epoch: EpochNumber,
     ) -> Result<CoreSpaceSponsorInfo, ConfluxRpcError> {
-        let address = self.cfx_rpc_address(address)?;
-
-        self.core_space_rpc_request("cfx_getSponsorInfo", rpc_params![address, epoch])
-            .await
+        let value = Self::core_request(
+            "cfx_getSponsorInfo",
+            self.core_space_provider
+                .cfx_get_sponsor_info(self.core_address(address)?, Self::provider_epoch(epoch)?),
+        )
+        .await?;
+        Ok(CoreSpaceSponsorInfo {
+            sponsor_for_gas: self.provider_address_to_rpc(value.sponsor_for_gas)?,
+            sponsor_for_collateral: self.provider_address_to_rpc(value.sponsor_for_collateral)?,
+            sponsor_gas_bound: crate::primitive::u256_to_cfx(value.sponsor_gas_bound),
+            sponsor_balance_for_gas: crate::primitive::u256_to_cfx(value.sponsor_balance_for_gas),
+            sponsor_balance_for_collateral: crate::primitive::u256_to_cfx(
+                value.sponsor_balance_for_collateral,
+            ),
+            available_storage_point_units: crate::primitive::u256_to_cfx(
+                value.available_storage_points,
+            ),
+        })
     }
 
     pub(crate) async fn cfx_get_code(
@@ -237,14 +272,15 @@ impl HttpConfluxProvider {
         address: Address,
         epoch: EpochNumber,
     ) -> Result<Vec<u8>, ConfluxRpcError> {
-        let address = self.cfx_rpc_address(address)?;
-        let epoch = BlockHashOrEpochNumber::EpochNumber(epoch);
-
-        let value: String = self
-            .core_space_rpc_request("cfx_getCode", rpc_params![address, epoch])
-            .await?;
-
-        decode_rpc_bytes(value, "cfx_getCode")
+        let value = Self::core_request(
+            "cfx_getCode",
+            self.core_space_provider.cfx_get_code(
+                self.core_address(address)?,
+                BlockHashOrEpochNumber::Epoch(Self::provider_epoch(epoch)?),
+            ),
+        )
+        .await?;
+        Ok(value.to_vec())
     }
 
     pub(crate) async fn cfx_get_storage_at(
@@ -253,13 +289,15 @@ impl HttpConfluxProvider {
         slot: H256,
         epoch: EpochNumber,
     ) -> Result<Option<U256>, ConfluxRpcError> {
-        let address = self.cfx_rpc_address(address)?;
-        let slot = U256::from_big_endian(slot.as_bytes());
-        let epoch = BlockHashOrEpochNumber::EpochNumber(epoch);
-
-        let value: Option<RpcBytes> = self
-            .core_space_rpc_request("cfx_getStorageAt", rpc_params![address, slot, epoch])
-            .await?;
+        let value = Self::core_request(
+            "cfx_getStorageAt",
+            self.core_space_provider.cfx_get_storage_at(
+                self.core_address(address)?,
+                crate::primitive::b256_from_cfx(slot),
+                BlockHashOrEpochNumber::Epoch(Self::provider_epoch(epoch)?),
+            ),
+        )
+        .await?;
         let Some(value) = value else {
             return Ok(None);
         };
@@ -284,25 +322,19 @@ impl HttpConfluxProvider {
         data: Vec<u8>,
         epoch: EpochNumber,
     ) -> Result<Vec<u8>, ConfluxRpcError> {
-        let to = self.cfx_rpc_address(to)?;
-        let epoch = BlockHashOrEpochNumber::EpochNumber(epoch);
-        let request = CoreSpaceCallRequest {
-            to,
-            data: data.into(),
-        };
-
-        let value: String = self
-            .core_space_rpc_request("cfx_call", rpc_params![request, epoch])
-            .await?;
-        decode_rpc_bytes(value, "cfx_call")
+        let value = Self::core_request(
+            "cfx_call",
+            self.core_space_provider.cfx_call(
+                CoreCallRequest {
+                    to: self.core_address(to)?,
+                    data: data.into(),
+                },
+                BlockHashOrEpochNumber::Epoch(Self::provider_epoch(epoch)?),
+            ),
+        )
+        .await?;
+        Ok(value.to_vec())
     }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CoreSpaceCallRequest {
-    to: RpcAddress,
-    data: RpcBytes,
 }
 
 fn decode_rpc_bytes(value: String, field: &'static str) -> Result<Vec<u8>, ConfluxRpcError> {

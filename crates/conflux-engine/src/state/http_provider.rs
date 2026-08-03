@@ -1,8 +1,12 @@
-use std::time::Instant;
+use std::{future::Future, sync::Arc, time::Instant};
 
 use cfx_addr::Network;
 use cfx_rpc_cfx_types::RpcAddress;
 use cfx_types::Address;
+use conflux_provider::{
+    ConfluxProvider, ConfluxProviderError, CoreAddress, EpochNumber as ProviderEpochNumber,
+    Network as ProviderNetwork,
+};
 use jsonrpsee::{
     core::{
         client::{BatchEntry, BatchResponse, ClientT},
@@ -24,13 +28,13 @@ pub use transaction::CoreSpaceResourceEstimate;
 pub struct HttpConfluxProvider {
     core_space_address_network: Network,
     espace_client: HttpClient,
-    core_space_client: HttpClient,
+    pub(crate) core_space_provider: Arc<ConfluxProvider>,
 }
 
 impl HttpConfluxProvider {
     pub fn new(
         espace_url: &str,
-        core_space_url: &str,
+        core_space_provider: Arc<ConfluxProvider>,
         core_space_address_network: Network,
     ) -> Result<Self, ConfluxRpcError> {
         let espace_client = HttpClientBuilder::default()
@@ -40,27 +44,89 @@ impl HttpConfluxProvider {
                 reason: format!("invalid rpc url or http client config: {error}"),
             })?;
 
-        let core_space_client =
-            HttpClientBuilder::default()
-                .build(core_space_url)
-                .map_err(|error| ConfluxRpcError {
-                    operation: "create Core Space RPC client",
-                    reason: format!("invalid rpc url or http client config: {error}"),
-                })?;
-
         Ok(Self {
             core_space_address_network,
             espace_client,
-            core_space_client,
+            core_space_provider,
         })
     }
 
-    fn cfx_rpc_address(&self, address: Address) -> Result<RpcAddress, ConfluxRpcError> {
-        RpcAddress::try_from_h160(address, self.core_space_address_network).map_err(|reason| {
-            ConfluxRpcError {
-                operation: "encode Core Space RPC address",
-                reason,
+    pub(crate) fn core_address(&self, address: Address) -> Result<CoreAddress, ConfluxRpcError> {
+        let mut bytes = [0_u8; 20];
+        bytes.copy_from_slice(address.as_bytes());
+        CoreAddress::from_bytes(bytes, self.provider_network()).map_err(|error| ConfluxRpcError {
+            operation: "encode Core Space RPC address",
+            reason: error.to_string(),
+        })
+    }
+
+    pub(crate) fn provider_network(&self) -> ProviderNetwork {
+        match self.core_space_address_network {
+            Network::Main => ProviderNetwork::Main,
+            Network::Test => ProviderNetwork::Test,
+            Network::Id(id) => ProviderNetwork::Id(id),
+        }
+    }
+
+    pub(crate) fn provider_epoch(
+        epoch: cfx_rpc_cfx_types::EpochNumber,
+    ) -> Result<ProviderEpochNumber, ConfluxRpcError> {
+        match epoch {
+            cfx_rpc_cfx_types::EpochNumber::Num(number) => {
+                Ok(ProviderEpochNumber::Number(number.as_u64()))
             }
+            cfx_rpc_cfx_types::EpochNumber::LatestState => Ok(ProviderEpochNumber::LatestState),
+            unsupported => Err(ConfluxRpcError {
+                operation: "convert Core Space epoch selector",
+                reason: format!("unsupported epoch selector: {unsupported:?}"),
+            }),
+        }
+    }
+
+    pub(crate) fn provider_address_to_rpc(
+        &self,
+        address: CoreAddress,
+    ) -> Result<RpcAddress, ConfluxRpcError> {
+        RpcAddress::try_from_h160(
+            Address::from_slice(&address.bytes()),
+            self.core_space_address_network,
+        )
+        .map_err(|reason| ConfluxRpcError {
+            operation: "decode Core Space RPC address",
+            reason,
+        })
+    }
+
+    pub(crate) fn convert_provider_error(
+        method: &'static str,
+        error: ConfluxProviderError,
+    ) -> ConfluxRpcError {
+        ConfluxRpcError {
+            operation: method,
+            reason: error.to_string(),
+        }
+    }
+
+    pub(crate) async fn core_request<Response, Request>(
+        method: &'static str,
+        request: Request,
+    ) -> Result<Response, ConfluxRpcError>
+    where
+        Request: Future<Output = Result<Response, ConfluxProviderError>>,
+    {
+        request
+            .await
+            .map_err(|error| Self::convert_provider_error(method, error))
+    }
+
+    pub(crate) fn alloy_u256_to_u64(
+        value: alloy_primitives::U256,
+        operation: &'static str,
+        field: &'static str,
+    ) -> Result<u64, ConfluxRpcError> {
+        u64::try_from(value).map_err(|_| ConfluxRpcError {
+            operation,
+            reason: format!("response field {field} exceeds u64"),
         })
     }
 
@@ -74,18 +140,6 @@ impl HttpConfluxProvider {
         Params: ToRpcParams + Send,
     {
         Self::rpc_request(&self.espace_client, "espace", method, params).await
-    }
-
-    async fn core_space_rpc_request<R, Params>(
-        &self,
-        method: &'static str,
-        params: Params,
-    ) -> Result<R, ConfluxRpcError>
-    where
-        R: DeserializeOwned + Send,
-        Params: ToRpcParams + Send,
-    {
-        Self::rpc_request(&self.core_space_client, "core_space", method, params).await
     }
 
     async fn rpc_request<R, Params>(
@@ -200,4 +254,27 @@ impl HttpConfluxProvider {
 pub struct ConfluxRpcError {
     pub(crate) operation: &'static str,
     pub(crate) reason: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::U256;
+
+    use super::HttpConfluxProvider;
+
+    #[test]
+    fn alloy_u256_to_u64_rejects_overflow() {
+        assert_eq!(
+            HttpConfluxProvider::alloy_u256_to_u64(U256::from(u64::MAX), "test", "value",).unwrap(),
+            u64::MAX
+        );
+        assert!(
+            HttpConfluxProvider::alloy_u256_to_u64(
+                U256::from_limbs([u64::MAX, 1, 0, 0]),
+                "test",
+                "value",
+            )
+            .is_err()
+        );
+    }
 }

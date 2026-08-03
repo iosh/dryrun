@@ -1,13 +1,18 @@
 use alloy_primitives::{Address as AlloyAddress, Bytes as AlloyBytes, U256 as AlloyU256};
-use cfx_rpc_cfx_types::{EpochNumber, RpcAddress, epoch_number::BlockHashOrEpochNumber};
+use cfx_rpc_cfx_types::EpochNumber;
 use cfx_rpc_eth_types::BlockId;
 use cfx_rpc_primitives::Bytes as RpcBytes;
-use cfx_types::{Address, H256, U64, U256};
+use cfx_types::{Address, U64, U256};
+use conflux_provider::{
+    BalanceCheckRequest, CoreAccessListItem, CoreTransactionType, EstimateGasAndCollateralRequest,
+};
 use jsonrpsee::rpc_params;
 use serde::{Deserialize, Serialize};
 use simulation_transaction::{AccessListItem, TransactionVariant};
 
-use crate::primitive::{access_list_ref_to_cfx, address_to_cfx, b256_to_cfx, u256_to_cfx};
+use crate::primitive::{
+    access_list_ref_to_cfx, address_to_cfx, alloy_u256_from_u64, alloy_u256_from_u128, u256_to_cfx,
+};
 
 use super::{ConfluxRpcError, HttpConfluxProvider};
 
@@ -73,21 +78,31 @@ impl HttpConfluxProvider {
         address: AlloyAddress,
         epoch: EpochNumber,
     ) -> Result<U256, ConfluxRpcError> {
-        let address = self.cfx_rpc_address(address_to_cfx(address))?;
-        let epoch = BlockHashOrEpochNumber::EpochNumber(epoch);
-
-        self.core_space_rpc_request("cfx_getNextNonce", rpc_params![address, epoch])
-            .await
+        let address = self.core_address(address_to_cfx(address))?;
+        let selector =
+            conflux_provider::BlockHashOrEpochNumber::Epoch(Self::provider_epoch(epoch)?);
+        let value = Self::core_request(
+            "cfx_getNextNonce",
+            self.core_space_provider
+                .cfx_get_next_nonce(address, selector),
+        )
+        .await?;
+        Ok(crate::primitive::u256_to_cfx(value))
     }
 
     pub async fn cfx_gas_price(&self) -> Result<U256, ConfluxRpcError> {
-        self.core_space_rpc_request("cfx_gasPrice", rpc_params![])
-            .await
+        let value =
+            Self::core_request("cfx_gasPrice", self.core_space_provider.cfx_gas_price()).await?;
+        Ok(crate::primitive::u256_to_cfx(value))
     }
 
     pub async fn cfx_max_priority_fee_per_gas(&self) -> Result<U256, ConfluxRpcError> {
-        self.core_space_rpc_request("cfx_maxPriorityFeePerGas", rpc_params![])
-            .await
+        let value = Self::core_request(
+            "cfx_maxPriorityFeePerGas",
+            self.core_space_provider.cfx_max_priority_fee_per_gas(),
+        )
+        .await?;
+        Ok(crate::primitive::u256_to_cfx(value))
     }
 
     pub async fn cfx_estimate_gas_and_collateral(
@@ -118,13 +133,20 @@ impl HttpConfluxProvider {
             gas_limit,
             storage_limit,
         )?;
-        let estimate: CoreEstimateRpcResponse = self
-            .core_space_rpc_request("cfx_estimateGasAndCollateral", rpc_params![request, epoch])
-            .await?;
+        let estimate = Self::core_request(
+            "cfx_estimateGasAndCollateral",
+            self.core_space_provider
+                .cfx_estimate_gas_and_collateral(request, Self::provider_epoch(epoch)?),
+        )
+        .await?;
 
         Ok(CoreSpaceResourceEstimate {
-            gas_limit: estimate.gas_limit,
-            storage_limit: estimate.storage_collateralized.as_u64(),
+            gas_limit: crate::primitive::u256_to_cfx(estimate.gas_limit),
+            storage_limit: Self::alloy_u256_to_u64(
+                estimate.storage_collateralized,
+                "cfx_estimateGasAndCollateral",
+                "storageCollateralized",
+            )?,
         })
     }
 
@@ -137,21 +159,22 @@ impl HttpConfluxProvider {
         storage_limit: u64,
         epoch: EpochNumber,
     ) -> Result<CoreSpaceBalanceCheck, ConfluxRpcError> {
-        let account = self.cfx_rpc_address(account)?;
-        let contract = self.cfx_rpc_address(contract)?;
-
-        self.core_space_rpc_request(
+        let request = BalanceCheckRequest {
+            account: self.core_address(account)?,
+            contract: self.core_address(contract)?,
+            gas_limit: alloy_u256_from_u64(gas_limit),
+            gas_price: alloy_u256_from_u128(gas_price),
+            storage_limit: alloy_u256_from_u64(storage_limit),
+        };
+        let result = Self::core_request(
             "cfx_checkBalanceAgainstTransaction",
-            rpc_params![
-                account,
-                contract,
-                U256::from(gas_limit),
-                U256::from(gas_price),
-                U256::from(storage_limit),
-                Some(epoch)
-            ],
+            self.core_space_provider
+                .cfx_check_balance_against_transaction(request, Self::provider_epoch(epoch)?),
         )
-        .await
+        .await?;
+        Ok(CoreSpaceBalanceCheck {
+            will_pay_collateral: result.will_pay_collateral,
+        })
     }
 }
 
@@ -254,77 +277,63 @@ impl HttpConfluxProvider {
         epoch_height: u64,
         gas_limit: Option<u64>,
         storage_limit: Option<u64>,
-    ) -> Result<EstimateRpcRequest<RpcAddress, CoreEstimateRpcAccessListItem>, ConfluxRpcError>
-    {
-        let cfx_access_list = |items: &[AccessListItem]| {
+    ) -> Result<EstimateGasAndCollateralRequest, ConfluxRpcError> {
+        let core_access_list = |items: &[AccessListItem]| {
             items
                 .iter()
                 .map(|item| {
-                    Ok(CoreEstimateRpcAccessListItem {
-                        address: self.cfx_rpc_address(address_to_cfx(item.address))?,
-                        storage_keys: item.storage_keys.iter().copied().map(b256_to_cfx).collect(),
+                    Ok(CoreAccessListItem {
+                        address: self.core_address(address_to_cfx(item.address))?,
+                        storage_keys: item.storage_keys.clone(),
                     })
                 })
                 .collect::<Result<Vec<_>, ConfluxRpcError>>()
         };
-        let mut request = EstimateRpcRequest {
-            from: self.cfx_rpc_address(address_to_cfx(transaction.from))?,
+        let mut request = EstimateGasAndCollateralRequest {
+            from: self.core_address(address_to_cfx(transaction.from))?,
             to: transaction
                 .to
-                .map(|address| self.cfx_rpc_address(address_to_cfx(address)))
+                .map(|address| self.core_address(address_to_cfx(address)))
                 .transpose()?,
             gas_price: None,
             max_fee_per_gas: None,
             max_priority_fee_per_gas: None,
-            gas: gas_limit.map(U256::from),
-            value: u256_to_cfx(transaction.value),
-            data: RpcBytes::new(transaction.data.to_vec()),
-            nonce: transaction.nonce.into(),
-            storage_limit: storage_limit.map(U64::from),
+            gas: gas_limit.map(alloy_u256_from_u64),
+            value: transaction.value,
+            data: transaction.data.clone(),
+            nonce: alloy_u256_from_u64(transaction.nonce),
+            storage_limit: storage_limit.map(alloy_u256_from_u64),
             access_list: None,
-            transaction_type: 0.into(),
-            chain_id: transaction.chain_id.into(),
-            epoch_height: Some(epoch_height.into()),
+            transaction_type: CoreTransactionType::Legacy,
+            chain_id: alloy_u256_from_u64(transaction.chain_id),
+            epoch_height: Some(alloy_u256_from_u64(epoch_height)),
         };
 
         match transaction.variant {
             TransactionVariant::Legacy { gas_price } => {
-                request.gas_price = Some((*gas_price).into());
+                request.gas_price = Some(alloy_u256_from_u128(*gas_price));
             }
             TransactionVariant::AccessList {
                 gas_price,
                 access_list,
             } => {
-                request.gas_price = Some((*gas_price).into());
-                request.access_list = Some(cfx_access_list(access_list)?);
-                request.transaction_type = 1.into();
+                request.gas_price = Some(alloy_u256_from_u128(*gas_price));
+                request.access_list = Some(core_access_list(access_list)?);
+                request.transaction_type = CoreTransactionType::AccessList;
             }
             TransactionVariant::DynamicFee {
                 max_fee_per_gas,
                 max_priority_fee_per_gas,
                 access_list,
             } => {
-                request.max_fee_per_gas = Some((*max_fee_per_gas).into());
-                request.max_priority_fee_per_gas = Some((*max_priority_fee_per_gas).into());
-                request.access_list = Some(cfx_access_list(access_list)?);
-                request.transaction_type = 2.into();
+                request.max_fee_per_gas = Some(alloy_u256_from_u128(*max_fee_per_gas));
+                request.max_priority_fee_per_gas =
+                    Some(alloy_u256_from_u128(*max_priority_fee_per_gas));
+                request.access_list = Some(core_access_list(access_list)?);
+                request.transaction_type = CoreTransactionType::DynamicFee;
             }
         }
 
         Ok(request)
     }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CoreEstimateRpcAccessListItem {
-    address: RpcAddress,
-    storage_keys: Vec<H256>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CoreEstimateRpcResponse {
-    gas_limit: U256,
-    storage_collateralized: U64,
 }
