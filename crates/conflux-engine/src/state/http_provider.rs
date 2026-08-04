@@ -84,17 +84,19 @@ impl HttpConfluxProvider {
     }
 
     pub(crate) fn provider_address_to_rpc(
-        &self,
         address: CoreAddress,
     ) -> Result<RpcAddress, ConfluxRpcError> {
-        RpcAddress::try_from_h160(
-            Address::from_slice(&address.bytes()),
-            self.core_space_address_network,
+        let network = match address.network() {
+            ProviderNetwork::Main => Network::Main,
+            ProviderNetwork::Test => Network::Test,
+            ProviderNetwork::Id(id) => Network::Id(id),
+        };
+        RpcAddress::try_from_h160(Address::from_slice(&address.bytes()), network).map_err(
+            |reason| ConfluxRpcError {
+                operation: "decode Core Space RPC address",
+                reason,
+            },
         )
-        .map_err(|reason| ConfluxRpcError {
-            operation: "decode Core Space RPC address",
-            reason,
-        })
     }
 
     pub(crate) fn convert_provider_error(
@@ -259,6 +261,7 @@ pub struct ConfluxRpcError {
 #[cfg(test)]
 mod tests {
     use alloy_primitives::U256;
+    use conflux_provider::CoreAddress;
 
     use super::HttpConfluxProvider;
 
@@ -276,5 +279,15 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn provider_address_to_rpc_preserves_network() {
+        let address =
+            CoreAddress::parse("cfxtest:aarc9abycue0hhzgyrr53m6cxedgccrmmy8m50bu1p").unwrap();
+
+        let rpc_address = HttpConfluxProvider::provider_address_to_rpc(address).unwrap();
+
+        assert_eq!(rpc_address.network, cfx_addr::Network::Test);
     }
 }

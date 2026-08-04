@@ -334,21 +334,21 @@ fn polymod(values: &[u8]) -> u64 {
     let mut checksum = 1_u64;
     for value in values {
         let top = checksum >> 35;
-        checksum = ((checksum & 0x07ff_ffff_ff) << 5) ^ u64::from(*value);
+        checksum = ((checksum & 0x0007_ffff_ffff) << 5) ^ u64::from(*value);
         if top & 0x01 != 0 {
-            checksum ^= 0x98f2_bc8e_61;
+            checksum ^= 0x0098_f2bc_8e61;
         }
         if top & 0x02 != 0 {
-            checksum ^= 0x79b7_6d99_e2;
+            checksum ^= 0x0079_b76d_99e2;
         }
         if top & 0x04 != 0 {
-            checksum ^= 0xf33e_5fb3_c4;
+            checksum ^= 0x00f3_3e5f_b3c4;
         }
         if top & 0x08 != 0 {
-            checksum ^= 0xae2e_abe2_a8;
+            checksum ^= 0x00ae_2eab_e2a8;
         }
         if top & 0x10 != 0 {
-            checksum ^= 0x1e4f_43e4_70;
+            checksum ^= 0x001e_4f43_e470;
         }
     }
     checksum ^ 1

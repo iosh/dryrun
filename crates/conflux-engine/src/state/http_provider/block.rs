@@ -18,7 +18,7 @@ impl HttpConfluxProvider {
         let block = Self::core_request(
             "cfx_getBlockByEpochNumber",
             self.core_space_provider
-                .cfx_get_block_by_epoch_number(Self::provider_epoch(epoch_number)?),
+                .cfx_get_block_by_epoch_number(Self::provider_epoch(epoch_number)?, false),
         )
         .await?;
         block
@@ -72,12 +72,12 @@ impl HttpConfluxProvider {
 
     fn convert_core_block(
         &self,
-        block: conflux_provider::CoreBlock,
+        block: conflux_provider::CoreRpcBlock,
     ) -> Result<CoreSpaceRpcBlock, ConfluxRpcError> {
         Ok(CoreSpaceRpcBlock {
             hash: cfx_types::H256::from_slice(block.hash.as_slice()),
             height: crate::primitive::u256_to_cfx(block.height),
-            miner: self.provider_address_to_rpc(block.miner)?,
+            miner: Self::provider_address_to_rpc(block.miner)?,
             block_number: block.block_number.map(crate::primitive::u256_to_cfx),
             base_fee_per_gas: block.base_fee_per_gas.map(crate::primitive::u256_to_cfx),
             timestamp: crate::primitive::u256_to_cfx(block.timestamp),

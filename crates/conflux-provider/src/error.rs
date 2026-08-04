@@ -2,7 +2,7 @@ use alloy_json_rpc::RpcError;
 use alloy_transport::{TransportError, TransportErrorKind};
 use thiserror::Error;
 
-use crate::{AddressError, Network};
+use crate::AddressError;
 
 #[derive(Debug, Error)]
 pub enum ConfluxProviderError {
@@ -35,12 +35,6 @@ pub enum ConfluxProviderError {
         method: &'static str,
         #[source]
         source: AddressError,
-    },
-    #[error("Core address network mismatch for {method}: expected {expected}, got {actual}")]
-    NetworkMismatch {
-        method: &'static str,
-        expected: Network,
-        actual: Network,
     },
     #[error("typed batch protocol error for {batch} method {method}: {detail}")]
     BatchProtocol {

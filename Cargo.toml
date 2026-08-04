@@ -37,7 +37,6 @@ simulation-tasks = { path = "crates/simulation-tasks" }
 jsonrpsee = "0.26"
 thiserror = "2"
 
-futures = "0.3"
 tokio = "1"
 
 alloy = { version = "1", features = ["full"] }

@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
+use alloy_primitives::U256 as AlloyU256;
 use cfx_rpc_cfx_types::EpochNumber;
 use cfx_rpc_eth_types::BlockId;
 use cfx_types::{Address, H256, U256};
-use conflux_provider::{BlockHashOrEpochNumber, CoreCallRequest};
+use conflux_provider::{BlockHashOrEpochNumber, CoreTransactionRequest};
 use jsonrpsee::{core::params::BatchRequestBuilder, rpc_params};
 use primitives::{DepositInfo, VoteStakeInfo};
 
@@ -193,7 +194,7 @@ impl HttpConfluxProvider {
                 accumulated_interest_return: crate::primitive::u256_to_cfx(
                     account.accumulated_interest_return,
                 ),
-                admin: self.provider_address_to_rpc(account.admin)?,
+                admin: Self::provider_address_to_rpc(account.admin)?,
             },
             token_collateral_for_storage: crate::primitive::u256_to_cfx(collateral),
         })
@@ -254,8 +255,8 @@ impl HttpConfluxProvider {
         )
         .await?;
         Ok(CoreSpaceSponsorInfo {
-            sponsor_for_gas: self.provider_address_to_rpc(value.sponsor_for_gas)?,
-            sponsor_for_collateral: self.provider_address_to_rpc(value.sponsor_for_collateral)?,
+            sponsor_for_gas: Self::provider_address_to_rpc(value.sponsor_for_gas)?,
+            sponsor_for_collateral: Self::provider_address_to_rpc(value.sponsor_for_collateral)?,
             sponsor_gas_bound: crate::primitive::u256_to_cfx(value.sponsor_gas_bound),
             sponsor_balance_for_gas: crate::primitive::u256_to_cfx(value.sponsor_balance_for_gas),
             sponsor_balance_for_collateral: crate::primitive::u256_to_cfx(
@@ -293,27 +294,12 @@ impl HttpConfluxProvider {
             "cfx_getStorageAt",
             self.core_space_provider.cfx_get_storage_at(
                 self.core_address(address)?,
-                crate::primitive::b256_from_cfx(slot),
-                BlockHashOrEpochNumber::Epoch(Self::provider_epoch(epoch)?),
+                AlloyU256::from_be_slice(slot.as_bytes()),
+                Some(BlockHashOrEpochNumber::Epoch(Self::provider_epoch(epoch)?)),
             ),
         )
         .await?;
-        let Some(value) = value else {
-            return Ok(None);
-        };
-
-        if value.is_empty() {
-            return Ok(None);
-        }
-
-        if value.len() != 32 {
-            return Err(ConfluxRpcError {
-                operation: "cfx_getStorageAt",
-                reason: format!("expected 32 bytes, got {}", value.len()),
-            });
-        }
-
-        Ok(Some(U256::from_big_endian(value.as_ref())))
+        Ok(value.map(|value| U256::from_big_endian(value.as_slice())))
     }
 
     pub(crate) async fn cfx_call(
@@ -325,11 +311,23 @@ impl HttpConfluxProvider {
         let value = Self::core_request(
             "cfx_call",
             self.core_space_provider.cfx_call(
-                CoreCallRequest {
-                    to: self.core_address(to)?,
-                    data: data.into(),
+                CoreTransactionRequest {
+                    from: None,
+                    to: Some(self.core_address(to)?),
+                    gas_price: None,
+                    gas: None,
+                    value: None,
+                    data: Some(data.into()),
+                    nonce: None,
+                    storage_limit: None,
+                    access_list: None,
+                    max_fee_per_gas: None,
+                    max_priority_fee_per_gas: None,
+                    transaction_type: None,
+                    chain_id: None,
+                    epoch_height: None,
                 },
-                BlockHashOrEpochNumber::Epoch(Self::provider_epoch(epoch)?),
+                Some(BlockHashOrEpochNumber::Epoch(Self::provider_epoch(epoch)?)),
             ),
         )
         .await?;

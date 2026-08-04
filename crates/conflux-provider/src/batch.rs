@@ -94,11 +94,10 @@ impl<'a> CoreBatch<'a> {
         address: CoreAddress,
         epoch: EpochNumber,
     ) -> Result<BatchCall<CoreAccount>, ConfluxProviderError> {
-        let address = self.provider.check_address("cfx_getAccount", address)?;
         let waiter = self.add_waiter("cfx_getAccount", (address, epoch))?;
         let provider = self.provider.clone();
         Ok(self.decode(waiter, "cfx_getAccount", move |wire| {
-            provider.decode_account("cfx_getAccount", address, wire)
+            provider.decode_account("cfx_getAccount", wire)
         }))
     }
 
@@ -107,9 +106,6 @@ impl<'a> CoreBatch<'a> {
         address: CoreAddress,
         epoch: EpochNumber,
     ) -> Result<BatchCall<U256>, ConfluxProviderError> {
-        let address = self
-            .provider
-            .check_address("cfx_getCollateralForStorage", address)?;
         self.add("cfx_getCollateralForStorage", (address, epoch))
     }
 

@@ -3,7 +3,7 @@ use std::{io, sync::Arc};
 use alloy::providers::RootProvider;
 use alloy_rpc_client::RpcClient;
 use conflux_engine::{ConfluxEngine, HttpConfluxProvider, config::ConfluxChainConfig};
-use conflux_provider::{ConfluxProvider, Network as ProviderNetwork};
+use conflux_provider::ConfluxProvider;
 use conflux_rpc::build_rpc_module as build_conflux_rpc_module;
 use conflux_service::ConfluxService;
 use evm_engine::EvmEngine;
@@ -121,22 +121,12 @@ fn create_conflux_provider(
     config: &ConfluxConfig,
     chain: &ConfluxChainConfig,
 ) -> io::Result<HttpConfluxProvider> {
-    let core_space_network = match chain.core_space_address_network {
-        cfx_addr::Network::Main => ProviderNetwork::Main,
-        cfx_addr::Network::Test => ProviderNetwork::Test,
-        cfx_addr::Network::Id(id) => ProviderNetwork::Id(id),
-    };
-    let core_space_provider = Arc::new(
-        ConfluxProvider::new(
-            RpcClient::new_http(config.core_space_rpc_url.parse().map_err(|error| {
-                configuration_error(format!("invalid Core Space RPC URL: {error}"))
-            })?),
-            core_space_network,
-        )
-        .map_err(|error| {
-            configuration_error(format!("failed to create Core Space provider: {error}"))
-        })?,
-    );
+    let core_space_provider = Arc::new(ConfluxProvider::new(RpcClient::new_http(
+        config
+            .core_space_rpc_url
+            .parse()
+            .map_err(|error| configuration_error(format!("invalid Core Space RPC URL: {error}")))?,
+    )));
     HttpConfluxProvider::new(
         &config.espace_rpc_url,
         core_space_provider,
