@@ -20,19 +20,19 @@ impl TryFrom<rpc::EvmSimulateTransactionRequest> for evm_service::SimulateEvmTra
             block: block
                 .map(map_block_ref)
                 .transpose()?
-                .unwrap_or(evm_service::BlockSelector::Latest),
+                .unwrap_or(evm_service::EvmBlockSelector::Latest),
             transaction: map_transaction(transaction)?,
         })
     }
 }
 
-fn map_block_ref(block: rpc::BlockRef) -> Result<evm_service::BlockSelector, ValidationError> {
+fn map_block_ref(block: rpc::BlockRef) -> Result<evm_service::EvmBlockSelector, ValidationError> {
     match block {
         rpc::BlockRef::Tag(value) => match value.as_str() {
-            "latest" => Ok(evm_service::BlockSelector::Latest),
-            "safe" => Ok(evm_service::BlockSelector::Safe),
-            "finalized" => Ok(evm_service::BlockSelector::Finalized),
-            value => Ok(evm_service::BlockSelector::Number(parse_u64_param(
+            "latest" => Ok(evm_service::EvmBlockSelector::Latest),
+            "safe" => Ok(evm_service::EvmBlockSelector::Safe),
+            "finalized" => Ok(evm_service::EvmBlockSelector::Finalized),
+            value => Ok(evm_service::EvmBlockSelector::Number(parse_u64_param(
                 value, "block",
             )?)),
         },
@@ -116,7 +116,7 @@ mod tests {
 
         let input: evm_service::SimulateEvmTransactionInput =
             request.try_into().expect("request should map");
-        assert!(matches!(input.block, evm_service::BlockSelector::Latest));
+        assert!(matches!(input.block, evm_service::EvmBlockSelector::Latest));
         assert_eq!(
             input.transaction.variant.transaction_type(),
             simulation_transaction::TransactionType::Legacy
@@ -140,15 +140,15 @@ mod tests {
 
         assert!(matches!(
             input.block,
-            evm_service::BlockSelector::Number(0x1234)
+            evm_service::EvmBlockSelector::Number(0x1234)
         ));
     }
 
     #[test]
     fn safe_and_finalized_block_tags_map_into_service_input() {
         for (tag, expected_selector) in [
-            ("safe", evm_service::BlockSelector::Safe),
-            ("finalized", evm_service::BlockSelector::Finalized),
+            ("safe", evm_service::EvmBlockSelector::Safe),
+            ("finalized", evm_service::EvmBlockSelector::Finalized),
         ] {
             let request = rpc::EvmSimulateTransactionRequest {
                 block: Some(rpc::BlockRef::Tag(tag.to_string())),

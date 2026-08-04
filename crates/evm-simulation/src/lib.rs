@@ -1,25 +1,140 @@
 use alloy::{
+    consensus::{BlockHeader, Header, Sealed},
     eips::{BlockId, BlockNumberOrTag},
-    primitives::{Address, Bytes, TxKind, U256},
-    providers::{Provider, RootProvider},
+    primitives::{Address, B256, Bytes, TxKind, U256},
+    providers::{Provider, RootProvider, layers::BlockIdProvider},
     rpc::types::{
         AccessList as RpcAccessList, TransactionInput, TransactionRequest as RpcTransactionRequest,
     },
 };
-use evm_engine::{EvmTransaction, EvmTransactionVariant, ResolvedBlock};
-pub use simulation_transaction::TransactionRequest as EvmTransactionRequest;
 use simulation_transaction::{
-    AccessListItem, Transaction, TransactionVariant, TransactionVariantRequest,
+    AccessListItem, Transaction, TransactionRequest, TransactionVariant, TransactionVariantRequest,
+};
+use thiserror::Error;
+
+mod execution;
+
+pub use execution::{
+    EvmBlockAnchor, EvmExecutionError, EvmExecutionFacts, EvmFeeSettlement, EvmStateSource,
+    EvmTransactionExecutor, MainnetEvm, MainnetEvmDatabase,
 };
 
-use crate::SimulationServiceError;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvmBlockSelector {
+    Latest,
+    Safe,
+    Finalized,
+    Number(u64),
+}
 
-pub(crate) async fn complete_transaction(
-    request: EvmTransactionRequest,
+impl EvmBlockSelector {
+    fn block_number_or_tag(self) -> BlockNumberOrTag {
+        match self {
+            Self::Latest => BlockNumberOrTag::Latest,
+            Self::Safe => BlockNumberOrTag::Safe,
+            Self::Finalized => BlockNumberOrTag::Finalized,
+            Self::Number(number) => BlockNumberOrTag::Number(number),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum EvmPreparationError {
+    #[error("block resolution failed: {details}")]
+    BlockResolution { details: String },
+
+    #[error("transaction completion failed: {details}")]
+    TransactionCompletion { details: String },
+}
+
+impl EvmPreparationError {
+    fn block_resolution(details: impl Into<String>) -> Self {
+        Self::BlockResolution {
+            details: details.into(),
+        }
+    }
+
+    fn transaction_completion(details: impl Into<String>) -> Self {
+        Self::TransactionCompletion {
+            details: details.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EvmSimulationPreparer {
+    provider: RootProvider,
+}
+
+impl EvmSimulationPreparer {
+    pub fn new(provider: RootProvider) -> Self {
+        Self { provider }
+    }
+
+    pub async fn prepare_transaction(
+        &self,
+        block: EvmBlockSelector,
+        transaction: TransactionRequest,
+    ) -> Result<PreparedEvmInput, EvmPreparationError> {
+        let block = resolve_block(&self.provider, block).await?;
+        let transaction = complete_transaction(transaction, &self.provider, &block).await?;
+
+        Ok(PreparedEvmInput { block, transaction })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PreparedEvmInput {
+    block: Sealed<Header>,
+    transaction: Transaction,
+}
+
+impl PreparedEvmInput {
+    pub fn into_parts(self) -> (Sealed<Header>, Transaction) {
+        (self.block, self.transaction)
+    }
+}
+
+async fn resolve_block(
     provider: &RootProvider,
-    block: &ResolvedBlock,
-) -> Result<EvmTransaction, SimulationServiceError> {
-    let EvmTransactionRequest {
+    selector: EvmBlockSelector,
+) -> Result<Sealed<Header>, EvmPreparationError> {
+    let block = provider
+        .get_block_by_number(selector.block_number_or_tag())
+        .await
+        .map_err(|_| {
+            EvmPreparationError::block_resolution("provider request failed while resolving block")
+        })?
+        .ok_or_else(|| {
+            EvmPreparationError::block_resolution("provider did not return the requested block")
+        })?;
+
+    let provider_hash = block.hash();
+    let header = block.into_consensus_header();
+    seal_and_validate_block(header, provider_hash)
+}
+
+fn seal_and_validate_block(
+    header: Header,
+    provider_hash: B256,
+) -> Result<Sealed<Header>, EvmPreparationError> {
+    let sealed_header = Sealed::new(header);
+
+    if sealed_header.hash() != provider_hash {
+        return Err(EvmPreparationError::block_resolution(
+            "provider block hash did not match the recomputed header hash",
+        ));
+    }
+
+    Ok(sealed_header)
+}
+
+async fn complete_transaction(
+    request: TransactionRequest,
+    provider: &RootProvider,
+    block: &Sealed<Header>,
+) -> Result<Transaction, EvmPreparationError> {
+    let TransactionRequest {
         from,
         to,
         nonce,
@@ -29,15 +144,15 @@ pub(crate) async fn complete_transaction(
         chain_id,
         variant,
     } = request;
-    let block_id = BlockId::Number(BlockNumberOrTag::Number(block.number()));
+    let block_id = BlockId::Hash(block.hash().into());
+    let anchored_provider = BlockIdProvider::new(provider.clone(), block_id);
     let nonce = match nonce {
         Some(nonce) => nonce,
-        None => provider
+        None => anchored_provider
             .get_transaction_count(from)
-            .block_id(block_id)
             .await
             .map_err(|error| {
-                SimulationServiceError::transaction_completion(format!(
+                EvmPreparationError::transaction_completion(format!(
                     "failed to fetch nonce at block {}: {error}",
                     block.number()
                 ))
@@ -48,7 +163,7 @@ pub(crate) async fn complete_transaction(
     let data = data.unwrap_or_default();
     let gas_limit = match gas_limit {
         Some(gas_limit) => gas_limit,
-        None => provider
+        None => anchored_provider
             .estimate_gas(estimation_request(
                 from,
                 to,
@@ -58,10 +173,9 @@ pub(crate) async fn complete_transaction(
                 chain_id,
                 &variant,
             ))
-            .block(block_id)
             .await
             .map_err(|error| {
-                SimulationServiceError::transaction_completion(format!(
+                EvmPreparationError::transaction_completion(format!(
                     "failed to estimate gas at block {}: {error}",
                     block.number()
                 ))
@@ -82,9 +196,9 @@ pub(crate) async fn complete_transaction(
 
 async fn complete_transaction_variant(
     provider: &RootProvider,
-    block: &ResolvedBlock,
+    block: &Sealed<Header>,
     variant: TransactionVariantRequest,
-) -> Result<EvmTransactionVariant, SimulationServiceError> {
+) -> Result<TransactionVariant, EvmPreparationError> {
     match variant {
         TransactionVariantRequest::Legacy { gas_price } => Ok(TransactionVariant::Legacy {
             gas_price: suggested_gas_price(provider, gas_price).await?,
@@ -107,14 +221,14 @@ async fn complete_transaction_variant(
                     .get_max_priority_fee_per_gas()
                     .await
                     .map_err(|error| {
-                        SimulationServiceError::transaction_completion(format!(
+                        EvmPreparationError::transaction_completion(format!(
                             "failed to fetch max priority fee per gas: {error}"
                         ))
                     })?,
             };
             let max_fee_per_gas = match max_fee_per_gas {
                 Some(value) => value,
-                None => suggested_dynamic_fee_cap(block, max_priority_fee_per_gas)?,
+                None => suggested_dynamic_fee_cap(block.inner(), max_priority_fee_per_gas)?,
             };
 
             Ok(TransactionVariant::DynamicFee {
@@ -129,11 +243,11 @@ async fn complete_transaction_variant(
 async fn suggested_gas_price(
     provider: &RootProvider,
     gas_price: Option<u128>,
-) -> Result<u128, SimulationServiceError> {
+) -> Result<u128, EvmPreparationError> {
     match gas_price {
         Some(value) => Ok(value),
         None => provider.get_gas_price().await.map_err(|error| {
-            SimulationServiceError::transaction_completion(format!(
+            EvmPreparationError::transaction_completion(format!(
                 "failed to fetch gas price: {error}"
             ))
         }),
@@ -141,11 +255,11 @@ async fn suggested_gas_price(
 }
 
 fn suggested_dynamic_fee_cap(
-    block: &ResolvedBlock,
+    block: &Header,
     max_priority_fee_per_gas: u128,
-) -> Result<u128, SimulationServiceError> {
+) -> Result<u128, EvmPreparationError> {
     let base_fee = block.base_fee_per_gas().ok_or_else(|| {
-        SimulationServiceError::transaction_completion(format!(
+        EvmPreparationError::transaction_completion(format!(
             "block {} does not provide a base fee for dynamic fee completion",
             block.number()
         ))
@@ -155,7 +269,7 @@ fn suggested_dynamic_fee_cap(
         .checked_mul(2)
         .and_then(|value| value.checked_add(max_priority_fee_per_gas))
         .ok_or_else(|| {
-            SimulationServiceError::transaction_completion(
+            EvmPreparationError::transaction_completion(
                 "calculated dynamic fee exceeds the simulator maximum \
                  340282366920938463463374607431768211455",
             )
@@ -169,7 +283,7 @@ fn estimation_request(
     value: U256,
     input: Bytes,
     chain_id: u64,
-    variant: &EvmTransactionVariant,
+    variant: &TransactionVariant,
 ) -> RpcTransactionRequest {
     let mut request = RpcTransactionRequest {
         from: Some(from),

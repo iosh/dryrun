@@ -14,10 +14,6 @@ impl ResolvedBlock {
         Self { header }
     }
 
-    pub(crate) fn header(&self) -> &Header {
-        self.header.inner()
-    }
-
     pub fn number(&self) -> u64 {
         self.header.number()
     }
@@ -28,5 +24,9 @@ impl ResolvedBlock {
 
     pub fn hash(&self) -> B256 {
         self.header.hash()
+    }
+
+    pub(crate) fn cloned_header(&self) -> Sealed<Header> {
+        self.header.clone()
     }
 }

@@ -1,4 +1,5 @@
 use evm_engine::EvmEngineError;
+use evm_simulation::EvmPreparationError;
 use simulation_tasks::SimulationTaskError;
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -41,12 +42,6 @@ impl SimulationServiceError {
         Self::ExecutionTask { source }
     }
 
-    pub(crate) fn transaction_completion(details: impl Into<String>) -> Self {
-        Self::TransactionCompletion {
-            details: details.into(),
-        }
-    }
-
     pub fn is_not_supported(&self) -> bool {
         matches!(self, Self::Engine(error) if error.is_not_supported())
     }
@@ -79,6 +74,17 @@ impl From<SimulationTaskError> for SimulationServiceError {
         match error {
             SimulationTaskError::Closed => Self::TaskSetClosed,
             SimulationTaskError::TaskFailed { source } => Self::AttemptTask { source },
+        }
+    }
+}
+
+impl From<EvmPreparationError> for SimulationServiceError {
+    fn from(error: EvmPreparationError) -> Self {
+        match error {
+            EvmPreparationError::BlockResolution { details } => Self::BlockResolution { details },
+            EvmPreparationError::TransactionCompletion { details } => {
+                Self::TransactionCompletion { details }
+            }
         }
     }
 }

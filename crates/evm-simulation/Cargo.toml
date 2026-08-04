@@ -1,13 +1,12 @@
 [package]
-name = "evm-engine"
+name = "evm-simulation"
 version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
 alloy = { workspace = true }
 alloy-chains = { workspace = true }
-alloy-primitives = { workspace = true }
-contract-standards = { workspace = true }
+alloy-hardforks = { workspace = true }
 revm = { workspace = true, features = [
     "alloydb",
     "optional_balance_check",
@@ -15,9 +14,6 @@ revm = { workspace = true, features = [
     "optional_fee_charge",
     "optional_no_base_fee",
 ] }
-simulation-changes = { workspace = true }
-simulation-execution = { workspace = true }
 simulation-transaction = { workspace = true }
-evm-simulation = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }

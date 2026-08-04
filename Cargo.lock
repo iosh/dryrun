@@ -2979,6 +2979,7 @@ dependencies = [
  "evm-engine",
  "evm-rpc",
  "evm-service",
+ "evm-simulation",
  "jsonrpsee",
  "metrics-exporter-prometheus",
  "serde",
@@ -3197,9 +3198,9 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "alloy-chains",
- "alloy-hardforks",
  "alloy-primitives",
  "contract-standards",
+ "evm-simulation",
  "revm",
  "simulation-changes",
  "simulation-execution",
@@ -3228,7 +3229,21 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "evm-engine",
+ "evm-simulation",
  "simulation-tasks",
+ "simulation-transaction",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "evm-simulation"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "alloy-chains",
+ "alloy-hardforks",
+ "revm",
  "simulation-transaction",
  "thiserror 2.0.18",
  "tokio",

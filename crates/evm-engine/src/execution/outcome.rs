@@ -7,14 +7,14 @@ use crate::{
     EvmTransaction, SimulatedBlock, simulation::ExecutedDetails,
 };
 
-use super::fee_settlement::TransactionFeeSettlement;
 use crate::ResolvedBlock;
+use evm_simulation::EvmFeeSettlement;
 
 pub(super) fn build_execution(
     result: ExecutionResult<HaltReason>,
     chain_id: u64,
     resolved_block: &ResolvedBlock,
-    fee_settlement: &TransactionFeeSettlement,
+    fee_settlement: &EvmFeeSettlement,
 ) -> EvmExecution {
     match result {
         ExecutionResult::Success { gas, output, .. } => EvmExecution {
@@ -68,7 +68,7 @@ fn build_revert_execution(
     gas_used: u64,
     gas_limit: u64,
     output: Bytes,
-    fee_settlement: &TransactionFeeSettlement,
+    fee_settlement: &EvmFeeSettlement,
 ) -> EvmExecution {
     let failure = build_revert_failure(&output);
 
@@ -89,7 +89,7 @@ fn build_halt_execution(
     gas_used: u64,
     gas_limit: u64,
     reason: HaltReason,
-    fee_settlement: &TransactionFeeSettlement,
+    fee_settlement: &EvmFeeSettlement,
 ) -> EvmExecution {
     build_failed_execution(
         chain_id,
@@ -109,7 +109,7 @@ fn build_failed_execution(
     gas_limit: u64,
     output: Bytes,
     failure: EvmExecutionFailure,
-    fee_settlement: &TransactionFeeSettlement,
+    fee_settlement: &EvmFeeSettlement,
 ) -> EvmExecution {
     EvmExecution {
         chain_id,

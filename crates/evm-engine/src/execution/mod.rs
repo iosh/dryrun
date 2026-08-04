@@ -1,44 +1,37 @@
-mod env;
-mod fee_settlement;
 mod metadata_reads;
 mod outcome;
-mod provider;
 mod read_call;
 mod token_state_reads;
 
-use self::{
-    env::{create_block_env, create_cfg_env, create_tx_env},
-    fee_settlement::TransactionFeeSettlement,
-    metadata_reads::load_change_metadata,
-    outcome::{build_execution, build_not_executed},
-    provider::{AlloyCacheDb, create_database},
-    token_state_reads::read_token_state_values,
-};
-
 use crate::{
-    EvmEngineError, EvmExecutionInput, EvmSimulation, EvmTransaction, ResolvedBlock,
-    chain_spec::resolve_execution_spec_id,
+    EvmEngineError, EvmExecutionInput, EvmSimulation,
     changes::{
         ChangeObservationInspector, PositionedChange, check_native_balances,
         collect_contract_candidates, collect_native_candidates, into_enriched_changes,
         sort_changes_by_position,
     },
+    execution::{
+        metadata_reads::load_change_metadata,
+        outcome::{build_execution, build_not_executed},
+        token_state_reads::read_token_state_values,
+    },
 };
 use alloy::providers::RootProvider;
-use contract_standards::{MetadataRequests, state_requirements, verify};
+use evm_simulation::{
+    EvmBlockAnchor, EvmExecutionError, EvmStateSource, EvmTransactionExecutor, MainnetEvmDatabase,
+};
 use revm::{
-    Context, ExecuteCommitEvm, InspectEvm, MainBuilder, MainContext, MainnetEvm,
+    Context,
     context::{BlockEnv, CfgEnv, TxEnv},
-    context_interface::{
-        result::{EVMError, ExecutionResult},
-        transaction::Transaction,
-    },
+    handler::EvmTr,
 };
 use tokio::runtime::Handle;
 
+use contract_standards::{MetadataRequests, state_requirements, verify};
+
 pub(super) type MainnetEvmWithDb<DB, INSP = ()> =
-    MainnetEvm<Context<BlockEnv, TxEnv, CfgEnv, DB>, INSP>;
-pub(super) type MainnetAlloyEvm<INSP = ()> = MainnetEvmWithDb<AlloyCacheDb, INSP>;
+    revm::MainnetEvm<Context<BlockEnv, TxEnv, CfgEnv, DB>, INSP>;
+pub(super) type MainnetAlloyEvm<INSP = ()> = MainnetEvmWithDb<MainnetEvmDatabase, INSP>;
 
 pub(crate) fn simulate_execution(
     provider: &RootProvider,
@@ -47,122 +40,108 @@ pub(crate) fn simulate_execution(
     input: EvmExecutionInput,
 ) -> Result<EvmSimulation, EvmEngineError> {
     let EvmExecutionInput { block, transaction } = input;
-    let resolved_block = block;
-    let db = create_database(provider, runtime_handle, &resolved_block);
-    let spec_id = resolve_execution_spec_id(
+    let state_source = EvmStateSource::new(
+        provider.clone(),
+        runtime_handle.clone(),
+        EvmBlockAnchor::new(block.number(), block.hash()),
+    );
+    let executor = EvmTransactionExecutor::new(
+        state_source,
+        block.cloned_header(),
         chain_id,
-        resolved_block.number(),
-        resolved_block.header().timestamp,
-    )?;
-    let cfg_env = create_cfg_env(chain_id, spec_id);
-    let block_env = create_block_env(&resolved_block, spec_id)?;
-    let tx_env = create_tx_env(&transaction)?;
-
-    execute_transaction(
-        db,
-        cfg_env,
-        block_env,
-        tx_env,
-        chain_id,
-        &resolved_block,
-        &transaction,
+        ChangeObservationInspector::new(),
     )
-}
+    .map_err(map_execution_error)?;
 
-fn execute_transaction(
-    db: AlloyCacheDb,
-    cfg_env: CfgEnv,
-    block_env: BlockEnv,
-    tx_env: TxEnv,
-    chain_id: u64,
-    resolved_block: &ResolvedBlock,
-    transaction: &EvmTransaction,
-) -> Result<EvmSimulation, EvmEngineError> {
-    let effective_gas_price = tx_env.effective_gas_price(block_env.basefee as u128);
-    let base_fee_per_gas = block_env.basefee;
-    let caller = tx_env.caller;
-    let beneficiary = block_env.beneficiary;
-
-    // Change observations are collected during execution so candidates and
-    // pre-state facts can be checked before committing the transaction state.
-    let mut evm = Context::mainnet()
-        .with_db(db)
-        .modify_cfg_chained(|cfg| *cfg = cfg_env)
-        .modify_block_chained(|block| *block = block_env)
-        .build_mainnet_with_inspector(ChangeObservationInspector::new());
-
-    let (execution, mut positioned_changes, metadata_requests) = match evm.inspect_tx(tx_env) {
-        Ok(result_and_state) => {
-            let result = result_and_state.result;
-            let state = result_and_state.state;
-            let fee_settlement =
-                TransactionFeeSettlement::new(result.gas(), effective_gas_price, base_fee_per_gas)?;
-            let succeeded = matches!(&result, ExecutionResult::Success { .. });
-            let execution = build_execution(result, chain_id, resolved_block, &fee_settlement);
-
-            if !succeeded {
-                return Ok(EvmSimulation::new(execution, Vec::new()));
-            }
-
-            let observation_inspector = std::mem::take(&mut evm.inspector);
-            let observations = observation_inspector.into_observations();
-            let native_candidates = collect_native_candidates(&observations)?;
-            let candidates = collect_contract_candidates(&observations)?;
-            let requirements = state_requirements(&candidates);
-
-            let mut positioned_changes = check_native_balances(
-                &state,
-                &native_candidates,
-                caller,
-                beneficiary,
-                fee_settlement.gas_precharge,
-                fee_settlement.caller_refund,
-                fee_settlement.beneficiary_reward,
-            )?;
-
-            let before_token_state =
-                read_token_state_values(&mut evm, transaction, chain_id, &requirements)?;
-
-            evm.commit(state);
-
-            let after_token_state =
-                read_token_state_values(&mut evm, transaction, chain_id, &requirements)?;
-
-            let standard_changes = verify(&candidates, &before_token_state, &after_token_state)?;
-            let metadata_requests = MetadataRequests::from_changes(&standard_changes);
-            positioned_changes.extend(standard_changes.into_iter().map(PositionedChange::from));
-
-            (execution, positioned_changes, metadata_requests)
+    let mut facts = match executor.execute(&transaction) {
+        Ok(facts) => facts,
+        Err(EvmExecutionError::NotExecuted(error)) => {
+            return Ok(EvmSimulation::new(
+                build_not_executed(chain_id, &block, &transaction, error),
+                Vec::new(),
+            ));
         }
-        Err(EVMError::Transaction(error)) => {
-            let execution = build_not_executed(chain_id, resolved_block, transaction, error);
-            return Ok(EvmSimulation::new(execution, Vec::new()));
-        }
-        Err(EVMError::Header(error)) => {
-            return Err(EvmEngineError::block_context_error(format!(
-                "engine header validation failed: {error}"
-            )));
-        }
-        Err(EVMError::Database(error)) => {
-            return Err(EvmEngineError::state_access_error(format!(
-                "state access failed during execution: {error}"
-            )));
-        }
-        Err(EVMError::Custom(error)) => {
-            return Err(EvmEngineError::engine_execution_error(format!(
-                "engine execution failed: {error}"
-            )));
-        }
+        Err(error) => return Err(map_execution_error(error)),
     };
+
+    let execution = build_execution(
+        facts.result().clone(),
+        chain_id,
+        &block,
+        facts.fee_settlement(),
+    );
+    if !facts.result().is_success() {
+        return Ok(EvmSimulation::new(execution, Vec::new()));
+    }
+
+    let observations = facts.take_inspector().into_observations();
+    let native_candidates = collect_native_candidates(&observations)?;
+    let candidates = collect_contract_candidates(&observations)?;
+    let requirements = state_requirements(&candidates);
+
+    let fee_settlement = facts.fee_settlement();
+    let gas_precharge = fee_settlement.gas_precharge;
+    let caller_refund = fee_settlement.caller_refund;
+    let beneficiary_reward = fee_settlement.beneficiary_reward;
+    let (caller, beneficiary) = {
+        let evm = facts.evm_mut();
+        (evm.ctx().tx.caller, evm.ctx().block.beneficiary)
+    };
+    let mut positioned_changes = check_native_balances(
+        facts.transition().map_err(map_execution_error)?,
+        &native_candidates,
+        caller,
+        beneficiary,
+        gas_precharge,
+        caller_refund,
+        beneficiary_reward,
+    )?;
+
+    let before_token_state =
+        read_token_state_values(facts.evm_mut(), &transaction, chain_id, &requirements)?;
+
+    facts.apply_transition().map_err(map_execution_error)?;
+
+    let after_token_state =
+        read_token_state_values(facts.evm_mut(), &transaction, chain_id, &requirements)?;
+    let standard_changes = verify(&candidates, &before_token_state, &after_token_state)?;
+    let metadata_requests = MetadataRequests::from_changes(&standard_changes);
+    positioned_changes.extend(standard_changes.into_iter().map(PositionedChange::from));
 
     let changes = if positioned_changes.is_empty() {
         Vec::new()
     } else {
         sort_changes_by_position(&mut positioned_changes);
-        let metadata = load_change_metadata(&mut evm, transaction, chain_id, metadata_requests)?;
-
+        let metadata =
+            load_change_metadata(facts.evm_mut(), &transaction, chain_id, metadata_requests)?;
         into_enriched_changes(positioned_changes, &metadata)
     };
 
     Ok(EvmSimulation::new(execution, changes))
+}
+
+fn map_execution_error(error: EvmExecutionError) -> EvmEngineError {
+    match error {
+        EvmExecutionError::UnsupportedChain(chain_id) => EvmEngineError::not_supported(format!(
+            "only Ethereum mainnet is supported now, got chain_id={chain_id}"
+        )),
+        EvmExecutionError::UnsupportedHardfork(hardfork) => EvmEngineError::not_ready(format!(
+            "hardfork {hardfork} is not mapped to revm::SpecId yet"
+        )),
+        EvmExecutionError::BlockContext(details) => EvmEngineError::block_context_error(details),
+        EvmExecutionError::StateAccess(details) => EvmEngineError::state_access_error(details),
+        EvmExecutionError::Execution(details) => EvmEngineError::engine_execution_error(details),
+        EvmExecutionError::FeeSettlement => EvmEngineError::engine_execution_error(
+            "transaction fee settlement arithmetic was inconsistent",
+        ),
+        EvmExecutionError::TransitionAlreadyApplied => EvmEngineError::engine_execution_error(
+            "transaction transition has already been applied",
+        ),
+        EvmExecutionError::TransitionNotApplicable => EvmEngineError::engine_execution_error(
+            "transaction transition is only applicable to a successful execution",
+        ),
+        EvmExecutionError::NotExecuted(_) => EvmEngineError::internal(
+            "invalid transaction was unexpectedly treated as an outer error",
+        ),
+    }
 }
