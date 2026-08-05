@@ -99,7 +99,7 @@ impl AnchoredVoteLists {
     }
 }
 
-pub(crate) struct RemoteStateReader {
+pub(crate) struct ConfluxStateSource {
     state_anchor: ConfluxStateAnchor,
     provider: Arc<ConfluxSimulationProvider>,
     core_space_globals: CoreSpaceGlobals,
@@ -108,7 +108,7 @@ pub(crate) struct RemoteStateReader {
     anchored_vote_lists: AnchoredVoteLists,
 }
 
-impl RemoteStateReader {
+impl ConfluxStateSource {
     pub(crate) async fn prepare(
         state_anchor: ConfluxStateAnchor,
         provider: Arc<ConfluxSimulationProvider>,

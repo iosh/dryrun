@@ -6,7 +6,10 @@ use simulation_transaction::{
 
 use crate::{
     ConfluxSimulationError, ConfluxSimulationProvider, CoreSpaceSimulationContext,
-    EspaceSimulationContext, core_space::CoreSpaceTransaction,
+    EspaceSimulationContext,
+    core_space::{
+        CoreSpaceTransaction, CoreSpaceTransactionRequest, validate_core_space_transaction_network,
+    },
 };
 
 #[derive(Debug)]
@@ -72,10 +75,12 @@ pub(crate) async fn complete_espace_transaction(
 pub(crate) async fn complete_core_space_transaction(
     provider: &ConfluxSimulationProvider,
     context: &CoreSpaceSimulationContext,
-    request: TransactionRequest,
+    request: CoreSpaceTransactionRequest,
     requested_storage_limit: Option<u64>,
     requested_epoch_height: Option<u64>,
 ) -> Result<CoreSpaceTransaction, ConfluxSimulationError> {
+    validate_core_space_transaction_network(&request, provider.provider_network())?;
+    let request = request.into_shared();
     let (transaction, gas_limit) = complete_without_gas_limit(
         request,
         TransactionCompletionContext::CoreSpace { provider, context },

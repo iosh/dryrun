@@ -1,7 +1,12 @@
+use alloy_primitives::{Address, B256, Bytes, U256};
 use cfx_rpc_cfx_types::EpochNumber;
+use conflux_provider::{CoreAddress, Network};
 use primitives::transaction::{
     Action, Cip1559Transaction, Cip2930Transaction,
     NativeTransaction as PrimitiveNativeTransaction, TypedNativeTransaction,
+};
+use simulation_transaction::{
+    TransactionRequest, TransactionType, TransactionVariantError, TransactionVariantRequest,
 };
 
 use crate::{
@@ -15,6 +20,186 @@ use crate::{
 pub enum CoreSpaceEpochRef {
     LatestState,
     Number(u64),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoreSpaceTransactionRequest {
+    pub from: CoreAddress,
+    pub to: Option<CoreAddress>,
+    pub nonce: Option<u64>,
+    pub gas_limit: Option<u64>,
+    pub value: Option<U256>,
+    pub data: Option<Bytes>,
+    pub chain_id: u64,
+    pub variant: CoreSpaceTransactionVariantRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoreSpaceAccessListItem {
+    pub address: CoreAddress,
+    pub storage_keys: Vec<B256>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoreSpaceTransactionVariantRequest {
+    Legacy {
+        gas_price: Option<u128>,
+    },
+    AccessList {
+        gas_price: Option<u128>,
+        access_list: Vec<CoreSpaceAccessListItem>,
+    },
+    DynamicFee {
+        max_fee_per_gas: Option<u128>,
+        max_priority_fee_per_gas: Option<u128>,
+        access_list: Vec<CoreSpaceAccessListItem>,
+    },
+}
+
+impl CoreSpaceTransactionVariantRequest {
+    pub fn try_new(
+        transaction_type: TransactionType,
+        access_list: Option<Vec<CoreSpaceAccessListItem>>,
+        gas_price: Option<u128>,
+        max_fee_per_gas: Option<u128>,
+        max_priority_fee_per_gas: Option<u128>,
+    ) -> Result<Self, TransactionVariantError> {
+        let has_dynamic_fee = max_fee_per_gas.is_some() || max_priority_fee_per_gas.is_some();
+
+        match transaction_type {
+            TransactionType::Legacy => {
+                if access_list.as_ref().is_some_and(|items| !items.is_empty()) {
+                    return Err(TransactionVariantError::AccessListNotAllowed { transaction_type });
+                }
+
+                if has_dynamic_fee {
+                    return Err(TransactionVariantError::DynamicFeeNotAllowed { transaction_type });
+                }
+
+                Ok(Self::Legacy { gas_price })
+            }
+            TransactionType::AccessList => {
+                if has_dynamic_fee {
+                    return Err(TransactionVariantError::DynamicFeeNotAllowed { transaction_type });
+                }
+
+                Ok(Self::AccessList {
+                    gas_price,
+                    access_list: access_list.unwrap_or_default(),
+                })
+            }
+            TransactionType::DynamicFee => {
+                if gas_price.is_some() {
+                    return Err(TransactionVariantError::GasPriceNotAllowed { transaction_type });
+                }
+
+                Ok(Self::DynamicFee {
+                    max_fee_per_gas,
+                    max_priority_fee_per_gas,
+                    access_list: access_list.unwrap_or_default(),
+                })
+            }
+        }
+    }
+
+    fn into_shared(self) -> TransactionVariantRequest {
+        match self {
+            Self::Legacy { gas_price } => TransactionVariantRequest::Legacy { gas_price },
+            Self::AccessList {
+                gas_price,
+                access_list,
+            } => TransactionVariantRequest::AccessList {
+                gas_price,
+                access_list: access_list
+                    .into_iter()
+                    .map(|item| simulation_transaction::AccessListItem {
+                        address: core_address_to_alloy(item.address),
+                        storage_keys: item.storage_keys,
+                    })
+                    .collect(),
+            },
+            Self::DynamicFee {
+                max_fee_per_gas,
+                max_priority_fee_per_gas,
+                access_list,
+            } => TransactionVariantRequest::DynamicFee {
+                max_fee_per_gas,
+                max_priority_fee_per_gas,
+                access_list: access_list
+                    .into_iter()
+                    .map(|item| simulation_transaction::AccessListItem {
+                        address: core_address_to_alloy(item.address),
+                        storage_keys: item.storage_keys,
+                    })
+                    .collect(),
+            },
+        }
+    }
+}
+
+impl CoreSpaceTransactionRequest {
+    pub(crate) fn into_shared(self) -> TransactionRequest {
+        TransactionRequest {
+            from: core_address_to_alloy(self.from),
+            to: self.to.map(core_address_to_alloy),
+            nonce: self.nonce,
+            gas_limit: self.gas_limit,
+            value: self.value,
+            data: self.data,
+            chain_id: self.chain_id,
+            variant: self.variant.into_shared(),
+        }
+    }
+}
+
+pub(crate) fn validate_core_space_transaction_network(
+    transaction: &CoreSpaceTransactionRequest,
+    expected_network: Network,
+) -> Result<(), ConfluxSimulationError> {
+    validate_core_space_address_network(&transaction.from, expected_network, "transaction.from")?;
+
+    if let Some(to) = transaction.to.as_ref() {
+        validate_core_space_address_network(to, expected_network, "transaction.to")?;
+    }
+
+    let access_list = match &transaction.variant {
+        CoreSpaceTransactionVariantRequest::Legacy { .. } => None,
+        CoreSpaceTransactionVariantRequest::AccessList { access_list, .. }
+        | CoreSpaceTransactionVariantRequest::DynamicFee { access_list, .. } => Some(access_list),
+    };
+    if let Some(access_list) = access_list {
+        for (index, item) in access_list.iter().enumerate() {
+            validate_core_space_address_network(
+                &item.address,
+                expected_network,
+                &format!("transaction.accessList[{index}].address"),
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_core_space_address_network(
+    address: &CoreAddress,
+    expected_network: Network,
+    field: &str,
+) -> Result<(), ConfluxSimulationError> {
+    if address.network() != expected_network {
+        return Err(ConfluxSimulationError::transaction_completion_failed(
+            format!(
+                "`{field}` uses address network {}, expected {}",
+                address.network(),
+                expected_network
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
+fn core_address_to_alloy(address: CoreAddress) -> Address {
+    Address::from_slice(&address.bytes())
 }
 
 pub type CoreSpaceTransactionVariant = ConfluxTransactionVariant;

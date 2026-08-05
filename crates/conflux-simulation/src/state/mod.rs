@@ -14,9 +14,9 @@ pub use self::provider::{ConfluxRpcError, ConfluxSimulationProvider, CoreSpaceRe
 
 pub(crate) use self::{
     core_space_internal::SponsorWhitelistStorageKey,
-    reader::{AnchoredVoteLists, MaskedSponsorWhitelistEntries, RemoteStateReader},
+    reader::{AnchoredVoteLists, ConfluxStateSource, MaskedSponsorWhitelistEntries},
     rpc_types::{CoreSpaceRpcBlock, CoreSpaceRpcPoSBlock, EspaceRpcBlock},
-    storage::new_rpc_backed_state,
+    storage::new_conflux_state,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -3,11 +3,11 @@ use cfx_addr::Network;
 use cfx_rpc_cfx_types::{EpochNumber, RpcAddress};
 use cfx_rpc_primitives::Bytes as CoreSpaceRpcBytes;
 use cfx_types::{H256, U64, U256};
-use conflux_service::{AccessListItem, core_space as service_core_space};
+use conflux_service::core_space as service_core_space;
 use serde::Deserialize;
-use simulation_transaction::{TransactionType, TransactionVariantRequest};
+use simulation_transaction::TransactionType;
 
-use super::{cfx_address_to_alloy, cfx_h256_to_alloy, cfx_u256_to_alloy, u64_param, u128_param};
+use super::{cfx_h256_to_alloy, cfx_u256_to_alloy, u64_param, u128_param};
 use crate::error::ValidationError;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -104,9 +104,10 @@ fn map_core_space_transaction(
 
     let from = require_core_space_field(from, "transaction.from")?;
     let chain_id = require_core_space_field(chain_id, "transaction.chainId")?;
-    let variant = TransactionVariantRequest::try_new(
+    let access_list = access_list.map(map_core_space_access_list).transpose()?;
+    let variant = service_core_space::CoreSpaceTransactionVariantRequest::try_new(
         transaction_type,
-        access_list.map(map_core_space_access_list),
+        access_list,
         gas_price
             .map(|value| u128_param(value, "transaction.gasPrice"))
             .transpose()?,
@@ -120,9 +121,9 @@ fn map_core_space_transaction(
     .map_err(|error| ValidationError::invalid_params(error.to_string()))?;
 
     Ok(service_core_space::CoreSpaceTransactionRequest {
-        transaction: conflux_service::ConfluxTransactionRequest {
-            from: cfx_address_to_alloy(from.hex_address),
-            to: to.map(|address| cfx_address_to_alloy(address.hex_address)),
+        transaction: service_core_space::CoreSpaceTransactionInput {
+            from: map_core_space_address(from)?,
+            to: to.map(map_core_space_address).transpose()?,
             nonce: nonce
                 .map(|value| u64_param(value, "transaction.nonce"))
                 .transpose()?,
@@ -212,16 +213,35 @@ fn require_core_space_field<T>(value: Option<T>, field: &str) -> Result<T, Valid
     value.ok_or_else(|| ValidationError::invalid_params(format!("`{field}` is required")))
 }
 
-fn map_core_space_access_list(items: Vec<CoreSpaceAccessListItem>) -> Vec<AccessListItem> {
+fn map_core_space_access_list(
+    items: Vec<CoreSpaceAccessListItem>,
+) -> Result<Vec<service_core_space::CoreSpaceAccessListItem>, ValidationError> {
     items
         .into_iter()
-        .map(|item| AccessListItem {
-            address: cfx_address_to_alloy(item.address.hex_address),
-            storage_keys: item
-                .storage_keys
-                .into_iter()
-                .map(cfx_h256_to_alloy)
-                .collect(),
+        .map(|item| {
+            Ok(service_core_space::CoreSpaceAccessListItem {
+                address: map_core_space_address(item.address)?,
+                storage_keys: item
+                    .storage_keys
+                    .into_iter()
+                    .map(cfx_h256_to_alloy)
+                    .collect(),
+            })
         })
         .collect()
+}
+
+fn map_core_space_address(
+    address: RpcAddress,
+) -> Result<service_core_space::CoreAddress, ValidationError> {
+    let mut bytes = [0_u8; 20];
+    bytes.copy_from_slice(address.hex_address.as_bytes());
+    let network = match address.network {
+        Network::Main => service_core_space::CoreAddressNetwork::Main,
+        Network::Test => service_core_space::CoreAddressNetwork::Test,
+        Network::Id(id) => service_core_space::CoreAddressNetwork::Id(id),
+    };
+
+    service_core_space::CoreAddress::from_bytes(bytes, network)
+        .map_err(|error| ValidationError::invalid_params(error.to_string()))
 }

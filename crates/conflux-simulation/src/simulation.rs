@@ -8,8 +8,9 @@ use crate::{
     core_space::{
         CoreSpaceEpochRef, CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode,
         CoreSpaceSimulation, CoreSpaceStateAnchor, CoreSpaceTransaction,
-        CoreSpaceTransactionVariant, build_core_space_not_executed,
+        CoreSpaceTransactionRequest, CoreSpaceTransactionVariant, build_core_space_not_executed,
         build_core_space_transaction_input, prepare_storage_payer,
+        validate_core_space_transaction_network,
     },
     espace::{
         EspaceBlockRef, EspaceSimulation, EspaceTransaction, build_espace_not_executed,
@@ -22,7 +23,7 @@ use crate::{
         complete_core_space_transaction, complete_espace_transaction, load_core_space_context,
         load_espace_context,
     },
-    state::{ConfluxSimulationProvider, ConfluxStateAnchor, RemoteStateReader},
+    state::{ConfluxSimulationProvider, ConfluxStateAnchor, ConfluxStateSource},
 };
 
 pub struct ConfluxSimulation {
@@ -78,7 +79,7 @@ impl ConfluxSimulation {
             block_context: context.block_context,
             transaction: DryRunTransactionInput::Espace(transaction),
         };
-        let state_reader = self.prepare_state_reader(context.state_anchor).await?;
+        let state_source = self.prepare_state_source(context.state_anchor).await?;
 
         Ok(PreparedEspaceSimulation {
             state: PreparedEspaceSimulationState::Ready(Box::new(ReadyEspaceSimulation {
@@ -86,7 +87,7 @@ impl ConfluxSimulation {
                 simulated_block: context.simulated_block,
                 gas_limit,
                 execution_input,
-                state_reader,
+                state_source,
             })),
         })
     }
@@ -149,7 +150,7 @@ impl ConfluxSimulation {
             block_context: context.block_context,
             transaction: DryRunTransactionInput::CoreSpace(transaction),
         };
-        let state_reader = self.prepare_state_reader(context.state_anchor).await?;
+        let state_source = self.prepare_state_source(context.state_anchor).await?;
 
         Ok(PreparedCoreSpaceSimulation {
             state: PreparedCoreSpaceSimulationState::Ready(Box::new(ReadyCoreSpaceSimulation {
@@ -158,7 +159,7 @@ impl ConfluxSimulation {
                 gas_limit,
                 storage_payer,
                 execution_input,
-                state_reader,
+                state_source,
             })),
         })
     }
@@ -166,10 +167,11 @@ impl ConfluxSimulation {
     pub async fn prepare_core_space_transaction(
         &self,
         epoch: CoreSpaceEpochRef,
-        request: simulation_transaction::TransactionRequest,
+        request: CoreSpaceTransactionRequest,
         storage_limit: Option<u64>,
         epoch_height: Option<u64>,
     ) -> Result<PreparedCoreSpaceSimulation, ConfluxSimulationError> {
+        validate_core_space_transaction_network(&request, self.provider.provider_network())?;
         let context = self.load_core_space_context(epoch).await?;
         let transaction = complete_core_space_transaction(
             self.provider.as_ref(),
@@ -190,11 +192,11 @@ impl ConfluxSimulation {
         crate::core_space::simulation::simulate(prepared_simulation, &self.runtime_handle)
     }
 
-    async fn prepare_state_reader(
+    async fn prepare_state_source(
         &self,
         state_anchor: ConfluxStateAnchor,
-    ) -> Result<RemoteStateReader, ConfluxSimulationError> {
-        RemoteStateReader::prepare(state_anchor, Arc::clone(&self.provider))
+    ) -> Result<ConfluxStateSource, ConfluxSimulationError> {
+        ConfluxStateSource::prepare(state_anchor, Arc::clone(&self.provider))
             .await
             .map_err(|error| ConfluxSimulationError::StateAccess {
                 message: error.to_string(),

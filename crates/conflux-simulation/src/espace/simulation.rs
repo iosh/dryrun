@@ -6,8 +6,8 @@ use tokio::runtime::Handle;
 use crate::{
     ConfluxSimulationError,
     execution::{
-        TransactionExecutionOutcome, build_mainnet_machine, build_rpc_backed_state,
-        execute_transaction, prepare_transaction_execution,
+        ConfluxTransactionExecutor, TransactionExecutionOutcome, build_conflux_state,
+        build_mainnet_machine,
     },
     preparation::{PreparedEspaceSimulation, PreparedEspaceSimulationState, ReadyEspaceSimulation},
     standards::{collect_standard_candidates, load_change_metadata, read_standard_state_values},
@@ -32,21 +32,21 @@ pub(crate) fn simulate(
                 simulated_block,
                 gas_limit,
                 execution_input,
-                state_reader,
+                state_source,
             } = *ready_simulation;
             let mut state =
-                build_rpc_backed_state(state_reader, runtime_handle.clone()).map_err(|error| {
+                build_conflux_state(state_source, runtime_handle.clone()).map_err(|error| {
                     ConfluxSimulationError::StateAccess {
                         message: error.to_string(),
                     }
                 })?;
             let machine = build_mainnet_machine();
-            let prepared_execution =
-                prepare_transaction_execution(&state, &machine, execution_input)?;
             let before_execution_snapshot = state.save();
-            let mut transaction_outcome =
-                execute_transaction(&mut state, &machine, &prepared_execution)
-                    .map_err(ConfluxSimulationError::from)?;
+            let execution = ConfluxTransactionExecutor::new(&mut state, &machine)
+                .execute(execution_input)
+                .map_err(ConfluxSimulationError::from)?;
+            let prepared_execution = execution.prepared;
+            let mut transaction_outcome = execution.outcome;
 
             let (execution_observations, execution_fee, burnt_fee) = match &mut transaction_outcome
             {

@@ -6,29 +6,29 @@ use primitives::{EpochId, StorageKeyWithSpace};
 use tokio::runtime::Handle;
 
 use crate::state::{
-    reader::RemoteStateReader,
+    reader::ConfluxStateSource,
     state_item::{StateItem, StateKeyError},
 };
 
-pub(crate) fn new_rpc_backed_state(
-    reader: RemoteStateReader,
+pub(crate) fn new_conflux_state(
+    source: ConfluxStateSource,
     runtime_handle: Handle,
 ) -> StateDbResult<State> {
-    let storage = RpcBackedStorage::new(reader, runtime_handle);
+    let storage = ConfluxStateStorage::new(source, runtime_handle);
     let db = StateDb::new(Box::new(storage));
 
     State::new(db)
 }
 
-pub(crate) struct RpcBackedStorage {
-    reader: RemoteStateReader,
+pub(crate) struct ConfluxStateStorage {
+    source: ConfluxStateSource,
     runtime_handle: Handle,
 }
 
-impl RpcBackedStorage {
-    fn new(reader: RemoteStateReader, runtime_handle: Handle) -> Self {
+impl ConfluxStateStorage {
+    fn new(source: ConfluxStateSource, runtime_handle: Handle) -> Self {
         Self {
-            reader,
+            source,
             runtime_handle,
         }
     }
@@ -36,7 +36,7 @@ impl RpcBackedStorage {
     fn unsupported(&self, operation: &'static str, key: StorageKeyWithSpace<'_>) -> StorageError {
         let message = format!(
             "unsupported rpc-backed storage operation: operation={operation}, state={:?}, key={:?}",
-            self.reader.state_anchor(),
+            self.source.state_anchor(),
             key
         );
         tracing::warn!("{message}");
@@ -51,7 +51,7 @@ impl RpcBackedStorage {
     ) -> StorageError {
         let message = format!(
             "unsupported rpc-backed storage key: operation={operation}, state={:?}, key={key:?}, reason={error}",
-            self.reader.state_anchor()
+            self.source.state_anchor()
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)
@@ -60,7 +60,7 @@ impl RpcBackedStorage {
     fn unsupported_operation(&self, operation: &'static str) -> StorageError {
         let message = format!(
             "unsupported rpc-backed storage operation: operation={operation}, state={:?}",
-            self.reader.state_anchor()
+            self.source.state_anchor()
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)
@@ -69,14 +69,14 @@ impl RpcBackedStorage {
     fn unsupported_commit(&self, epoch: EpochId) -> StorageError {
         let message = format!(
             "unsupported rpc-backed storage operation: operation=commit, state={:?}, epoch={epoch:?}",
-            self.reader.state_anchor()
+            self.source.state_anchor()
         );
         tracing::warn!("{message}");
         StorageError::Msg(message)
     }
 }
 
-impl StorageStateTrait for RpcBackedStorage {
+impl StorageStateTrait for ConfluxStateStorage {
     fn get(&self, access_key: StorageKeyWithSpace) -> StorageResult<Option<Box<[u8]>>> {
         // Before we can fetch anything from RPC, we need to understand which
         // semantic state item this raw storage key refers to.
@@ -85,7 +85,7 @@ impl StorageStateTrait for RpcBackedStorage {
             Err(error) => return Err(self.unsupported_storage_key("get", access_key, error)),
         };
 
-        self.runtime_handle.block_on(self.reader.read(&item))
+        self.runtime_handle.block_on(self.source.read(&item))
     }
 
     fn set(&mut self, access_key: StorageKeyWithSpace, _value: Box<[u8]>) -> StorageResult<()> {

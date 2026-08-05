@@ -21,7 +21,7 @@ pub use context::{
 pub(crate) use context::{
     build_core_space_pivot_block_context, build_espace_block_context, build_execution_block_context,
 };
-pub(crate) use env::build_rpc_backed_state;
+pub(crate) use env::build_conflux_state;
 pub use env::{build_execution_spec, build_mainnet_machine, build_transaction_env};
 pub(crate) use observer::Observation;
 pub(crate) use outcome::{
@@ -44,39 +44,60 @@ pub(crate) struct PreparedTransactionExecution {
     pub(crate) spec: Spec,
 }
 
-pub(crate) fn prepare_transaction_execution(
-    state: &State,
-    machine: &Machine,
-    input: TransactionExecutionInput,
-) -> Result<PreparedTransactionExecution, ExecutionBlockContextError> {
-    let transaction = signed_transaction_for_dryrun(input.transaction);
-    let env = build_transaction_env(machine, state, &transaction, &input.block_context)?;
-    let spec = build_execution_spec(machine, &env);
-
-    Ok(PreparedTransactionExecution {
-        transaction,
-        env,
-        spec,
-    })
+pub(crate) struct ConfluxTransactionExecution {
+    pub(crate) prepared: PreparedTransactionExecution,
+    pub(crate) outcome: TransactionExecutionOutcome,
 }
 
-pub(crate) fn execute_transaction(
-    state: &mut State,
-    machine: &Machine,
-    prepared: &PreparedTransactionExecution,
-) -> Result<TransactionExecutionOutcome, TransactionExecutionError> {
-    let options = transact_options_for(prepared.transaction.space());
+pub(crate) struct ConfluxTransactionExecutor<'a> {
+    state: &'a mut State,
+    machine: &'a Machine,
+}
 
-    let outcome = ExecutiveContext::new(state, &prepared.env, machine, &prepared.spec)
-        .transact(&prepared.transaction, options)?;
-
-    state.update_state_post_tx_execution(!prepared.spec.cip645.fix_eip1153);
-
-    if let Some(burnt_fee) = outcome.try_as_executed().and_then(|e| e.burnt_fee) {
-        state.burn_by_cip1559(burnt_fee);
+impl<'a> ConfluxTransactionExecutor<'a> {
+    pub(crate) fn new(state: &'a mut State, machine: &'a Machine) -> Self {
+        Self { state, machine }
     }
 
-    TransactionExecutionOutcome::from_upstream(outcome)
+    pub(crate) fn execute(
+        self,
+        input: TransactionExecutionInput,
+    ) -> Result<ConfluxTransactionExecution, TransactionExecutionError> {
+        let prepared = self.prepare(input)?;
+        let options = transact_options_for(prepared.transaction.space());
+
+        let outcome =
+            ExecutiveContext::new(self.state, &prepared.env, self.machine, &prepared.spec)
+                .transact(&prepared.transaction, options)?;
+
+        self.state
+            .update_state_post_tx_execution(!prepared.spec.cip645.fix_eip1153);
+
+        if let Some(burnt_fee) = outcome.try_as_executed().and_then(|e| e.burnt_fee) {
+            self.state.burn_by_cip1559(burnt_fee);
+        }
+
+        Ok(ConfluxTransactionExecution {
+            prepared,
+            outcome: TransactionExecutionOutcome::from_upstream(outcome)?,
+        })
+    }
+
+    fn prepare(
+        &self,
+        input: TransactionExecutionInput,
+    ) -> Result<PreparedTransactionExecution, ExecutionBlockContextError> {
+        let transaction = signed_transaction_for_dryrun(input.transaction);
+        let env =
+            build_transaction_env(self.machine, self.state, &transaction, &input.block_context)?;
+        let spec = build_execution_spec(self.machine, &env);
+
+        Ok(PreparedTransactionExecution {
+            transaction,
+            env,
+            spec,
+        })
+    }
 }
 
 fn transact_options_for(space: Space) -> TransactOptions<observer::ObservationObserver> {

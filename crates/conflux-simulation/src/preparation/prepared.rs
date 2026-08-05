@@ -2,7 +2,7 @@ use crate::{
     core_space::{CoreSpaceExecution, CoreSpaceStateAnchor, PreparedStoragePayer},
     espace::{EspaceExecution, SimulatedBlock},
     execution::TransactionExecutionInput,
-    state::RemoteStateReader,
+    state::ConfluxStateSource,
 };
 
 pub struct PreparedEspaceSimulation {
@@ -19,7 +19,7 @@ pub(crate) struct ReadyEspaceSimulation {
     pub(crate) simulated_block: SimulatedBlock,
     pub(crate) gas_limit: u64,
     pub(crate) execution_input: TransactionExecutionInput,
-    pub(crate) state_reader: RemoteStateReader,
+    pub(crate) state_source: ConfluxStateSource,
 }
 
 pub struct PreparedCoreSpaceSimulation {
@@ -37,5 +37,5 @@ pub(crate) struct ReadyCoreSpaceSimulation {
     pub(crate) gas_limit: u64,
     pub(crate) storage_payer: PreparedStoragePayer,
     pub(crate) execution_input: TransactionExecutionInput,
-    pub(crate) state_reader: RemoteStateReader,
+    pub(crate) state_source: ConfluxStateSource,
 }

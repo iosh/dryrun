@@ -9,7 +9,10 @@ use primitives::{LogEntry, receipt::StorageChange};
 use simulation_execution::ExecutedDetails;
 use thiserror::Error;
 
-use super::observer::{Observation, ObservationKey};
+use super::{
+    ExecutionBlockContextError,
+    observer::{Observation, ObservationKey},
+};
 use crate::primitive::u256_from_cfx;
 
 /// Execution details owned by this crate rather than by the upstream type map.
@@ -44,6 +47,9 @@ pub(crate) enum TransactionExecutionOutcome {
 
 #[derive(Debug, Error)]
 pub(crate) enum TransactionExecutionError {
+    #[error("execution block context failed: {0}")]
+    BlockContext(#[from] ExecutionBlockContextError),
+
     #[error("state access failed: {0}")]
     StateAccess(#[source] StateDbError),
 

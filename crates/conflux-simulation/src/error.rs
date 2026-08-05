@@ -59,6 +59,7 @@ impl From<ContractStandardsError> for ConfluxSimulationError {
 impl From<TransactionExecutionError> for ConfluxSimulationError {
     fn from(error: TransactionExecutionError) -> Self {
         match error {
+            TransactionExecutionError::BlockContext(error) => Self::BlockContext(error),
             TransactionExecutionError::StateAccess(error) => Self::StateAccess {
                 message: error.to_string(),
             },

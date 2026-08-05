@@ -9,15 +9,15 @@ use cfx_vm_types::{Env, Spec};
 use primitives::{BlockNumber, SignedTransaction};
 use tokio::runtime::Handle;
 
-use crate::state::{RemoteStateReader, new_rpc_backed_state};
+use crate::state::{ConfluxStateSource, new_conflux_state};
 
 use super::{ExecutionBlockContext, ExecutionBlockContextError, params::mainnet_common_params};
 
-pub(crate) fn build_rpc_backed_state(
-    reader: RemoteStateReader,
+pub(crate) fn build_conflux_state(
+    source: ConfluxStateSource,
     runtime_handle: Handle,
 ) -> StateDbResult<State> {
-    new_rpc_backed_state(reader, runtime_handle)
+    new_conflux_state(source, runtime_handle)
 }
 
 fn next_execution_block_number(

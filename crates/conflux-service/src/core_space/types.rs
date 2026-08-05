@@ -1,6 +1,5 @@
 use conflux_simulation as simulation;
 
-pub use crate::ConfluxTransactionRequest;
 pub use simulation::core_space::{
     Change, CoreSpaceChange, CoreSpaceEpochRef, CoreSpaceExecutedDetails, CoreSpaceExecution,
     CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode, CoreSpaceExecutionOutcome,
@@ -8,10 +7,14 @@ pub use simulation::core_space::{
     Erc721CollectionMetadata, NativeMetadata, SponsoredResource, SponsorshipConfiguration,
     SponsorshipEligibilityTarget,
 };
+pub use simulation::core_space::{
+    CoreAddress, CoreAddressNetwork, CoreSpaceAccessListItem,
+    CoreSpaceTransactionRequest as CoreSpaceTransactionInput, CoreSpaceTransactionVariantRequest,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreSpaceTransactionRequest {
-    pub transaction: ConfluxTransactionRequest,
+    pub transaction: CoreSpaceTransactionInput,
     pub storage_limit: Option<u64>,
     pub epoch_height: Option<u64>,
 }
