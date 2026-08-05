@@ -1,4 +1,5 @@
 mod core_space_internal;
+mod phases;
 mod provider;
 mod reader;
 mod rpc_types;
@@ -14,6 +15,7 @@ pub use self::provider::{ConfluxRpcError, ConfluxSimulationProvider, CoreSpaceRe
 
 pub(crate) use self::{
     core_space_internal::SponsorWhitelistStorageKey,
+    phases::{StatePhaseValues, execute_with_state_phases},
     reader::{AnchoredVoteLists, ConfluxStateSource, MaskedSponsorWhitelistEntries},
     rpc_types::{CoreSpaceRpcBlock, CoreSpaceRpcPoSBlock, EspaceRpcBlock},
     storage::new_conflux_state,

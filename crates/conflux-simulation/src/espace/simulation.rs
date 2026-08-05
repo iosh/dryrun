@@ -1,22 +1,35 @@
 use cfx_types::Space;
-use contract_standards::{MetadataRequests, StatePhase, state_requirements, verify};
+use contract_standards::{
+    MetadataRequests, StandardCandidate, StateRequirements, state_requirements, verify,
+};
 use simulation_changes::{PositionedChange, into_enriched_changes, sort_changes_by_position};
 use tokio::runtime::Handle;
 
 use crate::{
     ConfluxSimulationError,
     execution::{
-        ConfluxTransactionExecutor, TransactionExecutionOutcome, build_conflux_state,
-        build_mainnet_machine,
+        ConfluxTransactionExecutor, ObservationObserver, TransactionExecutionOutcome,
+        build_conflux_state, build_mainnet_machine,
     },
     preparation::{PreparedEspaceSimulation, PreparedEspaceSimulationState, ReadyEspaceSimulation},
     standards::{collect_standard_candidates, load_change_metadata, read_standard_state_values},
+    state::execute_with_state_phases,
 };
 
 use super::{
     EspaceSimulation, build_espace_execution,
-    changes::{collect_native_operations, read_native_balances, verify_native_changes},
+    changes::{
+        NativeOperations, collect_native_operations, read_native_balances, verify_native_changes,
+    },
 };
+
+struct EspaceAnalysisInput {
+    native_operations: NativeOperations,
+    standard_candidates: Vec<StandardCandidate>,
+    standard_state_requirements: StateRequirements,
+    execution_fee: alloy_primitives::U256,
+    burnt_fee: Option<alloy_primitives::U256>,
+}
 
 pub(crate) fn simulate(
     prepared_simulation: PreparedEspaceSimulation,
@@ -41,58 +54,63 @@ pub(crate) fn simulate(
                     }
                 })?;
             let machine = build_mainnet_machine();
-            let before_execution_snapshot = state.save();
-            let execution = ConfluxTransactionExecutor::new(&mut state, &machine)
-                .execute(execution_input)
-                .map_err(ConfluxSimulationError::from)?;
-            let prepared_execution = execution.prepared;
-            let mut transaction_outcome = execution.outcome;
-
-            let (execution_observations, execution_fee, burnt_fee) = match &mut transaction_outcome
-            {
-                TransactionExecutionOutcome::Success(executed_details) => (
-                    std::mem::take(&mut executed_details.observations),
-                    executed_details.common.fee,
-                    executed_details.common.burnt_fee,
-                ),
-                _ => {
-                    let espace_execution = build_espace_execution(
-                        chain_id,
-                        simulated_block,
-                        gas_limit,
-                        transaction_outcome,
+            let (execution, phase_values) = execute_with_state_phases(
+                &mut state,
+                |state| {
+                    ConfluxTransactionExecutor::new(state, &machine)
+                        .execute(execution_input, ObservationObserver::new(Space::Ethereum))
+                        .map_err(ConfluxSimulationError::from)
+                },
+                |execution| {
+                    let TransactionExecutionOutcome::Success(details) = &execution.outcome else {
+                        return Ok(None);
+                    };
+                    let native_operations = collect_native_operations(&details.observations)?;
+                    let standard_candidates =
+                        collect_standard_candidates(&details.observations, Space::Ethereum)?;
+                    let standard_state_requirements = state_requirements(&standard_candidates);
+                    Ok(Some(EspaceAnalysisInput {
+                        native_operations,
+                        standard_candidates,
+                        standard_state_requirements,
+                        execution_fee: details.common.fee,
+                        burnt_fee: details.common.burnt_fee,
+                    }))
+                },
+                |state, execution, input, state_phase| {
+                    let native_balances =
+                        read_native_balances(state, state_phase, &input.native_operations)?;
+                    let standard_state = read_standard_state_values(
+                        state,
+                        &machine,
+                        &execution.prepared,
+                        state_phase,
+                        &input.standard_state_requirements,
                     )?;
-                    return Ok(EspaceSimulation::new(espace_execution, Vec::new()));
-                }
+                    Ok((native_balances, standard_state))
+                },
+            )?;
+
+            let prepared_execution = execution.prepared;
+            let transaction_outcome = execution.outcome;
+            let Some((analysis_input, phase_values)) = phase_values else {
+                let espace_execution = build_espace_execution(
+                    chain_id,
+                    simulated_block,
+                    gas_limit,
+                    transaction_outcome,
+                )?;
+                return Ok(EspaceSimulation::new(espace_execution, Vec::new()));
             };
-            let native_operations = collect_native_operations(&execution_observations)?;
-            let standard_candidates =
-                collect_standard_candidates(execution_observations, Space::Ethereum)?;
-
-            let standard_state_requirements = state_requirements(&standard_candidates);
-            let after_execution_snapshot = state.save();
-
-            state.restore(before_execution_snapshot);
-            let before_native_balances =
-                read_native_balances(&state, StatePhase::Before, &native_operations)?;
-            let before_standard_state = read_standard_state_values(
-                &mut state,
-                &machine,
-                &prepared_execution,
-                StatePhase::Before,
-                &standard_state_requirements,
-            )?;
-
-            state.restore(after_execution_snapshot);
-            let after_native_balances =
-                read_native_balances(&state, StatePhase::After, &native_operations)?;
-            let after_standard_state = read_standard_state_values(
-                &mut state,
-                &machine,
-                &prepared_execution,
-                StatePhase::After,
-                &standard_state_requirements,
-            )?;
+            let EspaceAnalysisInput {
+                native_operations,
+                standard_candidates,
+                execution_fee,
+                burnt_fee,
+                ..
+            } = analysis_input;
+            let (before_native_balances, before_standard_state) = phase_values.before;
+            let (after_native_balances, after_standard_state) = phase_values.after;
 
             let standard_changes = verify(
                 &standard_candidates,

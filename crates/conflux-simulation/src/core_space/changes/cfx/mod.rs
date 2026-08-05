@@ -13,7 +13,7 @@ use contract_standards::Position;
 use primitives::{Action, SignedTransaction};
 
 pub(crate) use collection::collect_cfx_operations;
-pub(crate) use verification::{read_cfx_state_values, verify_cfx_changes};
+pub(crate) use verification::{CfxStateValues, read_cfx_state_values, verify_cfx_changes};
 
 use crate::{
     ConfluxSimulationError,

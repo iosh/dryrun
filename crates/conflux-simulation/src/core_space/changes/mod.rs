@@ -6,12 +6,13 @@ use contract_standards::{Position, PositionedStandardChange};
 use simulation_changes::{Change, ChangeMetadata, NativeMetadata};
 
 pub(crate) use cfx::{
-    collect_cfx_operations, determine_gas_fee_payer, read_cfx_state_values, verify_cfx_changes,
+    CfxBalanceLocation, CfxOperations, CfxStateValues, collect_cfx_operations,
+    determine_gas_fee_payer, read_cfx_state_values, verify_cfx_changes,
 };
 pub(crate) use staking::{
-    PoSStateRequirements, StakingContractActivation, collect_committed_staking_calls,
-    decode_pos_staking_events, read_pos_state_values, verify_pos_staking_changes,
-    verify_vote_lock_changes,
+    CommittedStakingCalls, PoSEvent, PoSStateRequirements, PoSStateValues,
+    StakingContractActivation, collect_committed_staking_calls, decode_pos_staking_events,
+    read_pos_state_values, verify_pos_staking_changes, verify_vote_lock_changes,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

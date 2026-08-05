@@ -23,9 +23,9 @@ pub(crate) use context::{
 };
 pub(crate) use env::build_conflux_state;
 pub use env::{build_execution_spec, build_mainnet_machine, build_transaction_env};
-pub(crate) use observer::Observation;
+pub(crate) use observer::{Observation, ObservationObserver};
 pub(crate) use outcome::{
-    ExecutedTransactionDetails, TransactionExecutionError, TransactionExecutionOutcome,
+    ConfluxExecutionOutput, TransactionExecutionError, TransactionExecutionOutcome,
 };
 pub use params::mainnet_common_params;
 pub use transaction::{
@@ -62,9 +62,10 @@ impl<'a> ConfluxTransactionExecutor<'a> {
     pub(crate) fn execute(
         self,
         input: TransactionExecutionInput,
+        observer: ObservationObserver,
     ) -> Result<ConfluxTransactionExecution, TransactionExecutionError> {
         let prepared = self.prepare(input)?;
-        let options = transact_options_for(prepared.transaction.space());
+        let options = transact_options_for(prepared.transaction.space(), observer);
 
         let outcome =
             ExecutiveContext::new(self.state, &prepared.env, self.machine, &prepared.spec)
@@ -100,9 +101,12 @@ impl<'a> ConfluxTransactionExecutor<'a> {
     }
 }
 
-fn transact_options_for(space: Space) -> TransactOptions<observer::ObservationObserver> {
+fn transact_options_for(
+    space: Space,
+    observer: ObservationObserver,
+) -> TransactOptions<ObservationObserver> {
     let mut options = TransactOptions {
-        observer: observer::ObservationObserver::new(space),
+        observer,
         settings: TransactSettings::all_checks(),
     };
 

@@ -15,13 +15,13 @@ use super::{
 };
 use crate::primitive::u256_from_cfx;
 
-/// Execution details owned by this crate rather than by the upstream type map.
+/// Conflux execution facts owned by this crate rather than by the upstream type map.
 #[derive(Debug)]
 #[expect(
     dead_code,
     reason = "some details are carried for the next analysis slices before they have consumers"
 )]
-pub(crate) struct ExecutedTransactionDetails {
+pub(crate) struct ConfluxExecutionOutput {
     pub(crate) common: ExecutedDetails<Option<AlloyU256>>,
     pub(crate) base_gas: u64,
     pub(crate) gas_sponsor_paid: bool,
@@ -36,10 +36,10 @@ pub(crate) struct ExecutedTransactionDetails {
 /// The normalized outcome exchanged between shared execution and each space.
 #[derive(Debug)]
 pub(crate) enum TransactionExecutionOutcome {
-    Success(ExecutedTransactionDetails),
+    Success(ConfluxExecutionOutput),
     Failed {
         error: ExecutionError,
-        details: ExecutedTransactionDetails,
+        details: ConfluxExecutionOutput,
     },
     NotExecutedDrop(TxDropError),
     NotExecutedToReconsiderPacking(ToRepackError),
@@ -91,7 +91,7 @@ impl TransactionExecutionOutcome {
 
 fn executed_transaction_details(
     executed: Executed,
-) -> Result<ExecutedTransactionDetails, TransactionExecutionError> {
+) -> Result<ConfluxExecutionOutput, TransactionExecutionError> {
     let Executed {
         base_gas,
         gas_used,
@@ -122,7 +122,7 @@ fn executed_transaction_details(
             value: gas_charged,
         })?;
 
-    Ok(ExecutedTransactionDetails {
+    Ok(ConfluxExecutionOutput {
         common: ExecutedDetails {
             gas_used,
             gas_charged,

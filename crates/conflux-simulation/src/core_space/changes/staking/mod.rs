@@ -4,12 +4,12 @@ mod pos;
 mod pos_state;
 mod vote_lock;
 
-pub(crate) use codec::decode_pos_staking_events;
+pub(crate) use codec::{PoSEvent, decode_pos_staking_events};
 pub(crate) use collection::{
     CommittedStakingCalls, StakingContractActivation, collect_committed_staking_calls,
 };
 pub(crate) use pos::verify_pos_staking_changes;
-pub(crate) use pos_state::{PoSStateRequirements, read_pos_state_values};
+pub(crate) use pos_state::{PoSStateRequirements, PoSStateValues, read_pos_state_values};
 pub(crate) use vote_lock::verify_vote_lock_changes;
 
 use alloy_primitives::{Address, B256, U256};

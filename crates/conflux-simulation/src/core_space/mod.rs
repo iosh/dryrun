@@ -1,3 +1,4 @@
+mod analysis;
 mod changes;
 mod execution;
 mod outcome;

@@ -5,7 +5,7 @@ use super::{
     CoreSpaceExecutedDetails, CoreSpaceExecution, CoreSpaceExecutionFailure,
     CoreSpaceExecutionFailureCode, CoreSpaceExecutionOutcome, CoreSpaceStateAnchor,
 };
-use crate::execution::{ExecutedTransactionDetails, TransactionExecutionOutcome};
+use crate::execution::{ConfluxExecutionOutput, TransactionExecutionOutcome};
 
 use super::PreparedStoragePayer;
 
@@ -59,7 +59,7 @@ pub(crate) fn build_core_space_not_executed(
 }
 
 fn into_core_space_details(
-    details: ExecutedTransactionDetails,
+    details: ConfluxExecutionOutput,
     storage_payer: Option<PreparedStoragePayer>,
 ) -> CoreSpaceExecutedDetails {
     CoreSpaceExecutedDetails {
