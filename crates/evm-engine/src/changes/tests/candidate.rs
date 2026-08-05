@@ -1,10 +1,8 @@
 use alloy_primitives::{Address, B256, Bytes, U256, keccak256};
 use contract_standards::{Position, StandardCandidate};
+use evm_simulation::EvmExecutionObservation;
 
-use super::super::{
-    contract_candidates::collect_contract_candidates, error::TransactionChangesError,
-    native::collect_native_candidates, observation::Observation,
-};
+use super::super::contract_candidates::collect_contract_candidates;
 
 fn indexed_address(address: Address) -> B256 {
     address.into_word()
@@ -15,20 +13,20 @@ fn event_observation<const N: usize>(
     signature: &str,
     indexed_topics: [B256; N],
     data: Bytes,
-) -> Observation {
+) -> EvmExecutionObservation {
     let mut topics = Vec::with_capacity(N + 1);
     topics.push(keccak256(signature));
     topics.extend(indexed_topics);
 
-    Observation::Log {
+    EvmExecutionObservation::Log {
         address,
         topics,
         data,
     }
 }
 
-fn call_observation(caller: Address, target: Address, value: u64) -> Observation {
-    Observation::Call {
+fn call_observation(caller: Address, target: Address, value: u64) -> EvmExecutionObservation {
+    EvmExecutionObservation::Call {
         caller,
         target,
         value: U256::from(value),
@@ -42,7 +40,7 @@ fn weth9_event_observation(
     signature: &str,
     account: Address,
     amount: u64,
-) -> Observation {
+) -> EvmExecutionObservation {
     event_observation(
         token,
         signature,
@@ -97,25 +95,4 @@ fn maps_malformed_event_error() {
         "transaction changes failed: failed to decode event at observation 0: \
          malformed Transfer event: expected ERC-20 or ERC-721 Transfer shape"
     );
-}
-
-#[test]
-fn rejects_nonzero_selfdestruct_to_self() {
-    let contract = Address::repeat_byte(0x01);
-    let amount = U256::from(7_u64);
-    let error = collect_native_candidates(&[Observation::SelfDestruct {
-        contract,
-        target: contract,
-        amount,
-    }])
-    .expect_err("selfdestruct-to-self");
-
-    assert!(matches!(
-        error,
-        TransactionChangesError::UnsupportedSelfDestructToSelf {
-            observation_index: 0,
-            contract: error_contract,
-            amount: error_amount,
-        } if error_contract == contract && error_amount == amount
-    ));
 }

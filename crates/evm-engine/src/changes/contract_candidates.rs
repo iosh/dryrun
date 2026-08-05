@@ -1,16 +1,15 @@
 use contract_standards::{Position, Record, StandardCandidate, collect_candidates};
+use evm_simulation::EvmExecutionObservation;
 
 use crate::EvmEngineError;
 
-use super::observation::Observation;
-
 pub(crate) fn collect_contract_candidates(
-    observations: &[Observation],
+    observations: &[EvmExecutionObservation],
 ) -> Result<Vec<StandardCandidate>, EvmEngineError> {
     Ok(collect_candidates(&collect_records(observations))?)
 }
 
-fn collect_records(observations: &[Observation]) -> Vec<Record> {
+fn collect_records(observations: &[EvmExecutionObservation]) -> Vec<Record> {
     observations
         .iter()
         .enumerate()
@@ -18,7 +17,7 @@ fn collect_records(observations: &[Observation]) -> Vec<Record> {
             let position = Position::new(index, 0);
 
             match observation {
-                Observation::Call {
+                EvmExecutionObservation::Call {
                     caller,
                     target,
                     value,
@@ -33,7 +32,7 @@ fn collect_records(observations: &[Observation]) -> Vec<Record> {
                     input_len: *input_len,
                     input_prefix: input_prefix.clone(),
                 }),
-                Observation::Log {
+                EvmExecutionObservation::Log {
                     address,
                     topics,
                     data,
@@ -43,7 +42,8 @@ fn collect_records(observations: &[Observation]) -> Vec<Record> {
                     topics: topics.clone(),
                     data: data.clone(),
                 }),
-                Observation::CreateTransfer { .. } | Observation::SelfDestruct { .. } => None,
+                EvmExecutionObservation::CreateTransfer { .. }
+                | EvmExecutionObservation::SelfDestruct { .. } => None,
             }
         })
         .collect()

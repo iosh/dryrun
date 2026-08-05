@@ -1,8 +1,11 @@
-use alloy_primitives::{Address, U256};
+use alloy::primitives::{Address, U256};
 use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub(crate) enum TransactionChangesError {
+#[derive(Debug, Error)]
+pub enum EvmNativeChangeError {
+    #[error("native analysis could not access the execution transition")]
+    TransitionUnavailable,
+
     #[error(
         "selfdestruct-to-self at observation {observation_index} burns \
          {amount} from {contract}, which cannot be represented"

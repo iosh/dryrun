@@ -4,8 +4,6 @@ use contract_standards::{
     ContractStandardsError, StateArithmeticOperation, StatePhase, StateRequirement,
 };
 
-use crate::changes::TransactionChangesError;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvmEngineInternalKind {
     NotReady,
@@ -92,12 +90,6 @@ impl EvmEngineError {
             kind,
             details: details.into(),
         }
-    }
-}
-
-impl From<TransactionChangesError> for EvmEngineError {
-    fn from(error: TransactionChangesError) -> Self {
-        Self::analysis_failed(format!("transaction changes failed: {error}"))
     }
 }
 

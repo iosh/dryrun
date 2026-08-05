@@ -12,11 +12,14 @@ use simulation_transaction::{
 };
 use thiserror::Error;
 
+mod changes;
 mod execution;
 
+pub use changes::{EvmNativeChangeError, analyze_native_changes};
 pub use execution::{
-    EvmBlockAnchor, EvmExecutionError, EvmExecutionFacts, EvmFeeSettlement, EvmStateSource,
-    EvmTransactionExecutor, MainnetEvm, MainnetEvmDatabase,
+    EvmBlockAnchor, EvmExecutionError, EvmExecutionObservation, EvmExecutionObserver,
+    EvmExecutionOutput, EvmFeeSettlement, EvmStateSource, EvmTransactionExecutor, MainnetEvm,
+    MainnetEvmDatabase,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

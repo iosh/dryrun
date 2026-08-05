@@ -1,29 +1,50 @@
 use std::collections::HashMap;
 
-use alloy_primitives::{Address, U256};
+use alloy::primitives::{Address, U256};
 use contract_standards::Position;
 use revm::state::EvmState;
+use simulation_changes::{Change, NativeMetadata, PositionedChange};
 
-use crate::{Change, NativeMetadata};
-
-use super::{PositionedChange, error::TransactionChangesError, observation::Observation};
+use crate::{
+    EvmExecutionObservation, EvmExecutionObserver, EvmExecutionOutput, EvmNativeChangeError,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct NativeCandidate {
+struct NativeCandidate {
     position: Position,
     from: Address,
     to: Address,
     amount: U256,
 }
 
-pub(crate) fn collect_native_candidates(
-    observations: &[Observation],
-) -> Result<Vec<NativeCandidate>, TransactionChangesError> {
+pub fn analyze_native_changes(
+    output: &EvmExecutionOutput<EvmExecutionObserver>,
+) -> Result<Vec<PositionedChange>, EvmNativeChangeError> {
+    let observations = output.observations();
+    let candidates = collect_native_candidates(&observations)?;
+    let fee_settlement = output.fee_settlement();
+
+    check_native_balances(
+        output
+            .transition()
+            .map_err(|_| EvmNativeChangeError::TransitionUnavailable)?,
+        &candidates,
+        output.caller(),
+        output.beneficiary(),
+        fee_settlement.gas_precharge,
+        fee_settlement.caller_refund,
+        fee_settlement.beneficiary_reward,
+    )
+}
+
+fn collect_native_candidates(
+    observations: &[EvmExecutionObservation],
+) -> Result<Vec<NativeCandidate>, EvmNativeChangeError> {
     let mut candidates = Vec::new();
 
     for (observation_index, observation) in observations.iter().enumerate() {
         let candidate = match observation {
-            Observation::Call {
+            EvmExecutionObservation::Call {
                 caller,
                 target,
                 value,
@@ -34,7 +55,7 @@ pub(crate) fn collect_native_candidates(
                 to: *target,
                 amount: *value,
             }),
-            Observation::CreateTransfer { from, to, amount } if !amount.is_zero() => {
+            EvmExecutionObservation::CreateTransfer { from, to, amount } if !amount.is_zero() => {
                 Some(NativeCandidate {
                     position: Position::new(observation_index, 0),
                     from: *from,
@@ -42,19 +63,19 @@ pub(crate) fn collect_native_candidates(
                     amount: *amount,
                 })
             }
-            Observation::SelfDestruct { amount, .. } if amount.is_zero() => None,
-            Observation::SelfDestruct {
+            EvmExecutionObservation::SelfDestruct { amount, .. } if amount.is_zero() => None,
+            EvmExecutionObservation::SelfDestruct {
                 contract,
                 target,
                 amount,
             } if contract == target => {
-                return Err(TransactionChangesError::UnsupportedSelfDestructToSelf {
+                return Err(EvmNativeChangeError::UnsupportedSelfDestructToSelf {
                     observation_index,
                     contract: *contract,
                     amount: *amount,
                 });
             }
-            Observation::SelfDestruct {
+            EvmExecutionObservation::SelfDestruct {
                 contract,
                 target,
                 amount,
@@ -64,9 +85,9 @@ pub(crate) fn collect_native_candidates(
                 to: *target,
                 amount: *amount,
             }),
-            Observation::Call { .. }
-            | Observation::CreateTransfer { .. }
-            | Observation::Log { .. } => None,
+            EvmExecutionObservation::Call { .. }
+            | EvmExecutionObservation::CreateTransfer { .. }
+            | EvmExecutionObservation::Log { .. } => None,
         };
 
         if let Some(candidate) = candidate {
@@ -77,7 +98,7 @@ pub(crate) fn collect_native_candidates(
     Ok(candidates)
 }
 
-pub(crate) fn check_native_balances(
+fn check_native_balances(
     state: &EvmState,
     candidates: &[NativeCandidate],
     caller: Address,
@@ -85,7 +106,7 @@ pub(crate) fn check_native_balances(
     gas_precharge: U256,
     caller_refund: U256,
     beneficiary_reward: U256,
-) -> Result<Vec<PositionedChange>, TransactionChangesError> {
+) -> Result<Vec<PositionedChange>, EvmNativeChangeError> {
     let mut balances = state
         .iter()
         .map(|(address, account)| (*address, account.original_info.balance))
@@ -118,7 +139,7 @@ pub(crate) fn check_native_balances(
         let replayed_balance = balances
             .get(address)
             .copied()
-            .ok_or(TransactionChangesError::NativeAccountMissing { address: *address })?;
+            .ok_or(EvmNativeChangeError::NativeAccountMissing { address: *address })?;
 
         let state_balance = if account.is_selfdestructed() {
             U256::ZERO
@@ -127,7 +148,7 @@ pub(crate) fn check_native_balances(
         };
 
         if replayed_balance != state_balance {
-            return Err(TransactionChangesError::NativeBalanceMismatch {
+            return Err(EvmNativeChangeError::NativeBalanceMismatch {
                 address: *address,
                 replayed_balance,
                 state_balance,
@@ -142,20 +163,19 @@ fn decrease_balance(
     balances: &mut HashMap<Address, U256>,
     address: Address,
     amount: U256,
-) -> Result<(), TransactionChangesError> {
+) -> Result<(), EvmNativeChangeError> {
     let balance = balances
         .get_mut(&address)
-        .ok_or(TransactionChangesError::NativeAccountMissing { address })?;
+        .ok_or(EvmNativeChangeError::NativeAccountMissing { address })?;
 
     let current = *balance;
-    *balance =
-        current
-            .checked_sub(amount)
-            .ok_or(TransactionChangesError::NativeBalanceUnderflow {
-                address,
-                balance: current,
-                amount,
-            })?;
+    *balance = current
+        .checked_sub(amount)
+        .ok_or(EvmNativeChangeError::NativeBalanceUnderflow {
+            address,
+            balance: current,
+            amount,
+        })?;
 
     Ok(())
 }
@@ -164,20 +184,19 @@ fn increase_balance(
     balances: &mut HashMap<Address, U256>,
     address: Address,
     amount: U256,
-) -> Result<(), TransactionChangesError> {
+) -> Result<(), EvmNativeChangeError> {
     let balance = balances
         .get_mut(&address)
-        .ok_or(TransactionChangesError::NativeAccountMissing { address })?;
+        .ok_or(EvmNativeChangeError::NativeAccountMissing { address })?;
 
     let current = *balance;
-    *balance =
-        current
-            .checked_add(amount)
-            .ok_or(TransactionChangesError::NativeBalanceOverflow {
-                address,
-                balance: current,
-                amount,
-            })?;
+    *balance = current
+        .checked_add(amount)
+        .ok_or(EvmNativeChangeError::NativeBalanceOverflow {
+            address,
+            balance: current,
+            amount,
+        })?;
 
     Ok(())
 }

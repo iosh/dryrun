@@ -1,9 +1,13 @@
 mod chain_spec;
 mod env;
 mod fee_settlement;
+mod observation;
 mod state;
 
-use alloy::consensus::{BlockHeader, Header, Sealed};
+use alloy::{
+    consensus::{BlockHeader, Header, Sealed},
+    primitives::Address,
+};
 use revm::{
     Context, ExecuteCommitEvm, InspectEvm, MainBuilder, MainContext, MainnetEvm as RevmMainnetEvm,
     context::{BlockEnv, CfgEnv, TxEnv},
@@ -27,6 +31,8 @@ pub type MainnetEvmDatabase = state::MainnetEvmDatabase;
 pub type MainnetEvm<INSP = ()> = MainnetEvmWithDatabase<MainnetEvmDatabase, INSP>;
 type MainnetEvmWithDatabase<DB, INSP = ()> =
     RevmMainnetEvm<Context<BlockEnv, TxEnv, CfgEnv, DB>, INSP>;
+
+pub use observation::{EvmExecutionObservation, EvmExecutionObserver};
 
 #[derive(Debug, Error)]
 pub enum EvmExecutionError {
@@ -59,14 +65,14 @@ pub enum EvmExecutionError {
 }
 
 #[derive(Debug)]
-pub struct EvmExecutionFacts<INSP> {
+pub struct EvmExecutionOutput<INSP> {
     result: ExecutionResult<HaltReason>,
     transition: Option<EvmState>,
     fee_settlement: EvmFeeSettlement,
     evm: MainnetEvm<INSP>,
 }
 
-impl<INSP> EvmExecutionFacts<INSP> {
+impl<INSP> EvmExecutionOutput<INSP> {
     pub fn result(&self) -> &ExecutionResult<HaltReason> {
         &self.result
     }
@@ -79,6 +85,14 @@ impl<INSP> EvmExecutionFacts<INSP> {
 
     pub fn fee_settlement(&self) -> &EvmFeeSettlement {
         &self.fee_settlement
+    }
+
+    pub fn caller(&self) -> Address {
+        self.evm.ctx_ref().tx.caller
+    }
+
+    pub fn beneficiary(&self) -> Address {
+        self.evm.ctx_ref().block.beneficiary
     }
 
     pub fn evm_mut(&mut self) -> &mut MainnetEvm<INSP> {
@@ -103,6 +117,12 @@ impl<INSP> EvmExecutionFacts<INSP> {
             .ok_or(EvmExecutionError::TransitionAlreadyApplied)?;
         self.evm.commit(transition);
         Ok(())
+    }
+}
+
+impl EvmExecutionOutput<EvmExecutionObserver> {
+    pub fn observations(&self) -> Vec<EvmExecutionObservation> {
+        self.evm.inspector.observations()
     }
 }
 
@@ -144,7 +164,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
     pub fn execute(
         mut self,
         transaction: &SimulationTransaction,
-    ) -> Result<EvmExecutionFacts<INSP>, EvmExecutionError>
+    ) -> Result<EvmExecutionOutput<INSP>, EvmExecutionError>
     where
         INSP: revm::Inspector<Context<BlockEnv, TxEnv, CfgEnv, MainnetEvmDatabase>, EthInterpreter>,
     {
@@ -179,7 +199,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
             base_fee_per_gas,
         )?;
 
-        Ok(EvmExecutionFacts {
+        Ok(EvmExecutionOutput {
             result: result_and_state.result,
             transition: Some(result_and_state.state),
             fee_settlement,

@@ -6,8 +6,7 @@ mod token_state_reads;
 use crate::{
     EvmEngineError, EvmExecutionInput, EvmSimulation,
     changes::{
-        ChangeObservationInspector, PositionedChange, check_native_balances,
-        collect_contract_candidates, collect_native_candidates, into_enriched_changes,
+        PositionedChange, collect_contract_candidates, into_enriched_changes,
         sort_changes_by_position,
     },
     execution::{
@@ -18,12 +17,12 @@ use crate::{
 };
 use alloy::providers::RootProvider;
 use evm_simulation::{
-    EvmBlockAnchor, EvmExecutionError, EvmStateSource, EvmTransactionExecutor, MainnetEvmDatabase,
+    EvmBlockAnchor, EvmExecutionError, EvmExecutionObserver, EvmNativeChangeError, EvmStateSource,
+    EvmTransactionExecutor, MainnetEvmDatabase, analyze_native_changes,
 };
 use revm::{
     Context,
     context::{BlockEnv, CfgEnv, TxEnv},
-    handler::EvmTr,
 };
 use tokio::runtime::Handle;
 
@@ -49,12 +48,12 @@ pub(crate) fn simulate_execution(
         state_source,
         block.cloned_header(),
         chain_id,
-        ChangeObservationInspector::new(),
+        EvmExecutionObserver::new(),
     )
     .map_err(map_execution_error)?;
 
-    let mut facts = match executor.execute(&transaction) {
-        Ok(facts) => facts,
+    let mut output = match executor.execute(&transaction) {
+        Ok(output) => output,
         Err(EvmExecutionError::NotExecuted(error)) => {
             return Ok(EvmSimulation::new(
                 build_not_executed(chain_id, &block, &transaction, error),
@@ -65,45 +64,28 @@ pub(crate) fn simulate_execution(
     };
 
     let execution = build_execution(
-        facts.result().clone(),
+        output.result().clone(),
         chain_id,
         &block,
-        facts.fee_settlement(),
+        output.fee_settlement(),
     );
-    if !facts.result().is_success() {
+    if !output.result().is_success() {
         return Ok(EvmSimulation::new(execution, Vec::new()));
     }
 
-    let observations = facts.take_inspector().into_observations();
-    let native_candidates = collect_native_candidates(&observations)?;
-    let candidates = collect_contract_candidates(&observations)?;
+    let candidates = collect_contract_candidates(&output.observations())?;
     let requirements = state_requirements(&candidates);
 
-    let fee_settlement = facts.fee_settlement();
-    let gas_precharge = fee_settlement.gas_precharge;
-    let caller_refund = fee_settlement.caller_refund;
-    let beneficiary_reward = fee_settlement.beneficiary_reward;
-    let (caller, beneficiary) = {
-        let evm = facts.evm_mut();
-        (evm.ctx().tx.caller, evm.ctx().block.beneficiary)
-    };
-    let mut positioned_changes = check_native_balances(
-        facts.transition().map_err(map_execution_error)?,
-        &native_candidates,
-        caller,
-        beneficiary,
-        gas_precharge,
-        caller_refund,
-        beneficiary_reward,
-    )?;
+    let mut positioned_changes =
+        analyze_native_changes(&output).map_err(map_native_change_error)?;
 
     let before_token_state =
-        read_token_state_values(facts.evm_mut(), &transaction, chain_id, &requirements)?;
+        read_token_state_values(output.evm_mut(), &transaction, chain_id, &requirements)?;
 
-    facts.apply_transition().map_err(map_execution_error)?;
+    output.apply_transition().map_err(map_execution_error)?;
 
     let after_token_state =
-        read_token_state_values(facts.evm_mut(), &transaction, chain_id, &requirements)?;
+        read_token_state_values(output.evm_mut(), &transaction, chain_id, &requirements)?;
     let standard_changes = verify(&candidates, &before_token_state, &after_token_state)?;
     let metadata_requests = MetadataRequests::from_changes(&standard_changes);
     positioned_changes.extend(standard_changes.into_iter().map(PositionedChange::from));
@@ -113,11 +95,20 @@ pub(crate) fn simulate_execution(
     } else {
         sort_changes_by_position(&mut positioned_changes);
         let metadata =
-            load_change_metadata(facts.evm_mut(), &transaction, chain_id, metadata_requests)?;
+            load_change_metadata(output.evm_mut(), &transaction, chain_id, metadata_requests)?;
         into_enriched_changes(positioned_changes, &metadata)
     };
 
     Ok(EvmSimulation::new(execution, changes))
+}
+
+fn map_native_change_error(error: EvmNativeChangeError) -> EvmEngineError {
+    match error {
+        EvmNativeChangeError::TransitionUnavailable => EvmEngineError::engine_execution_error(
+            "transaction execution transition was unavailable during native analysis",
+        ),
+        error => EvmEngineError::analysis_failed(format!("transaction changes failed: {error}")),
+    }
 }
 
 fn map_execution_error(error: EvmExecutionError) -> EvmEngineError {
