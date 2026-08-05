@@ -4,7 +4,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-conflux-engine = { workspace = true }
+conflux-simulation = { workspace = true }
 conflux-rpc = { workspace = true }
 conflux-service = { workspace = true }
 evm-simulation = { workspace = true }

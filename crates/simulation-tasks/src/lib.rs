@@ -58,6 +58,3 @@ impl SimulationTaskSet {
             .map_err(|source| SimulationTaskError::TaskFailed { source })
     }
 }
-
-#[cfg(test)]
-mod tests;

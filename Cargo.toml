@@ -7,7 +7,7 @@ members = [
     "crates/evm-simulation",
     "crates/evm-rpc",
     "crates/evm-service",
-    "crates/conflux-engine",
+    "crates/conflux-simulation",
     "crates/conflux-rpc",
     "crates/conflux-service",
     "crates/simulation-changes",
@@ -26,7 +26,7 @@ conflux-provider = { path = "crates/conflux-provider" }
 evm-simulation = { path = "crates/evm-simulation" }
 evm-rpc = { path = "crates/evm-rpc" }
 evm-service = { path = "crates/evm-service" }
-conflux-engine = { path = "crates/conflux-engine" }
+conflux-simulation = { path = "crates/conflux-simulation" }
 conflux-rpc = { path = "crates/conflux-rpc" }
 conflux-service = { path = "crates/conflux-service" }
 simulation-changes = { path = "crates/simulation-changes" }

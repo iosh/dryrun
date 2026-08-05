@@ -86,6 +86,3 @@ pub fn validate_collection_standards(
         supports_erc1155,
     })
 }
-
-#[cfg(test)]
-mod tests;

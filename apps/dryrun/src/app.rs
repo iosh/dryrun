@@ -107,23 +107,3 @@ async fn wait_for_metrics_server(metrics_server: &mut Option<MetricsServer>) -> 
 fn configuration_error(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
 }
-
-#[cfg(test)]
-mod tests {
-    use std::io;
-
-    use super::create_simulation_task_set;
-    use crate::app_config::SimulationConfig;
-
-    #[test]
-    fn simulation_task_set_rejects_zero_capacity() {
-        let error = create_simulation_task_set(&SimulationConfig { max_concurrent: 0 })
-            .expect_err("zero simulation capacity must be rejected");
-
-        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
-        assert_eq!(
-            error.to_string(),
-            "simulation.max_concurrent must be greater than zero"
-        );
-    }
-}

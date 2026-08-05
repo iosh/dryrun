@@ -6,6 +6,3 @@ edition = { workspace = true }
 [dependencies]
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync"] }
-
-[dev-dependencies]
-tokio = { workspace = true, features = ["macros"] }

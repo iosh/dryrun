@@ -18,7 +18,7 @@ impl EvmSimulationInternalKind {
             Self::NotReady => "not_ready",
             Self::BlockContext => "block_context_error",
             Self::StateAccess => "state_access_error",
-            Self::Execution => "engine_execution_error",
+            Self::Execution => "simulation_execution_error",
             Self::Analysis => "analysis_failed",
             Self::Unexpected => "unexpected",
         }

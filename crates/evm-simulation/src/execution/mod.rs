@@ -179,7 +179,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
             }
             Err(EVMError::Header(error)) => {
                 return Err(EvmExecutionError::BlockContext(format!(
-                    "engine header validation failed: {error}"
+                    "EVM header validation failed: {error}"
                 )));
             }
             Err(EVMError::Database(error)) => {
@@ -189,7 +189,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
             }
             Err(EVMError::Custom(error)) => {
                 return Err(EvmExecutionError::Execution(format!(
-                    "engine execution failed: {error}"
+                    "EVM execution failed: {error}"
                 )));
             }
         };

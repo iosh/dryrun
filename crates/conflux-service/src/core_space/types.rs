@@ -1,7 +1,7 @@
-use conflux_engine as engine;
+use conflux_simulation as simulation;
 
 pub use crate::ConfluxTransactionRequest;
-pub use engine::core_space::{
+pub use simulation::core_space::{
     Change, CoreSpaceChange, CoreSpaceEpochRef, CoreSpaceExecutedDetails, CoreSpaceExecution,
     CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode, CoreSpaceExecutionOutcome,
     CoreSpaceSimulation, CoreSpaceStateAnchor, CrossSpaceAddress, Erc20Metadata,

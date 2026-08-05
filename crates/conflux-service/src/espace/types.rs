@@ -1,6 +1,6 @@
 pub use crate::ConfluxTransactionRequest;
-use conflux_engine as engine;
-pub use engine::espace::{
+use conflux_simulation as simulation;
+pub use simulation::espace::{
     Change, Erc20Metadata, Erc721CollectionMetadata, EspaceBlockRef, EspaceExecutedDetails,
     EspaceExecution, EspaceExecutionFailure, EspaceExecutionFailureCode, EspaceExecutionOutcome,
     EspaceSimulation, NativeMetadata, SimulatedBlock,

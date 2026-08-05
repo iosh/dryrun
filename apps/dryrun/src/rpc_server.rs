@@ -2,10 +2,12 @@ use std::{io, sync::Arc};
 
 use alloy::providers::RootProvider;
 use alloy_rpc_client::RpcClient;
-use conflux_engine::{ConfluxEngine, HttpConfluxProvider, config::ConfluxChainConfig};
 use conflux_provider::ConfluxProvider;
 use conflux_rpc::build_rpc_module as build_conflux_rpc_module;
 use conflux_service::ConfluxService;
+use conflux_simulation::{
+    ConfluxSimulation, ConfluxSimulationProvider, config::ConfluxChainConfig,
+};
 use evm_rpc::{DryrunRpcServer, RpcHandler};
 use evm_service::SimulationService;
 use evm_simulation::{EvmSimulationPreparer, EvmSimulator};
@@ -90,16 +92,12 @@ fn add_conflux_rpc_module(
     let conflux_chain = ConfluxChainConfig::mainnet();
     let core_space_address_network = conflux_chain.core_space_address_network;
     let conflux_provider = Arc::new(create_conflux_provider(config, &conflux_chain)?);
-    let conflux_engine = Arc::new(ConfluxEngine::new(
+    let conflux_simulation = Arc::new(ConfluxSimulation::new(
         conflux_chain,
         Arc::clone(&conflux_provider),
         tokio::runtime::Handle::current(),
     ));
-    let conflux_service = Arc::new(ConfluxService::new(
-        conflux_provider,
-        conflux_engine,
-        simulation_tasks,
-    ));
+    let conflux_service = Arc::new(ConfluxService::new(conflux_simulation, simulation_tasks));
 
     rpc_module
         .merge(build_conflux_rpc_module(
@@ -121,19 +119,24 @@ fn create_ethereum_provider(config: &EthereumConfig) -> io::Result<RootProvider>
 fn create_conflux_provider(
     config: &ConfluxConfig,
     chain: &ConfluxChainConfig,
-) -> io::Result<HttpConfluxProvider> {
+) -> io::Result<ConfluxSimulationProvider> {
+    let espace_provider = RootProvider::new_http(
+        config
+            .espace_rpc_url
+            .parse()
+            .map_err(|error| configuration_error(format!("invalid eSpace RPC URL: {error}")))?,
+    );
     let core_space_provider = Arc::new(ConfluxProvider::new(RpcClient::new_http(
         config
             .core_space_rpc_url
             .parse()
             .map_err(|error| configuration_error(format!("invalid Core Space RPC URL: {error}")))?,
     )));
-    HttpConfluxProvider::new(
-        &config.espace_rpc_url,
+    Ok(ConfluxSimulationProvider::new(
+        espace_provider,
         core_space_provider,
         chain.core_space_address_network,
-    )
-    .map_err(|error| configuration_error(format!("failed to create Conflux provider: {error}")))
+    ))
 }
 
 fn startup_error(message: impl Into<String>) -> io::Error {
