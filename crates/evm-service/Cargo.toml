@@ -4,7 +4,6 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
-evm-engine = { workspace = true }
 evm-simulation = { workspace = true }
 simulation-transaction = { workspace = true }
 simulation-tasks = { workspace = true }

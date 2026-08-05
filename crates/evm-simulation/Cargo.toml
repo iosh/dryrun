@@ -7,6 +7,7 @@ edition = { workspace = true }
 alloy = { workspace = true }
 alloy-chains = { workspace = true }
 alloy-hardforks = { workspace = true }
+alloy-primitives = { workspace = true }
 contract-standards = { workspace = true }
 revm = { workspace = true, features = [
     "alloydb",
@@ -16,6 +17,7 @@ revm = { workspace = true, features = [
     "optional_no_base_fee",
 ] }
 simulation-changes = { workspace = true }
+simulation-execution = { workspace = true }
 simulation-transaction = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }

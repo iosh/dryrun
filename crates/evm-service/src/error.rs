@@ -1,5 +1,4 @@
-use evm_engine::EvmEngineError;
-use evm_simulation::EvmPreparationError;
+use evm_simulation::{EvmPreparationError, EvmSimulationError};
 use simulation_tasks::SimulationTaskError;
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -28,7 +27,7 @@ pub enum SimulationServiceError {
     },
 
     #[error(transparent)]
-    Engine(#[from] EvmEngineError),
+    Simulation(#[from] EvmSimulationError),
 }
 
 impl SimulationServiceError {
@@ -43,7 +42,7 @@ impl SimulationServiceError {
     }
 
     pub fn is_not_supported(&self) -> bool {
-        matches!(self, Self::Engine(error) if error.is_not_supported())
+        matches!(self, Self::Simulation(error) if error.is_not_supported())
     }
 
     pub fn kind_code(&self) -> Option<&'static str> {
@@ -53,7 +52,7 @@ impl SimulationServiceError {
             Self::TaskSetClosed => Some("task_set_closed"),
             Self::AttemptTask { .. } => Some("attempt_task_error"),
             Self::ExecutionTask { .. } => Some("execution_task_error"),
-            Self::Engine(error) => error.kind_code(),
+            Self::Simulation(error) => error.kind_code(),
         }
     }
 
@@ -64,7 +63,7 @@ impl SimulationServiceError {
             Self::TaskSetClosed => "simulation task set is closed".to_owned(),
             Self::AttemptTask { .. } => "simulation attempt task failed".to_owned(),
             Self::ExecutionTask { .. } => "EVM execution task failed".to_owned(),
-            Self::Engine(error) => error.details().to_owned(),
+            Self::Simulation(error) => error.details().to_owned(),
         }
     }
 }

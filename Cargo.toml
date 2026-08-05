@@ -4,7 +4,6 @@ members = [
     "apps/dryrun",
     "crates/contract-standards",
     "crates/conflux-provider",
-    "crates/evm-engine",
     "crates/evm-simulation",
     "crates/evm-rpc",
     "crates/evm-service",
@@ -24,7 +23,6 @@ edition = "2024"
 [workspace.dependencies]
 contract-standards = { path = "crates/contract-standards" }
 conflux-provider = { path = "crates/conflux-provider" }
-evm-engine = { path = "crates/evm-engine" }
 evm-simulation = { path = "crates/evm-simulation" }
 evm-rpc = { path = "crates/evm-rpc" }
 evm-service = { path = "crates/evm-service" }

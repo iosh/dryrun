@@ -29,8 +29,9 @@ use self::{
 
 pub type MainnetEvmDatabase = state::MainnetEvmDatabase;
 pub type MainnetEvm<INSP = ()> = MainnetEvmWithDatabase<MainnetEvmDatabase, INSP>;
-type MainnetEvmWithDatabase<DB, INSP = ()> =
+pub(crate) type MainnetEvmWithDb<DB, INSP = ()> =
     RevmMainnetEvm<Context<BlockEnv, TxEnv, CfgEnv, DB>, INSP>;
+type MainnetEvmWithDatabase<DB, INSP = ()> = MainnetEvmWithDb<DB, INSP>;
 
 pub use observation::{EvmExecutionObservation, EvmExecutionObserver};
 

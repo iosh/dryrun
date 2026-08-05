@@ -2976,7 +2976,6 @@ dependencies = [
  "conflux-provider",
  "conflux-rpc",
  "conflux-service",
- "evm-engine",
  "evm-rpc",
  "evm-service",
  "evm-simulation",
@@ -3193,23 +3192,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "evm-engine"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "alloy-chains",
- "alloy-primitives",
- "contract-standards",
- "evm-simulation",
- "revm",
- "simulation-changes",
- "simulation-execution",
- "simulation-transaction",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
 name = "evm-rpc"
 version = "0.1.0"
 dependencies = [
@@ -3228,7 +3210,6 @@ name = "evm-service"
 version = "0.1.0"
 dependencies = [
  "alloy",
- "evm-engine",
  "evm-simulation",
  "simulation-tasks",
  "simulation-transaction",
@@ -3243,9 +3224,11 @@ dependencies = [
  "alloy",
  "alloy-chains",
  "alloy-hardforks",
+ "alloy-primitives",
  "contract-standards",
  "revm",
  "simulation-changes",
+ "simulation-execution",
  "simulation-transaction",
  "thiserror 2.0.18",
  "tokio",

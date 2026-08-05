@@ -7,7 +7,6 @@ edition = { workspace = true }
 conflux-engine = { workspace = true }
 conflux-rpc = { workspace = true }
 conflux-service = { workspace = true }
-evm-engine = { workspace = true }
 evm-simulation = { workspace = true }
 evm-rpc = { workspace = true }
 evm-service = { workspace = true }

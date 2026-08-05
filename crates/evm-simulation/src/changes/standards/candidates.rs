@@ -1,11 +1,10 @@
 use contract_standards::{Position, Record, StandardCandidate, collect_candidates};
-use evm_simulation::EvmExecutionObservation;
 
-use crate::EvmEngineError;
+use crate::{EvmExecutionObservation, EvmSimulationError};
 
-pub(crate) fn collect_contract_candidates(
+pub(crate) fn collect_standard_candidates(
     observations: &[EvmExecutionObservation],
-) -> Result<Vec<StandardCandidate>, EvmEngineError> {
+) -> Result<Vec<StandardCandidate>, EvmSimulationError> {
     Ok(collect_candidates(&collect_records(observations))?)
 }
 

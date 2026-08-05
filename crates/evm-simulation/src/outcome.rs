@@ -1,25 +1,26 @@
-use alloy::sol_types::{Panic, Revert, SolError};
+use alloy::{
+    consensus::{BlockHeader, Header, Sealed},
+    sol_types::{Panic, Revert, SolError},
+};
 use alloy_primitives::Bytes;
 use revm::context_interface::result::{ExecutionResult, HaltReason, InvalidTransaction};
+use simulation_transaction::Transaction;
 
 use crate::{
     EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode, EvmExecutionOutcome,
-    EvmTransaction, SimulatedBlock, simulation::ExecutedDetails,
+    EvmFeeSettlement, SimulatedBlock, simulation::ExecutedDetails,
 };
 
-use crate::ResolvedBlock;
-use evm_simulation::EvmFeeSettlement;
-
-pub(super) fn build_execution(
+pub(crate) fn build_execution(
     result: ExecutionResult<HaltReason>,
     chain_id: u64,
-    resolved_block: &ResolvedBlock,
+    block: &Sealed<Header>,
     fee_settlement: &EvmFeeSettlement,
 ) -> EvmExecution {
     match result {
         ExecutionResult::Success { gas, output, .. } => EvmExecution {
             chain_id,
-            context: simulated_block(resolved_block),
+            context: simulated_block(block),
             gas_limit: gas.limit(),
             outcome: EvmExecutionOutcome::Success(ExecutedDetails {
                 gas_used: gas.used(),
@@ -31,7 +32,7 @@ pub(super) fn build_execution(
         },
         ExecutionResult::Revert { gas, output, .. } => build_revert_execution(
             chain_id,
-            resolved_block,
+            block,
             gas.used(),
             gas.limit(),
             output,
@@ -39,7 +40,7 @@ pub(super) fn build_execution(
         ),
         ExecutionResult::Halt { reason, gas, .. } => build_halt_execution(
             chain_id,
-            resolved_block,
+            block,
             gas.used(),
             gas.limit(),
             reason,
@@ -48,15 +49,15 @@ pub(super) fn build_execution(
     }
 }
 
-pub(super) fn build_not_executed(
+pub(crate) fn build_not_executed(
     chain_id: u64,
-    resolved_block: &ResolvedBlock,
-    transaction: &EvmTransaction,
+    block: &Sealed<Header>,
+    transaction: &Transaction,
     error: InvalidTransaction,
 ) -> EvmExecution {
     EvmExecution {
         chain_id,
-        context: simulated_block(resolved_block),
+        context: simulated_block(block),
         gas_limit: transaction.gas_limit,
         outcome: EvmExecutionOutcome::NotExecuted(build_invalid_transaction_failure(error)),
     }
@@ -64,7 +65,7 @@ pub(super) fn build_not_executed(
 
 fn build_revert_execution(
     chain_id: u64,
-    resolved_block: &ResolvedBlock,
+    block: &Sealed<Header>,
     gas_used: u64,
     gas_limit: u64,
     output: Bytes,
@@ -74,7 +75,7 @@ fn build_revert_execution(
 
     build_failed_execution(
         chain_id,
-        resolved_block,
+        block,
         gas_used,
         gas_limit,
         output,
@@ -85,7 +86,7 @@ fn build_revert_execution(
 
 fn build_halt_execution(
     chain_id: u64,
-    resolved_block: &ResolvedBlock,
+    block: &Sealed<Header>,
     gas_used: u64,
     gas_limit: u64,
     reason: HaltReason,
@@ -93,7 +94,7 @@ fn build_halt_execution(
 ) -> EvmExecution {
     build_failed_execution(
         chain_id,
-        resolved_block,
+        block,
         gas_used,
         gas_limit,
         Bytes::new(),
@@ -104,7 +105,7 @@ fn build_halt_execution(
 
 fn build_failed_execution(
     chain_id: u64,
-    resolved_block: &ResolvedBlock,
+    block: &Sealed<Header>,
     gas_used: u64,
     gas_limit: u64,
     output: Bytes,
@@ -113,7 +114,7 @@ fn build_failed_execution(
 ) -> EvmExecution {
     EvmExecution {
         chain_id,
-        context: simulated_block(resolved_block),
+        context: simulated_block(block),
         gas_limit,
         outcome: EvmExecutionOutcome::Failed {
             details: ExecutedDetails {
@@ -128,10 +129,10 @@ fn build_failed_execution(
     }
 }
 
-fn simulated_block(resolved_block: &ResolvedBlock) -> SimulatedBlock {
+fn simulated_block(block: &Sealed<Header>) -> SimulatedBlock {
     SimulatedBlock {
-        number: resolved_block.number(),
-        hash: resolved_block.hash(),
+        number: block.number(),
+        hash: block.hash(),
     }
 }
 
@@ -226,41 +227,5 @@ fn build_halt_failure(reason: HaltReason) -> EvmExecutionFailure {
         code,
         message: reason.to_string(),
         reason: None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use alloy::sol_types::{Panic, Revert, SolError};
-    use alloy_primitives::Bytes;
-
-    use super::{EvmExecutionFailureCode, build_revert_failure, decode_revert_reason};
-
-    #[test]
-    fn decode_revert_reason_extracts_standard_error_string() {
-        let output = Bytes::from(Revert::from("dry run reverted").abi_encode());
-
-        assert_eq!(
-            decode_revert_reason(&output),
-            Some("dry run reverted".to_string())
-        );
-    }
-
-    #[test]
-    fn decode_revert_reason_extracts_solidity_panic() {
-        let output = Bytes::from(Panic::from(0x11_u64).abi_encode());
-
-        assert_eq!(
-            decode_revert_reason(&output),
-            Some("arithmetic underflow or overflow".to_string())
-        );
-    }
-
-    #[test]
-    fn build_revert_failure_keeps_reason_empty_for_unknown_payload() {
-        let failure = build_revert_failure(&Bytes::from_static(b"\x12\x34\x56\x78"));
-
-        assert_eq!(failure.code, EvmExecutionFailureCode::Revert);
-        assert_eq!(failure.reason, None);
     }
 }

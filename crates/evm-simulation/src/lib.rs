@@ -7,20 +7,32 @@ use alloy::{
         AccessList as RpcAccessList, TransactionInput, TransactionRequest as RpcTransactionRequest,
     },
 };
+pub use simulation_transaction::{AccessListItem, TransactionRequest as EvmTransactionRequest};
 use simulation_transaction::{
-    AccessListItem, Transaction, TransactionRequest, TransactionVariant, TransactionVariantRequest,
+    Transaction, TransactionRequest, TransactionVariant, TransactionVariantRequest,
 };
 use thiserror::Error;
 
 mod changes;
+mod error;
 mod execution;
+mod outcome;
+mod simulation;
+mod simulator;
 
 pub use changes::{EvmNativeChangeError, analyze_native_changes};
+pub use error::{EvmSimulationError, EvmSimulationInternalKind};
 pub use execution::{
     EvmBlockAnchor, EvmExecutionError, EvmExecutionObservation, EvmExecutionObserver,
     EvmExecutionOutput, EvmFeeSettlement, EvmStateSource, EvmTransactionExecutor, MainnetEvm,
     MainnetEvmDatabase,
 };
+pub use simulation::{
+    EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode, EvmExecutionOutcome, EvmSimulation,
+    ExecutedDetails, SimulatedBlock,
+};
+pub use simulation_changes::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
+pub use simulator::EvmSimulator;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvmBlockSelector {

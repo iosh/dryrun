@@ -6,10 +6,9 @@ use conflux_engine::{ConfluxEngine, HttpConfluxProvider, config::ConfluxChainCon
 use conflux_provider::ConfluxProvider;
 use conflux_rpc::build_rpc_module as build_conflux_rpc_module;
 use conflux_service::ConfluxService;
-use evm_engine::EvmEngine;
 use evm_rpc::{DryrunRpcServer, RpcHandler};
 use evm_service::SimulationService;
-use evm_simulation::EvmSimulationPreparer;
+use evm_simulation::{EvmSimulationPreparer, EvmSimulator};
 use jsonrpsee::{
     RpcModule,
     server::{BatchRequestConfig, Server, ServerConfig as JsonRpcServerConfig, ServerHandle},
@@ -67,14 +66,14 @@ fn add_evm_rpc_module(
     simulation_tasks: SimulationTaskSet,
 ) -> io::Result<()> {
     let ethereum_provider = create_ethereum_provider(config)?;
-    let evm_engine = Arc::new(EvmEngine::new(
+    let evm_simulator = Arc::new(EvmSimulator::new(
         ethereum_provider.clone(),
         tokio::runtime::Handle::current(),
     ));
     let evm_preparer = Arc::new(EvmSimulationPreparer::new(ethereum_provider));
     let simulation_service = Arc::new(SimulationService::new(
         evm_preparer,
-        evm_engine,
+        evm_simulator,
         simulation_tasks,
     ));
 

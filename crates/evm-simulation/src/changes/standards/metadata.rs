@@ -8,23 +8,20 @@ use contract_standards::{
 };
 use revm::context_interface::result::EVMError;
 
-use crate::{EvmEngineError, EvmTransaction, NativeMetadata, changes::ChangeMetadata};
+use crate::EvmSimulationError;
+use simulation_transaction::Transaction as EvmTransaction;
 
-use super::{
-    MainnetAlloyEvm,
-    read_call::{ReadCallOutcome, execute_read_call, with_read_call_context},
-};
+use super::read_call::{ReadCallOutcome, execute_read_call, with_read_call_context};
+use crate::execution::MainnetEvm;
 
-pub(super) fn load_change_metadata<INSP>(
-    evm: &mut MainnetAlloyEvm<INSP>,
+pub(crate) fn load_standard_metadata<INSP>(
+    evm: &mut MainnetEvm<INSP>,
     transaction: &EvmTransaction,
     chain_id: u64,
     requests: MetadataRequests,
-) -> Result<ChangeMetadata, EvmEngineError> {
-    let native = native_metadata(chain_id);
-
+) -> Result<StandardMetadata, EvmSimulationError> {
     if requests.is_empty() {
-        return Ok(ChangeMetadata::new(native, StandardMetadata::default()));
+        return Ok(StandardMetadata::default());
     }
 
     with_read_call_context(evm, |evm| {
@@ -33,33 +30,21 @@ pub(super) fn load_change_metadata<INSP>(
             transaction,
             chain_id,
         }
-        .read(native, &requests)
+        .read(&requests)
     })
 }
 
 struct MetadataReader<'evm, 'transaction, INSP> {
-    evm: &'evm mut MainnetAlloyEvm<INSP>,
+    evm: &'evm mut MainnetEvm<INSP>,
     transaction: &'transaction EvmTransaction,
     chain_id: u64,
-}
-
-fn native_metadata(chain_id: u64) -> NativeMetadata {
-    match chain_id {
-        1 => NativeMetadata {
-            name: Some("Ether".to_string()),
-            symbol: Some("ETH".to_string()),
-            decimals: Some(18),
-        },
-        _ => NativeMetadata::default(),
-    }
 }
 
 impl<INSP> MetadataReader<'_, '_, INSP> {
     fn read(
         &mut self,
-        native: NativeMetadata,
         requests: &MetadataRequests,
-    ) -> Result<ChangeMetadata, EvmEngineError> {
+    ) -> Result<StandardMetadata, EvmSimulationError> {
         let mut erc20 = HashMap::new();
         let mut erc721 = HashMap::new();
 
@@ -71,13 +56,10 @@ impl<INSP> MetadataReader<'_, '_, INSP> {
             erc721.insert(collection, self.read_erc721(collection)?);
         }
 
-        Ok(ChangeMetadata::new(
-            native,
-            StandardMetadata::new(erc20, erc721),
-        ))
+        Ok(StandardMetadata::new(erc20, erc721))
     }
 
-    fn read_erc20(&mut self, contract: Address) -> Result<Erc20Metadata, EvmEngineError> {
+    fn read_erc20(&mut self, contract: Address) -> Result<Erc20Metadata, EvmSimulationError> {
         Ok(Erc20Metadata {
             name: self.read_optional(contract, name_call(), decode_name)?,
             symbol: self.read_optional(contract, symbol_call(), decode_symbol)?,
@@ -88,7 +70,7 @@ impl<INSP> MetadataReader<'_, '_, INSP> {
     fn read_erc721(
         &mut self,
         collection: Address,
-    ) -> Result<Erc721CollectionMetadata, EvmEngineError> {
+    ) -> Result<Erc721CollectionMetadata, EvmSimulationError> {
         let supports_metadata = self.read_optional(
             collection,
             supports_interface_call(ERC721_METADATA_INTERFACE_ID),
@@ -110,13 +92,13 @@ impl<INSP> MetadataReader<'_, '_, INSP> {
         target: Address,
         data: Bytes,
         decode: impl FnOnce(&[u8]) -> Option<T>,
-    ) -> Result<Option<T>, EvmEngineError> {
+    ) -> Result<Option<T>, EvmSimulationError> {
         let outcome = execute_read_call(self.evm, self.transaction, self.chain_id, target, data)
             .map_err(|error| match error {
-                EVMError::Database(error) => EvmEngineError::state_access_error(format!(
+                EVMError::Database(error) => EvmSimulationError::state_access_error(format!(
                     "state access failed during metadata read from {target}: {error}"
                 )),
-                error => EvmEngineError::analysis_failed(format!(
+                error => EvmSimulationError::analysis_failed(format!(
                     "metadata read from {target} failed: {error}"
                 )),
             })?;
