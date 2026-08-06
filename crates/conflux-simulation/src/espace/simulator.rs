@@ -78,7 +78,7 @@ impl EspaceSimulator {
                     state,
                     &machine,
                     &execution.prepared,
-                    analysis_input,
+                    &*analysis_input,
                     state_phase,
                 )
             },

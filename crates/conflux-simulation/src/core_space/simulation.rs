@@ -16,8 +16,7 @@ use crate::{
 };
 
 use super::{
-    CoreSpaceChange, CoreSpaceSimulation, PreparedStoragePayer,
-    analysis::{CoreSpaceAnalysisInput, CoreSpaceStateReader, analyze_core_space_changes},
+    CoreSpaceChange, CoreSpaceSimulation, PreparedStoragePayer, analysis::CoreSpaceChangeAnalysis,
     build_core_space_execution,
 };
 
@@ -55,7 +54,6 @@ fn simulate_ready(
         }
     })?;
     let machine = build_mainnet_machine();
-    let mut state_reader = CoreSpaceStateReader::default();
     let (execution, phase_values) = execute_with_state_phases(
         &mut state,
         |state| {
@@ -67,25 +65,20 @@ fn simulate_ready(
             if !matches!(&execution.outcome, TransactionExecutionOutcome::Success(_)) {
                 return Ok(None);
             }
-            CoreSpaceAnalysisInput::from_execution(
+            CoreSpaceChangeAnalysis::from_execution(
                 execution,
                 &machine,
                 &masked_sponsor_whitelist_entries,
+                &anchored_vote_lists,
             )
             .map(Some)
         },
-        |state, execution, analysis_input, state_phase| {
-            state_reader.read(
-                state,
-                &machine,
-                &execution.prepared,
-                analysis_input,
-                state_phase,
-            )
+        |state, execution, analysis, state_phase| {
+            analysis.read_state(state, &machine, &execution.prepared, state_phase)
         },
     )?;
 
-    let Some((analysis_input, phase_values)) = phase_values else {
+    let Some((analysis, phase_values)) = phase_values else {
         return Ok(build_core_space_simulation(
             chain_id,
             state_anchor,
@@ -95,14 +88,7 @@ fn simulate_ready(
             Vec::new(),
         ));
     };
-    let core_changes = analyze_core_space_changes(
-        &mut state,
-        &machine,
-        &execution.prepared,
-        analysis_input,
-        phase_values,
-        &anchored_vote_lists,
-    )?;
+    let core_changes = analysis.analyze(&mut state, &machine, &execution.prepared, phase_values)?;
 
     Ok(build_core_space_simulation(
         chain_id,

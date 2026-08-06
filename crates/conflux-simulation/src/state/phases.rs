@@ -9,6 +9,14 @@ pub(crate) struct StatePhaseValues<T> {
     pub(crate) after: T,
 }
 
+type StatePhaseExecutionResult<Execution, AnalysisInput, StateValue> = Result<
+    (
+        Execution,
+        Option<(AnalysisInput, StatePhaseValues<StateValue>)>,
+    ),
+    ConfluxSimulationError,
+>;
+
 pub(crate) fn execute_with_state_phases<Execution, AnalysisInput, StateValue>(
     state: &mut State,
     execute: impl FnOnce(&mut State) -> Result<Execution, ConfluxSimulationError>,
@@ -16,31 +24,25 @@ pub(crate) fn execute_with_state_phases<Execution, AnalysisInput, StateValue>(
     mut read: impl FnMut(
         &mut State,
         &Execution,
-        &AnalysisInput,
+        &mut AnalysisInput,
         StatePhase,
     ) -> Result<StateValue, ConfluxSimulationError>,
-) -> Result<
-    (
-        Execution,
-        Option<(AnalysisInput, StatePhaseValues<StateValue>)>,
-    ),
-    ConfluxSimulationError,
-> {
+) -> StatePhaseExecutionResult<Execution, AnalysisInput, StateValue> {
     let before_execution_snapshot = state.save();
     let execution = execute(state)?;
 
-    let Some(analysis_input) = prepare_analysis(&execution)? else {
+    let Some(mut analysis_input) = prepare_analysis(&execution)? else {
         return Ok((execution, None));
     };
 
     let after_execution_snapshot = state.save();
 
     state.restore(before_execution_snapshot);
-    let before = read(state, &execution, &analysis_input, StatePhase::Before)?;
+    let before = read(state, &execution, &mut analysis_input, StatePhase::Before)?;
     state.restore(after_execution_snapshot);
 
     let after_read_snapshot = state.save();
-    let after = read(state, &execution, &analysis_input, StatePhase::After)?;
+    let after = read(state, &execution, &mut analysis_input, StatePhase::After)?;
     state.restore(after_read_snapshot);
 
     Ok((
