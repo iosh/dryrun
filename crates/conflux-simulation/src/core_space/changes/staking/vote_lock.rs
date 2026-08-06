@@ -4,7 +4,7 @@ use alloy_primitives::{Address, U256};
 use cfx_executor::state::State;
 use primitives::VoteStakeList;
 
-use super::{CommittedStakingCalls, StakingCall};
+use super::CommittedVoteLockCall;
 use crate::{
     ConfluxSimulationError,
     core_space::changes::{CoreSpaceChange, PositionedCoreSpaceChange},
@@ -14,23 +14,20 @@ use crate::{
 
 pub(crate) fn verify_vote_lock_changes(
     state: &State,
-    committed_staking_calls: &CommittedStakingCalls,
+    committed_vote_lock_calls: &[CommittedVoteLockCall],
     anchored_vote_lists: &AnchoredVoteLists,
     current_block_number: u64,
 ) -> Result<Vec<PositionedCoreSpaceChange>, ConfluxSimulationError> {
     let mut vote_lists_by_account = BTreeMap::new();
     let mut positioned_changes = Vec::new();
 
-    for committed_call in committed_staking_calls.iter() {
-        let StakingCall::VoteLock {
+    for committed_call in committed_vote_lock_calls {
+        let CommittedVoteLockCall {
             position,
             account,
             amount,
             unlock_block_number,
-        } = committed_call
-        else {
-            continue;
-        };
+        } = committed_call;
         let vote_list = match vote_lists_by_account.entry(*account) {
             Entry::Occupied(entry) => entry.into_mut(),
             Entry::Vacant(entry) => {

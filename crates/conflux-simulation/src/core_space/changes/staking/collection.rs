@@ -3,7 +3,7 @@ use cfx_types::{AddressSpaceUtil, Space};
 use cfx_vm_types::{CallType, Spec};
 
 use super::{
-    StakingCall,
+    CommittedPoSCall, CommittedVoteLockCall,
     codec::{PoSCall, decode_pos_call, decode_vote_lock_call},
 };
 use crate::{ConfluxSimulationError, execution::Observation, primitive::address_from_cfx};
@@ -42,23 +42,17 @@ impl StakingContractActivation {
 
 #[derive(Debug, Default)]
 pub(crate) struct CommittedStakingCalls {
-    calls: Vec<StakingCall>,
+    vote_lock_calls: Vec<CommittedVoteLockCall>,
+    pos_calls: Vec<CommittedPoSCall>,
 }
 
 impl CommittedStakingCalls {
-    pub(super) fn iter(&self) -> impl Iterator<Item = &StakingCall> {
-        self.calls.iter()
+    pub(crate) fn vote_lock_calls(&self) -> &[CommittedVoteLockCall] {
+        &self.vote_lock_calls
     }
 
-    pub(crate) fn has_pos_calls(&self) -> bool {
-        self.calls.iter().any(|committed_call| {
-            matches!(
-                committed_call,
-                StakingCall::PoSRegistration { .. }
-                    | StakingCall::PoSStakeIncrease { .. }
-                    | StakingCall::PoSRetirementRequest { .. }
-            )
-        })
+    pub(crate) fn pos_calls(&self) -> &[CommittedPoSCall] {
+        &self.pos_calls
     }
 }
 
@@ -105,12 +99,14 @@ pub(crate) fn collect_committed_staking_calls(
                     "voteLock",
                     uses_canonical_plain_call(staking_contract_address),
                 )?;
-                committed_staking_calls.calls.push(StakingCall::VoteLock {
-                    position: contract_standards::Position::new(*position, 0),
-                    account: address_from_cfx(*caller),
-                    amount: vote_lock.amount,
-                    unlock_block_number: vote_lock.unlock_block_number,
-                });
+                committed_staking_calls
+                    .vote_lock_calls
+                    .push(CommittedVoteLockCall {
+                        position: contract_standards::Position::new(*position, 0),
+                        account: address_from_cfx(*caller),
+                        amount: vote_lock.amount,
+                        unlock_block_number: vote_lock.unlock_block_number,
+                    });
             }
             continue;
         }
@@ -134,26 +130,26 @@ pub(crate) fn collect_committed_staking_calls(
             PoSCall::Registration {
                 pos_identifier,
                 vote_count,
-            } => StakingCall::PoSRegistration {
+            } => CommittedPoSCall::Registration {
                 position,
                 account,
                 pos_identifier,
                 vote_count,
             },
-            PoSCall::StakeIncrease { vote_count } => StakingCall::PoSStakeIncrease {
+            PoSCall::StakeIncrease { vote_count } => CommittedPoSCall::StakeIncrease {
                 position,
                 account,
                 vote_count,
             },
             PoSCall::RetirementRequest {
                 requested_vote_count,
-            } => StakingCall::PoSRetirementRequest {
+            } => CommittedPoSCall::RetirementRequest {
                 position,
                 account,
                 requested_vote_count,
             },
         };
-        committed_staking_calls.calls.push(committed_call);
+        committed_staking_calls.pos_calls.push(committed_call);
     }
 
     Ok(committed_staking_calls)

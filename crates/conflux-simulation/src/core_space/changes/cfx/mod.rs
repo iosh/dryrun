@@ -1,3 +1,4 @@
+mod analysis;
 mod basic;
 mod collection;
 mod cross_space;
@@ -13,6 +14,7 @@ use alloy_primitives::{Address, U256};
 use contract_standards::Position;
 use primitives::{Action, SignedTransaction};
 
+pub(crate) use analysis::CfxAnalysisInput;
 pub(crate) use collection::collect_cfx_operations;
 pub(crate) use verification::{CfxStateValues, read_cfx_state_values, verify_cfx_changes};
 
@@ -184,38 +186,36 @@ impl CfxOperations {
         }
     }
 
-    /// Applies already-collected CFX operations that affect staking balances.
-    pub(crate) fn apply_staking_balance_effects(
-        &self,
-        staking_balances: &mut BTreeMap<Address, U256>,
-    ) -> Result<(), ConfluxSimulationError> {
-        for operation in &self.operations {
-            match operation {
+    pub(crate) fn staking_balance_effects(&self) -> StakingBalanceEffects {
+        let effects = self
+            .operations
+            .iter()
+            .filter_map(|operation| match operation {
                 CfxOperation::Basic(BasicCfxOperation::StakingDeposit {
                     account, amount, ..
-                }) => credit_staking_balance_if_present(staking_balances, *account, *amount)?,
+                }) => Some(StakingBalanceEffect::Deposit {
+                    account: *account,
+                    amount: *amount,
+                }),
                 CfxOperation::Basic(BasicCfxOperation::StakingWithdrawal {
                     account,
                     principal_amount,
                     ..
-                }) => debit_staking_balance_if_present(
-                    staking_balances,
-                    *account,
-                    *principal_amount,
-                    "withdrawal",
-                )?,
+                }) => Some(StakingBalanceEffect::Withdrawal {
+                    account: *account,
+                    amount: *principal_amount,
+                }),
                 CfxOperation::Basic(BasicCfxOperation::StakingBurn {
                     account, amount, ..
-                }) => {
-                    debit_staking_balance_if_present(staking_balances, *account, *amount, "burn")?
-                }
-                _ => {}
-            }
-        }
-
-        Ok(())
+                }) => Some(StakingBalanceEffect::Burn {
+                    account: *account,
+                    amount: *amount,
+                }),
+                _ => None,
+            })
+            .collect();
+        StakingBalanceEffects { effects }
     }
-
     pub(crate) fn reject_masked_sponsorship_access_dependencies(
         &self,
         masked_entries: &MaskedSponsorWhitelistEntries,
@@ -241,6 +241,47 @@ impl CfxOperations {
                 )));
             }
         }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct StakingBalanceEffects {
+    effects: Vec<StakingBalanceEffect>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum StakingBalanceEffect {
+    Deposit { account: Address, amount: U256 },
+    Withdrawal { account: Address, amount: U256 },
+    Burn { account: Address, amount: U256 },
+}
+
+impl StakingBalanceEffects {
+    /// Applies effects already collected from the single execution trace.
+    pub(crate) fn apply_to(
+        &self,
+        staking_balances: &mut BTreeMap<Address, U256>,
+    ) -> Result<(), ConfluxSimulationError> {
+        for effect in &self.effects {
+            match effect {
+                StakingBalanceEffect::Deposit { account, amount } => {
+                    credit_staking_balance_if_present(staking_balances, *account, *amount)?
+                }
+                StakingBalanceEffect::Withdrawal { account, amount } => {
+                    debit_staking_balance_if_present(
+                        staking_balances,
+                        *account,
+                        *amount,
+                        "withdrawal",
+                    )?
+                }
+                StakingBalanceEffect::Burn { account, amount } => {
+                    debit_staking_balance_if_present(staking_balances, *account, *amount, "burn")?
+                }
+            }
+        }
+
         Ok(())
     }
 }

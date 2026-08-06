@@ -8,7 +8,7 @@ use cfx_executor::{
 use cfx_types::{Address as CfxAddress, AddressSpaceUtil, BigEndianHash, H256};
 use contract_standards::StatePhase;
 
-use super::{CommittedStakingCalls, StakingCall};
+use super::CommittedPoSCall;
 use crate::{
     ConfluxSimulationError,
     primitive::{address_from_cfx, address_to_cfx, b256_from_cfx, b256_to_cfx, u256_from_cfx},
@@ -58,13 +58,54 @@ pub(crate) struct PoSStateRequirements {
     pos_identifiers: BTreeSet<B256>,
 }
 
+#[derive(Debug, Default)]
+pub(crate) struct PoSStateReader {
+    before_state: Option<PoSStateValues>,
+}
+
+impl PoSStateReader {
+    pub(crate) fn read(
+        &mut self,
+        state: &State,
+        committed_pos_calls: &[CommittedPoSCall],
+        requirements: &PoSStateRequirements,
+        phase: StatePhase,
+    ) -> Result<Option<PoSStateValues>, ConfluxSimulationError> {
+        if committed_pos_calls.is_empty() {
+            self.before_state = None;
+            return Ok(None);
+        }
+
+        match phase {
+            StatePhase::Before => {
+                let before = read_pos_state_values(state, StatePhase::Before, requirements)?;
+                self.before_state = Some(before.clone());
+                Ok(Some(before))
+            }
+            StatePhase::After => {
+                let Some(before) = self.before_state.as_ref() else {
+                    return Err(ConfluxSimulationError::ExecutionInternal {
+                        message: "Core Space PoS before state was not collected".into(),
+                    });
+                };
+                let requirements = requirements.including_identifiers_from(before);
+                Ok(Some(read_pos_state_values(
+                    state,
+                    StatePhase::After,
+                    &requirements,
+                )?))
+            }
+        }
+    }
+}
+
 impl PoSStateRequirements {
-    pub(crate) fn from_committed_calls(committed_staking_calls: &CommittedStakingCalls) -> Self {
+    pub(crate) fn from_pos_calls(committed_pos_calls: &[CommittedPoSCall]) -> Self {
         let mut accounts = BTreeSet::new();
         let mut pos_identifiers = BTreeSet::new();
-        for committed_call in committed_staking_calls.iter() {
+        for committed_call in committed_pos_calls {
             match committed_call {
-                StakingCall::PoSRegistration {
+                CommittedPoSCall::Registration {
                     account,
                     pos_identifier,
                     ..
@@ -72,11 +113,10 @@ impl PoSStateRequirements {
                     accounts.insert(*account);
                     pos_identifiers.insert(*pos_identifier);
                 }
-                StakingCall::PoSStakeIncrease { account, .. }
-                | StakingCall::PoSRetirementRequest { account, .. } => {
+                CommittedPoSCall::StakeIncrease { account, .. }
+                | CommittedPoSCall::RetirementRequest { account, .. } => {
                     accounts.insert(*account);
                 }
-                StakingCall::VoteLock { .. } => {}
             }
         }
         Self {

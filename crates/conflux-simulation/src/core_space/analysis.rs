@@ -1,4 +1,3 @@
-use alloy_primitives::U256;
 use cfx_executor::{machine::Machine, state::State};
 use cfx_types::Space;
 use contract_standards::{
@@ -16,24 +15,18 @@ use crate::{
 };
 
 use super::changes::{
-    CfxBalanceLocation, CfxOperations, CfxStateValues, CommittedStakingCalls, CoreSpaceChange,
-    PoSEvent, PoSStateRequirements, PoSStateValues, PositionedCoreSpaceChange,
-    StakingContractActivation, collect_cfx_operations, collect_committed_staking_calls,
-    decode_pos_staking_events, determine_gas_fee_payer, order_and_enrich_core_space_changes,
-    read_cfx_state_values, read_pos_state_values, verify_cfx_changes, verify_pos_staking_changes,
-    verify_vote_lock_changes,
+    CfxAnalysisInput, CfxStateValues, CommittedStakingCalls, CoreSpaceChange, PoSAnalysisInput,
+    PoSStateReader, PoSStateValues, PositionedCoreSpaceChange, StakingContractActivation,
+    collect_committed_staking_calls, order_and_enrich_core_space_changes,
+    verify_pos_staking_changes, verify_vote_lock_changes,
 };
 
 pub(super) struct CoreSpaceAnalysisInput {
-    pub(super) expected_gas_fee_payer: CfxBalanceLocation,
-    pub(super) cfx_operations: CfxOperations,
+    pub(super) cfx: CfxAnalysisInput,
     pub(super) committed_staking_calls: CommittedStakingCalls,
-    pub(super) pos_staking_events: Vec<PoSEvent>,
-    pub(super) pos_state_requirements: PoSStateRequirements,
+    pub(super) pos: PoSAnalysisInput,
     pub(super) standard_candidates: Vec<StandardCandidate>,
     pub(super) standard_state_requirements: StateRequirements,
-    pub(super) execution_fee: U256,
-    pub(super) burnt_fee: Option<U256>,
 }
 
 impl CoreSpaceAnalysisInput {
@@ -48,42 +41,28 @@ impl CoreSpaceAnalysisInput {
             });
         };
 
-        let expected_gas_fee_payer =
-            determine_gas_fee_payer(&execution.prepared.transaction, details.gas_sponsor_paid)?;
-        let cfx_operations = collect_cfx_operations(
-            &details.observations,
-            &details.contracts_created,
-            &details.storage_released,
-            machine,
-            &execution.prepared.spec,
-        )?;
-        cfx_operations
-            .reject_masked_sponsorship_access_dependencies(masked_sponsor_whitelist_entries)?;
+        let cfx =
+            CfxAnalysisInput::from_execution(execution, machine, masked_sponsor_whitelist_entries)?;
 
         let staking_contract_activation =
             StakingContractActivation::from_machine_and_spec(machine, &execution.prepared.spec);
         let committed_staking_calls =
             collect_committed_staking_calls(&details.observations, staking_contract_activation)?;
-        let pos_staking_events = decode_pos_staking_events(
+        let pos = PoSAnalysisInput::from_calls_and_logs(
+            committed_staking_calls.pos_calls(),
             &details.logs,
             staking_contract_activation.pos_register_is_active(),
         )?;
-        let pos_state_requirements =
-            PoSStateRequirements::from_committed_calls(&committed_staking_calls);
         let standard_candidates =
             collect_standard_candidates(&details.observations, Space::Native)?;
         let standard_state_requirements = state_requirements(&standard_candidates);
 
         Ok(Self {
-            expected_gas_fee_payer,
-            cfx_operations,
+            cfx,
             committed_staking_calls,
-            pos_staking_events,
-            pos_state_requirements,
+            pos,
             standard_candidates,
             standard_state_requirements,
-            execution_fee: details.common.fee,
-            burnt_fee: details.common.burnt_fee,
         })
     }
 }
@@ -97,7 +76,7 @@ pub(super) struct CoreSpaceStateValues {
 
 #[derive(Default)]
 pub(super) struct CoreSpaceStateReader {
-    before_pos_state: Option<PoSStateValues>,
+    pos_state_reader: PoSStateReader,
 }
 
 impl CoreSpaceStateReader {
@@ -109,8 +88,13 @@ impl CoreSpaceStateReader {
         analysis_input: &CoreSpaceAnalysisInput,
         phase: StatePhase,
     ) -> Result<CoreSpaceStateValues, ConfluxSimulationError> {
-        let cfx = read_cfx_state_values(state, phase, &analysis_input.cfx_operations)?;
-        let pos = self.read_pos_state(state, analysis_input, phase)?;
+        let cfx = analysis_input.cfx.read_state(state, phase)?;
+        let pos = self.pos_state_reader.read(
+            state,
+            analysis_input.committed_staking_calls.pos_calls(),
+            analysis_input.pos.state_requirements(),
+            phase,
+        )?;
         let standards = read_standard_state_values(
             state,
             machine,
@@ -124,45 +108,6 @@ impl CoreSpaceStateReader {
             pos,
             standards,
         })
-    }
-
-    fn read_pos_state(
-        &mut self,
-        state: &State,
-        analysis_input: &CoreSpaceAnalysisInput,
-        phase: StatePhase,
-    ) -> Result<Option<PoSStateValues>, ConfluxSimulationError> {
-        if !analysis_input.committed_staking_calls.has_pos_calls() {
-            self.before_pos_state = None;
-            return Ok(None);
-        }
-
-        match phase {
-            StatePhase::Before => {
-                let before = read_pos_state_values(
-                    state,
-                    StatePhase::Before,
-                    &analysis_input.pos_state_requirements,
-                )?;
-                self.before_pos_state = Some(before.clone());
-                Ok(Some(before))
-            }
-            StatePhase::After => {
-                let Some(before) = self.before_pos_state.as_ref() else {
-                    return Err(ConfluxSimulationError::ExecutionInternal {
-                        message: "Core Space PoS before state was not collected".into(),
-                    });
-                };
-                let requirements = analysis_input
-                    .pos_state_requirements
-                    .including_identifiers_from(before);
-                Ok(Some(read_pos_state_values(
-                    state,
-                    StatePhase::After,
-                    &requirements,
-                )?))
-            }
-        }
     }
 }
 
@@ -192,17 +137,12 @@ pub(super) fn analyze_core_space_changes(
         &after_standard_state,
     )?;
     let metadata_requests = MetadataRequests::from_changes(&positioned_standard_changes);
-    let mut positioned_core_changes = verify_cfx_changes(
-        &analysis_input.cfx_operations,
-        &before_cfx_state,
-        &after_cfx_state,
-        analysis_input.expected_gas_fee_payer,
-        analysis_input.execution_fee,
-        analysis_input.burnt_fee,
-    )?;
+    let mut positioned_core_changes = analysis_input
+        .cfx
+        .verify(&before_cfx_state, &after_cfx_state)?;
     positioned_core_changes.extend(verify_vote_lock_changes(
         state,
-        &analysis_input.committed_staking_calls,
+        analysis_input.committed_staking_calls.vote_lock_calls(),
         anchored_vote_lists,
         prepared_execution.env.number,
     )?);
@@ -210,14 +150,13 @@ pub(super) fn analyze_core_space_changes(
     match (before_pos_state, after_pos_state) {
         (Some(before), Some(after)) => {
             positioned_core_changes.extend(verify_pos_staking_changes(
-                &analysis_input.committed_staking_calls,
-                &analysis_input.pos_staking_events,
+                &analysis_input.pos,
                 &before,
                 &after,
-                &analysis_input.cfx_operations,
+                analysis_input.cfx.staking_balance_effects(),
             )?);
         }
-        (None, None) if analysis_input.pos_staking_events.is_empty() => {}
+        (None, None) if analysis_input.pos.events().is_empty() => {}
         (None, None) => {
             return Err(ConfluxSimulationError::analysis_failed(
                 "Core Space PoS final logs had no matching committed call",

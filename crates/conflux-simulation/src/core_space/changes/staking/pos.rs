@@ -1,18 +1,52 @@
 use alloy_primitives::{Address, B256, U256};
 
 use super::{
-    CommittedStakingCalls, StakingCall,
-    codec::PoSEvent,
+    CommittedPoSCall,
+    codec::{PoSEvent, decode_pos_staking_events},
     pos_state::{
-        PoSStateValues, pos_identifier_account, pos_status, sender_pos_identifier,
-        verify_pos_identifier_account_pair,
+        PoSStateRequirements, PoSStateValues, pos_identifier_account, pos_status,
+        sender_pos_identifier, verify_pos_identifier_account_pair,
     },
 };
 use crate::{
     ConfluxSimulationError,
-    core_space::changes::{CoreSpaceChange, PositionedCoreSpaceChange, cfx::CfxOperations},
+    core_space::changes::{CoreSpaceChange, PositionedCoreSpaceChange, cfx::StakingBalanceEffects},
     primitive::u256_from_cfx,
 };
+use primitives::LogEntry;
+
+#[derive(Debug)]
+pub(crate) struct PoSAnalysisInput {
+    calls: Vec<CommittedPoSCall>,
+    events: Vec<PoSEvent>,
+    state_requirements: PoSStateRequirements,
+}
+
+impl PoSAnalysisInput {
+    pub(crate) fn from_calls_and_logs(
+        calls: &[CommittedPoSCall],
+        final_logs: &[LogEntry],
+        pos_register_contract_active: bool,
+    ) -> Result<Self, ConfluxSimulationError> {
+        Ok(Self {
+            calls: calls.to_vec(),
+            events: decode_pos_staking_events(final_logs, pos_register_contract_active)?,
+            state_requirements: PoSStateRequirements::from_pos_calls(calls),
+        })
+    }
+
+    pub(crate) fn calls(&self) -> &[CommittedPoSCall] {
+        &self.calls
+    }
+
+    pub(crate) fn events(&self) -> &[PoSEvent] {
+        &self.events
+    }
+
+    pub(crate) fn state_requirements(&self) -> &PoSStateRequirements {
+        &self.state_requirements
+    }
+}
 
 #[derive(Clone, Copy)]
 enum PoSStakeIncreaseSource {
@@ -21,19 +55,18 @@ enum PoSStakeIncreaseSource {
 }
 
 pub(crate) fn verify_pos_staking_changes(
-    committed_staking_calls: &CommittedStakingCalls,
-    pos_staking_events: &[PoSEvent],
+    pos_analysis: &PoSAnalysisInput,
     before_state: &PoSStateValues,
     after_state: &PoSStateValues,
-    cfx_operations: &CfxOperations,
+    staking_balance_effects: &StakingBalanceEffects,
 ) -> Result<Vec<PositionedCoreSpaceChange>, ConfluxSimulationError> {
     let mut replayed_after_state = before_state.clone();
-    let mut remaining_pos_events = pos_staking_events.iter();
+    let mut remaining_pos_events = pos_analysis.events().iter();
     let mut positioned_changes = Vec::new();
 
-    for committed_call in committed_staking_calls.iter() {
+    for committed_call in pos_analysis.calls() {
         match committed_call {
-            StakingCall::PoSRegistration {
+            CommittedPoSCall::Registration {
                 position,
                 account,
                 pos_identifier,
@@ -71,7 +104,7 @@ pub(crate) fn verify_pos_staking_changes(
                     },
                 ));
             }
-            StakingCall::PoSStakeIncrease {
+            CommittedPoSCall::StakeIncrease {
                 position,
                 account,
                 vote_count,
@@ -102,7 +135,7 @@ pub(crate) fn verify_pos_staking_changes(
                     },
                 ));
             }
-            StakingCall::PoSRetirementRequest {
+            CommittedPoSCall::RetirementRequest {
                 position,
                 account,
                 requested_vote_count,
@@ -130,7 +163,6 @@ pub(crate) fn verify_pos_staking_changes(
                     },
                 ));
             }
-            StakingCall::VoteLock { .. } => {}
         }
     }
 
@@ -140,7 +172,7 @@ pub(crate) fn verify_pos_staking_changes(
         ));
     }
     verify_replay_matches_after_state(&replayed_after_state, after_state)?;
-    verify_staking_balance_replay(before_state, after_state, cfx_operations)?;
+    verify_staking_balance_replay(before_state, after_state, staking_balance_effects)?;
     verify_after_staking_coverage(after_state)?;
     Ok(positioned_changes)
 }
@@ -286,10 +318,10 @@ fn verify_replay_matches_after_state(
 fn verify_staking_balance_replay(
     before_state: &PoSStateValues,
     after_state: &PoSStateValues,
-    cfx_operations: &CfxOperations,
+    staking_balance_effects: &StakingBalanceEffects,
 ) -> Result<(), ConfluxSimulationError> {
     let mut replayed_staking_balances = before_state.staking_balances.clone();
-    cfx_operations.apply_staking_balance_effects(&mut replayed_staking_balances)?;
+    staking_balance_effects.apply_to(&mut replayed_staking_balances)?;
     if replayed_staking_balances != after_state.staking_balances {
         return Err(ConfluxSimulationError::analysis_failed(
             "Core Space PoS staking balances changed beyond verified CFX staking movements",
