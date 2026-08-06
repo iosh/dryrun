@@ -351,7 +351,7 @@ impl CfxOperationCollector {
                 .remove(collateral_contract)
                 .ok_or_else(|| {
                     ConfluxSimulationError::analysis_failed(format!(
-                        "Core Space storage release movement for contract {collateral_contract:?} had no matching execution fact"
+                        "Core Space storage release movement for contract {collateral_contract:?} had no matching execution record"
                     ))
                 })?;
             self.operations.push(CfxOperation::StorageCollateralRelease(

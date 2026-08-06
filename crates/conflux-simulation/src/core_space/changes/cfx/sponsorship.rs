@@ -142,7 +142,7 @@ pub(super) fn collect_sponsorship_call(
         ));
     };
 
-    let common = SponsorshipFundingCallFacts {
+    let call_context = SponsorshipFundingCallContext {
         call_position: *position,
         sponsor_contract,
         sponsor: address_to_cfx(caller_address),
@@ -154,14 +154,14 @@ pub(super) fn collect_sponsorship_call(
             gas_fee_upper_bound,
         } => {
             let (mut operation, consumed) =
-                collect_gas_sponsorship_call(observations, observation_index, common)?;
+                collect_gas_sponsorship_call(observations, observation_index, call_context)?;
             operation.funding_terms = SponsorshipFundingTerms::Gas {
                 gas_fee_upper_bound,
             };
             (operation, consumed)
         }
         SponsorshipFundingTerms::StorageCollateral => {
-            collect_storage_sponsorship_call(observations, observation_index, common)?
+            collect_storage_sponsorship_call(observations, observation_index, call_context)?
         }
     };
     Ok(Some((
@@ -331,7 +331,7 @@ pub(super) fn collect_storage_point_conversion(
 }
 
 #[derive(Clone, Copy)]
-struct SponsorshipFundingCallFacts {
+struct SponsorshipFundingCallContext {
     call_position: usize,
     sponsor_contract: Address,
     sponsor: Address,
@@ -342,17 +342,21 @@ struct SponsorshipFundingCallFacts {
 fn collect_gas_sponsorship_call(
     observations: &[Observation],
     observation_index: usize,
-    facts: SponsorshipFundingCallFacts,
+    call_context: SponsorshipFundingCallContext,
 ) -> Result<(SponsorshipFundingOperation, usize), ConfluxSimulationError> {
     let first = required_transfer(observations, observation_index, 1, "gas sponsorship")?;
-    verify_next_position(facts.call_position, first.position, "gas sponsorship")?;
+    verify_next_position(
+        call_context.call_position,
+        first.position,
+        "gas sponsorship",
+    )?;
 
     let (pool_deposit_amount, refund, consumed) =
-        if let Some((old_sponsor, pool_refund_amount)) = gas_pool_refund(first, facts)? {
+        if let Some((old_sponsor, pool_refund_amount)) = gas_pool_refund(first, call_context)? {
             let deposit = required_transfer(observations, observation_index, 2, "gas sponsorship")?;
             verify_next_position(first.position, deposit.position, "gas sponsorship")?;
-            let pool_deposit_amount = gas_pool_deposit(deposit, facts)?;
-            if pool_deposit_amount != facts.gross_deposit_amount {
+            let pool_deposit_amount = gas_pool_deposit(deposit, call_context)?;
+            if pool_deposit_amount != call_context.gross_deposit_amount {
                 return Err(transit_mismatch("gas"));
             }
             (
@@ -361,15 +365,15 @@ fn collect_gas_sponsorship_call(
                     position: Position::new(first.position, 0),
                     resource: SponsoredResource::Gas,
                     sponsor: address_from_cfx(old_sponsor),
-                    contract_address: address_from_cfx(facts.contract_address),
+                    contract_address: address_from_cfx(call_context.contract_address),
                     gross_refund_amount: pool_refund_amount,
                     pool_refund_amount,
                 }),
                 3,
             )
         } else {
-            let pool_deposit_amount = gas_pool_deposit(first, facts)?;
-            if pool_deposit_amount != facts.gross_deposit_amount {
+            let pool_deposit_amount = gas_pool_deposit(first, call_context)?;
+            if pool_deposit_amount != call_context.gross_deposit_amount {
                 return Err(transit_mismatch("gas"));
             }
             (pool_deposit_amount, None, 2)
@@ -377,13 +381,13 @@ fn collect_gas_sponsorship_call(
 
     Ok((
         SponsorshipFundingOperation {
-            position: Position::new(facts.call_position, 0),
+            position: Position::new(call_context.call_position, 0),
             funding_terms: SponsorshipFundingTerms::Gas {
                 gas_fee_upper_bound: alloy_primitives::U256::ZERO,
             },
-            sponsor: address_from_cfx(facts.sponsor),
-            contract_address: address_from_cfx(facts.contract_address),
-            gross_deposit_amount: facts.gross_deposit_amount,
+            sponsor: address_from_cfx(call_context.sponsor),
+            contract_address: address_from_cfx(call_context.contract_address),
+            gross_deposit_amount: call_context.gross_deposit_amount,
             pool_deposit_amount,
             refund,
         },
@@ -394,26 +398,30 @@ fn collect_gas_sponsorship_call(
 fn collect_storage_sponsorship_call(
     observations: &[Observation],
     observation_index: usize,
-    facts: SponsorshipFundingCallFacts,
+    call_context: SponsorshipFundingCallContext,
 ) -> Result<(SponsorshipFundingOperation, usize), ConfluxSimulationError> {
     let first = required_transfer(observations, observation_index, 1, "storage sponsorship")?;
-    verify_next_position(facts.call_position, first.position, "storage sponsorship")?;
+    verify_next_position(
+        call_context.call_position,
+        first.position,
+        "storage sponsorship",
+    )?;
 
     let (pool_deposit_amount, refund, consumed) = if let Some((old_sponsor, pool_refund_amount)) =
-        storage_pool_refund(first, facts)?
+        storage_pool_refund(first, call_context)?
     {
         let compensation =
             required_transfer(observations, observation_index, 2, "storage sponsorship")?;
         verify_next_position(first.position, compensation.position, "storage sponsorship")?;
         let collateral_compensation =
-            storage_collateral_compensation(compensation, facts, old_sponsor)?;
+            storage_collateral_compensation(compensation, call_context, old_sponsor)?;
         let deposit = required_transfer(observations, observation_index, 3, "storage sponsorship")?;
         verify_next_position(
             compensation.position,
             deposit.position,
             "storage sponsorship",
         )?;
-        let pool_deposit_amount = storage_pool_deposit(deposit, facts)?;
+        let pool_deposit_amount = storage_pool_deposit(deposit, call_context)?;
         let transit_total = collateral_compensation
             .checked_add(pool_deposit_amount)
             .ok_or_else(|| {
@@ -421,7 +429,7 @@ fn collect_storage_sponsorship_call(
                     "Core Space storage sponsorship transit amount overflowed",
                 )
             })?;
-        if transit_total != facts.gross_deposit_amount {
+        if transit_total != call_context.gross_deposit_amount {
             return Err(transit_mismatch("storage"));
         }
         let gross_refund_amount = pool_refund_amount
@@ -437,15 +445,15 @@ fn collect_storage_sponsorship_call(
                 position: Position::new(first.position, 0),
                 resource: SponsoredResource::StorageCollateral,
                 sponsor: address_from_cfx(old_sponsor),
-                contract_address: address_from_cfx(facts.contract_address),
+                contract_address: address_from_cfx(call_context.contract_address),
                 gross_refund_amount,
                 pool_refund_amount,
             }),
             4,
         )
     } else {
-        let pool_deposit_amount = storage_pool_deposit(first, facts)?;
-        if pool_deposit_amount != facts.gross_deposit_amount {
+        let pool_deposit_amount = storage_pool_deposit(first, call_context)?;
+        if pool_deposit_amount != call_context.gross_deposit_amount {
             return Err(transit_mismatch("storage"));
         }
         (pool_deposit_amount, None, 2)
@@ -453,11 +461,11 @@ fn collect_storage_sponsorship_call(
 
     Ok((
         SponsorshipFundingOperation {
-            position: Position::new(facts.call_position, 0),
+            position: Position::new(call_context.call_position, 0),
             funding_terms: SponsorshipFundingTerms::StorageCollateral,
-            sponsor: address_from_cfx(facts.sponsor),
-            contract_address: address_from_cfx(facts.contract_address),
-            gross_deposit_amount: facts.gross_deposit_amount,
+            sponsor: address_from_cfx(call_context.sponsor),
+            contract_address: address_from_cfx(call_context.contract_address),
+            gross_deposit_amount: call_context.gross_deposit_amount,
             pool_deposit_amount,
             refund,
         },
@@ -466,7 +474,7 @@ fn collect_storage_sponsorship_call(
 }
 
 #[derive(Clone, Copy)]
-struct TransferFacts<'a> {
+struct ObservedTransfer<'a> {
     position: usize,
     from: &'a AddressPocket,
     to: &'a AddressPocket,
@@ -478,7 +486,7 @@ fn required_transfer<'a>(
     observation_index: usize,
     offset: usize,
     operation: &str,
-) -> Result<TransferFacts<'a>, ConfluxSimulationError> {
+) -> Result<ObservedTransfer<'a>, ConfluxSimulationError> {
     let observation = observation_at_offset(observations, observation_index, offset, operation)?;
     let Some(Observation::InternalTransfer {
         position,
@@ -489,7 +497,7 @@ fn required_transfer<'a>(
     }) = observation
     else {
         return Err(ConfluxSimulationError::analysis_failed(format!(
-            "Core Space {operation} call is missing a contiguous internal-transfer fact"
+            "Core Space {operation} call is missing a contiguous internal transfer"
         )));
     };
     if *space != Space::Native {
@@ -497,7 +505,7 @@ fn required_transfer<'a>(
             "Core Space {operation} transit used a non-native transfer"
         )));
     }
-    Ok(TransferFacts {
+    Ok(ObservedTransfer {
         position: *position,
         from,
         to,
@@ -520,14 +528,16 @@ fn observation_at_offset<'a>(
 }
 
 fn gas_pool_refund(
-    transfer: TransferFacts<'_>,
-    facts: SponsorshipFundingCallFacts,
+    transfer: ObservedTransfer<'_>,
+    call_context: SponsorshipFundingCallContext,
 ) -> Result<Option<(Address, alloy_primitives::U256)>, ConfluxSimulationError> {
     match (transfer.from, transfer.to) {
         (
             AddressPocket::SponsorBalanceForGas(contract_address),
             AddressPocket::Balance(recipient),
-        ) if *contract_address == facts.contract_address && recipient.space == Space::Native => {
+        ) if *contract_address == call_context.contract_address
+            && recipient.space == Space::Native =>
+        {
             Ok(Some((recipient.address, transfer.amount)))
         }
         (AddressPocket::SponsorBalanceForGas(_), AddressPocket::Balance(_)) => {
@@ -538,14 +548,14 @@ fn gas_pool_refund(
 }
 
 fn gas_pool_deposit(
-    transfer: TransferFacts<'_>,
-    facts: SponsorshipFundingCallFacts,
+    transfer: ObservedTransfer<'_>,
+    call_context: SponsorshipFundingCallContext,
 ) -> Result<alloy_primitives::U256, ConfluxSimulationError> {
     match (transfer.from, transfer.to) {
         (AddressPocket::Balance(source), AddressPocket::SponsorBalanceForGas(contract_address))
             if source.space == Space::Native
-                && source.address == facts.sponsor_contract
-                && *contract_address == facts.contract_address =>
+                && source.address == call_context.sponsor_contract
+                && *contract_address == call_context.contract_address =>
         {
             Ok(transfer.amount)
         }
@@ -554,14 +564,16 @@ fn gas_pool_deposit(
 }
 
 fn storage_pool_refund(
-    transfer: TransferFacts<'_>,
-    facts: SponsorshipFundingCallFacts,
+    transfer: ObservedTransfer<'_>,
+    call_context: SponsorshipFundingCallContext,
 ) -> Result<Option<(Address, alloy_primitives::U256)>, ConfluxSimulationError> {
     match (transfer.from, transfer.to) {
         (
             AddressPocket::SponsorBalanceForStorage(contract_address),
             AddressPocket::Balance(recipient),
-        ) if *contract_address == facts.contract_address && recipient.space == Space::Native => {
+        ) if *contract_address == call_context.contract_address
+            && recipient.space == Space::Native =>
+        {
             Ok(Some((recipient.address, transfer.amount)))
         }
         (AddressPocket::SponsorBalanceForStorage(_), AddressPocket::Balance(_)) => {
@@ -572,14 +584,14 @@ fn storage_pool_refund(
 }
 
 fn storage_collateral_compensation(
-    transfer: TransferFacts<'_>,
-    facts: SponsorshipFundingCallFacts,
+    transfer: ObservedTransfer<'_>,
+    call_context: SponsorshipFundingCallContext,
     old_sponsor: Address,
 ) -> Result<alloy_primitives::U256, ConfluxSimulationError> {
     match (transfer.from, transfer.to) {
         (AddressPocket::Balance(source), AddressPocket::Balance(recipient))
             if source.space == Space::Native
-                && source.address == facts.sponsor_contract
+                && source.address == call_context.sponsor_contract
                 && recipient.space == Space::Native
                 && recipient.address == old_sponsor =>
         {
@@ -590,16 +602,16 @@ fn storage_collateral_compensation(
 }
 
 fn storage_pool_deposit(
-    transfer: TransferFacts<'_>,
-    facts: SponsorshipFundingCallFacts,
+    transfer: ObservedTransfer<'_>,
+    call_context: SponsorshipFundingCallContext,
 ) -> Result<alloy_primitives::U256, ConfluxSimulationError> {
     match (transfer.from, transfer.to) {
         (
             AddressPocket::Balance(source),
             AddressPocket::SponsorBalanceForStorage(contract_address),
         ) if source.space == Space::Native
-            && source.address == facts.sponsor_contract
-            && *contract_address == facts.contract_address =>
+            && source.address == call_context.sponsor_contract
+            && *contract_address == call_context.contract_address =>
         {
             Ok(transfer.amount)
         }
@@ -823,7 +835,7 @@ fn verify_next_position(
     })?;
     if next != expected {
         return Err(ConfluxSimulationError::analysis_failed(format!(
-            "Core Space {operation} internal-transfer facts were not contiguous"
+            "Core Space {operation} internal transfers were not contiguous"
         )));
     }
     Ok(())

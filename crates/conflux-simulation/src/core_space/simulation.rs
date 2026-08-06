@@ -17,7 +17,7 @@ use crate::{
 
 use super::{
     CoreSpaceChange, CoreSpaceSimulation, PreparedStoragePayer,
-    analysis::{CoreSpaceExecutionFacts, CoreSpaceStateReader, analyze_core_space_changes},
+    analysis::{CoreSpaceAnalysisInput, CoreSpaceStateReader, analyze_core_space_changes},
     build_core_space_execution,
 };
 
@@ -67,19 +67,25 @@ fn simulate_ready(
             if !matches!(&execution.outcome, TransactionExecutionOutcome::Success(_)) {
                 return Ok(None);
             }
-            CoreSpaceExecutionFacts::from_execution(
+            CoreSpaceAnalysisInput::from_execution(
                 execution,
                 &machine,
                 &masked_sponsor_whitelist_entries,
             )
             .map(Some)
         },
-        |state, execution, facts, state_phase| {
-            state_reader.read(state, &machine, &execution.prepared, facts, state_phase)
+        |state, execution, analysis_input, state_phase| {
+            state_reader.read(
+                state,
+                &machine,
+                &execution.prepared,
+                analysis_input,
+                state_phase,
+            )
         },
     )?;
 
-    let Some((facts, phase_values)) = phase_values else {
+    let Some((analysis_input, phase_values)) = phase_values else {
         return Ok(build_core_space_simulation(
             chain_id,
             state_anchor,
@@ -93,7 +99,7 @@ fn simulate_ready(
         &mut state,
         &machine,
         &execution.prepared,
-        facts,
+        analysis_input,
         phase_values,
         &anchored_vote_lists,
     )?;

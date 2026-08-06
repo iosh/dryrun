@@ -6,7 +6,10 @@ use conflux_provider::ConfluxProvider;
 use conflux_rpc::build_rpc_module as build_conflux_rpc_module;
 use conflux_service::ConfluxService;
 use conflux_simulation::{
-    ConfluxSimulation, ConfluxSimulationProvider, config::ConfluxChainConfig,
+    ConfluxSimulationProvider,
+    config::ConfluxChainConfig,
+    core_space::{CoreSpaceSimulationPreparer, CoreSpaceSimulator},
+    espace::{EspaceSimulationPreparer, EspaceSimulator},
 };
 use evm_rpc::{DryrunRpcServer, RpcHandler};
 use evm_service::SimulationService;
@@ -92,12 +95,24 @@ fn add_conflux_rpc_module(
     let conflux_chain = ConfluxChainConfig::mainnet();
     let core_space_address_network = conflux_chain.core_space_address_network;
     let conflux_provider = Arc::new(create_conflux_provider(config, &conflux_chain)?);
-    let conflux_simulation = Arc::new(ConfluxSimulation::new(
+    let runtime_handle = tokio::runtime::Handle::current();
+    let espace_preparer = Arc::new(EspaceSimulationPreparer::new(
+        conflux_chain.clone(),
+        Arc::clone(&conflux_provider),
+    ));
+    let espace_simulator = Arc::new(EspaceSimulator::new(runtime_handle.clone()));
+    let core_space_preparer = Arc::new(CoreSpaceSimulationPreparer::new(
         conflux_chain,
         Arc::clone(&conflux_provider),
-        tokio::runtime::Handle::current(),
     ));
-    let conflux_service = Arc::new(ConfluxService::new(conflux_simulation, simulation_tasks));
+    let core_space_simulator = Arc::new(CoreSpaceSimulator::new(runtime_handle));
+    let conflux_service = Arc::new(ConfluxService::new(
+        espace_preparer,
+        espace_simulator,
+        core_space_preparer,
+        core_space_simulator,
+        simulation_tasks,
+    ));
 
     rpc_module
         .merge(build_conflux_rpc_module(

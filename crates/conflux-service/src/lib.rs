@@ -3,7 +3,10 @@ pub mod espace;
 
 use std::sync::Arc;
 
-use conflux_simulation::ConfluxSimulation;
+use conflux_simulation::{
+    core_space::{CoreSpaceSimulationPreparer, CoreSpaceSimulator},
+    espace::{EspaceSimulationPreparer, EspaceSimulator},
+};
 use simulation_tasks::{SimulationTaskError, SimulationTaskSet};
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -12,14 +15,26 @@ pub use simulation_transaction::{AccessListItem, TransactionRequest as ConfluxTr
 
 #[derive(Clone)]
 pub struct ConfluxService {
-    simulation: Arc<ConfluxSimulation>,
+    espace_preparer: Arc<EspaceSimulationPreparer>,
+    espace_simulator: Arc<EspaceSimulator>,
+    core_space_preparer: Arc<CoreSpaceSimulationPreparer>,
+    core_space_simulator: Arc<CoreSpaceSimulator>,
     simulation_tasks: SimulationTaskSet,
 }
 
 impl ConfluxService {
-    pub fn new(simulation: Arc<ConfluxSimulation>, simulation_tasks: SimulationTaskSet) -> Self {
+    pub fn new(
+        espace_preparer: Arc<EspaceSimulationPreparer>,
+        espace_simulator: Arc<EspaceSimulator>,
+        core_space_preparer: Arc<CoreSpaceSimulationPreparer>,
+        core_space_simulator: Arc<CoreSpaceSimulator>,
+        simulation_tasks: SimulationTaskSet,
+    ) -> Self {
         Self {
-            simulation,
+            espace_preparer,
+            espace_simulator,
+            core_space_preparer,
+            core_space_simulator,
             simulation_tasks,
         }
     }
@@ -29,23 +44,19 @@ impl ConfluxService {
         input: espace::SimulateEspaceTransactionInput,
     ) -> Result<espace::SimulateEspaceTransactionOutput, ConfluxServiceError> {
         let espace::SimulateEspaceTransactionInput { block, transaction } = input;
-        let simulation = Arc::clone(&self.simulation);
+        let preparer = Arc::clone(&self.espace_preparer);
+        let simulator = Arc::clone(&self.espace_simulator);
         let simulation = self
             .simulation_tasks
             .run(move || async move {
-                let prepared = simulation
-                    .prepare_espace_transaction(block, transaction)
-                    .await?;
-                let execution = Arc::clone(&simulation);
+                let prepared = preparer.prepare_transaction(block, transaction).await?;
 
-                let simulation = tokio::task::spawn_blocking(move || {
-                    execution.simulate_espace_transaction(prepared)
-                })
-                .await
-                .map_err(|source| ConfluxServiceError::ExecutionTask {
-                    space: "eSpace",
-                    source,
-                })??;
+                let simulation = tokio::task::spawn_blocking(move || simulator.simulate(prepared))
+                    .await
+                    .map_err(|source| ConfluxServiceError::ExecutionTask {
+                        space: "eSpace",
+                        source,
+                    })??;
 
                 Ok::<_, ConfluxServiceError>(simulation)
             })
@@ -59,28 +70,26 @@ impl ConfluxService {
         input: core_space::SimulateCoreSpaceTransactionInput,
     ) -> Result<core_space::SimulateCoreSpaceTransactionOutput, ConfluxServiceError> {
         let core_space::SimulateCoreSpaceTransactionInput { epoch, transaction } = input;
-        let simulation = Arc::clone(&self.simulation);
+        let preparer = Arc::clone(&self.core_space_preparer);
+        let simulator = Arc::clone(&self.core_space_simulator);
         let simulation = self
             .simulation_tasks
             .run(move || async move {
-                let prepared = simulation
-                    .prepare_core_space_transaction(
+                let prepared = preparer
+                    .prepare_transaction(
                         epoch,
                         transaction.transaction,
                         transaction.storage_limit,
                         transaction.epoch_height,
                     )
                     .await?;
-                let execution = Arc::clone(&simulation);
 
-                let simulation = tokio::task::spawn_blocking(move || {
-                    execution.simulate_core_space_transaction(prepared)
-                })
-                .await
-                .map_err(|source| ConfluxServiceError::ExecutionTask {
-                    space: "Core Space",
-                    source,
-                })??;
+                let simulation = tokio::task::spawn_blocking(move || simulator.simulate(prepared))
+                    .await
+                    .map_err(|source| ConfluxServiceError::ExecutionTask {
+                        space: "Core Space",
+                        source,
+                    })??;
 
                 Ok::<_, ConfluxServiceError>(simulation)
             })

@@ -4,10 +4,55 @@ mod verification;
 use std::collections::BTreeSet;
 
 use alloy_primitives::{Address, U256};
-use contract_standards::Position;
+use cfx_executor::state::State;
+use contract_standards::{Position, StatePhase};
+use simulation_changes::PositionedChange;
 
-pub(crate) use collection::collect_native_operations;
-pub(crate) use verification::{read_native_balances, verify_native_changes};
+use crate::{ConfluxSimulationError, execution::ConfluxExecutionOutput};
+
+use self::verification::{read_native_balances, verify_native_changes};
+
+pub(crate) use verification::NativeBalances;
+
+pub(crate) struct EspaceNativeAnalysis {
+    operations: NativeOperations,
+    execution_fee: U256,
+    burnt_fee: Option<U256>,
+}
+
+impl EspaceNativeAnalysis {
+    pub(crate) fn from_execution(
+        execution: &ConfluxExecutionOutput,
+    ) -> Result<Self, ConfluxSimulationError> {
+        Ok(Self {
+            operations: collection::collect_native_operations(&execution.observations)?,
+            execution_fee: execution.common.fee,
+            burnt_fee: execution.common.burnt_fee,
+        })
+    }
+
+    pub(crate) fn read_state(
+        &self,
+        state: &State,
+        phase: StatePhase,
+    ) -> Result<NativeBalances, ConfluxSimulationError> {
+        read_native_balances(state, phase, &self.operations)
+    }
+
+    pub(crate) fn verify(
+        &self,
+        before_balances: &NativeBalances,
+        after_balances: &NativeBalances,
+    ) -> Result<Vec<PositionedChange>, ConfluxSimulationError> {
+        verify_native_changes(
+            &self.operations,
+            before_balances,
+            after_balances,
+            self.execution_fee,
+            self.burnt_fee,
+        )
+    }
+}
 
 #[derive(Debug)]
 pub(crate) struct NativeOperations {

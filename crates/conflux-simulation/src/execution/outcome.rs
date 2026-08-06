@@ -15,7 +15,7 @@ use super::{
 };
 use crate::primitive::u256_from_cfx;
 
-/// Conflux execution facts owned by this crate rather than by the upstream type map.
+/// Conflux execution output owned by this crate rather than by the upstream type map.
 #[derive(Debug)]
 #[expect(
     dead_code,

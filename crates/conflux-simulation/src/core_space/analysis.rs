@@ -24,7 +24,7 @@ use super::changes::{
     verify_vote_lock_changes,
 };
 
-pub(super) struct CoreSpaceExecutionFacts {
+pub(super) struct CoreSpaceAnalysisInput {
     pub(super) expected_gas_fee_payer: CfxBalanceLocation,
     pub(super) cfx_operations: CfxOperations,
     pub(super) committed_staking_calls: CommittedStakingCalls,
@@ -36,7 +36,7 @@ pub(super) struct CoreSpaceExecutionFacts {
     pub(super) burnt_fee: Option<U256>,
 }
 
-impl CoreSpaceExecutionFacts {
+impl CoreSpaceAnalysisInput {
     pub(super) fn from_execution(
         execution: &ConfluxTransactionExecution,
         machine: &Machine,
@@ -44,7 +44,7 @@ impl CoreSpaceExecutionFacts {
     ) -> Result<Self, ConfluxSimulationError> {
         let TransactionExecutionOutcome::Success(details) = &execution.outcome else {
             return Err(ConfluxSimulationError::ExecutionInternal {
-                message: "successful execution facts are required for Core Space analysis".into(),
+                message: "successful execution is required for Core Space analysis".into(),
             });
         };
 
@@ -106,17 +106,17 @@ impl CoreSpaceStateReader {
         state: &mut State,
         machine: &Machine,
         prepared_execution: &PreparedTransactionExecution,
-        facts: &CoreSpaceExecutionFacts,
+        analysis_input: &CoreSpaceAnalysisInput,
         phase: StatePhase,
     ) -> Result<CoreSpaceStateValues, ConfluxSimulationError> {
-        let cfx = read_cfx_state_values(state, phase, &facts.cfx_operations)?;
-        let pos = self.read_pos_state(state, facts, phase)?;
+        let cfx = read_cfx_state_values(state, phase, &analysis_input.cfx_operations)?;
+        let pos = self.read_pos_state(state, analysis_input, phase)?;
         let standards = read_standard_state_values(
             state,
             machine,
             prepared_execution,
             phase,
-            &facts.standard_state_requirements,
+            &analysis_input.standard_state_requirements,
         )?;
 
         Ok(CoreSpaceStateValues {
@@ -129,10 +129,10 @@ impl CoreSpaceStateReader {
     fn read_pos_state(
         &mut self,
         state: &State,
-        facts: &CoreSpaceExecutionFacts,
+        analysis_input: &CoreSpaceAnalysisInput,
         phase: StatePhase,
     ) -> Result<Option<PoSStateValues>, ConfluxSimulationError> {
-        if !facts.committed_staking_calls.has_pos_calls() {
+        if !analysis_input.committed_staking_calls.has_pos_calls() {
             self.before_pos_state = None;
             return Ok(None);
         }
@@ -142,7 +142,7 @@ impl CoreSpaceStateReader {
                 let before = read_pos_state_values(
                     state,
                     StatePhase::Before,
-                    &facts.pos_state_requirements,
+                    &analysis_input.pos_state_requirements,
                 )?;
                 self.before_pos_state = Some(before.clone());
                 Ok(Some(before))
@@ -153,7 +153,7 @@ impl CoreSpaceStateReader {
                         message: "Core Space PoS before state was not collected".into(),
                     });
                 };
-                let requirements = facts
+                let requirements = analysis_input
                     .pos_state_requirements
                     .including_identifiers_from(before);
                 Ok(Some(read_pos_state_values(
@@ -170,7 +170,7 @@ pub(super) fn analyze_core_space_changes(
     state: &mut State,
     machine: &Machine,
     prepared_execution: &PreparedTransactionExecution,
-    facts: CoreSpaceExecutionFacts,
+    analysis_input: CoreSpaceAnalysisInput,
     phase_values: StatePhaseValues<CoreSpaceStateValues>,
     anchored_vote_lists: &AnchoredVoteLists,
 ) -> Result<Vec<CoreSpaceChange>, ConfluxSimulationError> {
@@ -187,22 +187,22 @@ pub(super) fn analyze_core_space_changes(
     } = after;
 
     let positioned_standard_changes = verify(
-        &facts.standard_candidates,
+        &analysis_input.standard_candidates,
         &before_standard_state,
         &after_standard_state,
     )?;
     let metadata_requests = MetadataRequests::from_changes(&positioned_standard_changes);
     let mut positioned_core_changes = verify_cfx_changes(
-        &facts.cfx_operations,
+        &analysis_input.cfx_operations,
         &before_cfx_state,
         &after_cfx_state,
-        facts.expected_gas_fee_payer,
-        facts.execution_fee,
-        facts.burnt_fee,
+        analysis_input.expected_gas_fee_payer,
+        analysis_input.execution_fee,
+        analysis_input.burnt_fee,
     )?;
     positioned_core_changes.extend(verify_vote_lock_changes(
         state,
-        &facts.committed_staking_calls,
+        &analysis_input.committed_staking_calls,
         anchored_vote_lists,
         prepared_execution.env.number,
     )?);
@@ -210,14 +210,14 @@ pub(super) fn analyze_core_space_changes(
     match (before_pos_state, after_pos_state) {
         (Some(before), Some(after)) => {
             positioned_core_changes.extend(verify_pos_staking_changes(
-                &facts.committed_staking_calls,
-                &facts.pos_staking_events,
+                &analysis_input.committed_staking_calls,
+                &analysis_input.pos_staking_events,
                 &before,
                 &after,
-                &facts.cfx_operations,
+                &analysis_input.cfx_operations,
             )?);
         }
-        (None, None) if facts.pos_staking_events.is_empty() => {}
+        (None, None) if analysis_input.pos_staking_events.is_empty() => {}
         (None, None) => {
             return Err(ConfluxSimulationError::analysis_failed(
                 "Core Space PoS final logs had no matching committed call",
