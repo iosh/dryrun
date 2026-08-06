@@ -28,8 +28,8 @@ pub use execution::{
     MainnetEvmDatabase,
 };
 pub use simulation::{
-    EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode, EvmExecutionOutcome, EvmSimulation,
-    ExecutedDetails, SimulatedBlock,
+    EvmExecutedDetails, EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode,
+    EvmExecutionOutcome, EvmSimulation, SimulatedBlock,
 };
 pub use simulation_changes::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
 pub use simulator::EvmSimulator;

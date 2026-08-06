@@ -7,8 +7,8 @@ use revm::context_interface::result::{ExecutionResult, HaltReason, InvalidTransa
 use simulation_transaction::Transaction;
 
 use crate::{
-    EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode, EvmExecutionOutcome,
-    EvmFeeSettlement, SimulatedBlock, simulation::ExecutedDetails,
+    EvmExecutedDetails, EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode,
+    EvmExecutionOutcome, EvmFeeSettlement, SimulatedBlock,
 };
 
 pub(crate) fn build_execution(
@@ -22,7 +22,7 @@ pub(crate) fn build_execution(
             chain_id,
             context: simulated_block(block),
             gas_limit: gas.limit(),
-            outcome: EvmExecutionOutcome::Success(ExecutedDetails {
+            outcome: EvmExecutionOutcome::Success(EvmExecutedDetails {
                 gas_used: gas.used(),
                 gas_charged: gas.used(),
                 fee: fee_settlement.fee,
@@ -117,7 +117,7 @@ fn build_failed_execution(
         context: simulated_block(block),
         gas_limit,
         outcome: EvmExecutionOutcome::Failed {
-            details: ExecutedDetails {
+            details: EvmExecutedDetails {
                 gas_used,
                 gas_charged: gas_used,
                 fee: fee_settlement.fee,

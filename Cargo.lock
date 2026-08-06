@@ -7180,9 +7180,6 @@ dependencies = [
 [[package]]
 name = "simulation-execution"
 version = "0.1.0"
-dependencies = [
- "alloy-primitives",
-]
 
 [[package]]
 name = "simulation-tasks"

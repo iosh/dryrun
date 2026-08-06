@@ -2,8 +2,8 @@ use cfx_executor::executive::{ExecutionError, ToRepackError, TxDropError};
 use cfx_vm_types as vm;
 
 use super::{
-    EspaceExecution, EspaceExecutionFailure, EspaceExecutionFailureCode, EspaceExecutionOutcome,
-    SimulatedBlock,
+    EspaceExecutedDetails, EspaceExecution, EspaceExecutionFailure, EspaceExecutionFailureCode,
+    EspaceExecutionOutcome, SimulatedBlock,
 };
 use crate::{ConfluxSimulationError, execution::TransactionExecutionOutcome};
 
@@ -29,12 +29,12 @@ pub(crate) fn build_espace_execution(
 ) -> Result<EspaceExecution, ConfluxSimulationError> {
     let outcome = match outcome {
         TransactionExecutionOutcome::Success(details) => {
-            EspaceExecutionOutcome::Success(details.common)
+            EspaceExecutionOutcome::Success(into_espace_details(details))
         }
         TransactionExecutionOutcome::Failed { error, details } => {
             let failure = build_execution_error_failure(&error, details.common.output.as_ref())?;
             EspaceExecutionOutcome::Failed {
-                details: details.common,
+                details: into_espace_details(details),
                 failure,
             }
         }
@@ -52,6 +52,17 @@ pub(crate) fn build_espace_execution(
         gas_limit,
         outcome,
     })
+}
+
+fn into_espace_details(details: crate::execution::ConfluxExecutionOutput) -> EspaceExecutedDetails {
+    let crate::execution::ConfluxExecutionOutput { common, .. } = details;
+    EspaceExecutedDetails {
+        gas_used: common.gas_used,
+        gas_charged: common.gas_charged,
+        fee: common.fee,
+        burnt_fee: common.burnt_fee,
+        output: common.output,
+    }
 }
 
 fn espace_failure(

@@ -117,34 +117,28 @@ impl CoreSpaceExecution {
             output,
             failure,
         ) = match outcome {
-            service_core_space::CoreSpaceExecutionOutcome::Success(details) => {
-                let common = details.common;
-                (
-                    CoreSpaceExecutionStatus::Success,
-                    common.gas_used.into(),
-                    common.gas_charged.into(),
-                    u256_to_wire(common.fee),
-                    common.burnt_fee.map(u256_to_wire),
-                    details.gas_covered_by_sponsor,
-                    details.storage_covered_by_sponsor,
-                    CoreSpaceRpcBytes::from(common.output.to_vec()),
-                    None,
-                )
-            }
-            service_core_space::CoreSpaceExecutionOutcome::Failed { details, failure } => {
-                let common = details.common;
-                (
-                    CoreSpaceExecutionStatus::Failed,
-                    common.gas_used.into(),
-                    common.gas_charged.into(),
-                    u256_to_wire(common.fee),
-                    common.burnt_fee.map(u256_to_wire),
-                    details.gas_covered_by_sponsor,
-                    details.storage_covered_by_sponsor,
-                    CoreSpaceRpcBytes::from(common.output.to_vec()),
-                    Some(failure.into()),
-                )
-            }
+            service_core_space::CoreSpaceExecutionOutcome::Success(details) => (
+                CoreSpaceExecutionStatus::Success,
+                details.gas_used.into(),
+                details.gas_charged.into(),
+                u256_to_wire(details.fee),
+                details.burnt_fee.map(u256_to_wire),
+                details.gas_covered_by_sponsor,
+                details.storage_covered_by_sponsor,
+                CoreSpaceRpcBytes::from(details.output.to_vec()),
+                None,
+            ),
+            service_core_space::CoreSpaceExecutionOutcome::Failed { details, failure } => (
+                CoreSpaceExecutionStatus::Failed,
+                details.gas_used.into(),
+                details.gas_charged.into(),
+                u256_to_wire(details.fee),
+                details.burnt_fee.map(u256_to_wire),
+                details.gas_covered_by_sponsor,
+                details.storage_covered_by_sponsor,
+                CoreSpaceRpcBytes::from(details.output.to_vec()),
+                Some(failure.into()),
+            ),
             service_core_space::CoreSpaceExecutionOutcome::NotExecuted(failure) => (
                 CoreSpaceExecutionStatus::NotExecuted,
                 U256::zero(),

@@ -54,7 +54,7 @@ impl CoreSpaceSimulationPreparer {
         context: CoreSpaceSimulationContext,
         transaction: CoreSpaceTransaction,
     ) -> Result<PreparedCoreSpaceSimulation, ConfluxSimulationError> {
-        let gas_limit = transaction.transaction.gas_limit;
+        let gas_limit = transaction.gas_limit;
         let chain_id = self.chain.core_space_chain_id;
         let state_anchor = CoreSpaceStateAnchor {
             epoch_number: context.state_anchor.epoch_number(),
@@ -100,8 +100,6 @@ fn validate_core_space_transaction(
     transaction: &CoreSpaceTransaction,
     expected_chain_id: u32,
 ) -> Result<(), CoreSpaceExecutionFailure> {
-    let transaction = &transaction.transaction;
-
     if transaction.chain_id != u64::from(expected_chain_id) {
         return Err(CoreSpaceExecutionFailure {
             code: CoreSpaceExecutionFailureCode::ChainIdMismatch,

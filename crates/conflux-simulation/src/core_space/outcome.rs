@@ -62,12 +62,22 @@ fn into_core_space_details(
     details: ConfluxExecutionOutput,
     storage_payer: Option<PreparedStoragePayer>,
 ) -> CoreSpaceExecutedDetails {
+    let ConfluxExecutionOutput {
+        common,
+        gas_sponsor_paid,
+        storage_sponsor_paid,
+        ..
+    } = details;
     CoreSpaceExecutedDetails {
-        common: details.common,
-        gas_covered_by_sponsor: details.gas_sponsor_paid,
+        gas_used: common.gas_used,
+        gas_charged: common.gas_charged,
+        fee: common.fee,
+        burnt_fee: common.burnt_fee,
+        output: common.output,
+        gas_covered_by_sponsor: gas_sponsor_paid,
         storage_covered_by_sponsor: storage_payer
             .map(PreparedStoragePayer::storage_covered_by_sponsor)
-            .unwrap_or(details.storage_sponsor_paid),
+            .unwrap_or(storage_sponsor_paid),
     }
 }
 

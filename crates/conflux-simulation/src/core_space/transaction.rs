@@ -1,18 +1,16 @@
-use alloy_primitives::{Address, B256, Bytes, U256};
+use alloy_primitives::{B256, Bytes, U256};
 use cfx_rpc_cfx_types::EpochNumber;
 use conflux_provider::{CoreAddress, Network};
 use primitives::transaction::{
     Action, Cip1559Transaction, Cip2930Transaction,
     NativeTransaction as PrimitiveNativeTransaction, TypedNativeTransaction,
 };
-use simulation_transaction::{
-    TransactionRequest, TransactionType, TransactionVariantError, TransactionVariantRequest,
-};
+use simulation_transaction::{TransactionType, TransactionVariantError};
 
 use crate::{
-    ConfluxSimulationError, ConfluxTransaction, ConfluxTransactionVariant,
+    ConfluxSimulationError,
     execution::CoreSpaceTransactionInput,
-    primitive::{access_list_to_cfx, address_to_cfx, u256_to_cfx},
+    primitive::{b256_to_cfx, u256_to_cfx},
     state::ConfluxSimulationProvider,
 };
 
@@ -101,55 +99,6 @@ impl CoreSpaceTransactionVariantRequest {
             }
         }
     }
-
-    fn into_shared(self) -> TransactionVariantRequest {
-        match self {
-            Self::Legacy { gas_price } => TransactionVariantRequest::Legacy { gas_price },
-            Self::AccessList {
-                gas_price,
-                access_list,
-            } => TransactionVariantRequest::AccessList {
-                gas_price,
-                access_list: access_list
-                    .into_iter()
-                    .map(|item| simulation_transaction::AccessListItem {
-                        address: core_address_to_alloy(item.address),
-                        storage_keys: item.storage_keys,
-                    })
-                    .collect(),
-            },
-            Self::DynamicFee {
-                max_fee_per_gas,
-                max_priority_fee_per_gas,
-                access_list,
-            } => TransactionVariantRequest::DynamicFee {
-                max_fee_per_gas,
-                max_priority_fee_per_gas,
-                access_list: access_list
-                    .into_iter()
-                    .map(|item| simulation_transaction::AccessListItem {
-                        address: core_address_to_alloy(item.address),
-                        storage_keys: item.storage_keys,
-                    })
-                    .collect(),
-            },
-        }
-    }
-}
-
-impl CoreSpaceTransactionRequest {
-    pub(crate) fn into_shared(self) -> TransactionRequest {
-        TransactionRequest {
-            from: core_address_to_alloy(self.from),
-            to: self.to.map(core_address_to_alloy),
-            nonce: self.nonce,
-            gas_limit: self.gas_limit,
-            value: self.value,
-            data: self.data,
-            chain_id: self.chain_id,
-            variant: self.variant.into_shared(),
-        }
-    }
 }
 
 pub(crate) fn validate_core_space_transaction_network(
@@ -198,15 +147,32 @@ fn validate_core_space_address_network(
     Ok(())
 }
 
-fn core_address_to_alloy(address: CoreAddress) -> Address {
-    Address::from_slice(&address.bytes())
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoreSpaceTransactionVariant {
+    Legacy {
+        gas_price: u128,
+    },
+    AccessList {
+        gas_price: u128,
+        access_list: Vec<CoreSpaceAccessListItem>,
+    },
+    DynamicFee {
+        max_fee_per_gas: u128,
+        max_priority_fee_per_gas: u128,
+        access_list: Vec<CoreSpaceAccessListItem>,
+    },
 }
-
-pub type CoreSpaceTransactionVariant = ConfluxTransactionVariant;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreSpaceTransaction {
-    pub transaction: ConfluxTransaction,
+    pub from: CoreAddress,
+    pub to: Option<CoreAddress>,
+    pub nonce: u64,
+    pub gas_limit: u64,
+    pub value: U256,
+    pub data: Bytes,
+    pub chain_id: u64,
+    pub variant: CoreSpaceTransactionVariant,
     pub storage_limit: u64,
     pub epoch_height: u64,
 }
@@ -227,14 +193,14 @@ pub(crate) async fn prepare_storage_payer(
     epoch: EpochNumber,
     transaction: &CoreSpaceTransaction,
 ) -> Result<PreparedStoragePayer, ConfluxSimulationError> {
-    let Some(target) = transaction.transaction.to else {
+    let Some(target) = transaction.to.as_ref() else {
         return Ok(PreparedStoragePayer {
             storage_covered_by_sponsor: false,
         });
     };
 
-    let target = address_to_cfx(target);
-    let code = provider.cfx_get_code(target, epoch.clone()).await?;
+    let target_cfx = cfx_types::Address::from_slice(&target.bytes());
+    let code = provider.cfx_get_code(target_cfx, epoch.clone()).await?;
     if code.is_empty() {
         return Ok(PreparedStoragePayer {
             storage_covered_by_sponsor: false,
@@ -242,11 +208,10 @@ pub(crate) async fn prepare_storage_payer(
     }
 
     let storage_limit = transaction.storage_limit;
-    let transaction = &transaction.transaction;
     let balance_check = provider
         .cfx_check_balance_against_transaction(
-            address_to_cfx(transaction.from),
-            target,
+            transaction.from.clone(),
+            target.clone(),
             transaction.gas_limit,
             storage_payer_gas_price(&transaction.variant),
             storage_limit,
@@ -273,7 +238,7 @@ pub(crate) fn build_core_space_transaction_input(
     input: CoreSpaceTransaction,
     chain_id: u32,
 ) -> CoreSpaceTransactionInput {
-    let sender = address_to_cfx(input.transaction.from);
+    let sender = cfx_types::Address::from_slice(&input.from.bytes());
     let tx = build_typed_core_space_transaction(input, chain_id);
 
     CoreSpaceTransactionInput { tx, sender }
@@ -284,22 +249,20 @@ fn build_typed_core_space_transaction(
     chain_id: u32,
 ) -> TypedNativeTransaction {
     let CoreSpaceTransaction {
-        transaction,
-        storage_limit,
-        epoch_height,
-    } = input;
-    let ConfluxTransaction {
+        from: _,
         to,
         nonce,
         gas_limit,
         value,
         data,
+        chain_id: _,
         variant,
-        ..
-    } = transaction;
+        storage_limit,
+        epoch_height,
+    } = input;
 
     let action = to.map_or(Action::Create, |address| {
-        Action::Call(address_to_cfx(address))
+        Action::Call(cfx_types::Address::from_slice(&address.bytes()))
     });
     let nonce = nonce.into();
     let gas = gas_limit.into();
@@ -333,7 +296,7 @@ fn build_typed_core_space_transaction(
             epoch_height,
             chain_id,
             data,
-            access_list: access_list_to_cfx(access_list),
+            access_list: core_access_list_to_cfx(access_list),
         }),
         CoreSpaceTransactionVariant::DynamicFee {
             max_fee_per_gas,
@@ -350,7 +313,17 @@ fn build_typed_core_space_transaction(
             epoch_height,
             chain_id,
             data,
-            access_list: access_list_to_cfx(access_list),
+            access_list: core_access_list_to_cfx(access_list),
         }),
     }
+}
+
+fn core_access_list_to_cfx(items: Vec<CoreSpaceAccessListItem>) -> Vec<primitives::AccessListItem> {
+    items
+        .into_iter()
+        .map(|item| primitives::AccessListItem {
+            address: cfx_types::Address::from_slice(&item.address.bytes()),
+            storage_keys: item.storage_keys.into_iter().map(b256_to_cfx).collect(),
+        })
+        .collect()
 }

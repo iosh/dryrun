@@ -9,9 +9,10 @@ pub use error::SimulationServiceError;
 pub use evm_simulation::EvmBlockSelector;
 pub use evm_simulation::{
     AccessListItem, Change, Erc20Metadata, Erc721CollectionMetadata,
-    EvmExecution as SimulationExecution, EvmExecutionFailure as ExecutionFailure,
-    EvmExecutionFailureCode, EvmExecutionOutcome as ExecutionOutcome,
-    EvmSimulation as SimulateEvmTransactionOutput, ExecutedDetails, NativeMetadata, SimulatedBlock,
+    EvmExecutedDetails as ExecutedDetails, EvmExecution as SimulationExecution,
+    EvmExecutionFailure as ExecutionFailure, EvmExecutionFailureCode,
+    EvmExecutionOutcome as ExecutionOutcome, EvmSimulation as SimulateEvmTransactionOutput,
+    NativeMetadata, SimulatedBlock,
 };
 pub use simulation_transaction::TransactionRequest as EvmTransactionRequest;
 

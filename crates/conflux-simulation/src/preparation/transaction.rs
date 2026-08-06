@@ -8,7 +8,8 @@ use crate::{
     ConfluxSimulationError, ConfluxSimulationProvider, CoreSpaceSimulationContext,
     EspaceSimulationContext,
     core_space::{
-        CoreSpaceTransaction, CoreSpaceTransactionRequest, validate_core_space_transaction_network,
+        CoreSpaceTransaction, CoreSpaceTransactionRequest, CoreSpaceTransactionVariant,
+        CoreSpaceTransactionVariantRequest, validate_core_space_transaction_network,
     },
 };
 
@@ -43,11 +44,8 @@ pub(crate) async fn complete_espace_transaction(
     context: &EspaceSimulationContext,
     request: TransactionRequest,
 ) -> Result<Transaction, ConfluxSimulationError> {
-    let (transaction, gas_limit) = complete_without_gas_limit(
-        request,
-        TransactionCompletionContext::Espace { provider, context },
-    )
-    .await?;
+    let (transaction, gas_limit) =
+        complete_espace_without_gas_limit(provider, context, request).await?;
     let gas_limit = match gas_limit {
         Some(gas_limit) => gas_limit,
         None => {
@@ -80,12 +78,34 @@ pub(crate) async fn complete_core_space_transaction(
     requested_epoch_height: Option<u64>,
 ) -> Result<CoreSpaceTransaction, ConfluxSimulationError> {
     validate_core_space_transaction_network(&request, provider.provider_network())?;
-    let request = request.into_shared();
-    let (transaction, gas_limit) = complete_without_gas_limit(
-        request,
-        TransactionCompletionContext::CoreSpace { provider, context },
-    )
-    .await?;
+    let CoreSpaceTransactionRequest {
+        from,
+        to,
+        nonce,
+        gas_limit,
+        value,
+        data,
+        chain_id,
+        variant,
+    } = request;
+    let nonce = match nonce {
+        Some(nonce) => nonce,
+        None => {
+            let nonce = provider
+                .cfx_get_next_nonce(from, context.state_epoch())
+                .await?;
+            u64::try_from(nonce).map_err(|_| {
+                unsupported_value(
+                    "Core Space transaction nonce",
+                    nonce,
+                    CfxU256::from(u64::MAX),
+                )
+            })?
+        }
+    };
+    let variant = complete_core_space_transaction_variant(provider, context, variant).await?;
+    let value = value.unwrap_or_default();
+    let data = data.unwrap_or_default();
     let epoch_height = requested_epoch_height.unwrap_or_else(|| context.epoch_height());
 
     let (gas_limit, storage_limit) = match (gas_limit, requested_storage_limit) {
@@ -93,13 +113,13 @@ pub(crate) async fn complete_core_space_transaction(
         (gas_limit, storage_limit) => {
             let estimate = provider
                 .cfx_estimate_gas_and_collateral(
-                    transaction.from,
-                    transaction.to,
-                    transaction.nonce,
-                    transaction.value,
-                    &transaction.data,
-                    transaction.chain_id,
-                    &transaction.variant,
+                    from,
+                    to,
+                    nonce,
+                    value,
+                    &data,
+                    chain_id,
+                    &variant,
                     epoch_height,
                     gas_limit,
                     storage_limit,
@@ -124,15 +144,23 @@ pub(crate) async fn complete_core_space_transaction(
     };
 
     Ok(CoreSpaceTransaction {
-        transaction: transaction.into_transaction(gas_limit),
+        from,
+        to,
+        nonce,
+        gas_limit,
+        value,
+        data,
+        chain_id,
+        variant,
         storage_limit,
         epoch_height,
     })
 }
 
-async fn complete_without_gas_limit(
+async fn complete_espace_without_gas_limit(
+    provider: &ConfluxSimulationProvider,
+    context: &EspaceSimulationContext,
     request: TransactionRequest,
-    context: TransactionCompletionContext<'_>,
 ) -> Result<(TransactionWithoutGasLimit, Option<u64>), ConfluxSimulationError> {
     let TransactionRequest {
         from,
@@ -146,9 +174,16 @@ async fn complete_without_gas_limit(
     } = request;
     let nonce = match nonce {
         Some(nonce) => nonce,
-        None => context.nonce(from).await?,
+        None => {
+            let nonce = provider
+                .eth_get_transaction_count(from, context.state_block())
+                .await?;
+            u64::try_from(nonce).map_err(|_| {
+                unsupported_value("eSpace transaction nonce", nonce, CfxU256::from(u64::MAX))
+            })?
+        }
     };
-    let variant = complete_transaction_variant(context, variant).await?;
+    let variant = complete_espace_transaction_variant(provider, context, variant).await?;
 
     Ok((
         TransactionWithoutGasLimit {
@@ -164,79 +199,20 @@ async fn complete_without_gas_limit(
     ))
 }
 
-#[derive(Clone, Copy)]
-enum TransactionCompletionContext<'a> {
-    Espace {
-        provider: &'a ConfluxSimulationProvider,
-        context: &'a EspaceSimulationContext,
-    },
-    CoreSpace {
-        provider: &'a ConfluxSimulationProvider,
-        context: &'a CoreSpaceSimulationContext,
-    },
-}
-
-impl TransactionCompletionContext<'_> {
-    async fn nonce(self, address: Address) -> Result<u64, ConfluxSimulationError> {
-        let nonce = match self {
-            Self::Espace { provider, context } => {
-                provider
-                    .eth_get_transaction_count(address, context.state_block())
-                    .await
-            }
-            Self::CoreSpace { provider, context } => {
-                provider
-                    .cfx_get_next_nonce(address, context.state_epoch())
-                    .await
-            }
-        }?;
-
-        u64::try_from(nonce)
-            .map_err(|_| unsupported_value("transaction nonce", nonce, CfxU256::from(u64::MAX)))
-    }
-
-    async fn gas_price(self) -> Result<u128, ConfluxSimulationError> {
-        let gas_price = match self {
-            Self::Espace { provider, .. } => provider.eth_gas_price().await,
-            Self::CoreSpace { provider, .. } => provider.cfx_gas_price().await,
-        }?;
-
-        u128::try_from(gas_price)
-            .map_err(|_| unsupported_value("gas price", gas_price, CfxU256::from(u128::MAX)))
-    }
-
-    async fn max_priority_fee_per_gas(self) -> Result<u128, ConfluxSimulationError> {
-        let fee = match self {
-            Self::Espace { provider, .. } => provider.eth_max_priority_fee_per_gas().await,
-            Self::CoreSpace { provider, .. } => provider.cfx_max_priority_fee_per_gas().await,
-        }?;
-
-        u128::try_from(fee).map_err(|_| {
-            unsupported_value("max priority fee per gas", fee, CfxU256::from(u128::MAX))
-        })
-    }
-
-    fn base_fee_per_gas(self) -> Option<CfxU256> {
-        match self {
-            Self::Espace { context, .. } => context.base_fee_per_gas(),
-            Self::CoreSpace { context, .. } => context.base_fee_per_gas(),
-        }
-    }
-}
-
-async fn complete_transaction_variant(
-    context: TransactionCompletionContext<'_>,
+async fn complete_espace_transaction_variant(
+    provider: &ConfluxSimulationProvider,
+    context: &EspaceSimulationContext,
     variant: TransactionVariantRequest,
 ) -> Result<TransactionVariant, ConfluxSimulationError> {
     match variant {
         TransactionVariantRequest::Legacy { gas_price } => Ok(TransactionVariant::Legacy {
-            gas_price: suggested_gas_price(context, gas_price).await?,
+            gas_price: suggested_espace_gas_price(provider, gas_price).await?,
         }),
         TransactionVariantRequest::AccessList {
             gas_price,
             access_list,
         } => Ok(TransactionVariant::AccessList {
-            gas_price: suggested_gas_price(context, gas_price).await?,
+            gas_price: suggested_espace_gas_price(provider, gas_price).await?,
             access_list,
         }),
         TransactionVariantRequest::DynamicFee {
@@ -246,11 +222,22 @@ async fn complete_transaction_variant(
         } => {
             let max_priority_fee_per_gas = match max_priority_fee_per_gas {
                 Some(value) => value,
-                None => context.max_priority_fee_per_gas().await?,
+                None => {
+                    let fee = provider.eth_max_priority_fee_per_gas().await?;
+                    u128::try_from(fee).map_err(|_| {
+                        unsupported_value(
+                            "eSpace max priority fee per gas",
+                            fee,
+                            CfxU256::from(u128::MAX),
+                        )
+                    })?
+                }
             };
             let max_fee_per_gas = match max_fee_per_gas {
                 Some(value) => value,
-                None => suggested_dynamic_fee_cap(context, max_priority_fee_per_gas)?,
+                None => {
+                    suggested_dynamic_fee_cap(context.base_fee_per_gas(), max_priority_fee_per_gas)?
+                }
             };
 
             Ok(TransactionVariant::DynamicFee {
@@ -262,21 +249,93 @@ async fn complete_transaction_variant(
     }
 }
 
-async fn suggested_gas_price(
-    context: TransactionCompletionContext<'_>,
+async fn complete_core_space_transaction_variant(
+    provider: &ConfluxSimulationProvider,
+    context: &CoreSpaceSimulationContext,
+    variant: CoreSpaceTransactionVariantRequest,
+) -> Result<CoreSpaceTransactionVariant, ConfluxSimulationError> {
+    match variant {
+        CoreSpaceTransactionVariantRequest::Legacy { gas_price } => {
+            Ok(CoreSpaceTransactionVariant::Legacy {
+                gas_price: suggested_core_gas_price(provider, gas_price).await?,
+            })
+        }
+        CoreSpaceTransactionVariantRequest::AccessList {
+            gas_price,
+            access_list,
+        } => Ok(CoreSpaceTransactionVariant::AccessList {
+            gas_price: suggested_core_gas_price(provider, gas_price).await?,
+            access_list,
+        }),
+        CoreSpaceTransactionVariantRequest::DynamicFee {
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+            access_list,
+        } => {
+            let max_priority_fee_per_gas = match max_priority_fee_per_gas {
+                Some(value) => value,
+                None => {
+                    let fee = provider.cfx_max_priority_fee_per_gas().await?;
+                    u128::try_from(fee).map_err(|_| {
+                        unsupported_value(
+                            "Core Space max priority fee per gas",
+                            fee,
+                            CfxU256::from(u128::MAX),
+                        )
+                    })?
+                }
+            };
+            let max_fee_per_gas = match max_fee_per_gas {
+                Some(value) => value,
+                None => {
+                    suggested_dynamic_fee_cap(context.base_fee_per_gas(), max_priority_fee_per_gas)?
+                }
+            };
+
+            Ok(CoreSpaceTransactionVariant::DynamicFee {
+                max_fee_per_gas,
+                max_priority_fee_per_gas,
+                access_list,
+            })
+        }
+    }
+}
+
+async fn suggested_espace_gas_price(
+    provider: &ConfluxSimulationProvider,
     gas_price: Option<u128>,
 ) -> Result<u128, ConfluxSimulationError> {
     match gas_price {
         Some(value) => Ok(value),
-        None => context.gas_price().await,
+        None => {
+            let gas_price = provider.eth_gas_price().await?;
+            u128::try_from(gas_price).map_err(|_| {
+                unsupported_value("eSpace gas price", gas_price, CfxU256::from(u128::MAX))
+            })
+        }
+    }
+}
+
+async fn suggested_core_gas_price(
+    provider: &ConfluxSimulationProvider,
+    gas_price: Option<u128>,
+) -> Result<u128, ConfluxSimulationError> {
+    match gas_price {
+        Some(value) => Ok(value),
+        None => {
+            let gas_price = provider.cfx_gas_price().await?;
+            u128::try_from(gas_price).map_err(|_| {
+                unsupported_value("Core Space gas price", gas_price, CfxU256::from(u128::MAX))
+            })
+        }
     }
 }
 
 fn suggested_dynamic_fee_cap(
-    context: TransactionCompletionContext<'_>,
+    base_fee: Option<CfxU256>,
     max_priority_fee_per_gas: u128,
 ) -> Result<u128, ConfluxSimulationError> {
-    let base_fee = context.base_fee_per_gas().ok_or_else(|| {
+    let base_fee = base_fee.ok_or_else(|| {
         ConfluxSimulationError::transaction_completion_failed(
             "simulation context does not provide a base fee for dynamic fee completion",
         )

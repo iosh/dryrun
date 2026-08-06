@@ -6,7 +6,6 @@ use cfx_executor::executive::{
 use cfx_statedb::Error as StateDbError;
 use cfx_types::{AddressWithSpace, U256};
 use primitives::{LogEntry, receipt::StorageChange};
-use simulation_execution::ExecutedDetails;
 use thiserror::Error;
 
 use super::{
@@ -17,12 +16,21 @@ use crate::primitive::u256_from_cfx;
 
 /// Conflux execution output owned by this crate rather than by the upstream type map.
 #[derive(Debug)]
+pub(crate) struct ConfluxExecutionDetails {
+    pub(crate) gas_used: u64,
+    pub(crate) gas_charged: u64,
+    pub(crate) fee: AlloyU256,
+    pub(crate) burnt_fee: Option<AlloyU256>,
+    pub(crate) output: Bytes,
+}
+
+#[derive(Debug)]
 #[expect(
     dead_code,
     reason = "some details are carried for the next analysis slices before they have consumers"
 )]
 pub(crate) struct ConfluxExecutionOutput {
-    pub(crate) common: ExecutedDetails<Option<AlloyU256>>,
+    pub(crate) common: ConfluxExecutionDetails,
     pub(crate) base_gas: u64,
     pub(crate) gas_sponsor_paid: bool,
     pub(crate) logs: Vec<LogEntry>,
@@ -123,7 +131,7 @@ fn executed_transaction_details(
         })?;
 
     Ok(ConfluxExecutionOutput {
-        common: ExecutedDetails {
+        common: ConfluxExecutionDetails {
             gas_used,
             gas_charged,
             fee: u256_from_cfx(fee),

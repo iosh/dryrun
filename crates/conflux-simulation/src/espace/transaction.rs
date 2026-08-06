@@ -4,9 +4,11 @@ use primitives::transaction::{
 };
 
 use crate::{
-    ConfluxTransaction, ConfluxTransactionVariant,
     execution::EspaceTransactionInput,
     primitive::{access_list_to_cfx, address_to_cfx, u256_to_cfx},
+};
+pub use simulation_transaction::{
+    Transaction as EspaceTransaction, TransactionVariant as EspaceTransactionVariant,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,9 +16,6 @@ pub enum EspaceBlockRef {
     Latest,
     Number(u64),
 }
-
-pub type EspaceTransaction = ConfluxTransaction;
-pub type EspaceTransactionVariant = ConfluxTransactionVariant;
 
 pub(crate) fn build_espace_transaction_input(
     input: EspaceTransaction,
