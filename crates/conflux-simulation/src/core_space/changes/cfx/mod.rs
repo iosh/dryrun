@@ -1,3 +1,4 @@
+mod basic;
 mod collection;
 mod cross_space;
 mod sponsorship;
@@ -47,40 +48,46 @@ impl CfxOperations {
 
         for operation in &operations {
             match operation {
-                CfxOperation::CoreSpaceBalanceTransfer { from, to, .. } => {
+                CfxOperation::Basic(BasicCfxOperation::CoreSpaceBalanceTransfer {
+                    from,
+                    to,
+                    ..
+                }) => {
                     balance_locations
                         .insert(CfxBalanceLocation::CoreSpaceAccount { account: *from });
                     balance_locations.insert(CfxBalanceLocation::CoreSpaceAccount { account: *to });
                 }
-                CfxOperation::EspaceBalanceTransfer { from, to, .. } => {
+                CfxOperation::Basic(BasicCfxOperation::EspaceBalanceTransfer {
+                    from, to, ..
+                }) => {
                     balance_locations.insert(CfxBalanceLocation::EspaceAccount { account: *from });
                     balance_locations.insert(CfxBalanceLocation::EspaceAccount { account: *to });
                 }
-                CfxOperation::CrossSpaceTransfer(transfer) => {
+                CfxOperation::CrossSpace(transfer) => {
                     balance_locations.insert(cross_space_balance_location(transfer.from));
                     balance_locations.insert(cross_space_balance_location(transfer.to));
                     requires_total_espace_tokens = true;
                 }
-                CfxOperation::GasPrecharge { payer, .. } => {
+                CfxOperation::Basic(BasicCfxOperation::GasPrecharge { payer, .. }) => {
                     balance_locations.insert(*payer);
                 }
-                CfxOperation::GasRefund { recipient, .. } => {
+                CfxOperation::Basic(BasicCfxOperation::GasRefund { recipient, .. }) => {
                     balance_locations.insert(*recipient);
                 }
-                CfxOperation::StakingDeposit { account, .. }
-                | CfxOperation::StakingWithdrawal { account, .. } => {
+                CfxOperation::Basic(BasicCfxOperation::StakingDeposit { account, .. })
+                | CfxOperation::Basic(BasicCfxOperation::StakingWithdrawal { account, .. }) => {
                     balance_locations
                         .insert(CfxBalanceLocation::CoreSpaceAccount { account: *account });
                     balance_locations.insert(CfxBalanceLocation::Staking { account: *account });
                 }
-                CfxOperation::NativeBurn { account, .. } => {
+                CfxOperation::Basic(BasicCfxOperation::NativeBurn { account, .. }) => {
                     balance_locations
                         .insert(CfxBalanceLocation::CoreSpaceAccount { account: *account });
                 }
-                CfxOperation::StakingBurn { account, .. } => {
+                CfxOperation::Basic(BasicCfxOperation::StakingBurn { account, .. }) => {
                     balance_locations.insert(CfxBalanceLocation::Staking { account: *account });
                 }
-                CfxOperation::SponsorshipFunding(funding) => {
+                CfxOperation::Sponsorship(SponsorshipOperation::Funding(funding)) => {
                     balance_locations.insert(CfxBalanceLocation::CoreSpaceAccount {
                         account: funding.sponsor,
                     });
@@ -105,7 +112,7 @@ impl CfxOperations {
                         );
                     }
                 }
-                CfxOperation::SponsorshipStandaloneRefund(refund) => {
+                CfxOperation::Sponsorship(SponsorshipOperation::StandaloneRefund(refund)) => {
                     balance_locations.insert(CfxBalanceLocation::CoreSpaceAccount {
                         account: refund.sponsor,
                     });
@@ -124,7 +131,9 @@ impl CfxOperations {
                         );
                     }
                 }
-                CfxOperation::StoragePointConversion(conversion) => {
+                CfxOperation::Sponsorship(SponsorshipOperation::StoragePointConversion(
+                    conversion,
+                )) => {
                     add_storage_point_requirements(
                         conversion.contract_address,
                         &mut balance_locations,
@@ -136,7 +145,7 @@ impl CfxOperations {
                         contract_address: conversion.contract_address,
                     });
                 }
-                CfxOperation::StorageCollateralRelease(release) => {
+                CfxOperation::Basic(BasicCfxOperation::StorageCollateralRelease(release)) => {
                     add_storage_point_requirements(
                         release.contract_address,
                         &mut balance_locations,
@@ -144,7 +153,7 @@ impl CfxOperations {
                         &mut requires_storage_point_globals,
                     );
                 }
-                CfxOperation::SponsorshipAccessRule(update) => {
+                CfxOperation::Sponsorship(SponsorshipOperation::AccessRule(update)) => {
                     sponsorship_access_rule_keys.insert(update.key());
                     if update.caller_role == SponsorshipAccessCallerRole::ContractAdmin {
                         admin_managed_sponsorship_contracts.insert(update.contract_address);
@@ -182,22 +191,24 @@ impl CfxOperations {
     ) -> Result<(), ConfluxSimulationError> {
         for operation in &self.operations {
             match operation {
-                CfxOperation::StakingDeposit {
+                CfxOperation::Basic(BasicCfxOperation::StakingDeposit {
                     account, amount, ..
-                } => credit_staking_balance_if_present(staking_balances, *account, *amount)?,
-                CfxOperation::StakingWithdrawal {
+                }) => credit_staking_balance_if_present(staking_balances, *account, *amount)?,
+                CfxOperation::Basic(BasicCfxOperation::StakingWithdrawal {
                     account,
                     principal_amount,
                     ..
-                } => debit_staking_balance_if_present(
+                }) => debit_staking_balance_if_present(
                     staking_balances,
                     *account,
                     *principal_amount,
                     "withdrawal",
                 )?,
-                CfxOperation::StakingBurn {
+                CfxOperation::Basic(BasicCfxOperation::StakingBurn {
                     account, amount, ..
-                } => debit_staking_balance_if_present(staking_balances, *account, *amount, "burn")?,
+                }) => {
+                    debit_staking_balance_if_present(staking_balances, *account, *amount, "burn")?
+                }
                 _ => {}
             }
         }
@@ -340,6 +351,13 @@ impl SponsoredResource {
 
 #[derive(Debug)]
 enum CfxOperation {
+    Basic(BasicCfxOperation),
+    CrossSpace(CrossSpaceTransferOperation),
+    Sponsorship(SponsorshipOperation),
+}
+
+#[derive(Debug)]
+enum BasicCfxOperation {
     CoreSpaceBalanceTransfer {
         position: Position,
         from: Address,
@@ -351,7 +369,6 @@ enum CfxOperation {
         to: Address,
         amount: U256,
     },
-    CrossSpaceTransfer(CrossSpaceTransferOperation),
     GasPrecharge {
         payer: CfxBalanceLocation,
         amount: U256,
@@ -381,11 +398,15 @@ enum CfxOperation {
         account: Address,
         amount: U256,
     },
-    SponsorshipFunding(SponsorshipFundingOperation),
-    SponsorshipStandaloneRefund(SponsorshipRefundOperation),
-    SponsorshipAccessRule(SponsorshipAccessRuleUpdate),
-    StoragePointConversion(StoragePointConversionOperation),
     StorageCollateralRelease(StorageCollateralReleaseOperation),
+}
+
+#[derive(Debug)]
+enum SponsorshipOperation {
+    Funding(SponsorshipFundingOperation),
+    StandaloneRefund(SponsorshipRefundOperation),
+    AccessRule(SponsorshipAccessRuleUpdate),
+    StoragePointConversion(StoragePointConversionOperation),
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -7,10 +7,11 @@ use contract_standards::StatePhase;
 use simulation_changes::{Change, NativeMetadata};
 
 use super::{
-    CfxBalanceLocation, CfxOperation, CfxOperations, CrossSpaceTransferOperation,
-    SponsorResourceLocation, SponsorshipAccessCallerRole, SponsorshipAccessRuleKey,
-    SponsorshipAccessRuleUpdate, SponsorshipFundingOperation, SponsorshipFundingTerms,
-    SponsorshipRefundOperation, StorageCollateralReleaseOperation, StoragePointConversionOperation,
+    BasicCfxOperation, CfxBalanceLocation, CfxOperation, CfxOperations,
+    CrossSpaceTransferOperation, SponsorResourceLocation, SponsorshipAccessCallerRole,
+    SponsorshipAccessRuleKey, SponsorshipAccessRuleUpdate, SponsorshipFundingOperation,
+    SponsorshipFundingTerms, SponsorshipOperation, SponsorshipRefundOperation,
+    StorageCollateralReleaseOperation, StoragePointConversionOperation,
     cross_space_balance_location,
 };
 use crate::{
@@ -251,12 +252,12 @@ pub(crate) fn verify_cfx_changes(
 
     for operation in &cfx_operations.operations {
         match operation {
-            CfxOperation::CoreSpaceBalanceTransfer {
+            CfxOperation::Basic(BasicCfxOperation::CoreSpaceBalanceTransfer {
                 position,
                 from,
                 to,
                 amount,
-            } => {
+            }) => {
                 replayed_state.debit_balance(
                     CfxBalanceLocation::CoreSpaceAccount { account: *from },
                     *amount,
@@ -275,7 +276,7 @@ pub(crate) fn verify_cfx_changes(
                     }),
                 ));
             }
-            CfxOperation::EspaceBalanceTransfer { from, to, amount } => {
+            CfxOperation::Basic(BasicCfxOperation::EspaceBalanceTransfer { from, to, amount }) => {
                 replayed_state.debit_balance(
                     CfxBalanceLocation::EspaceAccount { account: *from },
                     *amount,
@@ -283,11 +284,11 @@ pub(crate) fn verify_cfx_changes(
                 replayed_state
                     .credit_balance(CfxBalanceLocation::EspaceAccount { account: *to }, *amount)?;
             }
-            CfxOperation::CrossSpaceTransfer(transfer) => {
+            CfxOperation::CrossSpace(transfer) => {
                 replayed_state
                     .apply_cross_space_transfer(transfer, &mut positioned_core_changes)?;
             }
-            CfxOperation::GasPrecharge { payer, amount } => {
+            CfxOperation::Basic(BasicCfxOperation::GasPrecharge { payer, amount }) => {
                 verify_gas_fee_location("precharge payer", *payer, expected_gas_fee_payer)?;
                 precharged_fee = precharged_fee.checked_add(*amount).ok_or_else(|| {
                     ConfluxSimulationError::analysis_failed(
@@ -296,7 +297,7 @@ pub(crate) fn verify_cfx_changes(
                 })?;
                 replayed_state.debit_balance(*payer, *amount)?;
             }
-            CfxOperation::GasRefund { recipient, amount } => {
+            CfxOperation::Basic(BasicCfxOperation::GasRefund { recipient, amount }) => {
                 verify_gas_fee_location("refund recipient", *recipient, expected_gas_fee_payer)?;
                 refunded_fee = refunded_fee.checked_add(*amount).ok_or_else(|| {
                     ConfluxSimulationError::analysis_failed(
@@ -305,11 +306,11 @@ pub(crate) fn verify_cfx_changes(
                 })?;
                 replayed_state.credit_balance(*recipient, *amount)?;
             }
-            CfxOperation::StakingDeposit {
+            CfxOperation::Basic(BasicCfxOperation::StakingDeposit {
                 position,
                 account,
                 amount,
-            } => {
+            }) => {
                 replayed_state.debit_balance(
                     CfxBalanceLocation::CoreSpaceAccount { account: *account },
                     *amount,
@@ -332,12 +333,12 @@ pub(crate) fn verify_cfx_changes(
                     },
                 ));
             }
-            CfxOperation::StakingWithdrawal {
+            CfxOperation::Basic(BasicCfxOperation::StakingWithdrawal {
                 position,
                 account,
                 principal_amount,
                 reward_amount,
-            } => {
+            }) => {
                 replayed_state.debit_balance(
                     CfxBalanceLocation::Staking { account: *account },
                     *principal_amount,
@@ -379,11 +380,11 @@ pub(crate) fn verify_cfx_changes(
                     },
                 ));
             }
-            CfxOperation::NativeBurn {
+            CfxOperation::Basic(BasicCfxOperation::NativeBurn {
                 position,
                 account,
                 amount,
-            } => {
+            }) => {
                 replayed_state.debit_balance(
                     CfxBalanceLocation::CoreSpaceAccount { account: *account },
                     *amount,
@@ -398,11 +399,11 @@ pub(crate) fn verify_cfx_changes(
                     },
                 ));
             }
-            CfxOperation::StakingBurn {
+            CfxOperation::Basic(BasicCfxOperation::StakingBurn {
                 position,
                 account,
                 amount,
-            } => {
+            }) => {
                 replayed_state
                     .debit_balance(CfxBalanceLocation::Staking { account: *account }, *amount)?;
                 replayed_state.debit_total_issued(*amount, "a staking balance burn")?;
@@ -414,22 +415,22 @@ pub(crate) fn verify_cfx_changes(
                     },
                 ));
             }
-            CfxOperation::SponsorshipFunding(funding) => {
+            CfxOperation::Sponsorship(SponsorshipOperation::Funding(funding)) => {
                 replayed_state.apply_sponsorship_funding(funding, &mut positioned_core_changes)?;
             }
-            CfxOperation::SponsorshipStandaloneRefund(refund) => {
+            CfxOperation::Sponsorship(SponsorshipOperation::StandaloneRefund(refund)) => {
                 replayed_state
                     .apply_standalone_sponsorship_refund(refund, &mut positioned_core_changes)?;
             }
-            CfxOperation::SponsorshipAccessRule(update) => {
+            CfxOperation::Sponsorship(SponsorshipOperation::AccessRule(update)) => {
                 replayed_state
                     .apply_sponsorship_access_rule_update(update, &mut positioned_core_changes)?;
             }
-            CfxOperation::StoragePointConversion(conversion) => {
+            CfxOperation::Sponsorship(SponsorshipOperation::StoragePointConversion(conversion)) => {
                 replayed_state
                     .apply_storage_point_conversion(conversion, &mut positioned_core_changes)?;
             }
-            CfxOperation::StorageCollateralRelease(release) => {
+            CfxOperation::Basic(BasicCfxOperation::StorageCollateralRelease(release)) => {
                 replayed_state.apply_storage_collateral_release(release)?;
             }
         }
