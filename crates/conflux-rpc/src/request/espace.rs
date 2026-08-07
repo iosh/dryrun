@@ -45,7 +45,7 @@ struct SimulateTransactionOptions {
     include: Option<Value>,
 }
 
-impl TryFrom<SimulateEspaceTransactionRequest> for service_espace::SimulateEspaceTransactionInput {
+impl TryFrom<SimulateEspaceTransactionRequest> for service_espace::EspaceSimulationInput {
     type Error = ValidationError;
 
     fn try_from(request: SimulateEspaceTransactionRequest) -> Result<Self, Self::Error> {
@@ -152,7 +152,7 @@ fn map_block_ref(block: BlockRef) -> Result<service_espace::EspaceBlockRef, Vali
 
 fn map_transaction(
     transaction: TransactionRequest,
-) -> Result<service_espace::ConfluxTransactionRequest, ValidationError> {
+) -> Result<service_espace::EspaceTransactionRequest, ValidationError> {
     let transaction_type = map_transaction_type(transaction.transaction_type)?;
     let transaction_type = TransactionType::infer(
         transaction_type,
@@ -211,7 +211,7 @@ fn map_transaction(
     )
     .map_err(|error| ValidationError::invalid_params(error.to_string()))?;
 
-    Ok(service_espace::ConfluxTransactionRequest {
+    Ok(service_espace::EspaceTransactionRequest {
         from: cfx_address_to_alloy(from),
         to: to.map(cfx_address_to_alloy),
         nonce: nonce

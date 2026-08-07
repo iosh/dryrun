@@ -4,7 +4,7 @@ use tokio::runtime::Handle;
 use crate::{
     ConfluxSimulationError,
     execution::{
-        ConfluxTransactionExecutor, ObservationObserver, TransactionExecutionOutcome,
+        ConfluxExecutionOutcome, ConfluxTransactionExecutor, ObservationObserver,
         build_conflux_state, build_mainnet_machine,
     },
     preparation::{PreparedEspaceSimulation, PreparedEspaceSimulationState, ReadyEspaceSimulation},
@@ -67,7 +67,7 @@ impl EspaceSimulator {
                     .map_err(ConfluxSimulationError::from)
             },
             |execution| {
-                if !matches!(&execution.outcome, TransactionExecutionOutcome::Success(_)) {
+                if !matches!(&execution.outcome, ConfluxExecutionOutcome::Success(_)) {
                     return Ok(None);
                 }
 

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use evm_service::{SimulationService, SimulationServiceError};
+use evm_service::{EvmServiceError, EvmSimulationService};
 use jsonrpsee::core::{RpcResult, async_trait};
 use jsonrpsee::types::ErrorObjectOwned;
 use tracing::{error, instrument};
@@ -16,11 +16,11 @@ use crate::{
 
 #[derive(Clone)]
 pub struct RpcHandler {
-    simulation_service: Arc<SimulationService>,
+    simulation_service: Arc<EvmSimulationService>,
 }
 
 impl RpcHandler {
-    pub fn new(simulation_service: Arc<SimulationService>) -> Self {
+    pub fn new(simulation_service: Arc<EvmSimulationService>) -> Self {
         Self { simulation_service }
     }
 
@@ -39,7 +39,7 @@ impl RpcHandler {
             block,
             options,
         };
-        let input: evm_service::SimulateEvmTransactionInput = request.try_into()?;
+        let input: evm_service::EvmSimulationInput = request.try_into()?;
         let output = self
             .simulation_service
             .simulate_evm_transaction(input)
@@ -63,7 +63,7 @@ impl DryrunRpcServer for RpcHandler {
     }
 }
 
-fn map_service_error(error: SimulationServiceError) -> ErrorObjectOwned {
+fn map_service_error(error: EvmServiceError) -> ErrorObjectOwned {
     if error.is_not_supported() {
         not_supported(error.details())
     } else {

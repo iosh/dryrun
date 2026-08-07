@@ -4,7 +4,7 @@ use revm::context_interface::result::{ExecutionResult, HaltReason};
 use super::EvmExecutionError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvmFeeSettlement {
+pub(crate) struct EvmFeeSettlement {
     pub fee: U256,
     pub burnt_fee: U256,
     pub gas_precharge: U256,

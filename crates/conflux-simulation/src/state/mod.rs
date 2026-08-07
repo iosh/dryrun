@@ -11,7 +11,7 @@ use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;
 use cfx_rpc_eth_types::BlockId as EthBlockId;
 use cfx_types::{H256, U64};
 
-pub use self::provider::{ConfluxRpcError, ConfluxSimulationProvider, CoreSpaceResourceEstimate};
+pub use self::provider::{ConfluxRpcError, ConfluxSimulationProvider};
 
 pub(crate) use self::{
     core_space_internal::SponsorWhitelistStorageKey,

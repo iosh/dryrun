@@ -1,11 +1,11 @@
-use alloy::primitives::{Bytes, U256};
+use alloy_primitives::{Bytes, U256};
 
 use crate::interface as rpc;
 
-impl From<evm_service::SimulateEvmTransactionOutput> for rpc::EvmSimulateTransactionResponse {
-    fn from(output: evm_service::SimulateEvmTransactionOutput) -> Self {
+impl From<evm_service::EvmSimulation> for rpc::EvmSimulateTransactionResponse {
+    fn from(output: evm_service::EvmSimulation) -> Self {
         let (execution, changes) = output.into_parts();
-        let evm_service::SimulationExecution {
+        let evm_service::EvmExecution {
             chain_id,
             context: block,
             gas_limit,
@@ -13,7 +13,7 @@ impl From<evm_service::SimulateEvmTransactionOutput> for rpc::EvmSimulateTransac
         } = execution;
 
         let (status, gas_used, fee, burnt_fee, output, failure) = match outcome {
-            evm_service::ExecutionOutcome::Success(evm_service::ExecutedDetails {
+            evm_service::EvmOutcome::Success(evm_service::EvmExecutionDetails {
                 gas_used,
                 gas_charged: _,
                 fee,
@@ -27,9 +27,9 @@ impl From<evm_service::SimulateEvmTransactionOutput> for rpc::EvmSimulateTransac
                 output,
                 None,
             ),
-            evm_service::ExecutionOutcome::Failed {
+            evm_service::EvmOutcome::Failed {
                 details:
-                    evm_service::ExecutedDetails {
+                    evm_service::EvmExecutionDetails {
                         gas_used,
                         gas_charged: _,
                         fee,
@@ -45,7 +45,7 @@ impl From<evm_service::SimulateEvmTransactionOutput> for rpc::EvmSimulateTransac
                 output,
                 Some(failure.into()),
             ),
-            evm_service::ExecutionOutcome::NotExecuted(failure) => (
+            evm_service::EvmOutcome::NotExecuted(failure) => (
                 rpc::ExecutionStatus::NotExecuted,
                 0,
                 U256::ZERO,
@@ -72,8 +72,8 @@ impl From<evm_service::SimulateEvmTransactionOutput> for rpc::EvmSimulateTransac
     }
 }
 
-impl From<evm_service::SimulatedBlock> for rpc::SimulatedBlock {
-    fn from(block: evm_service::SimulatedBlock) -> Self {
+impl From<evm_service::EvmBlockContext> for rpc::EvmBlockContext {
+    fn from(block: evm_service::EvmBlockContext) -> Self {
         Self {
             number: block.number,
             hash: block.hash,
@@ -81,8 +81,8 @@ impl From<evm_service::SimulatedBlock> for rpc::SimulatedBlock {
     }
 }
 
-impl From<evm_service::ExecutionFailure> for rpc::ExecutionFailure {
-    fn from(failure: evm_service::ExecutionFailure) -> Self {
+impl From<evm_service::EvmExecutionFailure> for rpc::ExecutionFailure {
+    fn from(failure: evm_service::EvmExecutionFailure) -> Self {
         Self {
             code: failure.code.as_str().to_string(),
             message: failure.message,

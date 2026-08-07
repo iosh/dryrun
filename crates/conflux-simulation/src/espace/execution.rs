@@ -1,8 +1,8 @@
 use alloy_primitives::{B256, Bytes, U256};
-use simulation_execution::ExecutionOutcome;
+use simulation_execution::Outcome;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SimulatedBlock {
+pub struct EspaceBlockContext {
     pub number: u64,
     pub hash: B256,
 }
@@ -33,7 +33,7 @@ pub struct EspaceExecutionFailure {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EspaceExecutedDetails {
+pub struct EspaceExecutionDetails {
     pub gas_used: u64,
     pub gas_charged: u64,
     pub fee: U256,
@@ -44,9 +44,9 @@ pub struct EspaceExecutedDetails {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EspaceExecution {
     pub chain_id: u64,
-    pub context: SimulatedBlock,
+    pub context: EspaceBlockContext,
     pub gas_limit: u64,
-    pub outcome: EspaceExecutionOutcome,
+    pub outcome: EspaceOutcome,
 }
 
-pub type EspaceExecutionOutcome = ExecutionOutcome<EspaceExecutedDetails, EspaceExecutionFailure>;
+pub type EspaceOutcome = Outcome<EspaceExecutionDetails, EspaceExecutionFailure>;

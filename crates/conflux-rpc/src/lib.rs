@@ -4,7 +4,8 @@ mod response;
 
 use std::sync::Arc;
 
-use cfx_addr::Network;
+use cfx_addr::Network as RpcNetwork;
+use conflux_provider::Network;
 use conflux_service::ConfluxService;
 use jsonrpsee::{RpcModule, types::ErrorObjectOwned};
 
@@ -24,6 +25,7 @@ pub fn build_rpc_module(
     service: Arc<ConfluxService>,
     core_space_address_network: Network,
 ) -> RpcModule<Arc<ConfluxService>> {
+    let rpc_network = to_rpc_network(core_space_address_network);
     let mut module = RpcModule::new(service);
 
     module
@@ -52,21 +54,26 @@ pub fn build_rpc_module(
                     .parse::<SimulateCoreSpaceTransactionRequest>()
                     .map_err(|error| invalid_params(error.to_string()))?;
 
-                let input = request.try_into_service_input(core_space_address_network)?;
+                let input = request.try_into_service_input(rpc_network)?;
 
                 let output = service
                     .simulate_core_space_transaction(input)
                     .await
                     .map_err(map_core_space_service_error)?;
 
-                SimulateCoreSpaceTransactionResponse::try_from_output(
-                    output,
-                    core_space_address_network,
-                )
-                .map_err(|error| core_space_response_mapping_error(error.to_string()))
+                SimulateCoreSpaceTransactionResponse::try_from_output(output, rpc_network)
+                    .map_err(|error| core_space_response_mapping_error(error.to_string()))
             },
         )
         .expect("RPC method names must be unique");
 
     module
+}
+
+fn to_rpc_network(network: Network) -> RpcNetwork {
+    match network {
+        Network::Main => RpcNetwork::Main,
+        Network::Test => RpcNetwork::Test,
+        Network::Id(id) => RpcNetwork::Id(id),
+    }
 }

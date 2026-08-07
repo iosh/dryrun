@@ -87,7 +87,7 @@ enum CoreSpaceExecutionFailureCode {
 
 impl SimulateCoreSpaceTransactionResponse {
     pub(crate) fn try_from_output(
-        simulation: service_core_space::SimulateCoreSpaceTransactionOutput,
+        simulation: service_core_space::CoreSpaceSimulation,
         network: Network,
     ) -> Result<Self, ResponseMappingError> {
         let (execution, changes) = simulation.into_parts();
@@ -117,7 +117,7 @@ impl CoreSpaceExecution {
             output,
             failure,
         ) = match outcome {
-            service_core_space::CoreSpaceExecutionOutcome::Success(details) => (
+            service_core_space::CoreSpaceOutcome::Success(details) => (
                 CoreSpaceExecutionStatus::Success,
                 details.gas_used.into(),
                 details.gas_charged.into(),
@@ -128,7 +128,7 @@ impl CoreSpaceExecution {
                 CoreSpaceRpcBytes::from(details.output.to_vec()),
                 None,
             ),
-            service_core_space::CoreSpaceExecutionOutcome::Failed { details, failure } => (
+            service_core_space::CoreSpaceOutcome::Failed { details, failure } => (
                 CoreSpaceExecutionStatus::Failed,
                 details.gas_used.into(),
                 details.gas_charged.into(),
@@ -139,7 +139,7 @@ impl CoreSpaceExecution {
                 CoreSpaceRpcBytes::from(details.output.to_vec()),
                 Some(failure.into()),
             ),
-            service_core_space::CoreSpaceExecutionOutcome::NotExecuted(failure) => (
+            service_core_space::CoreSpaceOutcome::NotExecuted(failure) => (
                 CoreSpaceExecutionStatus::NotExecuted,
                 U256::zero(),
                 U256::zero(),

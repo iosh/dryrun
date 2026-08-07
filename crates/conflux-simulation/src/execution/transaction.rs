@@ -5,24 +5,24 @@ use primitives::{
 };
 
 #[derive(Debug, Clone)]
-pub enum DryRunTransactionInput {
+pub(crate) enum DryRunTransactionInput {
     Espace(EspaceTransactionInput),
     CoreSpace(CoreSpaceTransactionInput),
 }
 
 #[derive(Debug, Clone)]
-pub struct EspaceTransactionInput {
+pub(crate) struct EspaceTransactionInput {
     pub tx: EthereumTransaction,
     pub sender: Address,
 }
 
 #[derive(Debug, Clone)]
-pub struct CoreSpaceTransactionInput {
+pub(crate) struct CoreSpaceTransactionInput {
     pub tx: TypedNativeTransaction,
     pub sender: Address,
 }
 
-pub fn signed_transaction_for_dryrun(input: DryRunTransactionInput) -> SignedTransaction {
+pub(crate) fn signed_transaction_for_dryrun(input: DryRunTransactionInput) -> SignedTransaction {
     match input {
         DryRunTransactionInput::Espace(input) => {
             // Dryrun input has an explicit sender but no real signature.

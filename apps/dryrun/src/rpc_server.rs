@@ -12,7 +12,7 @@ use conflux_simulation::{
     espace::{EspaceSimulationPreparer, EspaceSimulator},
 };
 use evm_rpc::{DryrunRpcServer, RpcHandler};
-use evm_service::SimulationService;
+use evm_service::EvmSimulationService;
 use evm_simulation::{EvmSimulationPreparer, EvmSimulator};
 use jsonrpsee::{
     RpcModule,
@@ -76,7 +76,7 @@ fn add_evm_rpc_module(
         tokio::runtime::Handle::current(),
     ));
     let evm_preparer = Arc::new(EvmSimulationPreparer::new(ethereum_provider));
-    let simulation_service = Arc::new(SimulationService::new(
+    let simulation_service = Arc::new(EvmSimulationService::new(
         evm_preparer,
         evm_simulator,
         simulation_tasks,

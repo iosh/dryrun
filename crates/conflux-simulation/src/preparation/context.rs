@@ -5,7 +5,7 @@ use cfx_types::{H256, U256};
 use crate::{
     ConfluxSimulationError,
     core_space::CoreSpaceEpochRef,
-    espace::{EspaceBlockRef, SimulatedBlock},
+    espace::{EspaceBlockContext, EspaceBlockRef},
     execution::{
         CoreSpacePivotBlockContext, ExecutionBlockContext, ExecutionConsensusContext,
         build_core_space_pivot_block_context, build_espace_block_context,
@@ -18,10 +18,10 @@ use crate::{
     },
 };
 
-pub struct EspaceSimulationContext {
+pub(crate) struct EspaceSimulationContext {
     pub(crate) block_context: ExecutionBlockContext,
     pub(crate) state_anchor: ConfluxStateAnchor,
-    pub(crate) simulated_block: SimulatedBlock,
+    pub(crate) simulated_block: EspaceBlockContext,
 }
 
 impl EspaceSimulationContext {
@@ -34,7 +34,7 @@ impl EspaceSimulationContext {
     }
 }
 
-pub struct CoreSpaceSimulationContext {
+pub(crate) struct CoreSpaceSimulationContext {
     pub(crate) block_context: ExecutionBlockContext,
     pub(crate) state_anchor: ConfluxStateAnchor,
 }
@@ -66,7 +66,7 @@ pub(crate) async fn load_espace_context(
     let state_anchor = state_anchor_from_espace_block(&espace_block)?;
     let core_space_pivot_block = load_core_space_pivot_block(provider, state_anchor).await?;
 
-    let simulated_block = SimulatedBlock {
+    let simulated_block = EspaceBlockContext {
         number: state_anchor.epoch_number(),
         hash: b256_from_cfx(espace_block.hash),
     };

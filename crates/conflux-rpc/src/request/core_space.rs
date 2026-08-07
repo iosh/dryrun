@@ -3,6 +3,7 @@ use cfx_addr::Network;
 use cfx_rpc_cfx_types::{EpochNumber, RpcAddress};
 use cfx_rpc_primitives::Bytes as CoreSpaceRpcBytes;
 use cfx_types::{H256, U64, U256};
+use conflux_provider::Network as ProviderNetwork;
 use conflux_service::core_space as service_core_space;
 use serde::Deserialize;
 use simulation_transaction::TransactionType;
@@ -49,8 +50,8 @@ impl SimulateCoreSpaceTransactionRequest {
     pub(crate) fn try_into_service_input(
         self,
         expected_network: Network,
-    ) -> Result<service_core_space::SimulateCoreSpaceTransactionInput, ValidationError> {
-        Ok(service_core_space::SimulateCoreSpaceTransactionInput {
+    ) -> Result<service_core_space::CoreSpaceSimulationInput, ValidationError> {
+        Ok(service_core_space::CoreSpaceSimulationInput {
             epoch: map_core_space_epoch(self.epoch)?,
             transaction: map_core_space_transaction(self.transaction, expected_network)?,
         })
@@ -74,7 +75,7 @@ fn map_core_space_epoch(
 fn map_core_space_transaction(
     transaction: CoreSpaceTransactionRequest,
     expected_network: Network,
-) -> Result<service_core_space::CoreSpaceTransactionRequest, ValidationError> {
+) -> Result<service_core_space::CoreSpaceTransactionInput, ValidationError> {
     validate_core_space_address_networks(&transaction, expected_network)?;
 
     let transaction_type = map_transaction_type(transaction.transaction_type)?;
@@ -120,8 +121,8 @@ fn map_core_space_transaction(
     )
     .map_err(|error| ValidationError::invalid_params(error.to_string()))?;
 
-    Ok(service_core_space::CoreSpaceTransactionRequest {
-        transaction: service_core_space::CoreSpaceTransactionInput {
+    Ok(service_core_space::CoreSpaceTransactionInput {
+        transaction: service_core_space::CoreSpaceTransactionRequest {
             from: map_core_space_address(from)?,
             to: to.map(map_core_space_address).transpose()?,
             nonce: nonce
@@ -237,9 +238,9 @@ fn map_core_space_address(
     let mut bytes = [0_u8; 20];
     bytes.copy_from_slice(address.hex_address.as_bytes());
     let network = match address.network {
-        Network::Main => service_core_space::CoreAddressNetwork::Main,
-        Network::Test => service_core_space::CoreAddressNetwork::Test,
-        Network::Id(id) => service_core_space::CoreAddressNetwork::Id(id),
+        Network::Main => ProviderNetwork::Main,
+        Network::Test => ProviderNetwork::Test,
+        Network::Id(id) => ProviderNetwork::Id(id),
     };
 
     service_core_space::CoreAddress::from_bytes(bytes, network)

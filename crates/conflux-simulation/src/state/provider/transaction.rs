@@ -24,13 +24,13 @@ use crate::{
 use super::{ConfluxRpcError, ConfluxSimulationProvider};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CoreSpaceResourceEstimate {
+pub(crate) struct CoreSpaceResourceEstimate {
     pub gas_limit: U256,
     pub storage_limit: u64,
 }
 
 impl ConfluxSimulationProvider {
-    pub async fn eth_get_transaction_count(
+    pub(crate) async fn eth_get_transaction_count(
         &self,
         address: AlloyAddress,
         block: BlockId,
@@ -46,7 +46,7 @@ impl ConfluxSimulationProvider {
         Ok(U256::from(nonce))
     }
 
-    pub async fn eth_gas_price(&self) -> Result<U256, ConfluxRpcError> {
+    pub(crate) async fn eth_gas_price(&self) -> Result<U256, ConfluxRpcError> {
         self.espace_provider
             .get_gas_price()
             .await
@@ -57,7 +57,7 @@ impl ConfluxSimulationProvider {
             })
     }
 
-    pub async fn eth_max_priority_fee_per_gas(&self) -> Result<U256, ConfluxRpcError> {
+    pub(crate) async fn eth_max_priority_fee_per_gas(&self) -> Result<U256, ConfluxRpcError> {
         self.espace_provider
             .get_max_priority_fee_per_gas()
             .await
@@ -68,7 +68,7 @@ impl ConfluxSimulationProvider {
             })
     }
 
-    pub async fn eth_estimate_gas(
+    pub(crate) async fn eth_estimate_gas(
         &self,
         from: AlloyAddress,
         to: Option<AlloyAddress>,
@@ -92,7 +92,7 @@ impl ConfluxSimulationProvider {
         Ok(U256::from(estimate))
     }
 
-    pub async fn cfx_get_next_nonce(
+    pub(crate) async fn cfx_get_next_nonce(
         &self,
         address: CoreAddress,
         epoch: EpochNumber,
@@ -108,13 +108,13 @@ impl ConfluxSimulationProvider {
         Ok(crate::primitive::u256_to_cfx(value))
     }
 
-    pub async fn cfx_gas_price(&self) -> Result<U256, ConfluxRpcError> {
+    pub(crate) async fn cfx_gas_price(&self) -> Result<U256, ConfluxRpcError> {
         let value =
             Self::core_request("cfx_gasPrice", self.core_space_provider.cfx_gas_price()).await?;
         Ok(crate::primitive::u256_to_cfx(value))
     }
 
-    pub async fn cfx_max_priority_fee_per_gas(&self) -> Result<U256, ConfluxRpcError> {
+    pub(crate) async fn cfx_max_priority_fee_per_gas(&self) -> Result<U256, ConfluxRpcError> {
         let value = Self::core_request(
             "cfx_maxPriorityFeePerGas",
             self.core_space_provider.cfx_max_priority_fee_per_gas(),
@@ -123,7 +123,7 @@ impl ConfluxSimulationProvider {
         Ok(crate::primitive::u256_to_cfx(value))
     }
 
-    pub async fn cfx_estimate_gas_and_collateral(
+    pub(crate) async fn cfx_estimate_gas_and_collateral(
         &self,
         from: CoreAddress,
         to: Option<CoreAddress>,

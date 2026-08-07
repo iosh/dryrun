@@ -43,7 +43,7 @@ pub(crate) struct ConfluxExecutionOutput {
 
 /// The normalized outcome exchanged between shared execution and each space.
 #[derive(Debug)]
-pub(crate) enum TransactionExecutionOutcome {
+pub(crate) enum ConfluxExecutionOutcome {
     Success(ConfluxExecutionOutput),
     Failed {
         error: ExecutionError,
@@ -77,7 +77,7 @@ impl From<StateDbError> for TransactionExecutionError {
     }
 }
 
-impl TransactionExecutionOutcome {
+impl ConfluxExecutionOutcome {
     pub(crate) fn from_upstream(
         outcome: UpstreamExecutionOutcome,
     ) -> Result<Self, TransactionExecutionError> {

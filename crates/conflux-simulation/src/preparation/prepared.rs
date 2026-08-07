@@ -1,6 +1,6 @@
 use crate::{
     core_space::{CoreSpaceExecution, CoreSpaceStateAnchor, PreparedStoragePayer},
-    espace::{EspaceExecution, SimulatedBlock},
+    espace::{EspaceBlockContext, EspaceExecution},
     execution::TransactionExecutionInput,
     state::ConfluxStateSource,
 };
@@ -16,7 +16,7 @@ pub(crate) enum PreparedEspaceSimulationState {
 
 pub(crate) struct ReadyEspaceSimulation {
     pub(crate) chain_id: u32,
-    pub(crate) simulated_block: SimulatedBlock,
+    pub(crate) simulated_block: EspaceBlockContext,
     pub(crate) gas_limit: u64,
     pub(crate) execution_input: TransactionExecutionInput,
     pub(crate) state_source: ConfluxStateSource,

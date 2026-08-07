@@ -13,7 +13,7 @@ use revm::{
 const CALL_INPUT_PREFIX_LIMIT: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EvmExecutionObservation {
+pub(crate) enum EvmExecutionObservation {
     Call {
         caller: Address,
         target: Address,
@@ -132,29 +132,19 @@ impl ObservationJournal {
             data: data.clone(),
         });
     }
-
-    fn into_observations(self) -> Vec<EvmExecutionObservation> {
-        self.entries
-            .into_iter()
-            .filter_map(|entry| match entry {
-                ObservationJournalEntry::Committed(observation) => Some(observation),
-                ObservationJournalEntry::PendingCreateTransfer { .. } => None,
-            })
-            .collect()
-    }
 }
 
 #[derive(Debug, Default)]
-pub struct EvmExecutionObserver {
+pub(crate) struct EvmExecutionObserver {
     journal: ObservationJournal,
 }
 
 impl EvmExecutionObserver {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub fn observations(&self) -> Vec<EvmExecutionObservation> {
+    pub(crate) fn observations(&self) -> Vec<EvmExecutionObservation> {
         self.journal
             .entries
             .iter()
@@ -163,10 +153,6 @@ impl EvmExecutionObserver {
                 ObservationJournalEntry::PendingCreateTransfer { .. } => None,
             })
             .collect()
-    }
-
-    pub fn into_observations(self) -> Vec<EvmExecutionObservation> {
-        self.journal.into_observations()
     }
 }
 

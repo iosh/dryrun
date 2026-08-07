@@ -9,7 +9,7 @@ use super::{
 use crate::{
     ConfluxSimulationError,
     core_space::changes::PositionedCoreSpaceChange,
-    execution::{ConfluxTransactionExecution, TransactionExecutionOutcome},
+    execution::{ConfluxExecutionOutcome, ConfluxTransactionExecution},
     state::MaskedSponsorWhitelistEntries,
 };
 
@@ -28,7 +28,7 @@ impl CfxAnalysisInput {
         machine: &Machine,
         masked_sponsor_whitelist_entries: &MaskedSponsorWhitelistEntries,
     ) -> Result<Self, ConfluxSimulationError> {
-        let TransactionExecutionOutcome::Success(details) = &execution.outcome else {
+        let ConfluxExecutionOutcome::Success(details) = &execution.outcome else {
             return Err(ConfluxSimulationError::ExecutionInternal {
                 message: "successful execution is required for Core Space CFX analysis".into(),
             });

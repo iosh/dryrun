@@ -8,7 +8,7 @@ use contract_standards::{
 use crate::{
     ConfluxSimulationError,
     execution::{
-        ConfluxTransactionExecution, PreparedTransactionExecution, TransactionExecutionOutcome,
+        ConfluxExecutionOutcome, ConfluxTransactionExecution, PreparedTransactionExecution,
     },
     standards::{collect_standard_candidates, load_change_metadata, read_standard_state_values},
     state::{AnchoredVoteLists, MaskedSponsorWhitelistEntries, StatePhaseValues},
@@ -35,7 +35,7 @@ impl CoreSpaceAnalysisInput {
         machine: &Machine,
         masked_sponsor_whitelist_entries: &MaskedSponsorWhitelistEntries,
     ) -> Result<Self, ConfluxSimulationError> {
-        let TransactionExecutionOutcome::Success(details) = &execution.outcome else {
+        let ConfluxExecutionOutcome::Success(details) = &execution.outcome else {
             return Err(ConfluxSimulationError::ExecutionInternal {
                 message: "successful execution is required for Core Space analysis".into(),
             });

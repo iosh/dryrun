@@ -27,16 +27,16 @@ use self::{
     env::{create_block_env, create_cfg_env, create_tx_env},
 };
 
-pub type MainnetEvmDatabase = state::MainnetEvmDatabase;
-pub type MainnetEvm<INSP = ()> = MainnetEvmWithDatabase<MainnetEvmDatabase, INSP>;
+pub(crate) type MainnetEvmDatabase = state::MainnetEvmDatabase;
+pub(crate) type MainnetEvm<INSP = ()> = MainnetEvmWithDatabase<MainnetEvmDatabase, INSP>;
 pub(crate) type MainnetEvmWithDb<DB, INSP = ()> =
     RevmMainnetEvm<Context<BlockEnv, TxEnv, CfgEnv, DB>, INSP>;
 type MainnetEvmWithDatabase<DB, INSP = ()> = MainnetEvmWithDb<DB, INSP>;
 
-pub use observation::{EvmExecutionObservation, EvmExecutionObserver};
+pub(crate) use observation::{EvmExecutionObservation, EvmExecutionObserver};
 
 #[derive(Debug, Error)]
-pub enum EvmExecutionError {
+pub(crate) enum EvmExecutionError {
     #[error("only Ethereum mainnet is supported now, got chain_id={0}")]
     UnsupportedChain(u64),
 
@@ -66,7 +66,7 @@ pub enum EvmExecutionError {
 }
 
 #[derive(Debug)]
-pub struct EvmExecutionOutput<INSP> {
+pub(crate) struct EvmExecutionOutput<INSP> {
     result: ExecutionResult<HaltReason>,
     transition: Option<EvmState>,
     fee_settlement: EvmFeeSettlement,
@@ -74,40 +74,33 @@ pub struct EvmExecutionOutput<INSP> {
 }
 
 impl<INSP> EvmExecutionOutput<INSP> {
-    pub fn result(&self) -> &ExecutionResult<HaltReason> {
+    pub(crate) fn result(&self) -> &ExecutionResult<HaltReason> {
         &self.result
     }
 
-    pub fn transition(&self) -> Result<&EvmState, EvmExecutionError> {
+    pub(crate) fn transition(&self) -> Result<&EvmState, EvmExecutionError> {
         self.transition
             .as_ref()
             .ok_or(EvmExecutionError::TransitionAlreadyApplied)
     }
 
-    pub fn fee_settlement(&self) -> &EvmFeeSettlement {
+    pub(crate) fn fee_settlement(&self) -> &EvmFeeSettlement {
         &self.fee_settlement
     }
 
-    pub fn caller(&self) -> Address {
+    pub(crate) fn caller(&self) -> Address {
         self.evm.ctx_ref().tx.caller
     }
 
-    pub fn beneficiary(&self) -> Address {
+    pub(crate) fn beneficiary(&self) -> Address {
         self.evm.ctx_ref().block.beneficiary
     }
 
-    pub fn evm_mut(&mut self) -> &mut MainnetEvm<INSP> {
+    pub(crate) fn evm_mut(&mut self) -> &mut MainnetEvm<INSP> {
         &mut self.evm
     }
 
-    pub fn take_inspector(&mut self) -> INSP
-    where
-        INSP: Default,
-    {
-        std::mem::take(&mut self.evm.inspector)
-    }
-
-    pub fn apply_transition(&mut self) -> Result<(), EvmExecutionError> {
+    pub(crate) fn apply_transition(&mut self) -> Result<(), EvmExecutionError> {
         if !self.result.is_success() {
             return Err(EvmExecutionError::TransitionNotApplicable);
         }
@@ -122,18 +115,18 @@ impl<INSP> EvmExecutionOutput<INSP> {
 }
 
 impl EvmExecutionOutput<EvmExecutionObserver> {
-    pub fn observations(&self) -> Vec<EvmExecutionObservation> {
+    pub(crate) fn observations(&self) -> Vec<EvmExecutionObservation> {
         self.evm.inspector.observations()
     }
 }
 
 #[derive(Debug)]
-pub struct EvmTransactionExecutor<INSP> {
+pub(crate) struct EvmTransactionExecutor<INSP> {
     evm: MainnetEvm<INSP>,
 }
 
 impl<INSP> EvmTransactionExecutor<INSP> {
-    pub fn new(
+    pub(crate) fn new(
         state_source: EvmStateSource,
         block: Sealed<Header>,
         chain_id: u64,
@@ -162,7 +155,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
         Ok(Self { evm })
     }
 
-    pub fn execute(
+    pub(crate) fn execute(
         mut self,
         transaction: &SimulationTransaction,
     ) -> Result<EvmExecutionOutput<INSP>, EvmExecutionError>
@@ -209,5 +202,5 @@ impl<INSP> EvmTransactionExecutor<INSP> {
     }
 }
 
-pub use fee_settlement::EvmFeeSettlement;
-pub use state::{EvmBlockAnchor, EvmStateSource};
+pub(crate) use fee_settlement::EvmFeeSettlement;
+pub(crate) use state::{EvmBlockAnchor, EvmStateSource};

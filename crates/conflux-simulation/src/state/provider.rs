@@ -4,7 +4,7 @@ use alloy::{
     eips::{BlockId, BlockNumberOrTag},
     providers::{RootProvider, layers::BlockIdProvider},
 };
-use cfx_addr::Network;
+use cfx_addr::Network as RpcNetwork;
 use cfx_rpc_cfx_types::RpcAddress;
 use cfx_types::Address;
 use conflux_provider::{
@@ -17,10 +17,8 @@ mod block;
 mod state;
 mod transaction;
 
-pub use transaction::CoreSpaceResourceEstimate;
-
 pub struct ConfluxSimulationProvider {
-    core_space_address_network: Network,
+    core_space_address_network: ProviderNetwork,
     pub(crate) espace_provider: RootProvider,
     pub(crate) core_space_provider: Arc<ConfluxProvider>,
 }
@@ -29,7 +27,7 @@ impl ConfluxSimulationProvider {
     pub fn new(
         espace_provider: RootProvider,
         core_space_provider: Arc<ConfluxProvider>,
-        core_space_address_network: Network,
+        core_space_address_network: ProviderNetwork,
     ) -> Self {
         Self {
             core_space_address_network,
@@ -83,11 +81,7 @@ impl ConfluxSimulationProvider {
     }
 
     pub(crate) fn provider_network(&self) -> ProviderNetwork {
-        match self.core_space_address_network {
-            Network::Main => ProviderNetwork::Main,
-            Network::Test => ProviderNetwork::Test,
-            Network::Id(id) => ProviderNetwork::Id(id),
-        }
+        self.core_space_address_network
     }
 
     pub(crate) fn provider_epoch(
@@ -109,9 +103,9 @@ impl ConfluxSimulationProvider {
         address: CoreAddress,
     ) -> Result<RpcAddress, ConfluxRpcError> {
         let network = match address.network() {
-            ProviderNetwork::Main => Network::Main,
-            ProviderNetwork::Test => Network::Test,
-            ProviderNetwork::Id(id) => Network::Id(id),
+            ProviderNetwork::Main => RpcNetwork::Main,
+            ProviderNetwork::Test => RpcNetwork::Test,
+            ProviderNetwork::Id(id) => RpcNetwork::Id(id),
         };
         RpcAddress::try_from_h160(Address::from_slice(&address.bytes()), network).map_err(
             |reason| ConfluxRpcError {

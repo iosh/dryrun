@@ -1,6 +1,6 @@
 use alloy_primitives::{Bytes, U256};
 use cfx_types::H256;
-use simulation_execution::ExecutionOutcome;
+use simulation_execution::Outcome;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoreSpaceExecutionFailureCode {
@@ -39,7 +39,7 @@ pub struct CoreSpaceStateAnchor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoreSpaceExecutedDetails {
+pub struct CoreSpaceExecutionDetails {
     pub gas_used: u64,
     pub gas_charged: u64,
     pub fee: U256,
@@ -54,8 +54,7 @@ pub struct CoreSpaceExecution {
     pub chain_id: u64,
     pub context: CoreSpaceStateAnchor,
     pub gas_limit: u64,
-    pub outcome: CoreSpaceExecutionOutcome,
+    pub outcome: CoreSpaceOutcome,
 }
 
-pub type CoreSpaceExecutionOutcome =
-    ExecutionOutcome<CoreSpaceExecutedDetails, CoreSpaceExecutionFailure>;
+pub type CoreSpaceOutcome = Outcome<CoreSpaceExecutionDetails, CoreSpaceExecutionFailure>;

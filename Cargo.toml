@@ -39,8 +39,9 @@ thiserror = "2"
 
 tokio = "1"
 
-alloy = { version = "1", features = ["full"] }
+alloy = "1"
 alloy-json-rpc = "1"
+alloy-serde = "1"
 alloy-rpc-client = { version = "1", default-features = false }
 alloy-transport = { version = "1", default-features = false }
 alloy-chains = "0.2"

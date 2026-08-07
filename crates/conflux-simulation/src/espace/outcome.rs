@@ -2,14 +2,14 @@ use cfx_executor::executive::{ExecutionError, ToRepackError, TxDropError};
 use cfx_vm_types as vm;
 
 use super::{
-    EspaceExecutedDetails, EspaceExecution, EspaceExecutionFailure, EspaceExecutionFailureCode,
-    EspaceExecutionOutcome, SimulatedBlock,
+    EspaceBlockContext, EspaceExecution, EspaceExecutionDetails, EspaceExecutionFailure,
+    EspaceExecutionFailureCode, EspaceOutcome,
 };
-use crate::{ConfluxSimulationError, execution::TransactionExecutionOutcome};
+use crate::{ConfluxSimulationError, execution::ConfluxExecutionOutcome};
 
 pub(crate) fn build_espace_not_executed(
     chain_id: u32,
-    block: SimulatedBlock,
+    block: EspaceBlockContext,
     gas_limit: u64,
     failure: EspaceExecutionFailure,
 ) -> EspaceExecution {
@@ -17,32 +17,32 @@ pub(crate) fn build_espace_not_executed(
         chain_id: u64::from(chain_id),
         context: block,
         gas_limit,
-        outcome: EspaceExecutionOutcome::NotExecuted(failure),
+        outcome: EspaceOutcome::NotExecuted(failure),
     }
 }
 
 pub(crate) fn build_espace_execution(
     chain_id: u32,
-    block: SimulatedBlock,
+    block: EspaceBlockContext,
     gas_limit: u64,
-    outcome: TransactionExecutionOutcome,
+    outcome: ConfluxExecutionOutcome,
 ) -> Result<EspaceExecution, ConfluxSimulationError> {
     let outcome = match outcome {
-        TransactionExecutionOutcome::Success(details) => {
-            EspaceExecutionOutcome::Success(into_espace_details(details))
+        ConfluxExecutionOutcome::Success(details) => {
+            EspaceOutcome::Success(into_espace_details(details))
         }
-        TransactionExecutionOutcome::Failed { error, details } => {
+        ConfluxExecutionOutcome::Failed { error, details } => {
             let failure = build_execution_error_failure(&error, details.common.output.as_ref())?;
-            EspaceExecutionOutcome::Failed {
+            EspaceOutcome::Failed {
                 details: into_espace_details(details),
                 failure,
             }
         }
-        TransactionExecutionOutcome::NotExecutedDrop(error) => {
-            EspaceExecutionOutcome::NotExecuted(build_espace_drop_failure(&error)?)
+        ConfluxExecutionOutcome::NotExecutedDrop(error) => {
+            EspaceOutcome::NotExecuted(build_espace_drop_failure(&error)?)
         }
-        TransactionExecutionOutcome::NotExecutedToReconsiderPacking(error) => {
-            EspaceExecutionOutcome::NotExecuted(build_espace_repack_failure(&error)?)
+        ConfluxExecutionOutcome::NotExecutedToReconsiderPacking(error) => {
+            EspaceOutcome::NotExecuted(build_espace_repack_failure(&error)?)
         }
     };
 
@@ -54,9 +54,11 @@ pub(crate) fn build_espace_execution(
     })
 }
 
-fn into_espace_details(details: crate::execution::ConfluxExecutionOutput) -> EspaceExecutedDetails {
+fn into_espace_details(
+    details: crate::execution::ConfluxExecutionOutput,
+) -> EspaceExecutionDetails {
     let crate::execution::ConfluxExecutionOutput { common, .. } = details;
-    EspaceExecutedDetails {
+    EspaceExecutionDetails {
         gas_used: common.gas_used,
         gas_charged: common.gas_charged,
         fee: common.fee,

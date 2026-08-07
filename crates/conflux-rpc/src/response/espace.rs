@@ -16,7 +16,7 @@ pub(crate) struct SimulateEspaceTransactionResponse {
 #[serde(rename_all = "camelCase")]
 struct Execution {
     chain_id: U64,
-    block: SimulatedBlock,
+    block: EspaceBlockContext,
     status: EspaceExecutionStatus,
     gas_used: U256,
     gas_limit: U256,
@@ -29,7 +29,7 @@ struct Execution {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct SimulatedBlock {
+struct EspaceBlockContext {
     number: U64,
     hash: H256,
 }
@@ -69,8 +69,8 @@ enum ExecutionFailureCode {
     VmError,
 }
 
-impl From<service_espace::SimulateEspaceTransactionOutput> for SimulateEspaceTransactionResponse {
-    fn from(simulation: service_espace::SimulateEspaceTransactionOutput) -> Self {
+impl From<service_espace::EspaceSimulation> for SimulateEspaceTransactionResponse {
+    fn from(simulation: service_espace::EspaceSimulation) -> Self {
         let (execution, changes) = simulation.into_parts();
         Self {
             execution: execution.into(),
@@ -88,7 +88,7 @@ impl From<service_espace::EspaceExecution> for Execution {
             outcome,
         } = execution;
         let (status, gas_used, gas_charged, fee, burnt_fee, output, failure) = match outcome {
-            service_espace::EspaceExecutionOutcome::Success(details) => (
+            service_espace::EspaceOutcome::Success(details) => (
                 EspaceExecutionStatus::Success,
                 details.gas_used.into(),
                 details.gas_charged.into(),
@@ -97,7 +97,7 @@ impl From<service_espace::EspaceExecution> for Execution {
                 RpcBytes::from(details.output.to_vec()),
                 None,
             ),
-            service_espace::EspaceExecutionOutcome::Failed { details, failure } => (
+            service_espace::EspaceOutcome::Failed { details, failure } => (
                 EspaceExecutionStatus::Failed,
                 details.gas_used.into(),
                 details.gas_charged.into(),
@@ -106,7 +106,7 @@ impl From<service_espace::EspaceExecution> for Execution {
                 RpcBytes::from(details.output.to_vec()),
                 Some(failure.into()),
             ),
-            service_espace::EspaceExecutionOutcome::NotExecuted(failure) => (
+            service_espace::EspaceOutcome::NotExecuted(failure) => (
                 EspaceExecutionStatus::NotExecuted,
                 U256::zero(),
                 U256::zero(),
@@ -132,8 +132,8 @@ impl From<service_espace::EspaceExecution> for Execution {
     }
 }
 
-impl From<service_espace::SimulatedBlock> for SimulatedBlock {
-    fn from(block: service_espace::SimulatedBlock) -> Self {
+impl From<service_espace::EspaceBlockContext> for EspaceBlockContext {
+    fn from(block: service_espace::EspaceBlockContext) -> Self {
         Self {
             number: block.number.into(),
             hash: b256_to_wire(block.hash),

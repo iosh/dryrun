@@ -1,15 +1,13 @@
-pub use crate::ConfluxTransactionRequest;
 use conflux_simulation as simulation;
 pub use simulation::espace::{
-    Change, Erc20Metadata, Erc721CollectionMetadata, EspaceBlockRef, EspaceExecutedDetails,
-    EspaceExecution, EspaceExecutionFailure, EspaceExecutionFailureCode, EspaceExecutionOutcome,
-    EspaceSimulation, NativeMetadata, SimulatedBlock,
+    Change, Erc20Metadata, Erc721CollectionMetadata, EspaceBlockContext, EspaceBlockRef,
+    EspaceExecution, EspaceExecutionDetails, EspaceExecutionFailure, EspaceExecutionFailureCode,
+    EspaceOutcome, EspaceSimulation, NativeMetadata,
 };
+pub use simulation_transaction::TransactionRequest as EspaceTransactionRequest;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SimulateEspaceTransactionInput {
+pub struct EspaceSimulationInput {
     pub block: EspaceBlockRef,
-    pub transaction: ConfluxTransactionRequest,
+    pub transaction: EspaceTransactionRequest,
 }
-
-pub type SimulateEspaceTransactionOutput = EspaceSimulation;

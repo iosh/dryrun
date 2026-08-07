@@ -8,20 +8,20 @@ use crate::state::{CoreSpaceRpcBlock, EspaceRpcBlock};
 // They remain optional because pre-PoS pivots have no such reference and ordinary
 // eSpace execution does not depend on this consensus context.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct ExecutionConsensusContext {
+pub(crate) struct ExecutionConsensusContext {
     pub pos_view: Option<u64>,
     pub finalized_epoch: Option<u64>,
 }
 
 // Core Space and eSpace base fees come from different public RPC block views.
 #[derive(Debug, Clone, Copy)]
-pub struct ExecutionBaseFees {
+pub(crate) struct ExecutionBaseFees {
     pub core_space_base_fee_per_gas: Option<U256>,
     pub espace_base_fee_per_gas: Option<U256>,
 }
 
 impl ExecutionBaseFees {
-    pub fn into_space_map(self) -> SpaceMap<U256> {
+    pub(crate) fn into_space_map(self) -> SpaceMap<U256> {
         SpaceMap::new(
             self.core_space_base_fee_per_gas.unwrap_or(U256::zero()),
             self.espace_base_fee_per_gas.unwrap_or(U256::zero()),
@@ -30,7 +30,7 @@ impl ExecutionBaseFees {
 }
 
 #[derive(Debug, Clone)]
-pub struct CoreSpacePivotBlockContext {
+pub(crate) struct CoreSpacePivotBlockContext {
     pub(crate) block_number: BlockNumber,
     pub(crate) epoch_height: u64,
     pub(crate) author: Address,
@@ -40,12 +40,12 @@ pub struct CoreSpacePivotBlockContext {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct EspaceBlockContext {
+pub(crate) struct EspaceBlockContext {
     pub(crate) base_fee_per_gas: Option<U256>,
 }
 
 #[derive(Debug, Clone)]
-pub struct ExecutionBlockContext {
+pub(crate) struct ExecutionBlockContext {
     pub(crate) pivot_block_number: BlockNumber,
     pub(crate) pivot_epoch_height: u64,
     pub(crate) author: Address,

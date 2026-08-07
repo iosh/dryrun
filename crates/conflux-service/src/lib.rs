@@ -11,8 +11,6 @@ use simulation_tasks::{SimulationTaskError, SimulationTaskSet};
 use thiserror::Error;
 use tokio::task::JoinError;
 
-pub use simulation_transaction::{AccessListItem, TransactionRequest as ConfluxTransactionRequest};
-
 #[derive(Clone)]
 pub struct ConfluxService {
     espace_preparer: Arc<EspaceSimulationPreparer>,
@@ -41,9 +39,9 @@ impl ConfluxService {
 
     pub async fn simulate_espace_transaction(
         &self,
-        input: espace::SimulateEspaceTransactionInput,
-    ) -> Result<espace::SimulateEspaceTransactionOutput, ConfluxServiceError> {
-        let espace::SimulateEspaceTransactionInput { block, transaction } = input;
+        input: espace::EspaceSimulationInput,
+    ) -> Result<espace::EspaceSimulation, ConfluxServiceError> {
+        let espace::EspaceSimulationInput { block, transaction } = input;
         let preparer = Arc::clone(&self.espace_preparer);
         let simulator = Arc::clone(&self.espace_simulator);
         let simulation = self
@@ -67,9 +65,9 @@ impl ConfluxService {
 
     pub async fn simulate_core_space_transaction(
         &self,
-        input: core_space::SimulateCoreSpaceTransactionInput,
-    ) -> Result<core_space::SimulateCoreSpaceTransactionOutput, ConfluxServiceError> {
-        let core_space::SimulateCoreSpaceTransactionInput { epoch, transaction } = input;
+        input: core_space::CoreSpaceSimulationInput,
+    ) -> Result<core_space::CoreSpaceSimulation, ConfluxServiceError> {
+        let core_space::CoreSpaceSimulationInput { epoch, transaction } = input;
         let preparer = Arc::clone(&self.core_space_preparer);
         let simulator = Arc::clone(&self.core_space_simulator);
         let simulation = self

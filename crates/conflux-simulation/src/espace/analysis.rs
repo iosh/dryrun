@@ -11,7 +11,7 @@ use simulation_changes::{
 use crate::{
     ConfluxSimulationError,
     execution::{
-        ConfluxTransactionExecution, PreparedTransactionExecution, TransactionExecutionOutcome,
+        ConfluxExecutionOutcome, ConfluxTransactionExecution, PreparedTransactionExecution,
     },
     standards::{collect_standard_candidates, load_change_metadata, read_standard_state_values},
     state::StatePhaseValues,
@@ -29,7 +29,7 @@ impl EspaceAnalysisInput {
     pub(crate) fn from_execution(
         execution: &ConfluxTransactionExecution,
     ) -> Result<Self, ConfluxSimulationError> {
-        let TransactionExecutionOutcome::Success(details) = &execution.outcome else {
+        let ConfluxExecutionOutcome::Success(details) = &execution.outcome else {
             return Err(ConfluxSimulationError::ExecutionInternal {
                 message: "successful execution is required for eSpace analysis".into(),
             });

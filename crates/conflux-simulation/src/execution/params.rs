@@ -18,7 +18,7 @@ use primitives::block_header::CIP112_TRANSITION_HEIGHT;
 ///
 /// Upstream keeps some config state outside `CommonParams` itself, so we mirror
 /// that here instead of relying on `cfx_config`.
-pub fn mainnet_common_params() -> CommonParams {
+pub(crate) fn mainnet_common_params() -> CommonParams {
     const MAINNET_NATIVE_CHAIN_ID: u32 = 1029;
     const MAINNET_EVM_CHAIN_ID: u32 = 1030;
     const MAINNET_NETWORK_ID: u64 = 1029;

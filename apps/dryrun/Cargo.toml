@@ -21,5 +21,4 @@ serde = { workspace = true }
 config = { workspace = true }
 alloy = { workspace = true }
 alloy-rpc-client = { workspace = true, features = ["reqwest"] }
-cfx-addr = { workspace = true }
 conflux-provider = { workspace = true }

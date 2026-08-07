@@ -1,4 +1,4 @@
-use cfx_addr::Network;
+use conflux_provider::Network;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConfluxChainConfig {

@@ -6,8 +6,8 @@ use tokio::runtime::Handle;
 use crate::{
     ConfluxSimulationError,
     execution::{
-        ConfluxTransactionExecution, ConfluxTransactionExecutor, ObservationObserver,
-        TransactionExecutionOutcome, build_conflux_state, build_mainnet_machine,
+        ConfluxExecutionOutcome, ConfluxTransactionExecution, ConfluxTransactionExecutor,
+        ObservationObserver, build_conflux_state, build_mainnet_machine,
     },
     preparation::{
         PreparedCoreSpaceSimulation, PreparedCoreSpaceSimulationState, ReadyCoreSpaceSimulation,
@@ -62,7 +62,7 @@ fn simulate_ready(
                 .map_err(ConfluxSimulationError::from)
         },
         |execution| {
-            if !matches!(&execution.outcome, TransactionExecutionOutcome::Success(_)) {
+            if !matches!(&execution.outcome, ConfluxExecutionOutcome::Success(_)) {
                 return Ok(None);
             }
             CoreSpaceChangeAnalysis::from_execution(
@@ -122,18 +122,18 @@ fn build_core_space_simulation(
 
 fn storage_payer_for_outcome(
     storage_payer: PreparedStoragePayer,
-    outcome: &TransactionExecutionOutcome,
+    outcome: &ConfluxExecutionOutcome,
     spec: &cfx_vm_types::Spec,
 ) -> Option<PreparedStoragePayer> {
     let outcome = match outcome {
-        TransactionExecutionOutcome::Success(_) => StoragePayerOutcome::Success,
-        TransactionExecutionOutcome::Failed {
+        ConfluxExecutionOutcome::Success(_) => StoragePayerOutcome::Success,
+        ConfluxExecutionOutcome::Failed {
             error: ExecutionError::VmError(vm::Error::Reverted),
             ..
         } => StoragePayerOutcome::Reverted,
-        TransactionExecutionOutcome::Failed { .. } => StoragePayerOutcome::FullyChargedError,
-        TransactionExecutionOutcome::NotExecutedDrop(_)
-        | TransactionExecutionOutcome::NotExecutedToReconsiderPacking(_) => {
+        ConfluxExecutionOutcome::Failed { .. } => StoragePayerOutcome::FullyChargedError,
+        ConfluxExecutionOutcome::NotExecutedDrop(_)
+        | ConfluxExecutionOutcome::NotExecutedToReconsiderPacking(_) => {
             StoragePayerOutcome::NotExecuted
         }
     };

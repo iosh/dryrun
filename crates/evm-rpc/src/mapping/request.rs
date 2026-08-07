@@ -6,7 +6,7 @@ use crate::{errors::ValidationError, interface as rpc};
 
 use super::shared::parse_u64_param;
 
-impl TryFrom<rpc::EvmSimulateTransactionRequest> for evm_service::SimulateEvmTransactionInput {
+impl TryFrom<rpc::EvmSimulateTransactionRequest> for evm_service::EvmSimulationInput {
     type Error = ValidationError;
 
     fn try_from(request: rpc::EvmSimulateTransactionRequest) -> Result<Self, Self::Error> {

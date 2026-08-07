@@ -18,16 +18,17 @@ pub use changes::{
     CoreSpaceChange, CrossSpaceAddress, SponsoredResource, SponsorshipConfiguration,
     SponsorshipEligibilityTarget,
 };
-pub use conflux_provider::{CoreAddress, Network as CoreAddressNetwork};
+pub use conflux_provider::CoreAddress;
 pub use execution::{
-    CoreSpaceExecutedDetails, CoreSpaceExecution, CoreSpaceExecutionFailure,
-    CoreSpaceExecutionFailureCode, CoreSpaceExecutionOutcome, CoreSpaceStateAnchor,
+    CoreSpaceExecution, CoreSpaceExecutionDetails, CoreSpaceExecutionFailure,
+    CoreSpaceExecutionFailureCode, CoreSpaceOutcome, CoreSpaceStateAnchor,
 };
 pub use preparer::CoreSpaceSimulationPreparer;
 pub use result::CoreSpaceSimulation;
 pub use simulation_changes::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
 pub use simulator::CoreSpaceSimulator;
 pub use transaction::{
-    CoreSpaceAccessListItem, CoreSpaceEpochRef, CoreSpaceTransaction, CoreSpaceTransactionRequest,
-    CoreSpaceTransactionVariant, CoreSpaceTransactionVariantRequest,
+    CoreSpaceAccessListItem, CoreSpaceEpochRef, CoreSpaceTransactionRequest,
+    CoreSpaceTransactionVariantRequest,
 };
+pub(crate) use transaction::{CoreSpaceTransaction, CoreSpaceTransactionVariant};

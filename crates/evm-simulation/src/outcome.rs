@@ -7,8 +7,8 @@ use revm::context_interface::result::{ExecutionResult, HaltReason, InvalidTransa
 use simulation_transaction::Transaction;
 
 use crate::{
-    EvmExecutedDetails, EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode,
-    EvmExecutionOutcome, EvmFeeSettlement, SimulatedBlock,
+    EvmBlockContext, EvmExecution, EvmExecutionDetails, EvmExecutionFailure,
+    EvmExecutionFailureCode, EvmFeeSettlement, EvmOutcome,
 };
 
 pub(crate) fn build_execution(
@@ -22,7 +22,7 @@ pub(crate) fn build_execution(
             chain_id,
             context: simulated_block(block),
             gas_limit: gas.limit(),
-            outcome: EvmExecutionOutcome::Success(EvmExecutedDetails {
+            outcome: EvmOutcome::Success(EvmExecutionDetails {
                 gas_used: gas.used(),
                 gas_charged: gas.used(),
                 fee: fee_settlement.fee,
@@ -59,7 +59,7 @@ pub(crate) fn build_not_executed(
         chain_id,
         context: simulated_block(block),
         gas_limit: transaction.gas_limit,
-        outcome: EvmExecutionOutcome::NotExecuted(build_invalid_transaction_failure(error)),
+        outcome: EvmOutcome::NotExecuted(build_invalid_transaction_failure(error)),
     }
 }
 
@@ -116,8 +116,8 @@ fn build_failed_execution(
         chain_id,
         context: simulated_block(block),
         gas_limit,
-        outcome: EvmExecutionOutcome::Failed {
-            details: EvmExecutedDetails {
+        outcome: EvmOutcome::Failed {
+            details: EvmExecutionDetails {
                 gas_used,
                 gas_charged: gas_used,
                 fee: fee_settlement.fee,
@@ -129,8 +129,8 @@ fn build_failed_execution(
     }
 }
 
-fn simulated_block(block: &Sealed<Header>) -> SimulatedBlock {
-    SimulatedBlock {
+fn simulated_block(block: &Sealed<Header>) -> EvmBlockContext {
+    EvmBlockContext {
         number: block.number(),
         hash: block.hash(),
     }

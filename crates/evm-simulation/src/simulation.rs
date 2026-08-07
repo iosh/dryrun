@@ -1,9 +1,9 @@
 use crate::Change;
 use alloy_primitives::{B256, Bytes, U256};
-use simulation_execution::ExecutionOutcome;
+use simulation_execution::Outcome;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SimulatedBlock {
+pub struct EvmBlockContext {
     pub number: u64,
     pub hash: B256,
 }
@@ -65,7 +65,7 @@ impl EvmExecutionFailureCode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvmExecutedDetails {
+pub struct EvmExecutionDetails {
     pub gas_used: u64,
     pub gas_charged: u64,
     pub fee: U256,
@@ -76,12 +76,12 @@ pub struct EvmExecutedDetails {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmExecution {
     pub chain_id: u64,
-    pub context: SimulatedBlock,
+    pub context: EvmBlockContext,
     pub gas_limit: u64,
-    pub outcome: EvmExecutionOutcome,
+    pub outcome: EvmOutcome,
 }
 
-pub type EvmExecutionOutcome = ExecutionOutcome<EvmExecutedDetails, EvmExecutionFailure>;
+pub type EvmOutcome = Outcome<EvmExecutionDetails, EvmExecutionFailure>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmSimulation {

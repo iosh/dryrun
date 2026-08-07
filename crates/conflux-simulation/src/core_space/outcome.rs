@@ -2,10 +2,10 @@ use cfx_executor::executive::{ExecutionError, ToRepackError, TxDropError};
 use cfx_vm_types as vm;
 
 use super::{
-    CoreSpaceExecutedDetails, CoreSpaceExecution, CoreSpaceExecutionFailure,
-    CoreSpaceExecutionFailureCode, CoreSpaceExecutionOutcome, CoreSpaceStateAnchor,
+    CoreSpaceExecution, CoreSpaceExecutionDetails, CoreSpaceExecutionFailure,
+    CoreSpaceExecutionFailureCode, CoreSpaceOutcome, CoreSpaceStateAnchor,
 };
-use crate::execution::{ConfluxExecutionOutput, TransactionExecutionOutcome};
+use crate::execution::{ConfluxExecutionOutcome, ConfluxExecutionOutput};
 
 use super::PreparedStoragePayer;
 
@@ -13,26 +13,26 @@ pub(crate) fn build_core_space_execution(
     chain_id: u32,
     state: CoreSpaceStateAnchor,
     gas_limit: u64,
-    outcome: TransactionExecutionOutcome,
+    outcome: ConfluxExecutionOutcome,
     storage_payer: Option<PreparedStoragePayer>,
 ) -> CoreSpaceExecution {
     let outcome = match outcome {
-        TransactionExecutionOutcome::Success(details) => {
-            CoreSpaceExecutionOutcome::Success(into_core_space_details(details, storage_payer))
+        ConfluxExecutionOutcome::Success(details) => {
+            CoreSpaceOutcome::Success(into_core_space_details(details, storage_payer))
         }
-        TransactionExecutionOutcome::Failed { error, details } => {
+        ConfluxExecutionOutcome::Failed { error, details } => {
             let failure =
                 build_core_space_execution_error_failure(&error, details.common.output.as_ref());
-            CoreSpaceExecutionOutcome::Failed {
+            CoreSpaceOutcome::Failed {
                 details: into_core_space_details(details, storage_payer),
                 failure,
             }
         }
-        TransactionExecutionOutcome::NotExecutedDrop(error) => {
-            CoreSpaceExecutionOutcome::NotExecuted(build_core_space_drop_failure(&error))
+        ConfluxExecutionOutcome::NotExecutedDrop(error) => {
+            CoreSpaceOutcome::NotExecuted(build_core_space_drop_failure(&error))
         }
-        TransactionExecutionOutcome::NotExecutedToReconsiderPacking(error) => {
-            CoreSpaceExecutionOutcome::NotExecuted(build_core_space_repack_failure(&error))
+        ConfluxExecutionOutcome::NotExecutedToReconsiderPacking(error) => {
+            CoreSpaceOutcome::NotExecuted(build_core_space_repack_failure(&error))
         }
     };
 
@@ -54,21 +54,21 @@ pub(crate) fn build_core_space_not_executed(
         chain_id: u64::from(chain_id),
         context: state,
         gas_limit,
-        outcome: CoreSpaceExecutionOutcome::NotExecuted(failure),
+        outcome: CoreSpaceOutcome::NotExecuted(failure),
     }
 }
 
 fn into_core_space_details(
     details: ConfluxExecutionOutput,
     storage_payer: Option<PreparedStoragePayer>,
-) -> CoreSpaceExecutedDetails {
+) -> CoreSpaceExecutionDetails {
     let ConfluxExecutionOutput {
         common,
         gas_sponsor_paid,
         storage_sponsor_paid,
         ..
     } = details;
-    CoreSpaceExecutedDetails {
+    CoreSpaceExecutionDetails {
         gas_used: common.gas_used,
         gas_charged: common.gas_charged,
         fee: common.fee,

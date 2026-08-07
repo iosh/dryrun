@@ -38,7 +38,7 @@ fn next_execution_epoch_height(pivot_epoch_height: u64) -> Result<u64, Execution
         .ok_or(ExecutionBlockContextError::NextEpochHeightOverflow { pivot_epoch_height })
 }
 
-pub fn build_transaction_env(
+pub(crate) fn build_transaction_env(
     machine: &Machine,
     state: &State,
     tx: &SignedTransaction,
@@ -70,10 +70,10 @@ pub fn build_transaction_env(
     })
 }
 
-pub fn build_mainnet_machine() -> Machine {
+pub(crate) fn build_mainnet_machine() -> Machine {
     Machine::new_with_builtin(mainnet_common_params(), VmFactory::default())
 }
 
-pub fn build_execution_spec(machine: &Machine, env: &Env) -> Spec {
+pub(crate) fn build_execution_spec(machine: &Machine, env: &Env) -> Spec {
     machine.spec(env.number, env.epoch_height)
 }

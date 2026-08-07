@@ -3,7 +3,7 @@ use thiserror::Error;
 use contract_standards::ContractStandardsError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EvmSimulationInternalKind {
+pub enum EvmSimulationErrorKind {
     NotReady,
     BlockContext,
     StateAccess,
@@ -12,7 +12,7 @@ pub enum EvmSimulationInternalKind {
     Unexpected,
 }
 
-impl EvmSimulationInternalKind {
+impl EvmSimulationErrorKind {
     pub const fn code(self) -> &'static str {
         match self {
             Self::NotReady => "not_ready",
@@ -32,7 +32,7 @@ pub enum EvmSimulationError {
 
     #[error("{details}")]
     Internal {
-        kind: EvmSimulationInternalKind,
+        kind: EvmSimulationErrorKind,
         details: String,
     },
 }
@@ -43,27 +43,27 @@ impl EvmSimulationError {
     }
 
     pub fn not_ready(details: impl Into<String>) -> Self {
-        Self::internal_kind(EvmSimulationInternalKind::NotReady, details)
+        Self::internal_kind(EvmSimulationErrorKind::NotReady, details)
     }
 
     pub fn block_context_error(details: impl Into<String>) -> Self {
-        Self::internal_kind(EvmSimulationInternalKind::BlockContext, details)
+        Self::internal_kind(EvmSimulationErrorKind::BlockContext, details)
     }
 
     pub fn state_access_error(details: impl Into<String>) -> Self {
-        Self::internal_kind(EvmSimulationInternalKind::StateAccess, details)
+        Self::internal_kind(EvmSimulationErrorKind::StateAccess, details)
     }
 
     pub fn execution_error(details: impl Into<String>) -> Self {
-        Self::internal_kind(EvmSimulationInternalKind::Execution, details)
+        Self::internal_kind(EvmSimulationErrorKind::Execution, details)
     }
 
     pub fn analysis_failed(details: impl Into<String>) -> Self {
-        Self::internal_kind(EvmSimulationInternalKind::Analysis, details)
+        Self::internal_kind(EvmSimulationErrorKind::Analysis, details)
     }
 
     pub fn internal(details: impl Into<String>) -> Self {
-        Self::internal_kind(EvmSimulationInternalKind::Unexpected, details)
+        Self::internal_kind(EvmSimulationErrorKind::Unexpected, details)
     }
 
     pub const fn kind_code(&self) -> Option<&'static str> {
@@ -83,7 +83,7 @@ impl EvmSimulationError {
         }
     }
 
-    fn internal_kind(kind: EvmSimulationInternalKind, details: impl Into<String>) -> Self {
+    fn internal_kind(kind: EvmSimulationErrorKind, details: impl Into<String>) -> Self {
         Self::Internal {
             kind,
             details: details.into(),

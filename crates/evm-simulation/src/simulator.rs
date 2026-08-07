@@ -12,7 +12,7 @@ use tokio::runtime::Handle;
 
 use crate::{
     EvmBlockAnchor, EvmExecutionError, EvmExecutionObserver, EvmNativeChangeError, EvmSimulation,
-    EvmSimulationError, EvmStateSource, EvmTransactionExecutor, PreparedEvmInput,
+    EvmSimulationError, EvmStateSource, EvmTransactionExecutor, PreparedEvmSimulation,
     changes::{
         analyze_native_changes, collect_standard_candidates, load_standard_metadata,
         read_standard_state_values,
@@ -36,7 +36,10 @@ impl EvmSimulator {
         }
     }
 
-    pub fn simulate(&self, input: PreparedEvmInput) -> Result<EvmSimulation, EvmSimulationError> {
+    pub fn simulate(
+        &self,
+        input: PreparedEvmSimulation,
+    ) -> Result<EvmSimulation, EvmSimulationError> {
         let (block, transaction) = input.into_parts();
         simulate_prepared(
             &self.provider,

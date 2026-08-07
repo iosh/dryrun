@@ -4,9 +4,9 @@ use simulation_transaction::{
     Transaction, TransactionRequest, TransactionVariant, TransactionVariantRequest,
 };
 
+use super::{CoreSpaceSimulationContext, EspaceSimulationContext};
 use crate::{
-    ConfluxSimulationError, ConfluxSimulationProvider, CoreSpaceSimulationContext,
-    EspaceSimulationContext,
+    ConfluxSimulationError, ConfluxSimulationProvider,
     core_space::{
         CoreSpaceTransaction, CoreSpaceTransactionRequest, CoreSpaceTransactionVariant,
         CoreSpaceTransactionVariantRequest, validate_core_space_transaction_network,

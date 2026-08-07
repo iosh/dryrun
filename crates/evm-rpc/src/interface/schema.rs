@@ -1,12 +1,10 @@
-use alloy::{
-    primitives::{Address, B256, Bytes, U256},
-    serde::quantity,
-};
+use alloy_primitives::{Address, B256, Bytes, U256};
+use alloy_serde::quantity;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 mod u256_hex {
-    use alloy::primitives::U256;
+    use alloy_primitives::U256;
     use serde::{Serialize, Serializer};
 
     pub(super) fn serialize<S>(value: &U256, serializer: S) -> Result<S::Ok, S::Error>
@@ -122,7 +120,7 @@ pub struct EvmSimulateTransactionResponse {
 pub struct Execution {
     #[serde(with = "quantity")]
     pub chain_id: u64,
-    pub block: SimulatedBlock,
+    pub block: EvmBlockContext,
     pub status: ExecutionStatus,
     #[serde(with = "quantity")]
     pub gas_used: u64,
@@ -137,7 +135,7 @@ pub struct Execution {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct SimulatedBlock {
+pub struct EvmBlockContext {
     #[serde(with = "quantity")]
     pub number: u64,
     pub hash: B256,

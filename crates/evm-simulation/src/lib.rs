@@ -20,16 +20,15 @@ mod outcome;
 mod simulation;
 mod simulator;
 
-pub use changes::{EvmNativeChangeError, analyze_native_changes};
-pub use error::{EvmSimulationError, EvmSimulationInternalKind};
-pub use execution::{
+pub(crate) use changes::EvmNativeChangeError;
+pub use error::{EvmSimulationError, EvmSimulationErrorKind};
+pub(crate) use execution::{
     EvmBlockAnchor, EvmExecutionError, EvmExecutionObservation, EvmExecutionObserver,
-    EvmExecutionOutput, EvmFeeSettlement, EvmStateSource, EvmTransactionExecutor, MainnetEvm,
-    MainnetEvmDatabase,
+    EvmExecutionOutput, EvmFeeSettlement, EvmStateSource, EvmTransactionExecutor,
 };
 pub use simulation::{
-    EvmExecutedDetails, EvmExecution, EvmExecutionFailure, EvmExecutionFailureCode,
-    EvmExecutionOutcome, EvmSimulation, SimulatedBlock,
+    EvmBlockContext, EvmExecution, EvmExecutionDetails, EvmExecutionFailure,
+    EvmExecutionFailureCode, EvmOutcome, EvmSimulation,
 };
 pub use simulation_changes::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
 pub use simulator::EvmSimulator;
@@ -90,21 +89,21 @@ impl EvmSimulationPreparer {
         &self,
         block: EvmBlockSelector,
         transaction: TransactionRequest,
-    ) -> Result<PreparedEvmInput, EvmPreparationError> {
+    ) -> Result<PreparedEvmSimulation, EvmPreparationError> {
         let block = resolve_block(&self.provider, block).await?;
         let transaction = complete_transaction(transaction, &self.provider, &block).await?;
 
-        Ok(PreparedEvmInput { block, transaction })
+        Ok(PreparedEvmSimulation { block, transaction })
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct PreparedEvmInput {
+pub struct PreparedEvmSimulation {
     block: Sealed<Header>,
     transaction: Transaction,
 }
 
-impl PreparedEvmInput {
+impl PreparedEvmSimulation {
     pub fn into_parts(self) -> (Sealed<Header>, Transaction) {
         (self.block, self.transaction)
     }

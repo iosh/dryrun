@@ -14,21 +14,20 @@ mod outcome;
 mod params;
 mod transaction;
 
-pub use context::{
-    CoreSpacePivotBlockContext, EspaceBlockContext, ExecutionBaseFees, ExecutionBlockContext,
-    ExecutionBlockContextError, ExecutionConsensusContext,
+pub use context::ExecutionBlockContextError;
+pub(crate) use context::{
+    CoreSpacePivotBlockContext, ExecutionBlockContext, ExecutionConsensusContext,
 };
 pub(crate) use context::{
     build_core_space_pivot_block_context, build_espace_block_context, build_execution_block_context,
 };
 pub(crate) use env::build_conflux_state;
-pub use env::{build_execution_spec, build_mainnet_machine, build_transaction_env};
+pub(crate) use env::{build_execution_spec, build_mainnet_machine, build_transaction_env};
 pub(crate) use observer::{Observation, ObservationObserver};
 pub(crate) use outcome::{
-    ConfluxExecutionOutput, TransactionExecutionError, TransactionExecutionOutcome,
+    ConfluxExecutionOutcome, ConfluxExecutionOutput, TransactionExecutionError,
 };
-pub use params::mainnet_common_params;
-pub use transaction::{
+pub(crate) use transaction::{
     CoreSpaceTransactionInput, DryRunTransactionInput, EspaceTransactionInput,
     signed_transaction_for_dryrun,
 };
@@ -46,7 +45,7 @@ pub(crate) struct PreparedTransactionExecution {
 
 pub(crate) struct ConfluxTransactionExecution {
     pub(crate) prepared: PreparedTransactionExecution,
-    pub(crate) outcome: TransactionExecutionOutcome,
+    pub(crate) outcome: ConfluxExecutionOutcome,
 }
 
 pub(crate) struct ConfluxTransactionExecutor<'a> {
@@ -80,7 +79,7 @@ impl<'a> ConfluxTransactionExecutor<'a> {
 
         Ok(ConfluxTransactionExecution {
             prepared,
-            outcome: TransactionExecutionOutcome::from_upstream(outcome)?,
+            outcome: ConfluxExecutionOutcome::from_upstream(outcome)?,
         })
     }
 
