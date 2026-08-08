@@ -1,11 +1,15 @@
 use alloy_primitives::{Bytes, U256};
+use evm_simulation::{
+    Change, Erc20Metadata, Erc721CollectionMetadata, EvmBlockContext, EvmExecution,
+    EvmExecutionDetails, EvmExecutionFailure, EvmOutcome, EvmSimulation, NativeMetadata,
+};
 
 use crate::interface as rpc;
 
-impl From<evm_service::EvmSimulation> for rpc::EvmSimulateTransactionResponse {
-    fn from(output: evm_service::EvmSimulation) -> Self {
+impl From<EvmSimulation> for rpc::EvmSimulateTransactionResponse {
+    fn from(output: EvmSimulation) -> Self {
         let (execution, changes) = output.into_parts();
-        let evm_service::EvmExecution {
+        let EvmExecution {
             chain_id,
             context: block,
             gas_limit,
@@ -13,7 +17,7 @@ impl From<evm_service::EvmSimulation> for rpc::EvmSimulateTransactionResponse {
         } = execution;
 
         let (status, gas_used, fee, burnt_fee, output, failure) = match outcome {
-            evm_service::EvmOutcome::Success(evm_service::EvmExecutionDetails {
+            EvmOutcome::Success(EvmExecutionDetails {
                 gas_used,
                 gas_charged: _,
                 fee,
@@ -27,9 +31,9 @@ impl From<evm_service::EvmSimulation> for rpc::EvmSimulateTransactionResponse {
                 output,
                 None,
             ),
-            evm_service::EvmOutcome::Failed {
+            EvmOutcome::Failed {
                 details:
-                    evm_service::EvmExecutionDetails {
+                    EvmExecutionDetails {
                         gas_used,
                         gas_charged: _,
                         fee,
@@ -45,7 +49,7 @@ impl From<evm_service::EvmSimulation> for rpc::EvmSimulateTransactionResponse {
                 output,
                 Some(failure.into()),
             ),
-            evm_service::EvmOutcome::NotExecuted(failure) => (
+            EvmOutcome::NotExecuted(failure) => (
                 rpc::ExecutionStatus::NotExecuted,
                 0,
                 U256::ZERO,
@@ -72,8 +76,8 @@ impl From<evm_service::EvmSimulation> for rpc::EvmSimulateTransactionResponse {
     }
 }
 
-impl From<evm_service::EvmBlockContext> for rpc::EvmBlockContext {
-    fn from(block: evm_service::EvmBlockContext) -> Self {
+impl From<EvmBlockContext> for rpc::EvmBlockContext {
+    fn from(block: EvmBlockContext) -> Self {
         Self {
             number: block.number,
             hash: block.hash,
@@ -81,8 +85,8 @@ impl From<evm_service::EvmBlockContext> for rpc::EvmBlockContext {
     }
 }
 
-impl From<evm_service::EvmExecutionFailure> for rpc::ExecutionFailure {
-    fn from(failure: evm_service::EvmExecutionFailure) -> Self {
+impl From<EvmExecutionFailure> for rpc::ExecutionFailure {
+    fn from(failure: EvmExecutionFailure) -> Self {
         Self {
             code: failure.code.as_str().to_string(),
             message: failure.message,
@@ -91,8 +95,8 @@ impl From<evm_service::EvmExecutionFailure> for rpc::ExecutionFailure {
     }
 }
 
-impl From<evm_service::NativeMetadata> for rpc::NativeMetadata {
-    fn from(metadata: evm_service::NativeMetadata) -> Self {
+impl From<NativeMetadata> for rpc::NativeMetadata {
+    fn from(metadata: NativeMetadata) -> Self {
         Self {
             name: metadata.name,
             symbol: metadata.symbol,
@@ -101,8 +105,8 @@ impl From<evm_service::NativeMetadata> for rpc::NativeMetadata {
     }
 }
 
-impl From<evm_service::Erc20Metadata> for rpc::Erc20Metadata {
-    fn from(metadata: evm_service::Erc20Metadata) -> Self {
+impl From<Erc20Metadata> for rpc::Erc20Metadata {
+    fn from(metadata: Erc20Metadata) -> Self {
         Self {
             name: metadata.name,
             symbol: metadata.symbol,
@@ -111,8 +115,8 @@ impl From<evm_service::Erc20Metadata> for rpc::Erc20Metadata {
     }
 }
 
-impl From<evm_service::Erc721CollectionMetadata> for rpc::Erc721CollectionMetadata {
-    fn from(metadata: evm_service::Erc721CollectionMetadata) -> Self {
+impl From<Erc721CollectionMetadata> for rpc::Erc721CollectionMetadata {
+    fn from(metadata: Erc721CollectionMetadata) -> Self {
         Self {
             name: metadata.name,
             symbol: metadata.symbol,
@@ -120,10 +124,10 @@ impl From<evm_service::Erc721CollectionMetadata> for rpc::Erc721CollectionMetada
     }
 }
 
-impl From<evm_service::Change> for rpc::Change {
-    fn from(change: evm_service::Change) -> Self {
+impl From<Change> for rpc::Change {
+    fn from(change: Change) -> Self {
         match change {
-            evm_service::Change::NativeTransfer {
+            Change::NativeTransfer {
                 from,
                 to,
                 raw_amount,
@@ -136,7 +140,7 @@ impl From<evm_service::Change> for rpc::Change {
                 from,
                 to,
             },
-            evm_service::Change::Erc20Transfer {
+            Change::Erc20Transfer {
                 contract_address,
                 from,
                 to,
@@ -151,7 +155,7 @@ impl From<evm_service::Change> for rpc::Change {
                 from,
                 to,
             },
-            evm_service::Change::Erc20Mint {
+            Change::Erc20Mint {
                 contract_address,
                 to,
                 raw_amount,
@@ -164,7 +168,7 @@ impl From<evm_service::Change> for rpc::Change {
                 },
                 to,
             },
-            evm_service::Change::Erc20Burn {
+            Change::Erc20Burn {
                 contract_address,
                 from,
                 raw_amount,
@@ -177,7 +181,7 @@ impl From<evm_service::Change> for rpc::Change {
                 },
                 from,
             },
-            evm_service::Change::Erc721Transfer {
+            Change::Erc721Transfer {
                 contract_address,
                 from,
                 to,
@@ -192,7 +196,7 @@ impl From<evm_service::Change> for rpc::Change {
                 from,
                 to,
             },
-            evm_service::Change::Erc721Mint {
+            Change::Erc721Mint {
                 contract_address,
                 to,
                 token_id,
@@ -205,7 +209,7 @@ impl From<evm_service::Change> for rpc::Change {
                 },
                 to,
             },
-            evm_service::Change::Erc721Burn {
+            Change::Erc721Burn {
                 contract_address,
                 from,
                 token_id,
@@ -218,7 +222,7 @@ impl From<evm_service::Change> for rpc::Change {
                 },
                 from,
             },
-            evm_service::Change::Erc1155Transfer {
+            Change::Erc1155Transfer {
                 contract_address,
                 from,
                 to,
@@ -233,7 +237,7 @@ impl From<evm_service::Change> for rpc::Change {
                 from,
                 to,
             },
-            evm_service::Change::Erc1155Mint {
+            Change::Erc1155Mint {
                 contract_address,
                 to,
                 token_id,
@@ -246,7 +250,7 @@ impl From<evm_service::Change> for rpc::Change {
                 },
                 to,
             },
-            evm_service::Change::Erc1155Burn {
+            Change::Erc1155Burn {
                 contract_address,
                 from,
                 token_id,
@@ -259,7 +263,7 @@ impl From<evm_service::Change> for rpc::Change {
                 },
                 from,
             },
-            evm_service::Change::Erc20Allowance {
+            Change::Erc20Allowance {
                 contract_address,
                 owner,
                 spender,
@@ -276,7 +280,7 @@ impl From<evm_service::Change> for rpc::Change {
                 owner,
                 spender,
             },
-            evm_service::Change::Erc721TokenApproval {
+            Change::Erc721TokenApproval {
                 contract_address,
                 token_id,
                 approved_address_before,
@@ -291,7 +295,7 @@ impl From<evm_service::Change> for rpc::Change {
                     metadata: metadata.into(),
                 },
             },
-            evm_service::Change::Erc721OperatorApproval {
+            Change::Erc721OperatorApproval {
                 contract_address,
                 owner,
                 operator,
@@ -308,7 +312,7 @@ impl From<evm_service::Change> for rpc::Change {
                 approved_before,
                 approved_after,
             },
-            evm_service::Change::Erc1155OperatorApproval {
+            Change::Erc1155OperatorApproval {
                 contract_address,
                 owner,
                 operator,

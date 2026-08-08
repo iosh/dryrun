@@ -1,8 +1,8 @@
 use alloy::{
-    consensus::{BlockHeader, Header, Sealed},
-    providers::RootProvider,
+    consensus::{Header, Sealed},
+    network::Ethereum,
+    providers::{DynProvider, Provider},
 };
-use alloy_chains::Chain;
 use contract_standards::legacy::{metadata_requests, state_requirements, verify};
 use simulation_changes::{
     ChangeMetadata, PositionedChange, into_enriched_changes, sort_changes_by_position,
@@ -11,62 +11,88 @@ use simulation_transaction::Transaction;
 use tokio::runtime::Handle;
 
 use crate::{
-    EvmBlockAnchor, EvmExecutionError, EvmExecutionObserver, EvmNativeChangeError, EvmSimulation,
-    EvmSimulationError, EvmStateSource, EvmTransactionExecutor, PreparedEvmSimulation,
+    EthereumChainSpec, EvmExecutionError, EvmExecutionObserver, EvmInitializationError,
+    EvmNativeChangeError, EvmSimulation, EvmSimulationError, EvmSimulationRequest,
+    EvmTransactionExecutor,
     changes::{
         analyze_native_changes, collect_standard_candidates, load_standard_metadata,
         read_standard_state_values,
     },
+    create_database,
     outcome::{build_execution, build_not_executed},
+    resolve_block,
 };
 
 #[derive(Debug, Clone)]
-pub struct EvmSimulator {
-    provider: RootProvider,
-    runtime_handle: Handle,
-    chain_id: u64,
+pub struct EvmTransactionSimulator {
+    provider: DynProvider<Ethereum>,
+    chain_spec: EthereumChainSpec,
 }
 
-impl EvmSimulator {
-    pub fn new(provider: RootProvider, runtime_handle: Handle) -> Self {
-        Self {
-            provider,
-            runtime_handle,
-            chain_id: Chain::mainnet().id(),
+impl EvmTransactionSimulator {
+    pub async fn ethereum_mainnet(
+        provider: DynProvider<Ethereum>,
+    ) -> Result<Self, EvmInitializationError> {
+        let chain_spec = EthereumChainSpec::mainnet();
+        let actual_chain_id = provider
+            .get_chain_id()
+            .await
+            .map_err(EvmInitializationError::chain_id_request)?;
+
+        if actual_chain_id != chain_spec.chain_id() {
+            return Err(EvmInitializationError::ChainIdMismatch {
+                expected: chain_spec.chain_id(),
+                actual: actual_chain_id,
+            });
         }
+
+        Ok(Self {
+            provider,
+            chain_spec,
+        })
     }
 
-    pub fn simulate(
+    pub async fn simulate(
         &self,
-        input: PreparedEvmSimulation,
+        request: EvmSimulationRequest,
     ) -> Result<EvmSimulation, EvmSimulationError> {
-        let (block, transaction) = input.into_parts();
-        simulate_prepared(
-            &self.provider,
-            &self.runtime_handle,
-            self.chain_id,
-            block,
-            transaction,
-        )
+        let EvmSimulationRequest { block, transaction } = request;
+        let block = resolve_block(&self.provider, block)
+            .await
+            .map_err(EvmSimulationError::block_resolution)?;
+        let transaction = crate::complete_transaction(transaction, &self.provider, &block)
+            .await
+            .map_err(EvmSimulationError::transaction_completion)?;
+
+        let provider = self.provider.clone();
+        let chain_spec = self.chain_spec;
+        let runtime_handle = Handle::current();
+
+        tokio::task::spawn_blocking(move || {
+            simulate_blocking(provider, runtime_handle, chain_spec, block, transaction)
+        })
+        .await
+        .map_err(|error| {
+            EvmSimulationError::execution_task_error(format!(
+                "blocking EVM simulation task terminated unexpectedly: {error}"
+            ))
+        })?
     }
 }
 
-fn simulate_prepared(
-    provider: &RootProvider,
-    runtime_handle: &Handle,
-    chain_id: u64,
+fn simulate_blocking(
+    provider: DynProvider<Ethereum>,
+    runtime_handle: Handle,
+    chain_spec: EthereumChainSpec,
     block: Sealed<Header>,
     transaction: Transaction,
 ) -> Result<EvmSimulation, EvmSimulationError> {
-    let state_source = EvmStateSource::new(
-        provider.clone(),
-        runtime_handle.clone(),
-        EvmBlockAnchor::new(block.number(), block.hash()),
-    );
+    let chain_id = chain_spec.chain_id();
+    let database = create_database(provider, runtime_handle, block.hash());
     let executor = EvmTransactionExecutor::new(
-        state_source,
+        database,
         block.clone(),
-        chain_id,
+        chain_spec,
         EvmExecutionObserver::new(),
     )
     .map_err(map_execution_error)?;
@@ -114,21 +140,19 @@ fn simulate_prepared(
         sort_changes_by_position(&mut positioned_changes);
         let standard_metadata =
             load_standard_metadata(output.evm_mut(), &transaction, chain_id, metadata_requests)?;
-        let metadata = ChangeMetadata::new(native_metadata(chain_id), standard_metadata);
+        let metadata = ChangeMetadata::new(native_metadata(chain_spec), standard_metadata);
         into_enriched_changes(positioned_changes, &metadata)
     };
 
     Ok(EvmSimulation::new(execution, changes))
 }
 
-fn native_metadata(chain_id: u64) -> crate::NativeMetadata {
-    match chain_id {
-        1 => crate::NativeMetadata {
-            name: Some("Ether".to_string()),
-            symbol: Some("ETH".to_string()),
-            decimals: Some(18),
-        },
-        _ => crate::NativeMetadata::default(),
+fn native_metadata(chain_spec: EthereumChainSpec) -> crate::NativeMetadata {
+    let native_currency = chain_spec.native_currency();
+    crate::NativeMetadata {
+        name: Some(native_currency.name.to_string()),
+        symbol: Some(native_currency.symbol.to_string()),
+        decimals: Some(native_currency.decimals),
     }
 }
 
@@ -145,12 +169,9 @@ fn map_native_change_error(error: EvmNativeChangeError) -> EvmSimulationError {
 
 fn map_execution_error(error: EvmExecutionError) -> EvmSimulationError {
     match error {
-        EvmExecutionError::UnsupportedChain(chain_id) => EvmSimulationError::not_supported(
-            format!("only Ethereum mainnet is supported now, got chain_id={chain_id}"),
-        ),
-        EvmExecutionError::UnsupportedHardfork(hardfork) => EvmSimulationError::not_ready(format!(
-            "hardfork {hardfork} is not mapped to revm::SpecId yet"
-        )),
+        EvmExecutionError::UnsupportedHardfork(error) => {
+            EvmSimulationError::not_ready(error.to_string())
+        }
         EvmExecutionError::BlockContext(details) => {
             EvmSimulationError::block_context_error(details)
         }

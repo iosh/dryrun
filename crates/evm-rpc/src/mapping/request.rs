@@ -1,12 +1,15 @@
 use std::convert::TryFrom;
 
+use evm_simulation::{
+    AccessListItem, EvmBlockSelector, EvmSimulationRequest, EvmTransactionRequest,
+};
 use simulation_transaction::{TransactionType, TransactionVariantRequest};
 
 use crate::{errors::ValidationError, interface as rpc};
 
 use super::shared::parse_u64_param;
 
-impl TryFrom<rpc::EvmSimulateTransactionRequest> for evm_service::EvmSimulationInput {
+impl TryFrom<rpc::EvmSimulateTransactionRequest> for EvmSimulationRequest {
     type Error = ValidationError;
 
     fn try_from(request: rpc::EvmSimulateTransactionRequest) -> Result<Self, Self::Error> {
@@ -20,21 +23,19 @@ impl TryFrom<rpc::EvmSimulateTransactionRequest> for evm_service::EvmSimulationI
             block: block
                 .map(map_block_ref)
                 .transpose()?
-                .unwrap_or(evm_service::EvmBlockSelector::Latest),
+                .unwrap_or(EvmBlockSelector::Latest),
             transaction: map_transaction(transaction)?,
         })
     }
 }
 
-fn map_block_ref(block: rpc::BlockRef) -> Result<evm_service::EvmBlockSelector, ValidationError> {
+fn map_block_ref(block: rpc::BlockRef) -> Result<EvmBlockSelector, ValidationError> {
     match block {
         rpc::BlockRef::Tag(value) => match value.as_str() {
-            "latest" => Ok(evm_service::EvmBlockSelector::Latest),
-            "safe" => Ok(evm_service::EvmBlockSelector::Safe),
-            "finalized" => Ok(evm_service::EvmBlockSelector::Finalized),
-            value => Ok(evm_service::EvmBlockSelector::Number(parse_u64_param(
-                value, "block",
-            )?)),
+            "latest" => Ok(EvmBlockSelector::Latest),
+            "safe" => Ok(EvmBlockSelector::Safe),
+            "finalized" => Ok(EvmBlockSelector::Finalized),
+            value => Ok(EvmBlockSelector::Number(parse_u64_param(value, "block")?)),
         },
         rpc::BlockRef::Hash(_) => Err(ValidationError::not_supported(
             "`block.blockHash` is not supported yet",
@@ -44,7 +45,7 @@ fn map_block_ref(block: rpc::BlockRef) -> Result<evm_service::EvmBlockSelector, 
 
 fn map_transaction(
     transaction: rpc::Transaction,
-) -> Result<evm_service::EvmTransactionRequest, ValidationError> {
+) -> Result<EvmTransactionRequest, ValidationError> {
     let transaction_type = map_transaction_type(transaction.tx_type)?;
     let transaction_type = TransactionType::infer(
         transaction_type,
@@ -53,16 +54,19 @@ fn map_transaction(
     );
     let variant = TransactionVariantRequest::try_new(
         transaction_type,
-        transaction
-            .access_list
-            .map(|items| items.into_iter().map(to_service_access_list_item).collect()),
+        transaction.access_list.map(|items| {
+            items
+                .into_iter()
+                .map(to_simulation_access_list_item)
+                .collect()
+        }),
         transaction.gas_price,
         transaction.max_fee_per_gas,
         transaction.max_priority_fee_per_gas,
     )
     .map_err(|error| ValidationError::invalid_params(error.to_string()))?;
 
-    Ok(evm_service::EvmTransactionRequest {
+    Ok(EvmTransactionRequest {
         from: transaction.from,
         to: transaction.to,
         nonce: transaction.nonce,
@@ -89,8 +93,8 @@ fn map_transaction_type(
         .transpose()
 }
 
-fn to_service_access_list_item(item: rpc::AccessListItem) -> evm_service::AccessListItem {
-    evm_service::AccessListItem {
+fn to_simulation_access_list_item(item: rpc::AccessListItem) -> AccessListItem {
+    AccessListItem {
         address: item.address,
         storage_keys: item.storage_keys,
     }

@@ -1,8 +1,9 @@
 use alloy::{
     consensus::{BlockHeader, Header, Sealed},
-    eips::{BlockId, BlockNumberOrTag},
+    eips::BlockId,
+    network::Ethereum,
     primitives::{Address, B256, Bytes, TxKind, U256},
-    providers::{Provider, RootProvider, layers::BlockIdProvider},
+    providers::{DynProvider, Provider, layers::BlockIdProvider},
     rpc::types::{
         AccessList as RpcAccessList, TransactionInput, TransactionRequest as RpcTransactionRequest,
     },
@@ -11,27 +12,31 @@ pub use simulation_transaction::{AccessListItem, TransactionRequest as EvmTransa
 use simulation_transaction::{
     Transaction, TransactionRequest, TransactionVariant, TransactionVariantRequest,
 };
-use thiserror::Error;
 
+mod chain_spec;
 mod changes;
+mod context;
 mod error;
 mod execution;
 mod outcome;
 mod simulation;
 mod simulator;
 
+pub(crate) use chain_spec::EthereumChainSpec;
 pub(crate) use changes::EvmNativeChangeError;
-pub use error::{EvmSimulationError, EvmSimulationErrorKind};
+pub(crate) use context::resolve_block;
+pub(crate) use error::{EvmContextError, EvmTransactionCompletionError};
+pub use error::{EvmInitializationError, EvmSimulationError, EvmSimulationErrorKind};
 pub(crate) use execution::{
-    EvmBlockAnchor, EvmExecutionError, EvmExecutionObservation, EvmExecutionObserver,
-    EvmExecutionOutput, EvmFeeSettlement, EvmStateSource, EvmTransactionExecutor,
+    EvmExecutionError, EvmExecutionObservation, EvmExecutionObserver, EvmExecutionOutput,
+    EvmFeeSettlement, EvmTransactionExecutor, create_database,
 };
 pub use simulation::{
     EvmBlockContext, EvmExecution, EvmExecutionDetails, EvmExecutionFailure,
     EvmExecutionFailureCode, EvmOutcome, EvmSimulation,
 };
 pub use simulation_changes::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
-pub use simulator::EvmSimulator;
+pub use simulator::EvmTransactionSimulator;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvmBlockSelector {
@@ -39,115 +44,32 @@ pub enum EvmBlockSelector {
     Safe,
     Finalized,
     Number(u64),
+    Hash(B256),
 }
 
-impl EvmBlockSelector {
-    fn block_number_or_tag(self) -> BlockNumberOrTag {
+impl std::fmt::Display for EvmBlockSelector {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Latest => BlockNumberOrTag::Latest,
-            Self::Safe => BlockNumberOrTag::Safe,
-            Self::Finalized => BlockNumberOrTag::Finalized,
-            Self::Number(number) => BlockNumberOrTag::Number(number),
+            Self::Latest => formatter.write_str("latest"),
+            Self::Safe => formatter.write_str("safe"),
+            Self::Finalized => formatter.write_str("finalized"),
+            Self::Number(number) => write!(formatter, "number {number}"),
+            Self::Hash(hash) => write!(formatter, "hash {hash}"),
         }
     }
 }
 
-#[derive(Debug, Error)]
-pub enum EvmPreparationError {
-    #[error("block resolution failed: {details}")]
-    BlockResolution { details: String },
-
-    #[error("transaction completion failed: {details}")]
-    TransactionCompletion { details: String },
-}
-
-impl EvmPreparationError {
-    fn block_resolution(details: impl Into<String>) -> Self {
-        Self::BlockResolution {
-            details: details.into(),
-        }
-    }
-
-    fn transaction_completion(details: impl Into<String>) -> Self {
-        Self::TransactionCompletion {
-            details: details.into(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct EvmSimulationPreparer {
-    provider: RootProvider,
-}
-
-impl EvmSimulationPreparer {
-    pub fn new(provider: RootProvider) -> Self {
-        Self { provider }
-    }
-
-    pub async fn prepare_transaction(
-        &self,
-        block: EvmBlockSelector,
-        transaction: TransactionRequest,
-    ) -> Result<PreparedEvmSimulation, EvmPreparationError> {
-        let block = resolve_block(&self.provider, block).await?;
-        let transaction = complete_transaction(transaction, &self.provider, &block).await?;
-
-        Ok(PreparedEvmSimulation { block, transaction })
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct PreparedEvmSimulation {
-    block: Sealed<Header>,
-    transaction: Transaction,
-}
-
-impl PreparedEvmSimulation {
-    pub fn into_parts(self) -> (Sealed<Header>, Transaction) {
-        (self.block, self.transaction)
-    }
-}
-
-async fn resolve_block(
-    provider: &RootProvider,
-    selector: EvmBlockSelector,
-) -> Result<Sealed<Header>, EvmPreparationError> {
-    let block = provider
-        .get_block_by_number(selector.block_number_or_tag())
-        .await
-        .map_err(|_| {
-            EvmPreparationError::block_resolution("provider request failed while resolving block")
-        })?
-        .ok_or_else(|| {
-            EvmPreparationError::block_resolution("provider did not return the requested block")
-        })?;
-
-    let provider_hash = block.hash();
-    let header = block.into_consensus_header();
-    seal_and_validate_block(header, provider_hash)
-}
-
-fn seal_and_validate_block(
-    header: Header,
-    provider_hash: B256,
-) -> Result<Sealed<Header>, EvmPreparationError> {
-    let sealed_header = Sealed::new(header);
-
-    if sealed_header.hash() != provider_hash {
-        return Err(EvmPreparationError::block_resolution(
-            "provider block hash did not match the recomputed header hash",
-        ));
-    }
-
-    Ok(sealed_header)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvmSimulationRequest {
+    pub block: EvmBlockSelector,
+    pub transaction: TransactionRequest,
 }
 
 async fn complete_transaction(
     request: TransactionRequest,
-    provider: &RootProvider,
+    provider: &DynProvider<Ethereum>,
     block: &Sealed<Header>,
-) -> Result<Transaction, EvmPreparationError> {
+) -> Result<Transaction, EvmTransactionCompletionError> {
     let TransactionRequest {
         from,
         to,
@@ -166,7 +88,7 @@ async fn complete_transaction(
             .get_transaction_count(from)
             .await
             .map_err(|error| {
-                EvmPreparationError::transaction_completion(format!(
+                EvmTransactionCompletionError::new(format!(
                     "failed to fetch nonce at block {}: {error}",
                     block.number()
                 ))
@@ -189,7 +111,7 @@ async fn complete_transaction(
             ))
             .await
             .map_err(|error| {
-                EvmPreparationError::transaction_completion(format!(
+                EvmTransactionCompletionError::new(format!(
                     "failed to estimate gas at block {}: {error}",
                     block.number()
                 ))
@@ -209,10 +131,10 @@ async fn complete_transaction(
 }
 
 async fn complete_transaction_variant(
-    provider: &RootProvider,
+    provider: &DynProvider<Ethereum>,
     block: &Sealed<Header>,
     variant: TransactionVariantRequest,
-) -> Result<TransactionVariant, EvmPreparationError> {
+) -> Result<TransactionVariant, EvmTransactionCompletionError> {
     match variant {
         TransactionVariantRequest::Legacy { gas_price } => Ok(TransactionVariant::Legacy {
             gas_price: suggested_gas_price(provider, gas_price).await?,
@@ -235,7 +157,7 @@ async fn complete_transaction_variant(
                     .get_max_priority_fee_per_gas()
                     .await
                     .map_err(|error| {
-                        EvmPreparationError::transaction_completion(format!(
+                        EvmTransactionCompletionError::new(format!(
                             "failed to fetch max priority fee per gas: {error}"
                         ))
                     })?,
@@ -255,15 +177,13 @@ async fn complete_transaction_variant(
 }
 
 async fn suggested_gas_price(
-    provider: &RootProvider,
+    provider: &DynProvider<Ethereum>,
     gas_price: Option<u128>,
-) -> Result<u128, EvmPreparationError> {
+) -> Result<u128, EvmTransactionCompletionError> {
     match gas_price {
         Some(value) => Ok(value),
         None => provider.get_gas_price().await.map_err(|error| {
-            EvmPreparationError::transaction_completion(format!(
-                "failed to fetch gas price: {error}"
-            ))
+            EvmTransactionCompletionError::new(format!("failed to fetch gas price: {error}"))
         }),
     }
 }
@@ -271,9 +191,9 @@ async fn suggested_gas_price(
 fn suggested_dynamic_fee_cap(
     block: &Header,
     max_priority_fee_per_gas: u128,
-) -> Result<u128, EvmPreparationError> {
+) -> Result<u128, EvmTransactionCompletionError> {
     let base_fee = block.base_fee_per_gas().ok_or_else(|| {
-        EvmPreparationError::transaction_completion(format!(
+        EvmTransactionCompletionError::new(format!(
             "block {} does not provide a base fee for dynamic fee completion",
             block.number()
         ))
@@ -283,7 +203,7 @@ fn suggested_dynamic_fee_cap(
         .checked_mul(2)
         .and_then(|value| value.checked_add(max_priority_fee_per_gas))
         .ok_or_else(|| {
-            EvmPreparationError::transaction_completion(
+            EvmTransactionCompletionError::new(
                 "calculated dynamic fee exceeds the simulator maximum \
                  340282366920938463463374607431768211455",
             )

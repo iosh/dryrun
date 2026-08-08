@@ -5,7 +5,6 @@ edition = { workspace = true }
 
 [dependencies]
 evm-simulation = { workspace = true }
-simulation-transaction = { workspace = true }
 simulation-tasks = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }

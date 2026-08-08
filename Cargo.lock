@@ -3030,6 +3030,7 @@ dependencies = [
  "alloy-primitives",
  "alloy-serde",
  "evm-service",
+ "evm-simulation",
  "jsonrpsee",
  "serde",
  "serde_json",
@@ -3044,7 +3045,6 @@ version = "0.1.0"
 dependencies = [
  "evm-simulation",
  "simulation-tasks",
- "simulation-transaction",
  "thiserror 2.0.18",
  "tokio",
 ]

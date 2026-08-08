@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use evm_service::{EvmServiceError, EvmSimulationService};
+use evm_simulation::EvmSimulationRequest;
 use jsonrpsee::core::{RpcResult, async_trait};
 use jsonrpsee::types::ErrorObjectOwned;
 use tracing::{error, instrument};
@@ -39,7 +40,7 @@ impl RpcHandler {
             block,
             options,
         };
-        let input: evm_service::EvmSimulationInput = request.try_into()?;
+        let input: EvmSimulationRequest = request.try_into()?;
         let output = self
             .simulation_service
             .simulate_evm_transaction(input)

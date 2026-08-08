@@ -1,6 +1,6 @@
 use std::{io, sync::Arc};
 
-use alloy::providers::RootProvider;
+use alloy::providers::{Provider, RootProvider};
 use alloy_rpc_client::RpcClient;
 use conflux_provider::ConfluxProvider;
 use conflux_rpc::build_rpc_module as build_conflux_rpc_module;
@@ -13,7 +13,7 @@ use conflux_simulation::{
 };
 use evm_rpc::{DryrunRpcServer, RpcHandler};
 use evm_service::EvmSimulationService;
-use evm_simulation::{EvmSimulationPreparer, EvmSimulator};
+use evm_simulation::EvmTransactionSimulator;
 use jsonrpsee::{
     RpcModule,
     server::{BatchRequestConfig, Server, ServerConfig as JsonRpcServerConfig, ServerHandle},
@@ -31,7 +31,7 @@ pub async fn start(
     config: &AppConfig,
     simulation_tasks: SimulationTaskSet,
 ) -> io::Result<ServerHandle> {
-    let rpc_module = build_host_rpc_module(config, simulation_tasks)?;
+    let rpc_module = build_host_rpc_module(config, simulation_tasks).await?;
     let server_config = JsonRpcServerConfig::builder()
         .max_connections(MAX_RPC_CONNECTIONS)
         .max_request_body_size(MAX_RPC_BODY_SIZE_BYTES)
@@ -50,13 +50,13 @@ pub async fn start(
     Ok(rpc_handle)
 }
 
-fn build_host_rpc_module(
+async fn build_host_rpc_module(
     config: &AppConfig,
     simulation_tasks: SimulationTaskSet,
 ) -> io::Result<RpcModule<()>> {
     let mut rpc_module = RpcModule::new(());
 
-    add_evm_rpc_module(&mut rpc_module, &config.ethereum, simulation_tasks.clone())?;
+    add_evm_rpc_module(&mut rpc_module, &config.ethereum, simulation_tasks.clone()).await?;
     add_conflux_rpc_module(&mut rpc_module, &config.conflux, simulation_tasks)?;
     rpc_module
         .register_method("dryrun_health", |_, _, _| Ok::<_, ErrorObjectOwned>("ok"))
@@ -65,22 +65,20 @@ fn build_host_rpc_module(
     Ok(rpc_module)
 }
 
-fn add_evm_rpc_module(
+async fn add_evm_rpc_module(
     rpc_module: &mut RpcModule<()>,
     config: &EthereumConfig,
     simulation_tasks: SimulationTaskSet,
 ) -> io::Result<()> {
-    let ethereum_provider = create_ethereum_provider(config)?;
-    let evm_simulator = Arc::new(EvmSimulator::new(
-        ethereum_provider.clone(),
-        tokio::runtime::Handle::current(),
-    ));
-    let evm_preparer = Arc::new(EvmSimulationPreparer::new(ethereum_provider));
-    let simulation_service = Arc::new(EvmSimulationService::new(
-        evm_preparer,
-        evm_simulator,
-        simulation_tasks,
-    ));
+    let ethereum_provider = create_ethereum_provider(config)?.erased();
+    let evm_simulator = Arc::new(
+        EvmTransactionSimulator::ethereum_mainnet(ethereum_provider)
+            .await
+            .map_err(|error| {
+                startup_error(format!("failed to initialize Ethereum simulation: {error}"))
+            })?,
+    );
+    let simulation_service = Arc::new(EvmSimulationService::new(evm_simulator, simulation_tasks));
 
     rpc_module
         .merge(RpcHandler::new(simulation_service).into_rpc())

@@ -1,4 +1,3 @@
-mod chain_spec;
 mod env;
 mod fee_settlement;
 mod observation;
@@ -22,10 +21,8 @@ use revm::{
 use simulation_transaction::Transaction as SimulationTransaction;
 use thiserror::Error;
 
-use self::{
-    chain_spec::resolve_execution_spec_id,
-    env::{create_block_env, create_cfg_env, create_tx_env},
-};
+use self::env::{create_block_env, create_cfg_env, create_tx_env};
+use crate::{EthereumChainSpec, chain_spec::EthereumChainSpecError};
 
 pub(crate) type MainnetEvmDatabase = state::MainnetEvmDatabase;
 pub(crate) type MainnetEvm<INSP = ()> = MainnetEvmWithDatabase<MainnetEvmDatabase, INSP>;
@@ -37,11 +34,8 @@ pub(crate) use observation::{EvmExecutionObservation, EvmExecutionObserver};
 
 #[derive(Debug, Error)]
 pub(crate) enum EvmExecutionError {
-    #[error("only Ethereum mainnet is supported now, got chain_id={0}")]
-    UnsupportedChain(u64),
-
-    #[error("hardfork {0} is not mapped to revm::SpecId yet")]
-    UnsupportedHardfork(String),
+    #[error(transparent)]
+    UnsupportedHardfork(#[from] EthereumChainSpecError),
 
     #[error("block context is invalid: {0}")]
     BlockContext(String),
@@ -127,27 +121,16 @@ pub(crate) struct EvmTransactionExecutor<INSP> {
 
 impl<INSP> EvmTransactionExecutor<INSP> {
     pub(crate) fn new(
-        state_source: EvmStateSource,
+        database: MainnetEvmDatabase,
         block: Sealed<Header>,
-        chain_id: u64,
+        chain_spec: EthereumChainSpec,
         inspector: INSP,
     ) -> Result<Self, EvmExecutionError> {
-        let block_anchor = EvmBlockAnchor::new(block.number(), block.hash());
-        if state_source.anchor() != block_anchor {
-            return Err(EvmExecutionError::BlockContext(format!(
-                "state source is anchored at block {} ({}) but execution uses block {} ({})",
-                state_source.anchor().number(),
-                state_source.anchor().hash(),
-                block_anchor.number(),
-                block_anchor.hash(),
-            )));
-        }
-
-        let spec_id = resolve_execution_spec_id(chain_id, block.number(), block.timestamp())?;
-        let cfg_env = create_cfg_env(chain_id, spec_id);
+        let spec_id = chain_spec.execution_spec_id(block.number(), block.timestamp())?;
+        let cfg_env = create_cfg_env(chain_spec.chain_id(), spec_id);
         let block_env = create_block_env(block.inner(), spec_id)?;
         let evm = Context::mainnet()
-            .with_db(state_source.into_database())
+            .with_db(database)
             .modify_cfg_chained(|cfg| *cfg = cfg_env)
             .modify_block_chained(|current_block| *current_block = block_env)
             .build_mainnet_with_inspector(inspector);
@@ -176,9 +159,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
                 )));
             }
             Err(EVMError::Database(error)) => {
-                return Err(EvmExecutionError::StateAccess(format!(
-                    "state access failed during execution: {error}"
-                )));
+                return Err(EvmExecutionError::StateAccess(error.to_string()));
             }
             Err(EVMError::Custom(error)) => {
                 return Err(EvmExecutionError::Execution(format!(
@@ -203,4 +184,4 @@ impl<INSP> EvmTransactionExecutor<INSP> {
 }
 
 pub(crate) use fee_settlement::EvmFeeSettlement;
-pub(crate) use state::{EvmBlockAnchor, EvmStateSource};
+pub(crate) use state::create_database;
