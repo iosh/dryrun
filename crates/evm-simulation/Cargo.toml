@@ -18,6 +18,5 @@ revm = { workspace = true, features = [
 ] }
 simulation-changes = { workspace = true }
 simulation-execution = { workspace = true }
-simulation-transaction = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }

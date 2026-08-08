@@ -7,13 +7,12 @@ use contract_standards::legacy::{metadata_requests, state_requirements, verify};
 use simulation_changes::{
     ChangeMetadata, PositionedChange, into_enriched_changes, sort_changes_by_position,
 };
-use simulation_transaction::Transaction;
 use tokio::runtime::Handle;
 
 use crate::{
-    EthereumChainSpec, EvmExecutionError, EvmExecutionObserver, EvmInitializationError,
-    EvmNativeChangeError, EvmSimulation, EvmSimulationError, EvmSimulationRequest,
-    EvmTransactionExecutor,
+    CompleteTransaction, EthereumChainSpec, EvmExecutionError, EvmExecutionObserver,
+    EvmInitializationError, EvmNativeChangeError, EvmSimulation, EvmSimulationError,
+    EvmSimulationRequest, EvmTransactionExecutor,
     changes::{
         analyze_native_changes, collect_standard_candidates, load_standard_metadata,
         read_standard_state_values,
@@ -57,12 +56,11 @@ impl EvmTransactionSimulator {
         request: EvmSimulationRequest,
     ) -> Result<EvmSimulation, EvmSimulationError> {
         let EvmSimulationRequest { block, transaction } = request;
-        let block = resolve_block(&self.provider, block)
-            .await
-            .map_err(EvmSimulationError::block_resolution)?;
-        let transaction = crate::complete_transaction(transaction, &self.provider, &block)
-            .await
-            .map_err(EvmSimulationError::transaction_completion)?;
+        transaction.validate_requirements()?;
+        let block = resolve_block(&self.provider, block).await?;
+        let transaction =
+            crate::complete_transaction(transaction, &self.provider, &block, self.chain_spec)
+                .await?;
 
         let provider = self.provider.clone();
         let chain_spec = self.chain_spec;
@@ -72,11 +70,7 @@ impl EvmTransactionSimulator {
             simulate_blocking(provider, runtime_handle, chain_spec, block, transaction)
         })
         .await
-        .map_err(|error| {
-            EvmSimulationError::execution_task_error(format!(
-                "blocking EVM simulation task terminated unexpectedly: {error}"
-            ))
-        })?
+        .map_err(EvmSimulationError::execution_task)?
     }
 }
 
@@ -85,7 +79,7 @@ fn simulate_blocking(
     runtime_handle: Handle,
     chain_spec: EthereumChainSpec,
     block: Sealed<Header>,
-    transaction: Transaction,
+    transaction: CompleteTransaction,
 ) -> Result<EvmSimulation, EvmSimulationError> {
     let chain_id = chain_spec.chain_id();
     let database = create_database(provider, runtime_handle, block.hash());
@@ -100,10 +94,8 @@ fn simulate_blocking(
     let mut output = match executor.execute(&transaction) {
         Ok(output) => output,
         Err(EvmExecutionError::NotExecuted(error)) => {
-            return Ok(EvmSimulation::new(
-                build_not_executed(chain_id, &block, &transaction, error),
-                Vec::new(),
-            ));
+            let execution = build_not_executed(chain_id, &block, &transaction, error);
+            return Ok(EvmSimulation::new(transaction, execution, Vec::new()));
         }
         Err(error) => return Err(map_execution_error(error)),
     };
@@ -115,7 +107,7 @@ fn simulate_blocking(
         output.fee_settlement(),
     );
     if !output.result().is_success() {
-        return Ok(EvmSimulation::new(execution, Vec::new()));
+        return Ok(EvmSimulation::new(transaction, execution, Vec::new()));
     }
 
     let candidates = collect_standard_candidates(&output.observations())?;
@@ -144,7 +136,7 @@ fn simulate_blocking(
         into_enriched_changes(positioned_changes, &metadata)
     };
 
-    Ok(EvmSimulation::new(execution, changes))
+    Ok(EvmSimulation::new(transaction, execution, changes))
 }
 
 fn native_metadata(chain_spec: EthereumChainSpec) -> crate::NativeMetadata {
@@ -158,12 +150,10 @@ fn native_metadata(chain_spec: EthereumChainSpec) -> crate::NativeMetadata {
 
 fn map_native_change_error(error: EvmNativeChangeError) -> EvmSimulationError {
     match error {
-        EvmNativeChangeError::TransitionUnavailable => EvmSimulationError::execution_error(
+        EvmNativeChangeError::TransitionUnavailable => EvmSimulationError::execution(
             "transaction execution transition was unavailable during native analysis",
         ),
-        error => {
-            EvmSimulationError::analysis_failed(format!("transaction changes failed: {error}"))
-        }
+        error => EvmSimulationError::changes(error.to_string()),
     }
 }
 
@@ -172,18 +162,22 @@ fn map_execution_error(error: EvmExecutionError) -> EvmSimulationError {
         EvmExecutionError::UnsupportedHardfork(error) => {
             EvmSimulationError::not_ready(error.to_string())
         }
-        EvmExecutionError::BlockContext(details) => {
-            EvmSimulationError::block_context_error(details)
+        error @ EvmExecutionError::Eip4844SettlementNotReady => {
+            EvmSimulationError::not_ready(error.to_string())
         }
-        EvmExecutionError::StateAccess(details) => EvmSimulationError::state_access_error(details),
-        EvmExecutionError::Execution(details) => EvmSimulationError::execution_error(details),
-        EvmExecutionError::FeeSettlement => EvmSimulationError::execution_error(
-            "transaction fee settlement arithmetic was inconsistent",
-        ),
+        error @ EvmExecutionError::Eip7702SettlementNotReady => {
+            EvmSimulationError::not_ready(error.to_string())
+        }
+        EvmExecutionError::BlockContext(details) => EvmSimulationError::block_context(details),
+        EvmExecutionError::StateAccess(details) => EvmSimulationError::state_access(details),
+        EvmExecutionError::Execution(details) => EvmSimulationError::execution(details),
+        EvmExecutionError::FeeSettlement => {
+            EvmSimulationError::execution("transaction fee settlement arithmetic was inconsistent")
+        }
         EvmExecutionError::TransitionAlreadyApplied => {
-            EvmSimulationError::execution_error("transaction transition has already been applied")
+            EvmSimulationError::execution("transaction transition has already been applied")
         }
-        EvmExecutionError::TransitionNotApplicable => EvmSimulationError::execution_error(
+        EvmExecutionError::TransitionNotApplicable => EvmSimulationError::execution(
             "transaction transition is only applicable to a successful execution",
         ),
         EvmExecutionError::NotExecuted(_) => EvmSimulationError::internal(

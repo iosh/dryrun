@@ -155,7 +155,7 @@ fn simulation_error_code(error: &conflux_simulation::ConfluxSimulationError) -> 
         ConfluxSimulationError::BlockContext(_)
         | ConfluxSimulationError::InvalidBlockContext { .. }
         | ConfluxSimulationError::StateAnchorInconsistent => "block_context_error",
-        ConfluxSimulationError::TransactionCompletion { .. } => "transaction_resolution_error",
+        ConfluxSimulationError::TransactionCompletion { .. } => "transaction_completion_error",
         ConfluxSimulationError::Provider(_) => "rpc_error",
         ConfluxSimulationError::StateAccess { .. } => "state_access_error",
         ConfluxSimulationError::Analysis { .. } => "analysis_failed",

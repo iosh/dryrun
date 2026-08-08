@@ -1,4 +1,4 @@
-use crate::Change;
+use crate::{Change, CompleteTransaction};
 use alloy_primitives::{B256, Bytes, U256};
 use simulation_execution::Outcome;
 
@@ -85,13 +85,26 @@ pub type EvmOutcome = Outcome<EvmExecutionDetails, EvmExecutionFailure>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmSimulation {
+    pub transaction: CompleteTransaction,
     pub execution: EvmExecution,
     pub changes: Vec<Change>,
 }
 
 impl EvmSimulation {
-    pub fn new(execution: EvmExecution, changes: Vec<Change>) -> Self {
-        Self { execution, changes }
+    pub fn new(
+        transaction: CompleteTransaction,
+        execution: EvmExecution,
+        changes: Vec<Change>,
+    ) -> Self {
+        Self {
+            transaction,
+            execution,
+            changes,
+        }
+    }
+
+    pub fn transaction(&self) -> &CompleteTransaction {
+        &self.transaction
     }
 
     pub fn execution(&self) -> &EvmExecution {
@@ -102,7 +115,7 @@ impl EvmSimulation {
         &self.changes
     }
 
-    pub fn into_parts(self) -> (EvmExecution, Vec<Change>) {
-        (self.execution, self.changes)
+    pub fn into_parts(self) -> (CompleteTransaction, EvmExecution, Vec<Change>) {
+        (self.transaction, self.execution, self.changes)
     }
 }

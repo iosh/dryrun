@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use evm_service::{EvmServiceError, EvmSimulationService};
-use evm_simulation::EvmSimulationRequest;
+use evm_simulation::{EvmSimulationError, EvmSimulationRequest};
 use jsonrpsee::core::{RpcResult, async_trait};
 use jsonrpsee::types::ErrorObjectOwned;
 use tracing::{error, instrument};
 
 use crate::{
-    errors::{internal_error, not_supported},
+    errors::{ValidationError, internal_error},
     interface::{
         BlockRef, EvmSimulateTransactionRequest, EvmSimulateTransactionResponse,
         SimulateTransactionOptions, Transaction,
@@ -65,11 +65,41 @@ impl DryrunRpcServer for RpcHandler {
 }
 
 fn map_service_error(error: EvmServiceError) -> ErrorObjectOwned {
-    if error.is_not_supported() {
-        not_supported(error.details())
-    } else {
-        let subkind = error.kind_code();
-        error!(subkind, error = ?error, "EVM simulation failed");
-        internal_error(subkind, "internal simulation error")
+    match error {
+        EvmServiceError::Simulation(EvmSimulationError::Input(error)) => {
+            ValidationError::invalid_params(error.to_string()).into()
+        }
+        EvmServiceError::Simulation(EvmSimulationError::Unsupported(details)) => {
+            ValidationError::not_supported(details).into()
+        }
+        error => {
+            let subkind = service_error_subkind(&error);
+            error!(subkind, error = ?error, "EVM simulation failed");
+            internal_error(subkind, "internal simulation error")
+        }
+    }
+}
+
+fn service_error_subkind(error: &EvmServiceError) -> Option<&'static str> {
+    match error {
+        EvmServiceError::TaskSetClosed => Some("task_set_closed"),
+        EvmServiceError::AttemptTask { .. } => Some("attempt_task_error"),
+        EvmServiceError::Simulation(error) => simulation_error_subkind(error),
+    }
+}
+
+fn simulation_error_subkind(error: &EvmSimulationError) -> Option<&'static str> {
+    match error {
+        EvmSimulationError::Input(_) | EvmSimulationError::Unsupported(_) => None,
+        EvmSimulationError::BlockResolution(_) => Some("block_resolution_error"),
+        EvmSimulationError::TransactionCompletion(_) => Some("transaction_completion_error"),
+        EvmSimulationError::NotReady(_) => Some("not_ready"),
+        EvmSimulationError::BlockContext(_) => Some("block_context_error"),
+        EvmSimulationError::StateAccess(_) => Some("state_access_error"),
+        EvmSimulationError::Execution(_) => Some("simulation_execution_error"),
+        EvmSimulationError::ExecutionTask { .. } => Some("execution_task_error"),
+        EvmSimulationError::Changes(_) => Some("analysis_failed"),
+        EvmSimulationError::Internal(_) => Some("unexpected"),
+        _ => Some("unexpected"),
     }
 }

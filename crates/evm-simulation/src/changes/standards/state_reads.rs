@@ -9,15 +9,14 @@ use contract_standards::legacy::{
 };
 use revm::{Database, context_interface::result::EVMError, handler::EvmTr};
 
-use crate::EvmSimulationError;
-use simulation_transaction::Transaction as EvmTransaction;
+use crate::{CompleteTransaction, EvmSimulationError};
 
 use super::read_call::{ReadCallOutcome, execute_read_call, with_read_call_context};
 use crate::execution::MainnetEvmWithDb;
 
 pub(crate) fn read_token_state_values<DB, INSP>(
     evm: &mut MainnetEvmWithDb<DB, INSP>,
-    transaction: &EvmTransaction,
+    transaction: &CompleteTransaction,
     chain_id: u64,
     requirements: &StateRequirements,
 ) -> Result<StandardStateValues, EvmSimulationError>
@@ -31,7 +30,7 @@ where
 
 fn read_values<DB, INSP>(
     evm: &mut MainnetEvmWithDb<DB, INSP>,
-    transaction: &EvmTransaction,
+    transaction: &CompleteTransaction,
     chain_id: u64,
     requirements: &StateRequirements,
 ) -> Result<StandardStateValues, EvmSimulationError>
@@ -126,7 +125,7 @@ where
 
 fn execute_token_state_call<DB, INSP, C>(
     evm: &mut MainnetEvmWithDb<DB, INSP>,
-    transaction: &EvmTransaction,
+    transaction: &CompleteTransaction,
     chain_id: u64,
     target: Address,
     call: C,
@@ -138,11 +137,11 @@ where
     let signature = C::SIGNATURE;
     match execute_read_call(evm, transaction, chain_id, target, call.abi_encode().into()) {
         Ok(outcome) => Ok(outcome),
-        Err(EVMError::Database(error)) => Err(EvmSimulationError::state_access_error(format!(
+        Err(EVMError::Database(error)) => Err(EvmSimulationError::state_access(format!(
             "state access failed while reading {} from {target}: {error}",
             signature,
         ))),
-        Err(error) => Err(EvmSimulationError::analysis_failed(format!(
+        Err(error) => Err(EvmSimulationError::changes(format!(
             "token state read {} from {target} failed: {error}",
             signature,
         ))),
@@ -151,7 +150,7 @@ where
 
 fn read_required_value<DB, INSP, C>(
     evm: &mut MainnetEvmWithDb<DB, INSP>,
-    transaction: &EvmTransaction,
+    transaction: &CompleteTransaction,
     chain_id: u64,
     target: Address,
     call: C,
@@ -166,13 +165,13 @@ where
     let output = match outcome {
         ReadCallOutcome::Success(output) => output,
         ReadCallOutcome::Revert(_) => {
-            return Err(EvmSimulationError::analysis_failed(format!(
+            return Err(EvmSimulationError::changes(format!(
                 "required token state read {} from {target} reverted",
                 signature,
             )));
         }
         ReadCallOutcome::Halt(reason) => {
-            return Err(EvmSimulationError::analysis_failed(format!(
+            return Err(EvmSimulationError::changes(format!(
                 "required token state read {} from {target} halted: {reason}",
                 signature,
             )));
@@ -180,15 +179,13 @@ where
     };
 
     C::abi_decode_returns_validate(output.as_ref()).map_err(|_| {
-        EvmSimulationError::analysis_failed(format!(
-            "invalid return data from {signature} at {target}",
-        ))
+        EvmSimulationError::changes(format!("invalid return data from {signature} at {target}",))
     })
 }
 
 fn read_interface_support<DB, INSP>(
     evm: &mut MainnetEvmWithDb<DB, INSP>,
-    transaction: &EvmTransaction,
+    transaction: &CompleteTransaction,
     chain_id: u64,
     collection: Address,
     interface_id: [u8; 4],
@@ -209,7 +206,7 @@ where
 
 fn read_collection_standards<DB, INSP>(
     evm: &mut MainnetEvmWithDb<DB, INSP>,
-    transaction: &EvmTransaction,
+    transaction: &CompleteTransaction,
     chain_id: u64,
     collection: Address,
 ) -> Result<CollectionStandards, EvmSimulationError>
@@ -220,7 +217,7 @@ where
         read_interface_support(evm, transaction, chain_id, collection, ERC165_INTERFACE_ID)?;
 
     if !supports_erc165 {
-        return Err(EvmSimulationError::analysis_failed(format!(
+        return Err(EvmSimulationError::changes(format!(
             "token collection {collection} does not support ERC165",
         )));
     }
@@ -234,7 +231,7 @@ where
     )?;
 
     if supports_invalid_interface {
-        return Err(EvmSimulationError::analysis_failed(format!(
+        return Err(EvmSimulationError::changes(format!(
             "token collection {collection} reports support for the invalid ERC165 interface",
         )));
     }
@@ -263,20 +260,18 @@ where
     let account = database
         .basic(contract)
         .map_err(|error| {
-            EvmSimulationError::state_access_error(format!(
+            EvmSimulationError::state_access(format!(
                 "failed to read token contract {contract}: {error}",
             ))
         })?
         .ok_or_else(|| {
-            EvmSimulationError::analysis_failed(
-                format!("token contract {contract} does not exist",),
-            )
+            EvmSimulationError::changes(format!("token contract {contract} does not exist",))
         })?;
 
     let code_hash = account.code_hash;
 
     if code_hash == B256::ZERO || account.is_empty_code_hash() {
-        return Err(EvmSimulationError::analysis_failed(format!(
+        return Err(EvmSimulationError::changes(format!(
             "token contract {contract} has no runtime code",
         )));
     }
@@ -284,14 +279,14 @@ where
     let code = match account.code {
         Some(code) => code,
         None => database.code_by_hash(code_hash).map_err(|error| {
-            EvmSimulationError::state_access_error(format!(
+            EvmSimulationError::state_access(format!(
                 "failed to read runtime code for token contract {contract}: {error}",
             ))
         })?,
     };
 
     if code.is_empty() {
-        return Err(EvmSimulationError::analysis_failed(format!(
+        return Err(EvmSimulationError::changes(format!(
             "token contract {contract} has no runtime code",
         )));
     }
@@ -301,7 +296,7 @@ where
 
 fn read_erc721_token_state<DB, INSP>(
     evm: &mut MainnetEvmWithDb<DB, INSP>,
-    transaction: &EvmTransaction,
+    transaction: &CompleteTransaction,
     chain_id: u64,
     key: Erc721TokenKey,
 ) -> Result<Erc721TokenState, EvmSimulationError>
@@ -316,7 +311,7 @@ where
         match execute_token_state_call(evm, transaction, chain_id, key.collection, owner_call)? {
             ReadCallOutcome::Success(output) => {
                 Erc721OwnerCall::abi_decode_returns_validate(output.as_ref()).map_err(|_| {
-                    EvmSimulationError::analysis_failed(format!(
+                    EvmSimulationError::changes(format!(
                         "invalid return data from {} at {}",
                         Erc721OwnerCall::SIGNATURE,
                         key.collection
@@ -327,7 +322,7 @@ where
                 return Ok(Erc721TokenState::OwnerOfReverted);
             }
             ReadCallOutcome::Halt(reason) => {
-                return Err(EvmSimulationError::analysis_failed(format!(
+                return Err(EvmSimulationError::changes(format!(
                     "required token state read {} from {} halted: {reason}",
                     Erc721OwnerCall::SIGNATURE,
                     key.collection,
@@ -336,7 +331,7 @@ where
         };
 
     if owner == Address::ZERO {
-        return Err(EvmSimulationError::analysis_failed(format!(
+        return Err(EvmSimulationError::changes(format!(
             "{} at {} returned the zero address",
             Erc721OwnerCall::SIGNATURE,
             key.collection,

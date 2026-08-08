@@ -4,10 +4,9 @@ use alloy::{
 };
 use alloy_primitives::Bytes;
 use revm::context_interface::result::{ExecutionResult, HaltReason, InvalidTransaction};
-use simulation_transaction::Transaction;
 
 use crate::{
-    EvmBlockContext, EvmExecution, EvmExecutionDetails, EvmExecutionFailure,
+    CompleteTransaction, EvmBlockContext, EvmExecution, EvmExecutionDetails, EvmExecutionFailure,
     EvmExecutionFailureCode, EvmFeeSettlement, EvmOutcome,
 };
 
@@ -52,7 +51,7 @@ pub(crate) fn build_execution(
 pub(crate) fn build_not_executed(
     chain_id: u64,
     block: &Sealed<Header>,
-    transaction: &Transaction,
+    transaction: &CompleteTransaction,
     error: InvalidTransaction,
 ) -> EvmExecution {
     EvmExecution {

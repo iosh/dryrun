@@ -13,4 +13,3 @@ alloy-primitives = { workspace = true }
 alloy-serde = { workspace = true }
 evm-service = { workspace = true }
 evm-simulation = { workspace = true }
-simulation-transaction = { workspace = true }

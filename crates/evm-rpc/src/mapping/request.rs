@@ -1,13 +1,10 @@
 use std::convert::TryFrom;
 
-use evm_simulation::{
-    AccessListItem, EvmBlockSelector, EvmSimulationRequest, EvmTransactionRequest,
-};
-use simulation_transaction::{TransactionType, TransactionVariantRequest};
+use evm_simulation::{EvmBlockSelector, EvmSimulationRequest};
 
 use crate::{errors::ValidationError, interface as rpc};
 
-use super::shared::parse_u64_param;
+use super::{shared::parse_u64_param, transaction::map_transaction};
 
 impl TryFrom<rpc::EvmSimulateTransactionRequest> for EvmSimulationRequest {
     type Error = ValidationError;
@@ -40,62 +37,5 @@ fn map_block_ref(block: rpc::BlockRef) -> Result<EvmBlockSelector, ValidationErr
         rpc::BlockRef::Hash(_) => Err(ValidationError::not_supported(
             "`block.blockHash` is not supported yet",
         )),
-    }
-}
-
-fn map_transaction(
-    transaction: rpc::Transaction,
-) -> Result<EvmTransactionRequest, ValidationError> {
-    let transaction_type = map_transaction_type(transaction.tx_type)?;
-    let transaction_type = TransactionType::infer(
-        transaction_type,
-        transaction.access_list.is_some(),
-        transaction.max_fee_per_gas.is_some() || transaction.max_priority_fee_per_gas.is_some(),
-    );
-    let variant = TransactionVariantRequest::try_new(
-        transaction_type,
-        transaction.access_list.map(|items| {
-            items
-                .into_iter()
-                .map(to_simulation_access_list_item)
-                .collect()
-        }),
-        transaction.gas_price,
-        transaction.max_fee_per_gas,
-        transaction.max_priority_fee_per_gas,
-    )
-    .map_err(|error| ValidationError::invalid_params(error.to_string()))?;
-
-    Ok(EvmTransactionRequest {
-        from: transaction.from,
-        to: transaction.to,
-        nonce: transaction.nonce,
-        gas_limit: transaction.gas,
-        value: transaction.value,
-        data: transaction.data,
-        chain_id: transaction.chain_id,
-        variant,
-    })
-}
-
-fn map_transaction_type(
-    transaction_type: Option<u8>,
-) -> Result<Option<TransactionType>, ValidationError> {
-    transaction_type
-        .map(|transaction_type| match transaction_type {
-            0x0 => Ok(TransactionType::Legacy),
-            0x1 => Ok(TransactionType::AccessList),
-            0x2 => Ok(TransactionType::DynamicFee),
-            _ => Err(ValidationError::not_supported(
-                "`transaction.type` only supports `0x0`, `0x1`, and `0x2`",
-            )),
-        })
-        .transpose()
-}
-
-fn to_simulation_access_list_item(item: rpc::AccessListItem) -> AccessListItem {
-    AccessListItem {
-        address: item.address,
-        storage_keys: item.storage_keys,
     }
 }

@@ -3034,7 +3034,6 @@ dependencies = [
  "jsonrpsee",
  "serde",
  "serde_json",
- "simulation-transaction",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -3061,7 +3060,6 @@ dependencies = [
  "revm",
  "simulation-changes",
  "simulation-execution",
- "simulation-transaction",
  "thiserror 2.0.18",
  "tokio",
 ]

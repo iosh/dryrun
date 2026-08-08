@@ -10,9 +10,7 @@ use revm::{
     primitives::TxKind,
 };
 
-use simulation_transaction::Transaction as EvmTransaction;
-
-use crate::execution::MainnetEvmWithDb;
+use crate::{CompleteTransaction, execution::MainnetEvmWithDb};
 
 const READ_CALL_GAS_LIMIT: u64 = 100_000;
 
@@ -53,7 +51,7 @@ where
 
 pub(super) fn execute_read_call<DB, INSP>(
     evm: &mut MainnetEvmWithDb<DB, INSP>,
-    transaction: &EvmTransaction,
+    transaction: &CompleteTransaction,
     chain_id: u64,
     target: Address,
     data: Bytes,
@@ -72,7 +70,7 @@ where
 }
 
 fn build_read_call_tx(
-    transaction: &EvmTransaction,
+    transaction: &CompleteTransaction,
     chain_id: u64,
     target: Address,
     data: Bytes,

@@ -98,6 +98,16 @@ pub struct Transaction {
         with = "quantity::opt"
     )]
     pub max_priority_fee_per_gas: Option<u128>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "quantity::opt"
+    )]
+    pub max_fee_per_blob_gas: Option<u128>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blob_versioned_hashes: Option<Vec<B256>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization_list: Option<Vec<SignedAuthorization>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -105,6 +115,19 @@ pub struct Transaction {
 pub struct AccessListItem {
     pub address: Address,
     pub storage_keys: Vec<B256>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SignedAuthorization {
+    pub chain_id: U256,
+    pub address: Address,
+    #[serde(with = "quantity")]
+    pub nonce: u64,
+    #[serde(rename = "yParity", alias = "v", with = "quantity")]
+    pub y_parity: u8,
+    pub r: U256,
+    pub s: U256,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

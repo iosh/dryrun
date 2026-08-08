@@ -9,15 +9,14 @@ use contract_standards::legacy::{
 use contract_standards::{Erc20Metadata, Erc721CollectionMetadata};
 use revm::context_interface::result::EVMError;
 
-use crate::EvmSimulationError;
-use simulation_transaction::Transaction as EvmTransaction;
+use crate::{CompleteTransaction, EvmSimulationError};
 
 use super::read_call::{ReadCallOutcome, execute_read_call, with_read_call_context};
 use crate::execution::MainnetEvm;
 
 pub(crate) fn load_standard_metadata<INSP>(
     evm: &mut MainnetEvm<INSP>,
-    transaction: &EvmTransaction,
+    transaction: &CompleteTransaction,
     chain_id: u64,
     requests: MetadataRequests,
 ) -> Result<StandardMetadata, EvmSimulationError> {
@@ -37,7 +36,7 @@ pub(crate) fn load_standard_metadata<INSP>(
 
 struct MetadataReader<'evm, 'transaction, INSP> {
     evm: &'evm mut MainnetEvm<INSP>,
-    transaction: &'transaction EvmTransaction,
+    transaction: &'transaction CompleteTransaction,
     chain_id: u64,
 }
 
@@ -96,10 +95,10 @@ impl<INSP> MetadataReader<'_, '_, INSP> {
     ) -> Result<Option<T>, EvmSimulationError> {
         let outcome = execute_read_call(self.evm, self.transaction, self.chain_id, target, data)
             .map_err(|error| match error {
-                EVMError::Database(error) => EvmSimulationError::state_access_error(format!(
+                EVMError::Database(error) => EvmSimulationError::state_access(format!(
                     "state access failed during metadata read from {target}: {error}"
                 )),
-                error => EvmSimulationError::analysis_failed(format!(
+                error => EvmSimulationError::changes(format!(
                     "metadata read from {target} failed: {error}"
                 )),
             })?;

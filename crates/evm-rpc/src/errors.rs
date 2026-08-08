@@ -56,25 +56,14 @@ impl From<ValidationError> for ErrorObjectOwned {
 }
 
 pub(crate) fn internal_error(
-    kind_code: Option<&'static str>,
+    subkind: Option<&'static str>,
     details: impl Into<String>,
 ) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(
         INTERNAL_ERROR_CODE,
         "Internal error",
         Some(ErrorData {
-            subkind: kind_code,
-            details: details.into(),
-        }),
-    )
-}
-
-pub(crate) fn not_supported(details: impl Into<String>) -> ErrorObjectOwned {
-    ErrorObjectOwned::owned(
-        -32004,
-        "Not supported",
-        Some(ErrorData {
-            subkind: None,
+            subkind,
             details: details.into(),
         }),
     )

@@ -8,7 +8,7 @@ use crate::interface as rpc;
 
 impl From<EvmSimulation> for rpc::EvmSimulateTransactionResponse {
     fn from(output: EvmSimulation) -> Self {
-        let (execution, changes) = output.into_parts();
+        let (_, execution, changes) = output.into_parts();
         let EvmExecution {
             chain_id,
             context: block,

@@ -4,14 +4,11 @@ use alloy_primitives::B256;
 
 use crate::errors::ValidationError;
 
-use super::{
-    AccessListItem, BlockRef, EvmSimulateTransactionRequest, SimulateTransactionOptions,
-    Transaction,
-};
+use super::{BlockRef, EvmSimulateTransactionRequest, SimulateTransactionOptions, Transaction};
 
 impl EvmSimulateTransactionRequest {
     pub(crate) fn validate(&self) -> Result<(), ValidationError> {
-        self.transaction.validate()?;
+        self.transaction.validate_mainnet_chain_id()?;
 
         if let Some(block) = &self.block {
             block.validate()?;
@@ -56,27 +53,13 @@ impl SimulateTransactionOptions {
 }
 
 impl Transaction {
-    pub(crate) fn validate(&self) -> Result<(), ValidationError> {
-        if let Some(tx_type) = self.tx_type
-            && !matches!(tx_type, 0x0..=0x2)
-        {
-            return Err(ValidationError::not_supported(
-                "`transaction.type` only supports `0x0`, `0x1`, and `0x2`",
+    fn validate_mainnet_chain_id(&self) -> Result<(), ValidationError> {
+        if self.chain_id != 1 {
+            return Err(ValidationError::invalid_params(
+                "`transaction.chainId` must be `0x1` for Ethereum mainnet",
             ));
         }
 
-        if let Some(access_list) = &self.access_list {
-            for (index, entry) in access_list.iter().enumerate() {
-                entry.validate(index)?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl AccessListItem {
-    pub(crate) fn validate(&self, _index: usize) -> Result<(), ValidationError> {
         Ok(())
     }
 }

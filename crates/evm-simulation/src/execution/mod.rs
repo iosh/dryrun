@@ -16,13 +16,16 @@ use revm::{
     },
     handler::EvmTr,
     interpreter::interpreter::EthInterpreter,
+    primitives::hardfork::SpecId,
     state::EvmState,
 };
-use simulation_transaction::Transaction as SimulationTransaction;
 use thiserror::Error;
 
 use self::env::{create_block_env, create_cfg_env, create_tx_env};
-use crate::{EthereumChainSpec, chain_spec::EthereumChainSpecError};
+use crate::{
+    CompleteTransaction, CompleteTransactionVariant, EthereumChainSpec,
+    chain_spec::EthereumChainSpecError,
+};
 
 pub(crate) type MainnetEvmDatabase = state::MainnetEvmDatabase;
 pub(crate) type MainnetEvm<INSP = ()> = MainnetEvmWithDatabase<MainnetEvmDatabase, INSP>;
@@ -48,6 +51,12 @@ pub(crate) enum EvmExecutionError {
 
     #[error("transaction was not executed: {0}")]
     NotExecuted(InvalidTransaction),
+
+    #[error("EIP-4844 execution is not ready because blob fee settlement is not implemented")]
+    Eip4844SettlementNotReady,
+
+    #[error("EIP-7702 execution is not ready because authorization settlement is not implemented")]
+    Eip7702SettlementNotReady,
 
     #[error("transaction fee settlement arithmetic was inconsistent")]
     FeeSettlement,
@@ -117,6 +126,7 @@ impl EvmExecutionOutput<EvmExecutionObserver> {
 #[derive(Debug)]
 pub(crate) struct EvmTransactionExecutor<INSP> {
     evm: MainnetEvm<INSP>,
+    spec_id: SpecId,
 }
 
 impl<INSP> EvmTransactionExecutor<INSP> {
@@ -135,16 +145,30 @@ impl<INSP> EvmTransactionExecutor<INSP> {
             .modify_block_chained(|current_block| *current_block = block_env)
             .build_mainnet_with_inspector(inspector);
 
-        Ok(Self { evm })
+        Ok(Self { evm, spec_id })
     }
 
     pub(crate) fn execute(
         mut self,
-        transaction: &SimulationTransaction,
+        transaction: &CompleteTransaction,
     ) -> Result<EvmExecutionOutput<INSP>, EvmExecutionError>
     where
         INSP: revm::Inspector<Context<BlockEnv, TxEnv, CfgEnv, MainnetEvmDatabase>, EthInterpreter>,
     {
+        match &transaction.variant {
+            CompleteTransactionVariant::Eip4844 { .. }
+                if self.spec_id.is_enabled_in(SpecId::CANCUN) =>
+            {
+                return Err(EvmExecutionError::Eip4844SettlementNotReady);
+            }
+            CompleteTransactionVariant::Eip7702 { .. }
+                if self.spec_id.is_enabled_in(SpecId::PRAGUE) =>
+            {
+                return Err(EvmExecutionError::Eip7702SettlementNotReady);
+            }
+            _ => {}
+        }
+
         let tx_env = create_tx_env(transaction);
         let effective_gas_price = tx_env.effective_gas_price(self.evm.ctx().block.basefee as u128);
         let base_fee_per_gas = self.evm.ctx().block.basefee;
