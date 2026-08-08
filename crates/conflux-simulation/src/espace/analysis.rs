@@ -1,7 +1,7 @@
 use cfx_executor::{machine::Machine, state::State};
 use cfx_types::Space;
-use contract_standards::{
-    MetadataRequests, StandardCandidate, StandardStateValues, StatePhase, StateRequirements,
+use contract_standards::legacy::{
+    StandardCandidate, StandardStateValues, StatePhase, StateRequirements, metadata_requests,
     state_requirements, verify,
 };
 use simulation_changes::{
@@ -86,7 +86,7 @@ pub(crate) fn analyze_espace_changes(
     let StatePhaseValues { before, after } = phase_values;
 
     let standard_changes = verify(&standard_candidates, &before.standards, &after.standards)?;
-    let metadata_requests = MetadataRequests::from_changes(&standard_changes);
+    let metadata_requests = metadata_requests(&standard_changes);
     let mut positioned_changes = native.verify(&before.native, &after.native)?;
     positioned_changes.extend(standard_changes.into_iter().map(PositionedChange::from));
     sort_changes_by_position(&mut positioned_changes);

@@ -2,7 +2,7 @@ mod cfx;
 mod staking;
 
 use alloy_primitives::{Address, B256, U256};
-use contract_standards::{Position, PositionedStandardChange};
+use contract_standards::legacy::{Position, PositionedChange};
 use simulation_changes::{Change, ChangeMetadata, NativeMetadata};
 
 pub(crate) use cfx::{CfxAnalysisInput, CfxStateValues};
@@ -133,8 +133,8 @@ impl PositionedCoreSpaceChange {
     }
 }
 
-impl From<PositionedStandardChange> for PositionedCoreSpaceChange {
-    fn from(positioned: PositionedStandardChange) -> Self {
+impl From<PositionedChange> for PositionedCoreSpaceChange {
+    fn from(positioned: PositionedChange) -> Self {
         Self::new(
             positioned.position,
             CoreSpaceChange::Asset(positioned.change.into()),

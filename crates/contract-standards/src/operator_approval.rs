@@ -5,9 +5,9 @@ use std::collections::{HashMap, hash_map::Entry};
 use alloy_primitives::Address;
 
 use crate::{
-    CollectionStandards, ContractStandardsError, OperatorApprovalKey, Position,
-    PositionedStandardChange, StandardCandidate, StandardCandidateKind, StandardChange,
-    StandardStateValues, StatePhase, StateRequirement,
+    CollectionStandards, ContractStandardsError, OperatorApprovalKey, Position, StandardCandidate,
+    StandardCandidateKind, StandardStateValues, StatePhase, StateRequirement,
+    change::legacy::{Change, PositionedChange},
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -20,7 +20,7 @@ pub(crate) fn check_operator_approvals(
     candidates: &[StandardCandidate],
     before: &StandardStateValues,
     after: &StandardStateValues,
-) -> Result<Vec<PositionedStandardChange>, ContractStandardsError> {
+) -> Result<Vec<PositionedChange>, ContractStandardsError> {
     let last_approval_values = collect_last_approval_values(candidates);
     let mut changes = Vec::new();
 
@@ -44,14 +44,14 @@ pub(crate) fn check_operator_approvals(
 
         let standards = collection_standards(before, key.collection)?;
         let change = match (standards.supports_erc721, standards.supports_erc1155) {
-            (true, false) => StandardChange::Erc721OperatorApproval {
+            (true, false) => Change::Erc721OperatorApproval {
                 contract_address: key.collection,
                 owner: key.owner,
                 operator: key.operator,
                 approved_before,
                 approved_after: after_approved,
             },
-            (false, true) => StandardChange::Erc1155OperatorApproval {
+            (false, true) => Change::Erc1155OperatorApproval {
                 contract_address: key.collection,
                 owner: key.owner,
                 operator: key.operator,
@@ -67,7 +67,7 @@ pub(crate) fn check_operator_approvals(
             }
         };
 
-        changes.push(PositionedStandardChange::new(event.position, change));
+        changes.push(PositionedChange::new(event.position, change));
     }
 
     Ok(changes)

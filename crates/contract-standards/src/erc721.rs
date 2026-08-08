@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use alloy_primitives::{Address, U256};
 
 use crate::{
-    ContractStandardsError, Erc721TokenKey, Erc721TokenState, Position, PositionedStandardChange,
-    StandardCandidate, StandardCandidateKind, StandardChange, StandardStateValues, StatePhase,
-    StateRequirement,
+    ContractStandardsError, Erc721TokenKey, Erc721TokenState, Position, StandardCandidate,
+    StandardCandidateKind, StandardStateValues, StatePhase, StateRequirement,
+    change::legacy::{Change, PositionedChange},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,7 +30,7 @@ impl Erc721TokenCursor {
 
 struct Erc721Replay {
     tokens: Vec<Erc721ReplayToken>,
-    movements: Vec<PositionedStandardChange>,
+    movements: Vec<PositionedChange>,
 }
 
 struct Erc721ReplayToken {
@@ -43,7 +43,7 @@ pub(crate) fn check_erc721_changes(
     candidates: &[StandardCandidate],
     before: &StandardStateValues,
     after: &StandardStateValues,
-) -> Result<Vec<PositionedStandardChange>, ContractStandardsError> {
+) -> Result<Vec<PositionedChange>, ContractStandardsError> {
     let replayed = replay_erc721_changes(candidates, before)?;
     let mut changes = replayed.movements;
 
@@ -61,9 +61,9 @@ pub(crate) fn check_erc721_changes(
             continue;
         }
 
-        changes.push(PositionedStandardChange::new(
+        changes.push(PositionedChange::new(
             replay_token.approval_position,
-            StandardChange::Erc721TokenApproval {
+            Change::Erc721TokenApproval {
                 contract_address: key.collection,
                 token_id: key.token_id,
                 approved_address_before,
@@ -104,7 +104,7 @@ fn replay_erc721_changes(
                 )?;
                 apply_movement(&mut replay_token.cursor, key, from, to)?;
                 replay_token.approval_position = candidate.position;
-                movements.push(PositionedStandardChange::new(
+                movements.push(PositionedChange::new(
                     candidate.position,
                     erc721_movement_change(collection, from, to, token_id),
                 ));
@@ -143,21 +143,21 @@ fn erc721_movement_change(
     from: Address,
     to: Address,
     token_id: U256,
-) -> StandardChange {
+) -> Change {
     if from == Address::ZERO {
-        StandardChange::Erc721Mint {
+        Change::Erc721Mint {
             contract_address: collection,
             to,
             token_id,
         }
     } else if to == Address::ZERO {
-        StandardChange::Erc721Burn {
+        Change::Erc721Burn {
             contract_address: collection,
             from,
             token_id,
         }
     } else {
-        StandardChange::Erc721Transfer {
+        Change::Erc721Transfer {
             contract_address: collection,
             from,
             to,

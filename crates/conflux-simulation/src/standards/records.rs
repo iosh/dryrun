@@ -1,7 +1,7 @@
 use alloy_primitives::Bytes;
 use cfx_types::Space;
 use cfx_vm_types::CallType;
-use contract_standards::{Position, Record, StandardCandidate, collect_candidates};
+use contract_standards::legacy::{Position, Record, StandardCandidate, collect_candidates};
 
 use crate::{
     ConfluxSimulationError,

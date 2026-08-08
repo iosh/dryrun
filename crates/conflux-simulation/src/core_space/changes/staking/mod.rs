@@ -12,7 +12,7 @@ pub(crate) use pos_state::{PoSStateReader, PoSStateValues};
 pub(crate) use vote_lock::verify_vote_lock_changes;
 
 use alloy_primitives::{Address, B256, U256};
-use contract_standards::Position;
+use contract_standards::legacy::Position;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CommittedVoteLockCall {

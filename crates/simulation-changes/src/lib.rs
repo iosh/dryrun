@@ -1,5 +1,8 @@
 use alloy_primitives::{Address, U256};
-use contract_standards::{Position, PositionedStandardChange, StandardChange, StandardMetadata};
+use contract_standards::legacy::{
+    Change as StandardChange, Position, PositionedChange as PositionedStandardChange,
+    StandardMetadata,
+};
 
 pub use contract_standards::{Erc20Metadata, Erc721CollectionMetadata};
 

@@ -5,10 +5,11 @@ use std::collections::{HashMap, hash_map::Entry};
 use alloy_primitives::{Address, U256};
 
 use crate::{
-    ContractStandardsError, Erc20AllowanceKey, Erc20BalanceKey, Position, PositionedStandardChange,
-    StandardCandidate, StandardCandidateKind, StandardChange, StandardStateValues,
-    StateArithmeticOperation, StatePhase, StateRequirement, StateRequirements,
+    ContractStandardsError, Erc20AllowanceKey, Erc20BalanceKey, Position, StandardCandidate,
+    StandardCandidateKind, StandardStateValues, StateArithmeticOperation, StatePhase,
+    StateRequirement, StateRequirements,
     candidate::AllowanceSource,
+    change::legacy::{Change, PositionedChange},
 };
 
 struct Erc20Replay {
@@ -27,7 +28,7 @@ pub(crate) fn check_erc20_changes(
     keys: &StateRequirements,
     before: &StandardStateValues,
     after: &StandardStateValues,
-) -> Result<Vec<PositionedStandardChange>, ContractStandardsError> {
+) -> Result<Vec<PositionedChange>, ContractStandardsError> {
     let mut changes = check_erc20_movements(candidates, keys, before, after)?;
     changes.extend(check_erc20_allowances(candidates, before, after)?);
 
@@ -39,7 +40,7 @@ pub(crate) fn check_erc20_movements(
     keys: &StateRequirements,
     before: &StandardStateValues,
     after: &StandardStateValues,
-) -> Result<Vec<PositionedStandardChange>, ContractStandardsError> {
+) -> Result<Vec<PositionedChange>, ContractStandardsError> {
     let replayed = replay_erc20_movements(candidates, before)?;
 
     for &key in &keys.erc20_balances {
@@ -101,7 +102,7 @@ pub(crate) fn check_erc20_allowances(
     candidates: &[StandardCandidate],
     before: &StandardStateValues,
     after: &StandardStateValues,
-) -> Result<Vec<PositionedStandardChange>, ContractStandardsError> {
+) -> Result<Vec<PositionedChange>, ContractStandardsError> {
     let allowances = collect_allowances(candidates);
     let mut changes = Vec::new();
 
@@ -123,9 +124,9 @@ pub(crate) fn check_erc20_allowances(
         }
 
         if before_allowance != after_allowance {
-            changes.push(PositionedStandardChange::new(
+            changes.push(PositionedChange::new(
                 allowance.position,
-                StandardChange::Erc20Allowance {
+                Change::Erc20Allowance {
                     contract_address: key.token,
                     owner: key.owner,
                     spender: key.spender,
@@ -193,7 +194,7 @@ fn collect_allowances(
     allowances
 }
 
-fn erc20_movement_change(candidate: &StandardCandidate) -> Option<PositionedStandardChange> {
+fn erc20_movement_change(candidate: &StandardCandidate) -> Option<PositionedChange> {
     let StandardCandidateKind::Erc20Movement {
         token,
         from,
@@ -209,19 +210,19 @@ fn erc20_movement_change(candidate: &StandardCandidate) -> Option<PositionedStan
     }
 
     let change = if from == Address::ZERO {
-        StandardChange::Erc20Mint {
+        Change::Erc20Mint {
             contract_address: token,
             to,
             raw_amount: amount,
         }
     } else if to == Address::ZERO {
-        StandardChange::Erc20Burn {
+        Change::Erc20Burn {
             contract_address: token,
             from,
             raw_amount: amount,
         }
     } else {
-        StandardChange::Erc20Transfer {
+        Change::Erc20Transfer {
             contract_address: token,
             from,
             to,
@@ -229,7 +230,7 @@ fn erc20_movement_change(candidate: &StandardCandidate) -> Option<PositionedStan
         }
     };
 
-    Some(PositionedStandardChange::new(candidate.position, change))
+    Some(PositionedChange::new(candidate.position, change))
 }
 
 fn replay_erc20_movements(

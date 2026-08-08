@@ -5,7 +5,7 @@ use cfx_executor::executive_observer::AddressPocket;
 use cfx_parameters::staking::DRIPS_PER_STORAGE_COLLATERAL_UNIT;
 use cfx_types::{AddressSpaceUtil, Space, address_util::AddressUtil};
 use cfx_vm_types::{CallType, Spec};
-use contract_standards::Position;
+use contract_standards::legacy::Position;
 use primitives::receipt::StorageChange;
 
 use super::{BasicCfxOperation, CfxBalanceLocation, StorageCollateralReleaseOperation};

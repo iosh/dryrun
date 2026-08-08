@@ -3,7 +3,7 @@ use alloy::{
     providers::RootProvider,
 };
 use alloy_chains::Chain;
-use contract_standards::{MetadataRequests, state_requirements, verify};
+use contract_standards::legacy::{metadata_requests, state_requirements, verify};
 use simulation_changes::{
     ChangeMetadata, PositionedChange, into_enriched_changes, sort_changes_by_position,
 };
@@ -105,7 +105,7 @@ fn simulate_prepared(
     let after_token_state =
         read_standard_state_values(output.evm_mut(), &transaction, chain_id, &requirements)?;
     let standard_changes = verify(&candidates, &before_token_state, &after_token_state)?;
-    let metadata_requests = MetadataRequests::from_changes(&standard_changes);
+    let metadata_requests = metadata_requests(&standard_changes);
     positioned_changes.extend(standard_changes.into_iter().map(PositionedChange::from));
 
     let changes = if positioned_changes.is_empty() {

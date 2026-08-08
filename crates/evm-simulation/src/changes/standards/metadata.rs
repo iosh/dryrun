@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
 use alloy_primitives::{Address, Bytes};
-use contract_standards::{
-    ERC721_METADATA_INTERFACE_ID, Erc20Metadata, Erc721CollectionMetadata, MetadataRequests,
-    StandardMetadata, decimals_call, decode_decimals, decode_name, decode_supports_interface,
-    decode_symbol, name_call, supports_interface_call, symbol_call,
+use contract_standards::legacy::{
+    ERC721_METADATA_INTERFACE_ID, MetadataRequests, StandardMetadata, decimals_call,
+    decode_decimals, decode_name, decode_supports_interface, decode_symbol, name_call,
+    supports_interface_call, symbol_call,
 };
+use contract_standards::{Erc20Metadata, Erc721CollectionMetadata};
 use revm::context_interface::result::EVMError;
 
 use crate::EvmSimulationError;

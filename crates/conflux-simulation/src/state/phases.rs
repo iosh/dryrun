@@ -1,5 +1,5 @@
 use cfx_executor::state::State;
-use contract_standards::StatePhase;
+use contract_standards::legacy::StatePhase;
 
 use crate::ConfluxSimulationError;
 

@@ -1,6 +1,6 @@
 use alloy_primitives::U256;
 use cfx_executor::{machine::Machine, state::State};
-use contract_standards::StatePhase;
+use contract_standards::legacy::StatePhase;
 
 use super::{
     CfxBalanceLocation, CfxOperations, CfxStateValues, StakingBalanceEffects,

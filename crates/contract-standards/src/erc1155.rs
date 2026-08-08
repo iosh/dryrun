@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use alloy_primitives::{Address, U256};
 
 use crate::{
-    ContractStandardsError, Erc1155BalanceKey, PositionedStandardChange, StandardCandidate,
-    StandardCandidateKind, StandardChange, StandardStateValues, StateArithmeticOperation,
-    StatePhase, StateRequirement, StateRequirements,
+    ContractStandardsError, Erc1155BalanceKey, StandardCandidate, StandardCandidateKind,
+    StandardStateValues, StateArithmeticOperation, StatePhase, StateRequirement, StateRequirements,
+    change::legacy::{Change, PositionedChange},
 };
 
 pub(crate) fn check_erc1155_movements(
@@ -15,7 +15,7 @@ pub(crate) fn check_erc1155_movements(
     keys: &StateRequirements,
     before: &StandardStateValues,
     after: &StandardStateValues,
-) -> Result<Vec<PositionedStandardChange>, ContractStandardsError> {
+) -> Result<Vec<PositionedChange>, ContractStandardsError> {
     let replayed_balances = replay_erc1155_movements(candidates, before)?;
 
     for &key in &keys.erc1155_balances {
@@ -38,7 +38,7 @@ pub(crate) fn check_erc1155_movements(
         .collect())
 }
 
-fn erc1155_movement_change(candidate: &StandardCandidate) -> Option<PositionedStandardChange> {
+fn erc1155_movement_change(candidate: &StandardCandidate) -> Option<PositionedChange> {
     let StandardCandidateKind::Erc1155Transfer {
         collection,
         from,
@@ -55,21 +55,21 @@ fn erc1155_movement_change(candidate: &StandardCandidate) -> Option<PositionedSt
     }
 
     let change = if from == Address::ZERO {
-        StandardChange::Erc1155Mint {
+        Change::Erc1155Mint {
             contract_address: collection,
             to,
             token_id,
             raw_amount: amount,
         }
     } else if to == Address::ZERO {
-        StandardChange::Erc1155Burn {
+        Change::Erc1155Burn {
             contract_address: collection,
             from,
             token_id,
             raw_amount: amount,
         }
     } else {
-        StandardChange::Erc1155Transfer {
+        Change::Erc1155Transfer {
             contract_address: collection,
             from,
             to,
@@ -78,7 +78,7 @@ fn erc1155_movement_change(candidate: &StandardCandidate) -> Option<PositionedSt
         }
     };
 
-    Some(PositionedStandardChange::new(candidate.position, change))
+    Some(PositionedChange::new(candidate.position, change))
 }
 
 fn replay_erc1155_movements(

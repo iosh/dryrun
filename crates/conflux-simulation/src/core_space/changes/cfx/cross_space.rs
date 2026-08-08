@@ -6,7 +6,7 @@ use cfx_executor::{
 };
 use cfx_types::{AddressSpaceUtil, Space, address_util::AddressUtil};
 use cfx_vm_types::{CallType, Spec};
-use contract_standards::Position;
+use contract_standards::legacy::Position;
 
 use super::CrossSpaceTransferOperation;
 use crate::{

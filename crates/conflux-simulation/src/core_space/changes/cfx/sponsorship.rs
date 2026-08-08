@@ -2,7 +2,7 @@ use alloy_sol_types::{SolCall, sol};
 use cfx_executor::{executive_observer::AddressPocket, machine::Machine};
 use cfx_types::{Address, AddressSpaceUtil, Space};
 use cfx_vm_types::{CallType, Spec};
-use contract_standards::Position;
+use contract_standards::legacy::Position;
 
 use super::{
     SponsoredResource, SponsorshipAccessCallerRole, SponsorshipAccessRuleUpdate,

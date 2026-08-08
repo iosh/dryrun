@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use alloy_primitives::{Address, U256};
 use cfx_executor::state::State;
-use contract_standards::{Position, StatePhase};
+use contract_standards::legacy::{Position, StatePhase};
 use simulation_changes::PositionedChange;
 
 use crate::{ConfluxSimulationError, execution::ConfluxExecutionOutput};

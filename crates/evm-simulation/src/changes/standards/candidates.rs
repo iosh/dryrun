@@ -1,4 +1,4 @@
-use contract_standards::{Position, Record, StandardCandidate, collect_candidates};
+use contract_standards::legacy::{Position, Record, StandardCandidate, collect_candidates};
 
 use crate::{EvmExecutionObservation, EvmSimulationError};
 

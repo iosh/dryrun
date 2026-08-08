@@ -418,6 +418,7 @@ fn append_event_candidates(
         ),
         DecodedEvent::Erc1155TransferSingle {
             collection,
+            operator: _,
             from,
             to,
             token_id,
@@ -434,6 +435,7 @@ fn append_event_candidates(
         ),
         DecodedEvent::Erc1155TransferBatch {
             collection,
+            operator: _,
             from,
             to,
             items,
@@ -446,7 +448,7 @@ fn append_event_candidates(
                         from,
                         to,
                         token_id: item.token_id,
-                        amount: item.amount,
+                        amount: item.raw_amount,
                     },
                 );
             }

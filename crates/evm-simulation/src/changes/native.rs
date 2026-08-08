@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use alloy::primitives::{Address, U256};
-use contract_standards::Position;
+use contract_standards::legacy::Position;
 use revm::state::EvmState;
 use simulation_changes::{Change, NativeMetadata, PositionedChange};
 

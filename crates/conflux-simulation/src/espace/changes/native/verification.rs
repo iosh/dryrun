@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use alloy_primitives::{Address, U256};
 use cfx_executor::state::State;
 use cfx_types::AddressSpaceUtil;
-use contract_standards::StatePhase;
+use contract_standards::legacy::StatePhase;
 use simulation_changes::{Change, NativeMetadata, PositionedChange};
 
 use super::{NativeOperation, NativeOperations};

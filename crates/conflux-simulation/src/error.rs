@@ -1,4 +1,4 @@
-use contract_standards::ContractStandardsError;
+use contract_standards::legacy::ContractStandardsError;
 use thiserror::Error;
 
 use crate::{

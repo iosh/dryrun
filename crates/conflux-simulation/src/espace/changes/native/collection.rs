@@ -1,7 +1,7 @@
 use alloy_primitives::{Address, U256};
 use cfx_executor::executive_observer::AddressPocket;
 use cfx_types::Space;
-use contract_standards::Position;
+use contract_standards::legacy::Position;
 
 use super::{NativeOperation, NativeOperations};
 use crate::{

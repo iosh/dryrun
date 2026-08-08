@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use contract_standards::ContractStandardsError;
+use contract_standards::legacy::ContractStandardsError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvmSimulationErrorKind {

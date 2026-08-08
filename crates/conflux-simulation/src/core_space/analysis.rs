@@ -1,7 +1,7 @@
 use cfx_executor::{machine::Machine, state::State};
 use cfx_types::Space;
-use contract_standards::{
-    MetadataRequests, StandardCandidate, StandardStateValues, StatePhase, StateRequirements,
+use contract_standards::legacy::{
+    StandardCandidate, StandardStateValues, StatePhase, StateRequirements, metadata_requests,
     state_requirements, verify,
 };
 
@@ -175,7 +175,7 @@ impl CoreSpaceChangeAnalysis {
             &before_standard_state,
             &after_standard_state,
         )?;
-        let metadata_requests = MetadataRequests::from_changes(&positioned_standard_changes);
+        let metadata_requests = metadata_requests(&positioned_standard_changes);
         let mut positioned_core_changes = analysis_input
             .cfx
             .verify(&before_cfx_state, &after_cfx_state)?;

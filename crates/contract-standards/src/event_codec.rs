@@ -4,7 +4,7 @@ use alloy_primitives::{Address, B256, U256, keccak256};
 use alloy_sol_types::SolValue;
 use thiserror::Error;
 
-use crate::Record;
+use crate::{Erc1155TransferItem, candidate::Record};
 
 static TRANSFER_TOPIC0: LazyLock<B256> =
     LazyLock::new(|| keccak256("Transfer(address,address,uint256)"));
@@ -16,7 +16,7 @@ static TRANSFER_SINGLE_TOPIC0: LazyLock<B256> =
     LazyLock::new(|| keccak256("TransferSingle(address,address,address,uint256,uint256)"));
 static TRANSFER_BATCH_TOPIC0: LazyLock<B256> =
     LazyLock::new(|| keccak256("TransferBatch(address,address,address,uint256[],uint256[])"));
-pub(super) fn decode_event(record: &Record) -> Result<Option<DecodedEvent>, EventCodecError> {
+pub(crate) fn decode_event(record: &Record) -> Result<Option<DecodedEvent>, EventCodecError> {
     let Record::Log {
         address,
         topics,
@@ -27,20 +27,28 @@ pub(super) fn decode_event(record: &Record) -> Result<Option<DecodedEvent>, Even
         return Ok(None);
     };
 
+    decode_log(*address, topics, data)
+}
+
+pub(crate) fn decode_log(
+    contract_address: Address,
+    topics: &[B256],
+    data: &[u8],
+) -> Result<Option<DecodedEvent>, EventCodecError> {
     let Some(topic0) = topics.first() else {
         return Ok(None);
     };
 
     let decoded = if *topic0 == *TRANSFER_TOPIC0 {
-        decode_transfer_event(*address, topics, data)?
+        decode_transfer_event(contract_address, topics, data)?
     } else if *topic0 == *APPROVAL_TOPIC0 {
-        decode_approval_event(*address, topics, data)?
+        decode_approval_event(contract_address, topics, data)?
     } else if *topic0 == *APPROVAL_FOR_ALL_TOPIC0 {
-        decode_approval_for_all_event(*address, topics, data)?
+        decode_approval_for_all_event(contract_address, topics, data)?
     } else if *topic0 == *TRANSFER_SINGLE_TOPIC0 {
-        decode_transfer_single_event(*address, topics, data)?
+        decode_transfer_single_event(contract_address, topics, data)?
     } else if *topic0 == *TRANSFER_BATCH_TOPIC0 {
-        decode_transfer_batch_event(*address, topics, data)?
+        decode_transfer_batch_event(contract_address, topics, data)?
     } else {
         return Ok(None);
     };
@@ -82,6 +90,7 @@ pub(crate) enum DecodedEvent {
     },
     Erc1155TransferSingle {
         collection: Address,
+        operator: Address,
         from: Address,
         to: Address,
         token_id: U256,
@@ -89,16 +98,11 @@ pub(crate) enum DecodedEvent {
     },
     Erc1155TransferBatch {
         collection: Address,
+        operator: Address,
         from: Address,
         to: Address,
         items: Vec<Erc1155TransferItem>,
     },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Erc1155TransferItem {
-    pub(crate) token_id: U256,
-    pub(crate) amount: U256,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,13 +248,14 @@ fn decode_transfer_single_event(
 ) -> Result<DecodedEvent, EventCodecError> {
     let event = SupportedEvent::TransferSingle;
 
-    if topics.len() != 4 {
-        return Err(EventCodecError::malformed(event, "expected 4 topics"));
+    if topics.len() != 4 || data.len() != 64 {
+        return Err(EventCodecError::malformed(
+            event,
+            "expected 4 topics and 64 data bytes",
+        ));
     }
 
-    // Operator is not needed by the movement candidate, but its encoding
-    // still belongs to the supported event shape and must be valid.
-    indexed_address(&topics[1], event)?;
+    let operator = indexed_address(&topics[1], event)?;
     let from = indexed_address(&topics[2], event)?;
     let to = indexed_address(&topics[3], event)?;
 
@@ -260,6 +265,7 @@ fn decode_transfer_single_event(
 
     Ok(DecodedEvent::Erc1155TransferSingle {
         collection: contract_address,
+        operator,
         from,
         to,
         token_id,
@@ -278,7 +284,7 @@ fn decode_transfer_batch_event(
         return Err(EventCodecError::malformed(event, "expected 4 topics"));
     }
 
-    indexed_address(&topics[1], event)?;
+    let operator = indexed_address(&topics[1], event)?;
     let from = indexed_address(&topics[2], event)?;
     let to = indexed_address(&topics[3], event)?;
 
@@ -286,6 +292,13 @@ fn decode_transfer_batch_event(
         .map_err(|_| {
             EventCodecError::malformed(event, "data is not a canonical (uint256[],uint256[]) tuple")
         })?;
+
+    if (token_ids.as_slice(), amounts.as_slice()).abi_encode_sequence() != data {
+        return Err(EventCodecError::malformed(
+            event,
+            "data is not a canonical (uint256[],uint256[]) tuple",
+        ));
+    }
 
     if token_ids.len() != amounts.len() {
         return Err(EventCodecError::malformed(
@@ -297,11 +310,15 @@ fn decode_transfer_batch_event(
     let items = token_ids
         .into_iter()
         .zip(amounts)
-        .map(|(token_id, amount)| Erc1155TransferItem { token_id, amount })
+        .map(|(token_id, raw_amount)| Erc1155TransferItem {
+            token_id,
+            raw_amount,
+        })
         .collect();
 
     Ok(DecodedEvent::Erc1155TransferBatch {
         collection: contract_address,
+        operator,
         from,
         to,
         items,

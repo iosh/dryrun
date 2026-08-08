@@ -1,6 +1,7 @@
 use cfx_executor::machine::Machine;
 use cfx_types::{AddressSpaceUtil, Space};
 use cfx_vm_types::{CallType, Spec};
+use contract_standards::legacy::Position;
 
 use super::{
     CommittedPoSCall, CommittedVoteLockCall,
@@ -102,7 +103,7 @@ pub(crate) fn collect_committed_staking_calls(
                 committed_staking_calls
                     .vote_lock_calls
                     .push(CommittedVoteLockCall {
-                        position: contract_standards::Position::new(*position, 0),
+                        position: Position::new(*position, 0),
                         account: address_from_cfx(*caller),
                         amount: vote_lock.amount,
                         unlock_block_number: vote_lock.unlock_block_number,
@@ -124,7 +125,7 @@ pub(crate) fn collect_committed_staking_calls(
             "PoS",
             uses_canonical_plain_call(pos_register_contract_address),
         )?;
-        let position = contract_standards::Position::new(*position, 0);
+        let position = Position::new(*position, 0);
         let account = address_from_cfx(*caller);
         let committed_call = match pos_call {
             PoSCall::Registration {

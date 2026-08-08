@@ -11,7 +11,7 @@ use std::{
 };
 
 use alloy_primitives::{Address, U256};
-use contract_standards::Position;
+use contract_standards::legacy::Position;
 use primitives::{Action, SignedTransaction};
 
 pub(crate) use analysis::CfxAnalysisInput;

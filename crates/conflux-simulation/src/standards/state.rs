@@ -2,7 +2,7 @@ use alloy_primitives::{Address, B256, FixedBytes};
 use alloy_sol_types::SolCall;
 use cfx_executor::{machine::Machine, state::State};
 use cfx_types::AddressSpaceUtil;
-use contract_standards::{
+use contract_standards::legacy::{
     CollectionStandards, ERC165_INTERFACE_ID, ERC721_INTERFACE_ID, ERC1155_INTERFACE_ID,
     Erc20AllowanceCall, Erc20BalanceCall, Erc20TotalSupplyCall, Erc721GetApprovedCall,
     Erc721OwnerCall, Erc721TokenKey, Erc721TokenState, Erc1155BalanceCall,

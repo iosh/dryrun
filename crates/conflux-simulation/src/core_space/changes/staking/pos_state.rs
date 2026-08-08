@@ -6,7 +6,7 @@ use cfx_executor::{
     state::State,
 };
 use cfx_types::{Address as CfxAddress, AddressSpaceUtil, BigEndianHash, H256};
-use contract_standards::StatePhase;
+use contract_standards::legacy::StatePhase;
 
 use super::CommittedPoSCall;
 use crate::{
