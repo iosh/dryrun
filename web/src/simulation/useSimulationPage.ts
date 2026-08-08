@@ -120,10 +120,9 @@ function toRequestErrorState(
   if (error instanceof RpcError) {
     return {
       context,
-      detail: error.payload.data?.details ?? error.payload.message,
+      detail: error.payload.message,
       kind: 'rpc',
       rawResponse: error.rawResponse,
-      subkind: formatRpcErrorKind(error),
       title: rpcErrorTitle(error.payload.code),
     };
   }
@@ -166,11 +165,4 @@ function rpcErrorTitle(code: number) {
     default:
       return 'RPC error';
   }
-}
-
-function formatRpcErrorKind(error: RpcError) {
-  const code = `RPC ${error.payload.code}`;
-  return error.payload.data?.subkind
-    ? `${code} / ${error.payload.data.subkind}`
-    : code;
 }

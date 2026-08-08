@@ -119,46 +119,11 @@ pub enum ConfluxServiceError {
     Simulation(#[from] conflux_simulation::ConfluxSimulationError),
 }
 
-impl ConfluxServiceError {
-    pub fn rpc_error_code(&self) -> &'static str {
-        match self {
-            Self::TaskSetClosed => "task_set_closed",
-            Self::AttemptTask { .. } => "attempt_task_error",
-            Self::ExecutionTask { .. } => "simulation_execution_error",
-            Self::Simulation(error) => simulation_error_code(error),
-        }
-    }
-
-    pub fn details(&self) -> String {
-        match self {
-            Self::TaskSetClosed => "simulation task set is closed".to_owned(),
-            Self::AttemptTask { .. } => "simulation attempt task failed".to_owned(),
-            _ => self.to_string(),
-        }
-    }
-}
-
 impl From<SimulationTaskError> for ConfluxServiceError {
     fn from(error: SimulationTaskError) -> Self {
         match error {
             SimulationTaskError::Closed => Self::TaskSetClosed,
             SimulationTaskError::TaskFailed { source } => Self::AttemptTask { source },
         }
-    }
-}
-
-fn simulation_error_code(error: &conflux_simulation::ConfluxSimulationError) -> &'static str {
-    use conflux_simulation::ConfluxSimulationError;
-
-    match error {
-        ConfluxSimulationError::BlockNotFound { .. } => "block_not_found",
-        ConfluxSimulationError::BlockContext(_)
-        | ConfluxSimulationError::InvalidBlockContext { .. }
-        | ConfluxSimulationError::StateAnchorInconsistent => "block_context_error",
-        ConfluxSimulationError::TransactionCompletion { .. } => "transaction_completion_error",
-        ConfluxSimulationError::Provider(_) => "rpc_error",
-        ConfluxSimulationError::StateAccess { .. } => "state_access_error",
-        ConfluxSimulationError::Analysis { .. } => "analysis_failed",
-        ConfluxSimulationError::ExecutionInternal { .. } => "simulation_execution_error",
     }
 }

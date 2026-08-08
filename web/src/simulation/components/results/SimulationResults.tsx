@@ -138,11 +138,6 @@ function RequestError({ error }: Readonly<{ error: RequestErrorState }>) {
               <p className="mt-2 text-sm leading-6 text-red-800">
                 {error.detail}
               </p>
-              {error.subkind ? (
-                <p className="mt-2 font-mono text-[11px] text-red-700">
-                  {error.subkind}
-                </p>
-              ) : null}
             </div>
           </div>
           <CopyButton
@@ -167,7 +162,6 @@ function formatErrorReport(error: RequestErrorState) {
     error: {
       detail: error.detail,
       kind: error.kind,
-      subkind: error.subkind,
       title: error.title,
     },
     formValues: error.context.formValues,

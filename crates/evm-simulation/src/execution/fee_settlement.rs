@@ -1,51 +1,51 @@
 use alloy::primitives::U256;
-use revm::context_interface::result::{ExecutionResult, HaltReason};
 
-use super::EvmExecutionError;
+use crate::{EvmExecutionGasFee, EvmGas, EvmResultIntegrationError};
 
+/// Internal balance-accounting facts for execution gas settlement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EvmFeeSettlement {
-    pub fee: U256,
-    pub burnt_fee: U256,
-    pub gas_precharge: U256,
-    pub caller_refund: U256,
-    pub beneficiary_reward: U256,
+    execution_gas_fee: EvmExecutionGasFee,
+    gas_precharge: U256,
+    caller_refund: U256,
 }
 
 impl EvmFeeSettlement {
     pub(super) fn new(
-        result: &ExecutionResult<HaltReason>,
+        gas: &EvmGas,
+        transaction_gas_limit: u64,
         effective_gas_price: u128,
         base_fee_per_gas: u64,
-    ) -> Result<Self, EvmExecutionError> {
-        let gas = result.gas();
-        let gas_limit = U256::from(gas.limit());
-        let gas_used = U256::from(gas.used());
-        let effective_gas_price = U256::from(effective_gas_price);
-        let base_fee_per_gas = U256::from(base_fee_per_gas);
-
-        let gas_precharge = gas_limit
-            .checked_mul(effective_gas_price)
-            .ok_or(EvmExecutionError::FeeSettlement)?;
-        let fee = gas_used
-            .checked_mul(effective_gas_price)
-            .ok_or(EvmExecutionError::FeeSettlement)?;
-        let burnt_fee = gas_used
-            .checked_mul(base_fee_per_gas)
-            .ok_or(EvmExecutionError::FeeSettlement)?;
-        let caller_refund = gas_precharge
-            .checked_sub(fee)
-            .ok_or(EvmExecutionError::FeeSettlement)?;
-        let beneficiary_reward = fee
-            .checked_sub(burnt_fee)
-            .ok_or(EvmExecutionError::FeeSettlement)?;
+    ) -> Result<Self, EvmResultIntegrationError> {
+        let effective_gas_price_u256 = U256::from(effective_gas_price);
+        let gas_used = U256::from(gas.gas_used());
+        let gas_precharge = U256::from(transaction_gas_limit) * effective_gas_price_u256;
+        let charged_amount = gas_used * effective_gas_price_u256;
+        let burnt_amount = gas_used * U256::from(base_fee_per_gas);
+        let caller_refund = gas_precharge - charged_amount;
+        let execution_gas_fee =
+            EvmExecutionGasFee::new(effective_gas_price, charged_amount, burnt_amount)?;
 
         Ok(Self {
-            fee,
-            burnt_fee,
+            execution_gas_fee,
             gas_precharge,
             caller_refund,
-            beneficiary_reward,
         })
+    }
+
+    pub(crate) fn into_execution_gas_fee(self) -> EvmExecutionGasFee {
+        self.execution_gas_fee
+    }
+
+    pub(crate) const fn gas_precharge(&self) -> U256 {
+        self.gas_precharge
+    }
+
+    pub(crate) const fn caller_refund(&self) -> U256 {
+        self.caller_refund
+    }
+
+    pub(crate) fn beneficiary_reward(&self) -> U256 {
+        self.execution_gas_fee.beneficiary_reward()
     }
 }

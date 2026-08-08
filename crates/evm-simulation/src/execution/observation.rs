@@ -144,12 +144,11 @@ impl EvmExecutionObserver {
         Self::default()
     }
 
-    pub(crate) fn observations(&self) -> Vec<EvmExecutionObservation> {
-        self.journal
-            .entries
-            .iter()
+    pub(crate) fn take_observations(&mut self) -> Vec<EvmExecutionObservation> {
+        std::mem::take(&mut self.journal.entries)
+            .into_iter()
             .filter_map(|entry| match entry {
-                ObservationJournalEntry::Committed(observation) => Some(observation.clone()),
+                ObservationJournalEntry::Committed(observation) => Some(observation),
                 ObservationJournalEntry::PendingCreateTransfer { .. } => None,
             })
             .collect()

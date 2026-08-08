@@ -330,10 +330,7 @@ export type RpcSimulationResponse =
 export interface RpcErrorPayload {
   code: number;
   message: string;
-  data?: {
-    subkind?: string;
-    details?: string;
-  };
+  data?: unknown;
 }
 
 export interface RpcResultEnvelope {

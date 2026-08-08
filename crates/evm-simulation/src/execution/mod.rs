@@ -1,8 +1,19 @@
 mod env;
 mod fee_settlement;
 mod observation;
+mod outcome_mapping;
+mod rejection_mapping;
 mod state;
 
+use self::{
+    env::{create_block_env, create_cfg_env, create_tx_env},
+    rejection_mapping::map_transaction_rejection,
+};
+use crate::{
+    CompleteTransaction, CompleteTransactionVariant, EthereumChainSpec, EvmBlockEnvironmentError,
+    EvmExecutionError, EvmExecutionResult, EvmGas, EvmNotReadyError, EvmSimulationError,
+    EvmStateAccessError, EvmTransactionRejection,
+};
 use alloy::{
     consensus::{BlockHeader, Header, Sealed},
     primitives::Address,
@@ -11,7 +22,7 @@ use revm::{
     Context, ExecuteCommitEvm, InspectEvm, MainBuilder, MainContext, MainnetEvm as RevmMainnetEvm,
     context::{BlockEnv, CfgEnv, TxEnv},
     context_interface::{
-        result::{EVMError, ExecutionResult, HaltReason, InvalidTransaction},
+        result::{EVMError, ExecutionResult, HaltReason, InvalidHeader},
         transaction::Transaction,
     },
     handler::EvmTr,
@@ -19,66 +30,46 @@ use revm::{
     primitives::hardfork::SpecId,
     state::EvmState,
 };
-use thiserror::Error;
-
-use self::env::{create_block_env, create_cfg_env, create_tx_env};
-use crate::{
-    CompleteTransaction, CompleteTransactionVariant, EthereumChainSpec,
-    chain_spec::EthereumChainSpecError,
-};
 
 pub(crate) type MainnetEvmDatabase = state::MainnetEvmDatabase;
-pub(crate) type MainnetEvm<INSP = ()> = MainnetEvmWithDatabase<MainnetEvmDatabase, INSP>;
+pub(crate) type MainnetEvm<INSP = ()> = MainnetEvmWithDb<MainnetEvmDatabase, INSP>;
 pub(crate) type MainnetEvmWithDb<DB, INSP = ()> =
     RevmMainnetEvm<Context<BlockEnv, TxEnv, CfgEnv, DB>, INSP>;
-type MainnetEvmWithDatabase<DB, INSP = ()> = MainnetEvmWithDb<DB, INSP>;
 
 pub(crate) use observation::{EvmExecutionObservation, EvmExecutionObserver};
+pub(crate) use outcome_mapping::map_executed_outcome;
 
-#[derive(Debug, Error)]
-pub(crate) enum EvmExecutionError {
-    #[error(transparent)]
-    UnsupportedHardfork(#[from] EthereumChainSpecError),
-
-    #[error("block context is invalid: {0}")]
-    BlockContext(String),
-
-    #[error("state access failed during execution: {0}")]
-    StateAccess(String),
-
-    #[error("EVM execution failed: {0}")]
-    Execution(String),
-
-    #[error("transaction was not executed: {0}")]
-    NotExecuted(InvalidTransaction),
-
-    #[error("EIP-4844 execution is not ready because blob fee settlement is not implemented")]
-    Eip4844SettlementNotReady,
-
-    #[error("EIP-7702 execution is not ready because authorization settlement is not implemented")]
-    Eip7702SettlementNotReady,
-
-    #[error("transaction fee settlement arithmetic was inconsistent")]
-    FeeSettlement,
-
-    #[error("transaction transition has already been applied")]
-    TransitionAlreadyApplied,
-
-    #[error("transaction transition is only applicable to a successful execution")]
-    TransitionNotApplicable,
+#[derive(Debug)]
+pub(crate) enum EvmTransactionExecution<INSP> {
+    Executed(Box<ExecutedTransaction<INSP>>),
+    NotExecuted(EvmTransactionRejection),
 }
 
 #[derive(Debug)]
-pub(crate) struct EvmExecutionOutput<INSP> {
+pub(crate) struct ExecutedTransaction<INSP> {
     result: ExecutionResult<HaltReason>,
+    gas: EvmGas,
     transition: Option<EvmState>,
     fee_settlement: EvmFeeSettlement,
     evm: MainnetEvm<INSP>,
 }
 
-impl<INSP> EvmExecutionOutput<INSP> {
-    pub(crate) fn result(&self) -> &ExecutionResult<HaltReason> {
-        &self.result
+impl<INSP> ExecutedTransaction<INSP> {
+    pub(crate) fn is_success(&self) -> bool {
+        self.result.is_success()
+    }
+
+    pub(crate) fn into_outcome_parts(self) -> (ExecutionResult<HaltReason>, EvmExecutionResult) {
+        let Self {
+            result,
+            gas,
+            fee_settlement,
+            ..
+        } = self;
+        let execution_result =
+            EvmExecutionResult::new(gas, fee_settlement.into_execution_gas_fee());
+
+        (result, execution_result)
     }
 
     pub(crate) fn transition(&self) -> Result<&EvmState, EvmExecutionError> {
@@ -87,7 +78,7 @@ impl<INSP> EvmExecutionOutput<INSP> {
             .ok_or(EvmExecutionError::TransitionAlreadyApplied)
     }
 
-    pub(crate) fn fee_settlement(&self) -> &EvmFeeSettlement {
+    pub(crate) const fn fee_settlement(&self) -> &EvmFeeSettlement {
         &self.fee_settlement
     }
 
@@ -99,15 +90,11 @@ impl<INSP> EvmExecutionOutput<INSP> {
         self.evm.ctx_ref().block.beneficiary
     }
 
-    pub(crate) fn evm_mut(&mut self) -> &mut MainnetEvm<INSP> {
+    pub(crate) const fn evm_mut(&mut self) -> &mut MainnetEvm<INSP> {
         &mut self.evm
     }
 
     pub(crate) fn apply_transition(&mut self) -> Result<(), EvmExecutionError> {
-        if !self.result.is_success() {
-            return Err(EvmExecutionError::TransitionNotApplicable);
-        }
-
         let transition = self
             .transition
             .take()
@@ -117,9 +104,9 @@ impl<INSP> EvmExecutionOutput<INSP> {
     }
 }
 
-impl EvmExecutionOutput<EvmExecutionObserver> {
-    pub(crate) fn observations(&self) -> Vec<EvmExecutionObservation> {
-        self.evm.inspector.observations()
+impl ExecutedTransaction<EvmExecutionObserver> {
+    pub(crate) fn take_observations(&mut self) -> Vec<EvmExecutionObservation> {
+        self.evm.inspector.take_observations()
     }
 }
 
@@ -127,6 +114,10 @@ impl EvmExecutionOutput<EvmExecutionObserver> {
 pub(crate) struct EvmTransactionExecutor<INSP> {
     evm: MainnetEvm<INSP>,
     spec_id: SpecId,
+    chain_id: u64,
+    block_number: u64,
+    block_gas_limit: u64,
+    base_fee_per_gas: u64,
 }
 
 impl<INSP> EvmTransactionExecutor<INSP> {
@@ -135,23 +126,37 @@ impl<INSP> EvmTransactionExecutor<INSP> {
         block: Sealed<Header>,
         chain_spec: EthereumChainSpec,
         inspector: INSP,
-    ) -> Result<Self, EvmExecutionError> {
-        let spec_id = chain_spec.execution_spec_id(block.number(), block.timestamp())?;
-        let cfg_env = create_cfg_env(chain_spec.chain_id(), spec_id);
-        let block_env = create_block_env(block.inner(), spec_id)?;
+    ) -> Result<Self, EvmSimulationError> {
+        let block_number = block.number();
+        let spec_id = chain_spec
+            .execution_spec_id(block_number, block.timestamp())
+            .map_err(EvmNotReadyError::from)?;
+        let chain_id = chain_spec.chain_id();
+        let cfg_env = create_cfg_env(chain_id, spec_id);
+        let block_env =
+            create_block_env(block.inner(), spec_id).map_err(EvmExecutionError::from)?;
+        let block_gas_limit = block_env.gas_limit;
+        let base_fee_per_gas = block_env.basefee;
         let evm = Context::mainnet()
             .with_db(database)
             .modify_cfg_chained(|cfg| *cfg = cfg_env)
             .modify_block_chained(|current_block| *current_block = block_env)
             .build_mainnet_with_inspector(inspector);
 
-        Ok(Self { evm, spec_id })
+        Ok(Self {
+            evm,
+            spec_id,
+            chain_id,
+            block_number,
+            block_gas_limit,
+            base_fee_per_gas,
+        })
     }
 
     pub(crate) fn execute(
         mut self,
         transaction: &CompleteTransaction,
-    ) -> Result<EvmExecutionOutput<INSP>, EvmExecutionError>
+    ) -> Result<EvmTransactionExecution<INSP>, EvmSimulationError>
     where
         INSP: revm::Inspector<Context<BlockEnv, TxEnv, CfgEnv, MainnetEvmDatabase>, EthInterpreter>,
     {
@@ -159,51 +164,81 @@ impl<INSP> EvmTransactionExecutor<INSP> {
             CompleteTransactionVariant::Eip4844 { .. }
                 if self.spec_id.is_enabled_in(SpecId::CANCUN) =>
             {
-                return Err(EvmExecutionError::Eip4844SettlementNotReady);
+                return Err(EvmNotReadyError::Eip4844.into());
             }
             CompleteTransactionVariant::Eip7702 { .. }
                 if self.spec_id.is_enabled_in(SpecId::PRAGUE) =>
             {
-                return Err(EvmExecutionError::Eip7702SettlementNotReady);
+                return Err(EvmNotReadyError::Eip7702.into());
             }
             _ => {}
         }
 
         let tx_env = create_tx_env(transaction);
-        let effective_gas_price = tx_env.effective_gas_price(self.evm.ctx().block.basefee as u128);
-        let base_fee_per_gas = self.evm.ctx().block.basefee;
+        let effective_gas_price = tx_env.effective_gas_price(self.base_fee_per_gas as u128);
         let result_and_state = match self.evm.inspect_tx(tx_env) {
             Ok(result_and_state) => result_and_state,
             Err(EVMError::Transaction(error)) => {
-                return Err(EvmExecutionError::NotExecuted(error));
+                let rejection = map_transaction_rejection(
+                    error,
+                    transaction,
+                    self.chain_id,
+                    self.block_gas_limit,
+                    self.base_fee_per_gas,
+                )?;
+                return Ok(EvmTransactionExecution::NotExecuted(rejection));
             }
             Err(EVMError::Header(error)) => {
-                return Err(EvmExecutionError::BlockContext(format!(
-                    "EVM header validation failed: {error}"
-                )));
+                return Err(
+                    EvmExecutionError::from(map_header_error(error, self.block_number)).into(),
+                );
             }
             Err(EVMError::Database(error)) => {
-                return Err(EvmExecutionError::StateAccess(error.to_string()));
+                return Err(EvmExecutionError::from(EvmStateAccessError::from(error)).into());
             }
-            Err(EVMError::Custom(error)) => {
-                return Err(EvmExecutionError::Execution(format!(
-                    "EVM execution failed: {error}"
-                )));
+            Err(EVMError::Custom(details)) => {
+                return Err(EvmExecutionError::engine_failure(details).into());
             }
         };
 
+        let result_gas = result_and_state.result.gas();
+        let gas = EvmGas::new(
+            transaction.gas_limit,
+            result_gas.limit(),
+            result_gas.intrinsic_gas(),
+            result_gas.spent(),
+            result_gas.inner_refunded(),
+            result_gas.floor_gas(),
+        )
+        .map_err(EvmExecutionError::from)?;
         let fee_settlement = EvmFeeSettlement::new(
-            &result_and_state.result,
+            &gas,
+            transaction.gas_limit,
             effective_gas_price,
-            base_fee_per_gas,
-        )?;
+            self.base_fee_per_gas,
+        )
+        .map_err(EvmExecutionError::from)?;
 
-        Ok(EvmExecutionOutput {
-            result: result_and_state.result,
-            transition: Some(result_and_state.state),
-            fee_settlement,
-            evm: self.evm,
-        })
+        Ok(EvmTransactionExecution::Executed(Box::new(
+            ExecutedTransaction {
+                result: result_and_state.result,
+                gas,
+                transition: Some(result_and_state.state),
+                fee_settlement,
+                evm: self.evm,
+            },
+        )))
+    }
+}
+
+const fn map_header_error(error: InvalidHeader, block_number: u64) -> EvmBlockEnvironmentError {
+    match error {
+        InvalidHeader::PrevrandaoNotSet => {
+            EvmBlockEnvironmentError::MissingPrevRandao { block_number }
+        }
+        InvalidHeader::ExcessBlobGasNotSet => {
+            EvmBlockEnvironmentError::MissingExcessBlobGas { block_number }
+        }
     }
 }
 

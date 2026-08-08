@@ -1,230 +1,152 @@
-use alloy::{
-    consensus::{BlockHeader, Header, Sealed},
-    sol_types::{Panic, Revert, SolError},
-};
-use alloy_primitives::Bytes;
-use revm::context_interface::result::{ExecutionResult, HaltReason, InvalidTransaction};
+use std::fmt;
 
-use crate::{
-    CompleteTransaction, EvmBlockContext, EvmExecution, EvmExecutionDetails, EvmExecutionFailure,
-    EvmExecutionFailureCode, EvmFeeSettlement, EvmOutcome,
-};
+use alloy::sol_types::Panic;
+use alloy_primitives::{Address, Bytes, Log, U256};
 
-pub(crate) fn build_execution(
-    result: ExecutionResult<HaltReason>,
-    chain_id: u64,
-    block: &Sealed<Header>,
-    fee_settlement: &EvmFeeSettlement,
-) -> EvmExecution {
-    match result {
-        ExecutionResult::Success { gas, output, .. } => EvmExecution {
-            chain_id,
-            context: simulated_block(block),
-            gas_limit: gas.limit(),
-            outcome: EvmOutcome::Success(EvmExecutionDetails {
-                gas_used: gas.used(),
-                gas_charged: gas.used(),
-                fee: fee_settlement.fee,
-                burnt_fee: fee_settlement.burnt_fee,
-                output: output.into_data(),
-            }),
-        },
-        ExecutionResult::Revert { gas, output, .. } => build_revert_execution(
-            chain_id,
-            block,
-            gas.used(),
-            gas.limit(),
-            output,
-            fee_settlement,
-        ),
-        ExecutionResult::Halt { reason, gas, .. } => build_halt_execution(
-            chain_id,
-            block,
-            gas.used(),
-            gas.limit(),
-            reason,
-            fee_settlement,
-        ),
+use crate::{EvmExecutionResult, EvmTransactionRejection};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvmSuccessReason {
+    Stop,
+    Return,
+    SelfDestruct,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EvmSuccessOutput {
+    Call {
+        return_data: Bytes,
+    },
+    Create {
+        address: Address,
+        runtime_code: Bytes,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EvmRevertReason {
+    SolidityError { message: String },
+    SolidityPanic { code: U256 },
+}
+
+impl fmt::Display for EvmRevertReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SolidityError { message } if message.is_empty() => formatter.write_str("<empty>"),
+            Self::SolidityError { message } => formatter.write_str(message),
+            Self::SolidityPanic { code } => {
+                formatter.write_str(Panic { code: *code }.as_geth_str().as_ref())
+            }
+        }
     }
 }
 
-pub(crate) fn build_not_executed(
-    chain_id: u64,
-    block: &Sealed<Header>,
-    transaction: &CompleteTransaction,
-    error: InvalidTransaction,
-) -> EvmExecution {
-    EvmExecution {
-        chain_id,
-        context: simulated_block(block),
-        gas_limit: transaction.gas_limit,
-        outcome: EvmOutcome::NotExecuted(build_invalid_transaction_failure(error)),
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EvmOutOfGasReason {
+    Basic,
+    MemoryLimit,
+    MemoryExpansion,
+    Precompile,
+    InvalidOperand,
+    ReentrancySentry,
 }
 
-fn build_revert_execution(
-    chain_id: u64,
-    block: &Sealed<Header>,
-    gas_used: u64,
-    gas_limit: u64,
-    output: Bytes,
-    fee_settlement: &EvmFeeSettlement,
-) -> EvmExecution {
-    let failure = build_revert_failure(&output);
-
-    build_failed_execution(
-        chain_id,
-        block,
-        gas_used,
-        gas_limit,
-        output,
-        failure,
-        fee_settlement,
-    )
-}
-
-fn build_halt_execution(
-    chain_id: u64,
-    block: &Sealed<Header>,
-    gas_used: u64,
-    gas_limit: u64,
-    reason: HaltReason,
-    fee_settlement: &EvmFeeSettlement,
-) -> EvmExecution {
-    build_failed_execution(
-        chain_id,
-        block,
-        gas_used,
-        gas_limit,
-        Bytes::new(),
-        build_halt_failure(reason),
-        fee_settlement,
-    )
-}
-
-fn build_failed_execution(
-    chain_id: u64,
-    block: &Sealed<Header>,
-    gas_used: u64,
-    gas_limit: u64,
-    output: Bytes,
-    failure: EvmExecutionFailure,
-    fee_settlement: &EvmFeeSettlement,
-) -> EvmExecution {
-    EvmExecution {
-        chain_id,
-        context: simulated_block(block),
-        gas_limit,
-        outcome: EvmOutcome::Failed {
-            details: EvmExecutionDetails {
-                gas_used,
-                gas_charged: gas_used,
-                fee: fee_settlement.fee,
-                burnt_fee: fee_settlement.burnt_fee,
-                output,
-            },
-            failure,
-        },
-    }
-}
-
-fn simulated_block(block: &Sealed<Header>) -> EvmBlockContext {
-    EvmBlockContext {
-        number: block.number(),
-        hash: block.hash(),
-    }
-}
-
-fn build_invalid_transaction_failure(error: InvalidTransaction) -> EvmExecutionFailure {
-    let code = match error {
-        InvalidTransaction::NonceTooLow { .. } => EvmExecutionFailureCode::NonceTooLow,
-        InvalidTransaction::NonceTooHigh { .. } => EvmExecutionFailureCode::NonceTooHigh,
-        InvalidTransaction::NonceOverflowInTransaction => EvmExecutionFailureCode::NonceOverflow,
-        InvalidTransaction::LackOfFundForMaxFee { .. } => {
-            EvmExecutionFailureCode::InsufficientFunds
-        }
-        InvalidTransaction::PriorityFeeGreaterThanMaxFee => {
-            EvmExecutionFailureCode::PriorityFeeGreaterThanMaxFee
-        }
-        InvalidTransaction::GasPriceLessThanBasefee => {
-            EvmExecutionFailureCode::GasPriceLessThanBaseFee
-        }
-        InvalidTransaction::CallerGasLimitMoreThanBlock
-        | InvalidTransaction::TxGasLimitGreaterThanCap { .. } => {
-            EvmExecutionFailureCode::GasLimitExceedsBlockGasLimit
-        }
-        InvalidTransaction::CallGasCostMoreThanGasLimit { .. }
-        | InvalidTransaction::GasFloorMoreThanGasLimit { .. } => {
-            EvmExecutionFailureCode::IntrinsicGasTooLow
-        }
-        InvalidTransaction::RejectCallerWithCode => EvmExecutionFailureCode::SenderHasCode,
-        InvalidTransaction::InvalidChainId | InvalidTransaction::MissingChainId => {
-            EvmExecutionFailureCode::InvalidChainId
-        }
-        InvalidTransaction::AccessListNotSupported
-        | InvalidTransaction::Eip2930NotSupported
-        | InvalidTransaction::Eip1559NotSupported
-        | InvalidTransaction::Eip4844NotSupported
-        | InvalidTransaction::Eip7702NotSupported
-        | InvalidTransaction::Eip7873NotSupported => {
-            EvmExecutionFailureCode::TransactionTypeNotSupported
-        }
-        InvalidTransaction::OverflowPaymentInTransaction
-        | InvalidTransaction::CreateInitCodeSizeLimit
-        | InvalidTransaction::MaxFeePerBlobGasNotSupported
-        | InvalidTransaction::BlobVersionedHashesNotSupported
-        | InvalidTransaction::BlobGasPriceGreaterThanMax { .. }
-        | InvalidTransaction::EmptyBlobs
-        | InvalidTransaction::BlobCreateTransaction
-        | InvalidTransaction::TooManyBlobs { .. }
-        | InvalidTransaction::BlobVersionNotSupported
-        | InvalidTransaction::AuthorizationListNotSupported
-        | InvalidTransaction::AuthorizationListInvalidFields
-        | InvalidTransaction::EmptyAuthorizationList
-        | InvalidTransaction::Eip7873MissingTarget
-        | InvalidTransaction::Str(_) => EvmExecutionFailureCode::InvalidTransaction,
-    };
-
-    EvmExecutionFailure {
-        code,
-        message: error.to_string(),
-        reason: None,
-    }
-}
-
-fn build_revert_failure(output: &Bytes) -> EvmExecutionFailure {
-    EvmExecutionFailure {
-        code: EvmExecutionFailureCode::Revert,
-        message: "execution reverted".to_string(),
-        reason: decode_revert_reason(output),
-    }
-}
-
-fn decode_revert_reason(output: &Bytes) -> Option<String> {
-    Revert::abi_decode(output.as_ref())
-        .map(|revert| revert.reason().to_string())
-        .or_else(|_| {
-            Panic::abi_decode(output.as_ref()).map(|panic| panic.as_geth_str().into_owned())
+impl fmt::Display for EvmOutOfGasReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Basic => "out of gas",
+            Self::MemoryLimit => "out of gas: memory limit exceeded",
+            Self::MemoryExpansion => "out of gas: memory expansion",
+            Self::Precompile => "out of gas: precompile",
+            Self::InvalidOperand => "out of gas: invalid operand",
+            Self::ReentrancySentry => "out of gas: reentrancy sentry",
         })
-        .ok()
+    }
 }
 
-fn build_halt_failure(reason: HaltReason) -> EvmExecutionFailure {
-    let code = match reason {
-        HaltReason::OutOfGas(_) => EvmExecutionFailureCode::OutOfGas,
-        HaltReason::OpcodeNotFound | HaltReason::InvalidFEOpcode => {
-            EvmExecutionFailureCode::InvalidOpcode
-        }
-        HaltReason::InvalidJump => EvmExecutionFailureCode::InvalidJump,
-        HaltReason::StackUnderflow => EvmExecutionFailureCode::StackUnderflow,
-        HaltReason::StackOverflow => EvmExecutionFailureCode::StackOverflow,
-        HaltReason::NonceOverflow => EvmExecutionFailureCode::NonceOverflow,
-        _ => EvmExecutionFailureCode::ExecutionFailed,
-    };
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EvmHaltReason {
+    OutOfGas(EvmOutOfGasReason),
+    OpcodeNotFound,
+    InvalidFeOpcode,
+    InvalidJump,
+    NotActivated,
+    StackUnderflow,
+    StackOverflow,
+    OutOfOffset,
+    CreateCollision,
+    PrecompileError,
+    PrecompileErrorWithContext { message: String },
+    NonceOverflow,
+    CreateContractSizeLimit,
+    CreateContractStartingWithEf,
+    CreateInitCodeSizeLimit,
+    PaymentOverflow,
+    StateChangeDuringStaticCall,
+    CallNotAllowedInsideStatic,
+    OutOfFunds,
+    CallTooDeep,
+}
 
-    EvmExecutionFailure {
-        code,
-        message: reason.to_string(),
-        reason: None,
+impl fmt::Display for EvmHaltReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OutOfGas(reason) => reason.fmt(formatter),
+            Self::OpcodeNotFound => formatter.write_str("opcode not found"),
+            Self::InvalidFeOpcode => formatter.write_str("invalid 0xFE opcode"),
+            Self::InvalidJump => formatter.write_str("invalid jump destination"),
+            Self::NotActivated => formatter.write_str("opcode is not active at the selected block"),
+            Self::StackUnderflow => formatter.write_str("stack underflow"),
+            Self::StackOverflow => formatter.write_str("stack overflow"),
+            Self::OutOfOffset => formatter.write_str("out of offset"),
+            Self::CreateCollision => formatter.write_str("create collision"),
+            Self::PrecompileError => formatter.write_str("precompile error"),
+            Self::PrecompileErrorWithContext { message } => {
+                write!(formatter, "precompile error: {message}")
+            }
+            Self::NonceOverflow => formatter.write_str("nonce overflow"),
+            Self::CreateContractSizeLimit => {
+                formatter.write_str("contract runtime code exceeds the protocol size limit")
+            }
+            Self::CreateContractStartingWithEf => {
+                formatter.write_str("contract runtime code starts with the forbidden 0xEF byte")
+            }
+            Self::CreateInitCodeSizeLimit => {
+                formatter.write_str("contract initcode exceeds the protocol size limit")
+            }
+            Self::PaymentOverflow => formatter.write_str("payment calculation overflowed"),
+            Self::StateChangeDuringStaticCall => {
+                formatter.write_str("state change during static call")
+            }
+            Self::CallNotAllowedInsideStatic => {
+                formatter.write_str("call not allowed inside static call")
+            }
+            Self::OutOfFunds => formatter.write_str("insufficient funds"),
+            Self::CallTooDeep => formatter.write_str("call depth limit exceeded"),
+        }
     }
+}
+
+/// Outcome of attempting to execute a complete transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EvmExecutionOutcome {
+    Success {
+        result: EvmExecutionResult,
+        reason: EvmSuccessReason,
+        output: EvmSuccessOutput,
+        logs: Vec<Log>,
+    },
+    Reverted {
+        result: EvmExecutionResult,
+        revert_data: Bytes,
+        reason: Option<EvmRevertReason>,
+    },
+    Halted {
+        result: EvmExecutionResult,
+        reason: EvmHaltReason,
+    },
+    NotExecuted(EvmTransactionRejection),
 }

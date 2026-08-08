@@ -1,63 +1,65 @@
 use alloy_primitives::{Bytes, U256};
 use evm_simulation::{
-    Change, Erc20Metadata, Erc721CollectionMetadata, EvmBlockContext, EvmExecution,
-    EvmExecutionDetails, EvmExecutionFailure, EvmOutcome, EvmSimulation, NativeMetadata,
+    Change, Erc20Metadata, Erc721CollectionMetadata, EvmBlockContext, EvmExecutionOutcome,
+    EvmHaltReason, EvmSimulation, EvmSuccessOutput, EvmTransactionRejection, NativeMetadata,
 };
 
 use crate::interface as rpc;
 
 impl From<EvmSimulation> for rpc::EvmSimulateTransactionResponse {
     fn from(output: EvmSimulation) -> Self {
-        let (_, execution, changes) = output.into_parts();
-        let EvmExecution {
-            chain_id,
+        let EvmSimulation {
             context: block,
-            gas_limit,
-            outcome,
-        } = execution;
+            transaction,
+            execution,
+            changes,
+        } = output;
+        let chain_id = transaction.chain_id;
+        let gas_limit = transaction.gas_limit;
 
-        let (status, gas_used, fee, burnt_fee, output, failure) = match outcome {
-            EvmOutcome::Success(EvmExecutionDetails {
-                gas_used,
-                gas_charged: _,
-                fee,
-                burnt_fee,
-                output,
-            }) => (
-                rpc::ExecutionStatus::Success,
-                gas_used,
-                fee,
-                burnt_fee,
-                output,
-                None,
-            ),
-            EvmOutcome::Failed {
-                details:
-                    EvmExecutionDetails {
-                        gas_used,
-                        gas_charged: _,
-                        fee,
-                        burnt_fee,
-                        output,
-                    },
-                failure,
+        let (status, result, output, failure) = match execution {
+            EvmExecutionOutcome::Success { result, output, .. } => {
+                let output = match output {
+                    EvmSuccessOutput::Call { return_data } => return_data,
+                    EvmSuccessOutput::Create { runtime_code, .. } => runtime_code,
+                };
+                (rpc::ExecutionStatus::Success, Some(result), output, None)
+            }
+            EvmExecutionOutcome::Reverted {
+                result,
+                revert_data,
+                reason,
             } => (
                 rpc::ExecutionStatus::Failed,
-                gas_used,
-                fee,
-                burnt_fee,
-                output,
-                Some(failure.into()),
+                Some(result),
+                revert_data,
+                Some(rpc::ExecutionFailure {
+                    code: "REVERT".to_string(),
+                    message: "execution reverted".to_string(),
+                    reason: reason.map(|reason| reason.to_string()),
+                }),
             ),
-            EvmOutcome::NotExecuted(failure) => (
-                rpc::ExecutionStatus::NotExecuted,
-                0,
-                U256::ZERO,
-                U256::ZERO,
+            EvmExecutionOutcome::Halted { result, reason } => (
+                rpc::ExecutionStatus::Failed,
+                Some(result),
                 Bytes::new(),
-                Some(failure.into()),
+                Some(reason.into()),
+            ),
+            EvmExecutionOutcome::NotExecuted(rejection) => (
+                rpc::ExecutionStatus::NotExecuted,
+                None,
+                Bytes::new(),
+                Some(rejection.into()),
             ),
         };
+        let (gas_used, fee, burnt_fee) = result.map_or((0, U256::ZERO, U256::ZERO), |result| {
+            let execution_gas_fee = result.execution_gas_fee();
+            (
+                result.gas().gas_used(),
+                execution_gas_fee.charged_amount(),
+                execution_gas_fee.burnt_amount(),
+            )
+        });
 
         Self {
             execution: rpc::Execution {
@@ -85,13 +87,59 @@ impl From<EvmBlockContext> for rpc::EvmBlockContext {
     }
 }
 
-impl From<EvmExecutionFailure> for rpc::ExecutionFailure {
-    fn from(failure: EvmExecutionFailure) -> Self {
+impl From<EvmHaltReason> for rpc::ExecutionFailure {
+    fn from(reason: EvmHaltReason) -> Self {
         Self {
-            code: failure.code.as_str().to_string(),
-            message: failure.message,
-            reason: failure.reason,
+            code: halt_failure_code(&reason).to_string(),
+            message: reason.to_string(),
+            reason: None,
         }
+    }
+}
+
+impl From<EvmTransactionRejection> for rpc::ExecutionFailure {
+    fn from(rejection: EvmTransactionRejection) -> Self {
+        Self {
+            code: rejection_failure_code(&rejection).to_string(),
+            message: rejection.to_string(),
+            reason: None,
+        }
+    }
+}
+
+fn halt_failure_code(reason: &EvmHaltReason) -> &'static str {
+    match reason {
+        EvmHaltReason::OutOfGas(_) => "OUT_OF_GAS",
+        EvmHaltReason::OpcodeNotFound | EvmHaltReason::InvalidFeOpcode => "INVALID_OPCODE",
+        EvmHaltReason::InvalidJump => "INVALID_JUMP",
+        EvmHaltReason::StackUnderflow => "STACK_UNDERFLOW",
+        EvmHaltReason::StackOverflow => "STACK_OVERFLOW",
+        EvmHaltReason::NonceOverflow => "NONCE_OVERFLOW",
+        _ => "EXECUTION_FAILED",
+    }
+}
+
+fn rejection_failure_code(rejection: &EvmTransactionRejection) -> &'static str {
+    match rejection {
+        EvmTransactionRejection::PriorityFeeGreaterThanMaxFee { .. } => {
+            "PRIORITY_FEE_GREATER_THAN_MAX_FEE"
+        }
+        EvmTransactionRejection::GasPriceBelowBaseFee { .. } => "GAS_PRICE_LESS_THAN_BASE_FEE",
+        EvmTransactionRejection::GasLimitExceedsBlockGasLimit { .. }
+        | EvmTransactionRejection::GasLimitExceedsCap { .. } => "GAS_LIMIT_EXCEEDS_BLOCK_GAS_LIMIT",
+        EvmTransactionRejection::IntrinsicGasExceedsGasLimit { .. }
+        | EvmTransactionRejection::FloorGasExceedsGasLimit { .. } => "INTRINSIC_GAS_TOO_LOW",
+        EvmTransactionRejection::SenderHasCode { .. } => "SENDER_HAS_CODE",
+        EvmTransactionRejection::InsufficientFunds { .. } => "INSUFFICIENT_FUNDS",
+        EvmTransactionRejection::NonceOverflow => "NONCE_OVERFLOW",
+        EvmTransactionRejection::NonceTooHigh { .. } => "NONCE_TOO_HIGH",
+        EvmTransactionRejection::NonceTooLow { .. } => "NONCE_TOO_LOW",
+        EvmTransactionRejection::InvalidChainId { .. } => "INVALID_CHAIN_ID",
+        EvmTransactionRejection::Eip2930NotActivated
+        | EvmTransactionRejection::Eip1559NotActivated
+        | EvmTransactionRejection::Eip4844NotActivated
+        | EvmTransactionRejection::Eip7702NotActivated => "TRANSACTION_TYPE_NOT_SUPPORTED",
+        _ => "INVALID_TRANSACTION",
     }
 }
 

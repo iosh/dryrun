@@ -12,31 +12,25 @@ use revm::{Database, context_interface::result::EVMError, handler::EvmTr};
 use crate::{CompleteTransaction, EvmSimulationError};
 
 use super::read_call::{ReadCallOutcome, execute_read_call, with_read_call_context};
-use crate::execution::MainnetEvmWithDb;
+use crate::execution::MainnetEvm;
 
-pub(crate) fn read_token_state_values<DB, INSP>(
-    evm: &mut MainnetEvmWithDb<DB, INSP>,
+pub(crate) fn read_token_state_values<INSP>(
+    evm: &mut MainnetEvm<INSP>,
     transaction: &CompleteTransaction,
     chain_id: u64,
     requirements: &StateRequirements,
-) -> Result<StandardStateValues, EvmSimulationError>
-where
-    DB: Database,
-{
+) -> Result<StandardStateValues, EvmSimulationError> {
     with_read_call_context(evm, |evm| {
         read_values(evm, transaction, chain_id, requirements)
     })
 }
 
-fn read_values<DB, INSP>(
-    evm: &mut MainnetEvmWithDb<DB, INSP>,
+fn read_values<INSP>(
+    evm: &mut MainnetEvm<INSP>,
     transaction: &CompleteTransaction,
     chain_id: u64,
     requirements: &StateRequirements,
-) -> Result<StandardStateValues, EvmSimulationError>
-where
-    DB: Database,
-{
+) -> Result<StandardStateValues, EvmSimulationError> {
     let mut values = StandardStateValues::default();
 
     for &contract in &requirements.token_contracts {
@@ -123,24 +117,23 @@ where
     Ok(values)
 }
 
-fn execute_token_state_call<DB, INSP, C>(
-    evm: &mut MainnetEvmWithDb<DB, INSP>,
+fn execute_token_state_call<INSP, C>(
+    evm: &mut MainnetEvm<INSP>,
     transaction: &CompleteTransaction,
     chain_id: u64,
     target: Address,
     call: C,
 ) -> Result<ReadCallOutcome, EvmSimulationError>
 where
-    DB: Database,
     C: SolCall,
 {
     let signature = C::SIGNATURE;
     match execute_read_call(evm, transaction, chain_id, target, call.abi_encode().into()) {
         Ok(outcome) => Ok(outcome),
-        Err(EVMError::Database(error)) => Err(EvmSimulationError::state_access(format!(
-            "state access failed while reading {} from {target}: {error}",
-            signature,
-        ))),
+        Err(EVMError::Database(error)) => Err(EvmSimulationError::changes_state_access(
+            format!("reading {signature} from {target}"),
+            error,
+        )),
         Err(error) => Err(EvmSimulationError::changes(format!(
             "token state read {} from {target} failed: {error}",
             signature,
@@ -148,15 +141,14 @@ where
     }
 }
 
-fn read_required_value<DB, INSP, C>(
-    evm: &mut MainnetEvmWithDb<DB, INSP>,
+fn read_required_value<INSP, C>(
+    evm: &mut MainnetEvm<INSP>,
     transaction: &CompleteTransaction,
     chain_id: u64,
     target: Address,
     call: C,
 ) -> Result<C::Return, EvmSimulationError>
 where
-    DB: Database,
     C: SolCall,
 {
     let signature = C::SIGNATURE;
@@ -183,16 +175,13 @@ where
     })
 }
 
-fn read_interface_support<DB, INSP>(
-    evm: &mut MainnetEvmWithDb<DB, INSP>,
+fn read_interface_support<INSP>(
+    evm: &mut MainnetEvm<INSP>,
     transaction: &CompleteTransaction,
     chain_id: u64,
     collection: Address,
     interface_id: [u8; 4],
-) -> Result<bool, EvmSimulationError>
-where
-    DB: Database,
-{
+) -> Result<bool, EvmSimulationError> {
     read_required_value(
         evm,
         transaction,
@@ -204,15 +193,12 @@ where
     )
 }
 
-fn read_collection_standards<DB, INSP>(
-    evm: &mut MainnetEvmWithDb<DB, INSP>,
+fn read_collection_standards<INSP>(
+    evm: &mut MainnetEvm<INSP>,
     transaction: &CompleteTransaction,
     chain_id: u64,
     collection: Address,
-) -> Result<CollectionStandards, EvmSimulationError>
-where
-    DB: Database,
-{
+) -> Result<CollectionStandards, EvmSimulationError> {
     let supports_erc165 =
         read_interface_support(evm, transaction, chain_id, collection, ERC165_INTERFACE_ID)?;
 
@@ -248,21 +234,19 @@ where
     })
 }
 
-fn read_contract_code_hash<DB, INSP>(
-    evm: &mut MainnetEvmWithDb<DB, INSP>,
+fn read_contract_code_hash<INSP>(
+    evm: &mut MainnetEvm<INSP>,
     contract: Address,
-) -> Result<B256, EvmSimulationError>
-where
-    DB: Database,
-{
+) -> Result<B256, EvmSimulationError> {
     let database = &mut evm.ctx_mut().journaled_state.database;
 
     let account = database
         .basic(contract)
         .map_err(|error| {
-            EvmSimulationError::state_access(format!(
-                "failed to read token contract {contract}: {error}",
-            ))
+            EvmSimulationError::changes_state_access(
+                format!("reading token contract {contract}"),
+                error,
+            )
         })?
         .ok_or_else(|| {
             EvmSimulationError::changes(format!("token contract {contract} does not exist",))
@@ -279,9 +263,10 @@ where
     let code = match account.code {
         Some(code) => code,
         None => database.code_by_hash(code_hash).map_err(|error| {
-            EvmSimulationError::state_access(format!(
-                "failed to read runtime code for token contract {contract}: {error}",
-            ))
+            EvmSimulationError::changes_state_access(
+                format!("reading runtime code for token contract {contract}"),
+                error,
+            )
         })?,
     };
 
@@ -294,15 +279,12 @@ where
     Ok(code_hash)
 }
 
-fn read_erc721_token_state<DB, INSP>(
-    evm: &mut MainnetEvmWithDb<DB, INSP>,
+fn read_erc721_token_state<INSP>(
+    evm: &mut MainnetEvm<INSP>,
     transaction: &CompleteTransaction,
     chain_id: u64,
     key: Erc721TokenKey,
-) -> Result<Erc721TokenState, EvmSimulationError>
-where
-    DB: Database,
-{
+) -> Result<Erc721TokenState, EvmSimulationError> {
     let owner_call = Erc721OwnerCall {
         tokenId: key.token_id,
     };

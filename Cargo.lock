@@ -3059,7 +3059,6 @@ dependencies = [
  "contract-standards",
  "revm",
  "simulation-changes",
- "simulation-execution",
  "thiserror 2.0.18",
  "tokio",
 ]

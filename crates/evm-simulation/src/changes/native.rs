@@ -5,9 +5,7 @@ use contract_standards::legacy::Position;
 use revm::state::EvmState;
 use simulation_changes::{Change, NativeMetadata, PositionedChange};
 
-use crate::{
-    EvmExecutionObservation, EvmExecutionObserver, EvmExecutionOutput, EvmNativeChangeError,
-};
+use crate::{EvmExecutionObservation, EvmNativeChangeError, execution::EvmFeeSettlement};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NativeCandidate {
@@ -17,23 +15,23 @@ struct NativeCandidate {
     amount: U256,
 }
 
-pub fn analyze_native_changes(
-    output: &EvmExecutionOutput<EvmExecutionObserver>,
+pub(crate) fn analyze_native_changes(
+    state: &EvmState,
+    observations: &[EvmExecutionObservation],
+    caller: Address,
+    beneficiary: Address,
+    fee_settlement: &EvmFeeSettlement,
 ) -> Result<Vec<PositionedChange>, EvmNativeChangeError> {
-    let observations = output.observations();
-    let candidates = collect_native_candidates(&observations)?;
-    let fee_settlement = output.fee_settlement();
+    let candidates = collect_native_candidates(observations)?;
 
     check_native_balances(
-        output
-            .transition()
-            .map_err(|_| EvmNativeChangeError::TransitionUnavailable)?,
+        state,
         &candidates,
-        output.caller(),
-        output.beneficiary(),
-        fee_settlement.gas_precharge,
-        fee_settlement.caller_refund,
-        fee_settlement.beneficiary_reward,
+        caller,
+        beneficiary,
+        fee_settlement.gas_precharge(),
+        fee_settlement.caller_refund(),
+        fee_settlement.beneficiary_reward(),
     )
 }
 

@@ -1,5 +1,6 @@
-use super::EvmExecutionError;
-use crate::{AccessListItem, CompleteTransaction, CompleteTransactionVariant};
+use crate::{
+    AccessListItem, CompleteTransaction, CompleteTransactionVariant, EvmBlockEnvironmentError,
+};
 use alloy::consensus::{BlockHeader, Header};
 use alloy::primitives::{TxKind, U256};
 use revm::{
@@ -20,33 +21,36 @@ pub(super) fn create_cfg_env(chain_id: u64, spec_id: SpecId) -> CfgEnv {
 pub(super) fn create_block_env(
     header: &Header,
     spec_id: SpecId,
-) -> Result<BlockEnv, EvmExecutionError> {
+) -> Result<BlockEnv, EvmBlockEnvironmentError> {
     let basefee = if spec_id.is_enabled_in(SpecId::LONDON) {
-        header.base_fee_per_gas().ok_or_else(|| {
-            EvmExecutionError::BlockContext(format!(
-                "rpc block header is missing base fee for spec {spec_id:?}"
-            ))
-        })?
+        header
+            .base_fee_per_gas()
+            .ok_or(EvmBlockEnvironmentError::MissingBaseFee {
+                block_number: header.number(),
+            })?
     } else {
         0
     };
 
     let prevrandao = if spec_id.is_enabled_in(SpecId::MERGE) {
-        Some(header.mix_hash().ok_or_else(|| {
-            EvmExecutionError::BlockContext(format!(
-                "rpc block header is missing prev randao for spec {spec_id:?}"
-            ))
-        })?)
+        Some(
+            header
+                .mix_hash()
+                .ok_or(EvmBlockEnvironmentError::MissingPrevRandao {
+                    block_number: header.number(),
+                })?,
+        )
     } else {
         None
     };
 
     let blob_excess_gas_and_price = if spec_id.is_enabled_in(SpecId::CANCUN) {
-        let excess_blob_gas = header.excess_blob_gas().ok_or_else(|| {
-            EvmExecutionError::BlockContext(format!(
-                "rpc block header is missing excess blob gas for spec {spec_id:?}"
-            ))
-        })?;
+        let excess_blob_gas =
+            header
+                .excess_blob_gas()
+                .ok_or(EvmBlockEnvironmentError::MissingExcessBlobGas {
+                    block_number: header.number(),
+                })?;
 
         Some(BlobExcessGasAndPrice::new_with_spec(
             excess_blob_gas,

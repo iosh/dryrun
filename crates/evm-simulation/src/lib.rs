@@ -6,7 +6,9 @@ mod completion;
 mod context;
 mod error;
 mod execution;
+mod execution_result;
 mod outcome;
+mod rejection;
 mod simulation;
 mod simulator;
 mod transaction;
@@ -16,17 +18,21 @@ pub(crate) use changes::EvmNativeChangeError;
 pub(crate) use completion::complete_transaction;
 pub(crate) use context::resolve_block;
 pub use error::{
-    EvmBlockResolutionError, EvmChangesError, EvmInitializationError, EvmSimulationError,
-    EvmTransactionCompletionError,
+    EvmBlockEnvironmentError, EvmBlockResolutionError, EvmChangesError, EvmExecutionError,
+    EvmInitializationError, EvmNotReadyError, EvmResultIntegrationError, EvmSimulationError,
+    EvmStateAccessError, EvmTransactionCompletionError,
 };
 pub(crate) use execution::{
-    EvmExecutionError, EvmExecutionObservation, EvmExecutionObserver, EvmExecutionOutput,
-    EvmFeeSettlement, EvmTransactionExecutor, create_database,
+    EvmExecutionObservation, EvmExecutionObserver, EvmTransactionExecution, EvmTransactionExecutor,
+    create_database, map_executed_outcome,
 };
-pub use simulation::{
-    EvmBlockContext, EvmExecution, EvmExecutionDetails, EvmExecutionFailure,
-    EvmExecutionFailureCode, EvmOutcome, EvmSimulation,
+pub use execution_result::{EvmExecutionGasFee, EvmExecutionResult, EvmGas};
+pub use outcome::{
+    EvmExecutionOutcome, EvmHaltReason, EvmOutOfGasReason, EvmRevertReason, EvmSuccessOutput,
+    EvmSuccessReason,
 };
+pub use rejection::EvmTransactionRejection;
+pub use simulation::{EvmBlockContext, EvmSimulation};
 pub use simulation_changes::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
 pub use simulator::EvmTransactionSimulator;
 pub use transaction::{

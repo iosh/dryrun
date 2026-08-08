@@ -90,7 +90,6 @@ export interface RequestErrorState {
   kind: 'transport' | 'rpc' | 'invalid-response';
   title: string;
   detail: string;
-  subkind?: string;
   rawResponse?: unknown;
 }
 

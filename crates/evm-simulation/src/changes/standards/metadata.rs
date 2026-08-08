@@ -95,9 +95,10 @@ impl<INSP> MetadataReader<'_, '_, INSP> {
     ) -> Result<Option<T>, EvmSimulationError> {
         let outcome = execute_read_call(self.evm, self.transaction, self.chain_id, target, data)
             .map_err(|error| match error {
-                EVMError::Database(error) => EvmSimulationError::state_access(format!(
-                    "state access failed during metadata read from {target}: {error}"
-                )),
+                EVMError::Database(error) => EvmSimulationError::changes_state_access(
+                    format!("reading metadata from {target}"),
+                    error,
+                ),
                 error => EvmSimulationError::changes(format!(
                     "metadata read from {target} failed: {error}"
                 )),
