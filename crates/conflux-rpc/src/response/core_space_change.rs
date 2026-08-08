@@ -526,6 +526,17 @@ fn try_map_asset_change(
             },
             from: map_address(from, network, field, "from")?,
         },
+        Source::SelfDestructBurn {
+            contract_address,
+            raw_amount,
+            metadata,
+        } => Change::Burn {
+            asset: BurnAsset::Native {
+                raw_amount: u256_to_wire(raw_amount),
+                metadata: metadata.into(),
+            },
+            from: map_address(contract_address, network, field, "from")?,
+        },
         Source::Erc721Transfer {
             contract_address,
             from,

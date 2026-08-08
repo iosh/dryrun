@@ -1,4 +1,5 @@
 use revm::context_interface::result::InvalidTransaction;
+use revm::primitives::eip4844::VERSIONED_HASH_VERSION_KZG;
 
 use crate::{
     CompleteTransaction, CompleteTransactionVariant, EvmExecutionError, EvmTransactionRejection,
@@ -81,6 +82,30 @@ pub(super) fn map_transaction_rejection(
             transaction_chain_id: transaction.chain_id,
             expected_chain_id,
         },
+        InvalidTransaction::BlobGasPriceGreaterThanMax {
+            block_blob_gas_price,
+            tx_max_fee_per_blob_gas,
+        } => EvmTransactionRejection::BlobGasPriceExceedsMaxFee {
+            blob_gas_price: block_blob_gas_price,
+            max_fee_per_blob_gas: tx_max_fee_per_blob_gas,
+        },
+        InvalidTransaction::TooManyBlobs { max, have } => {
+            EvmTransactionRejection::BlobCountExceedsLimit {
+                blob_count: have,
+                max_blob_count: max,
+            }
+        }
+        InvalidTransaction::BlobVersionNotSupported => {
+            let (blob_index, version) = unsupported_blob_version(transaction).ok_or_else(|| {
+                EvmExecutionError::unmapped_transaction_validation(
+                    "blob version validation failed without an unsupported versioned hash",
+                )
+            })?;
+            EvmTransactionRejection::UnsupportedBlobVersion {
+                blob_index,
+                version,
+            }
+        }
         InvalidTransaction::Eip2930NotSupported => EvmTransactionRejection::Eip2930NotActivated,
         InvalidTransaction::Eip1559NotSupported => EvmTransactionRejection::Eip1559NotActivated,
         InvalidTransaction::Eip4844NotSupported => EvmTransactionRejection::Eip4844NotActivated,
@@ -89,11 +114,8 @@ pub(super) fn map_transaction_rejection(
         | InvalidTransaction::AccessListNotSupported
         | InvalidTransaction::MaxFeePerBlobGasNotSupported
         | InvalidTransaction::BlobVersionedHashesNotSupported
-        | InvalidTransaction::BlobGasPriceGreaterThanMax { .. }
         | InvalidTransaction::EmptyBlobs
         | InvalidTransaction::BlobCreateTransaction
-        | InvalidTransaction::TooManyBlobs { .. }
-        | InvalidTransaction::BlobVersionNotSupported
         | InvalidTransaction::AuthorizationListNotSupported
         | InvalidTransaction::AuthorizationListInvalidFields
         | InvalidTransaction::EmptyAuthorizationList
@@ -107,6 +129,23 @@ pub(super) fn map_transaction_rejection(
     };
 
     Ok(rejection)
+}
+
+fn unsupported_blob_version(transaction: &CompleteTransaction) -> Option<(usize, u8)> {
+    let CompleteTransactionVariant::Eip4844 {
+        blob_versioned_hashes,
+        ..
+    } = &transaction.variant
+    else {
+        return None;
+    };
+
+    blob_versioned_hashes
+        .iter()
+        .enumerate()
+        .find_map(|(index, hash)| {
+            (hash[0] != VERSIONED_HASH_VERSION_KZG).then_some((index, hash[0]))
+        })
 }
 
 fn transaction_gas_price(transaction: &CompleteTransaction) -> u128 {

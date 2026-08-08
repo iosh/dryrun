@@ -10,9 +10,9 @@ use self::{
     rejection_mapping::map_transaction_rejection,
 };
 use crate::{
-    CompleteTransaction, CompleteTransactionVariant, EthereumChainSpec, EvmBlockEnvironmentError,
-    EvmExecutionError, EvmExecutionResult, EvmGas, EvmNotReadyError, EvmSimulationError,
-    EvmStateAccessError, EvmTransactionRejection,
+    CompleteTransaction, CompleteTransactionVariant, EthereumChainSpec, EvmBlobGasFee,
+    EvmBlockEnvironmentError, EvmExecutionError, EvmExecutionResult, EvmGas, EvmNotReadyError,
+    EvmSimulationError, EvmStateAccessError, EvmTransactionRejection,
 };
 use alloy::{
     consensus::{BlockHeader, Header, Sealed},
@@ -27,7 +27,7 @@ use revm::{
     },
     handler::EvmTr,
     interpreter::interpreter::EthInterpreter,
-    primitives::hardfork::SpecId,
+    primitives::eip4844::GAS_PER_BLOB,
     state::EvmState,
 };
 
@@ -66,8 +66,7 @@ impl<INSP> ExecutedTransaction<INSP> {
             fee_settlement,
             ..
         } = self;
-        let execution_result =
-            EvmExecutionResult::new(gas, fee_settlement.into_execution_gas_fee());
+        let execution_result = EvmExecutionResult::new(gas, fee_settlement.into_fee());
 
         (result, execution_result)
     }
@@ -113,11 +112,11 @@ impl ExecutedTransaction<EvmExecutionObserver> {
 #[derive(Debug)]
 pub(crate) struct EvmTransactionExecutor<INSP> {
     evm: MainnetEvm<INSP>,
-    spec_id: SpecId,
     chain_id: u64,
     block_number: u64,
     block_gas_limit: u64,
     base_fee_per_gas: u64,
+    blob_gas_price: Option<u128>,
 }
 
 impl<INSP> EvmTransactionExecutor<INSP> {
@@ -137,6 +136,10 @@ impl<INSP> EvmTransactionExecutor<INSP> {
             create_block_env(block.inner(), spec_id).map_err(EvmExecutionError::from)?;
         let block_gas_limit = block_env.gas_limit;
         let base_fee_per_gas = block_env.basefee;
+        let blob_gas_price = block_env
+            .blob_excess_gas_and_price
+            .as_ref()
+            .map(|blob| blob.blob_gasprice);
         let evm = Context::mainnet()
             .with_db(database)
             .modify_cfg_chained(|cfg| *cfg = cfg_env)
@@ -145,11 +148,11 @@ impl<INSP> EvmTransactionExecutor<INSP> {
 
         Ok(Self {
             evm,
-            spec_id,
             chain_id,
             block_number,
             block_gas_limit,
             base_fee_per_gas,
+            blob_gas_price,
         })
     }
 
@@ -160,20 +163,6 @@ impl<INSP> EvmTransactionExecutor<INSP> {
     where
         INSP: revm::Inspector<Context<BlockEnv, TxEnv, CfgEnv, MainnetEvmDatabase>, EthInterpreter>,
     {
-        match &transaction.variant {
-            CompleteTransactionVariant::Eip4844 { .. }
-                if self.spec_id.is_enabled_in(SpecId::CANCUN) =>
-            {
-                return Err(EvmNotReadyError::Eip4844.into());
-            }
-            CompleteTransactionVariant::Eip7702 { .. }
-                if self.spec_id.is_enabled_in(SpecId::PRAGUE) =>
-            {
-                return Err(EvmNotReadyError::Eip7702.into());
-            }
-            _ => {}
-        }
-
         let tx_env = create_tx_env(transaction);
         let effective_gas_price = tx_env.effective_gas_price(self.base_fee_per_gas as u128);
         let result_and_state = match self.evm.inspect_tx(tx_env) {
@@ -211,11 +200,33 @@ impl<INSP> EvmTransactionExecutor<INSP> {
             result_gas.floor_gas(),
         )
         .map_err(EvmExecutionError::from)?;
+        let blob_gas_fee = match &transaction.variant {
+            CompleteTransactionVariant::Eip4844 {
+                blob_versioned_hashes,
+                ..
+            } => {
+                let gas_price = self
+                    .blob_gas_price
+                    .ok_or(EvmBlockEnvironmentError::MissingExcessBlobGas {
+                        block_number: self.block_number,
+                    })
+                    .map_err(EvmExecutionError::from)?;
+                Some(EvmBlobGasFee::new(
+                    GAS_PER_BLOB * blob_versioned_hashes.len() as u64,
+                    gas_price,
+                ))
+            }
+            CompleteTransactionVariant::Legacy { .. }
+            | CompleteTransactionVariant::Eip2930 { .. }
+            | CompleteTransactionVariant::Eip1559 { .. }
+            | CompleteTransactionVariant::Eip7702 { .. } => None,
+        };
         let fee_settlement = EvmFeeSettlement::new(
             &gas,
             transaction.gas_limit,
             effective_gas_price,
             self.base_fee_per_gas,
+            blob_gas_fee,
         )
         .map_err(EvmExecutionError::from)?;
 

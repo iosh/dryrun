@@ -51,6 +51,18 @@ pub enum EvmTransactionRejection {
         transaction_chain_id: u64,
         expected_chain_id: u64,
     },
+    BlobGasPriceExceedsMaxFee {
+        blob_gas_price: u128,
+        max_fee_per_blob_gas: u128,
+    },
+    BlobCountExceedsLimit {
+        blob_count: usize,
+        max_blob_count: usize,
+    },
+    UnsupportedBlobVersion {
+        blob_index: usize,
+        version: u8,
+    },
     Eip2930NotActivated,
     Eip1559NotActivated,
     Eip4844NotActivated,
@@ -135,6 +147,27 @@ impl fmt::Display for EvmTransactionRejection {
             } => write!(
                 formatter,
                 "transaction chain ID {transaction_chain_id} does not match expected chain ID {expected_chain_id}"
+            ),
+            Self::BlobGasPriceExceedsMaxFee {
+                blob_gas_price,
+                max_fee_per_blob_gas,
+            } => write!(
+                formatter,
+                "block blob gas price {blob_gas_price} exceeds max fee per blob gas {max_fee_per_blob_gas}"
+            ),
+            Self::BlobCountExceedsLimit {
+                blob_count,
+                max_blob_count,
+            } => write!(
+                formatter,
+                "transaction contains {blob_count} blobs, exceeding the limit of {max_blob_count}"
+            ),
+            Self::UnsupportedBlobVersion {
+                blob_index,
+                version,
+            } => write!(
+                formatter,
+                "blob versioned hash at index {blob_index} uses unsupported version 0x{version:02x}"
             ),
             Self::Eip2930NotActivated => {
                 formatter.write_str("EIP-2930 is not active at the selected block")

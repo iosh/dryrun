@@ -22,7 +22,7 @@ pub(super) enum Change {
     },
     Burn {
         #[serde(flatten)]
-        asset: TokenMovementAsset,
+        asset: BurnAsset,
         from: Address,
     },
     Allowance {
@@ -83,6 +83,37 @@ pub(super) enum TransferAsset {
     rename_all_fields = "camelCase"
 )]
 pub(super) enum TokenMovementAsset {
+    Erc20 {
+        contract_address: Address,
+        raw_amount: U256,
+        #[serde(flatten)]
+        metadata: Erc20Metadata,
+    },
+    Erc721 {
+        contract_address: Address,
+        token_id: U256,
+        #[serde(flatten)]
+        metadata: Erc721CollectionMetadata,
+    },
+    Erc1155 {
+        contract_address: Address,
+        token_id: U256,
+        raw_amount: U256,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(
+    tag = "assetType",
+    rename_all = "SCREAMING_SNAKE_CASE",
+    rename_all_fields = "camelCase"
+)]
+pub(super) enum BurnAsset {
+    Native {
+        raw_amount: U256,
+        #[serde(flatten)]
+        metadata: NativeMetadata,
+    },
     Erc20 {
         contract_address: Address,
         raw_amount: U256,
@@ -262,12 +293,23 @@ impl From<service_espace::Change> for Change {
                 raw_amount,
                 metadata,
             } => Self::Burn {
-                asset: TokenMovementAsset::Erc20 {
+                asset: BurnAsset::Erc20 {
                     contract_address,
                     raw_amount,
                     metadata: metadata.into(),
                 },
                 from,
+            },
+            service_espace::Change::SelfDestructBurn {
+                contract_address,
+                raw_amount,
+                metadata,
+            } => Self::Burn {
+                asset: BurnAsset::Native {
+                    raw_amount,
+                    metadata: metadata.into(),
+                },
+                from: contract_address,
             },
             service_espace::Change::Erc721Transfer {
                 contract_address,
@@ -303,7 +345,7 @@ impl From<service_espace::Change> for Change {
                 token_id,
                 metadata,
             } => Self::Burn {
-                asset: TokenMovementAsset::Erc721 {
+                asset: BurnAsset::Erc721 {
                     contract_address,
                     token_id,
                     metadata: metadata.into(),
@@ -344,7 +386,7 @@ impl From<service_espace::Change> for Change {
                 token_id,
                 raw_amount,
             } => Self::Burn {
-                asset: TokenMovementAsset::Erc1155 {
+                asset: BurnAsset::Erc1155 {
                     contract_address,
                     token_id,
                     raw_amount,

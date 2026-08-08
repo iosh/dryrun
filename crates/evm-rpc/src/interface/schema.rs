@@ -201,7 +201,7 @@ pub enum Change {
     },
     Burn {
         #[serde(flatten)]
-        asset: TokenMovementAsset,
+        asset: BurnAsset,
         from: Address,
     },
     Allowance {
@@ -267,6 +267,42 @@ pub enum TransferAsset {
     rename_all_fields = "camelCase"
 )]
 pub enum TokenMovementAsset {
+    Erc20 {
+        contract_address: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
+        #[serde(flatten)]
+        metadata: Erc20Metadata,
+    },
+    Erc721 {
+        contract_address: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        token_id: U256,
+        #[serde(flatten)]
+        metadata: Erc721CollectionMetadata,
+    },
+    Erc1155 {
+        contract_address: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        token_id: U256,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(
+    tag = "assetType",
+    rename_all = "SCREAMING_SNAKE_CASE",
+    rename_all_fields = "camelCase"
+)]
+pub enum BurnAsset {
+    Native {
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
+        #[serde(flatten)]
+        metadata: NativeMetadata,
+    },
     Erc20 {
         contract_address: Address,
         #[serde(serialize_with = "u256_hex::serialize")]

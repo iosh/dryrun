@@ -128,19 +128,101 @@ impl EvmExecutionGasFee {
     }
 }
 
-/// Gas and execution-fee facts for a transaction that entered the EVM.
+/// Actual fee charged for blob gas by an EIP-4844 transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvmBlobGasFee {
+    gas_used: u64,
+    gas_price: u128,
+    charged_amount: U256,
+}
+
+impl EvmBlobGasFee {
+    pub(crate) fn new(gas_used: u64, gas_price: u128) -> Self {
+        Self {
+            gas_used,
+            gas_price,
+            charged_amount: U256::from(gas_used) * U256::from(gas_price),
+        }
+    }
+
+    /// Blob gas consumed by the transaction.
+    pub const fn gas_used(&self) -> u64 {
+        self.gas_used
+    }
+
+    /// Blob gas price derived from the selected block.
+    pub const fn gas_price(&self) -> u128 {
+        self.gas_price
+    }
+
+    /// Amount charged and burnt for blob gas.
+    pub const fn charged_amount(&self) -> U256 {
+        self.charged_amount
+    }
+}
+
+/// Actual protocol fee settlement for an executed EVM transaction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvmFee {
+    execution_gas_fee: EvmExecutionGasFee,
+    blob_gas_fee: Option<EvmBlobGasFee>,
+}
+
+impl EvmFee {
+    pub(crate) const fn new(
+        execution_gas_fee: EvmExecutionGasFee,
+        blob_gas_fee: Option<EvmBlobGasFee>,
+    ) -> Self {
+        Self {
+            execution_gas_fee,
+            blob_gas_fee,
+        }
+    }
+
+    /// Actual execution-gas fee settlement.
+    pub const fn execution_gas_fee(&self) -> &EvmExecutionGasFee {
+        &self.execution_gas_fee
+    }
+
+    /// Actual blob-gas fee settlement, present only for EIP-4844 transactions.
+    pub const fn blob_gas_fee(&self) -> Option<&EvmBlobGasFee> {
+        self.blob_gas_fee.as_ref()
+    }
+
+    /// Total amount charged for execution gas and blob gas.
+    pub fn total_charged_amount(&self) -> U256 {
+        self.execution_gas_fee.charged_amount()
+            + self
+                .blob_gas_fee
+                .as_ref()
+                .map_or(U256::ZERO, EvmBlobGasFee::charged_amount)
+    }
+
+    /// Total amount burnt from execution base fee and blob gas fee.
+    pub fn total_burnt_amount(&self) -> U256 {
+        self.execution_gas_fee.burnt_amount()
+            + self
+                .blob_gas_fee
+                .as_ref()
+                .map_or(U256::ZERO, EvmBlobGasFee::charged_amount)
+    }
+
+    /// Execution priority fee paid to the block beneficiary.
+    pub fn beneficiary_reward(&self) -> U256 {
+        self.execution_gas_fee.beneficiary_reward()
+    }
+}
+
+/// Gas and fee facts for a transaction that entered the EVM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmExecutionResult {
     gas: EvmGas,
-    execution_gas_fee: EvmExecutionGasFee,
+    fee: EvmFee,
 }
 
 impl EvmExecutionResult {
-    pub(crate) const fn new(gas: EvmGas, execution_gas_fee: EvmExecutionGasFee) -> Self {
-        Self {
-            gas,
-            execution_gas_fee,
-        }
+    pub(crate) const fn new(gas: EvmGas, fee: EvmFee) -> Self {
+        Self { gas, fee }
     }
 
     /// Gas accounting for the execution.
@@ -148,8 +230,8 @@ impl EvmExecutionResult {
         &self.gas
     }
 
-    /// Actual execution-gas fee settlement.
-    pub const fn execution_gas_fee(&self) -> &EvmExecutionGasFee {
-        &self.execution_gas_fee
+    /// Actual protocol fee settlement.
+    pub const fn fee(&self) -> &EvmFee {
+        &self.fee
     }
 }

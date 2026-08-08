@@ -53,11 +53,11 @@ impl From<EvmSimulation> for rpc::EvmSimulateTransactionResponse {
             ),
         };
         let (gas_used, fee, burnt_fee) = result.map_or((0, U256::ZERO, U256::ZERO), |result| {
-            let execution_gas_fee = result.execution_gas_fee();
+            let protocol_fee = result.fee();
             (
                 result.gas().gas_used(),
-                execution_gas_fee.charged_amount(),
-                execution_gas_fee.burnt_amount(),
+                protocol_fee.total_charged_amount(),
+                protocol_fee.total_burnt_amount(),
             )
         });
 
@@ -135,6 +135,11 @@ fn rejection_failure_code(rejection: &EvmTransactionRejection) -> &'static str {
         EvmTransactionRejection::NonceTooHigh { .. } => "NONCE_TOO_HIGH",
         EvmTransactionRejection::NonceTooLow { .. } => "NONCE_TOO_LOW",
         EvmTransactionRejection::InvalidChainId { .. } => "INVALID_CHAIN_ID",
+        EvmTransactionRejection::BlobGasPriceExceedsMaxFee { .. } => {
+            "BLOB_GAS_PRICE_EXCEEDS_MAX_FEE"
+        }
+        EvmTransactionRejection::BlobCountExceedsLimit { .. } => "TOO_MANY_BLOBS",
+        EvmTransactionRejection::UnsupportedBlobVersion { .. } => "UNSUPPORTED_BLOB_VERSION",
         EvmTransactionRejection::Eip2930NotActivated
         | EvmTransactionRejection::Eip1559NotActivated
         | EvmTransactionRejection::Eip4844NotActivated
@@ -222,12 +227,23 @@ impl From<Change> for rpc::Change {
                 raw_amount,
                 metadata,
             } => Self::Burn {
-                asset: rpc::TokenMovementAsset::Erc20 {
+                asset: rpc::BurnAsset::Erc20 {
                     contract_address,
                     raw_amount,
                     metadata: metadata.into(),
                 },
                 from,
+            },
+            Change::SelfDestructBurn {
+                contract_address,
+                raw_amount,
+                metadata,
+            } => Self::Burn {
+                asset: rpc::BurnAsset::Native {
+                    raw_amount,
+                    metadata: metadata.into(),
+                },
+                from: contract_address,
             },
             Change::Erc721Transfer {
                 contract_address,
@@ -263,7 +279,7 @@ impl From<Change> for rpc::Change {
                 token_id,
                 metadata,
             } => Self::Burn {
-                asset: rpc::TokenMovementAsset::Erc721 {
+                asset: rpc::BurnAsset::Erc721 {
                     contract_address,
                     token_id,
                     metadata: metadata.into(),
@@ -304,7 +320,7 @@ impl From<Change> for rpc::Change {
                 token_id,
                 raw_amount,
             } => Self::Burn {
-                asset: rpc::TokenMovementAsset::Erc1155 {
+                asset: rpc::BurnAsset::Erc1155 {
                     contract_address,
                     token_id,
                     raw_amount,

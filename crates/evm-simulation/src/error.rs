@@ -204,14 +204,6 @@ impl EvmExecutionError {
 pub enum EvmNotReadyError {
     #[error("Ethereum hardfork {hardfork} is not supported by the EVM executor")]
     UnsupportedHardfork { hardfork: &'static str },
-
-    #[error("EIP-4844 execution is not ready because blob fee settlement is not implemented")]
-    Eip4844,
-
-    #[error(
-        "EIP-7702 execution is not ready because authorization state handling is not implemented"
-    )]
-    Eip7702,
 }
 
 impl From<EthereumChainSpecError> for EvmNotReadyError {

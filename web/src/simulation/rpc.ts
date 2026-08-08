@@ -32,6 +32,7 @@ interface Erc1155Asset {
 }
 
 type TokenMovementAsset = Erc20Asset | Erc721Asset | Erc1155Asset;
+type BurnAsset = NativeAsset | TokenMovementAsset;
 type TransferAsset = NativeAsset | TokenMovementAsset;
 type WithFields<TValue, TFields> = TValue extends unknown
   ? TValue & TFields
@@ -55,17 +56,12 @@ export type MintChange = WithFields<
 >;
 
 export type BurnChange = WithFields<
-  TokenMovementAsset,
+  BurnAsset,
   {
     changeType: 'BURN';
     from: string;
   }
 >;
-
-export type NativeBurnChange = NativeAsset & {
-  changeType: 'BURN';
-  from: string;
-};
 
 export interface AllowanceChange extends FungibleAssetMetadata {
   changeType: 'ALLOWANCE';
@@ -235,7 +231,6 @@ export interface CrossSpaceTransferChange {
 
 export type CoreChange =
   | CommonChange
-  | NativeBurnChange
   | StakingDepositChange
   | StakingWithdrawalChange
   | StakingBurnChange

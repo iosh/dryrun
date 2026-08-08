@@ -26,7 +26,7 @@ pub(crate) use execution::{
     EvmExecutionObservation, EvmExecutionObserver, EvmTransactionExecution, EvmTransactionExecutor,
     create_database, map_executed_outcome,
 };
-pub use execution_result::{EvmExecutionGasFee, EvmExecutionResult, EvmGas};
+pub use execution_result::{EvmBlobGasFee, EvmExecutionGasFee, EvmExecutionResult, EvmFee, EvmGas};
 pub use outcome::{
     EvmExecutionOutcome, EvmHaltReason, EvmOutOfGasReason, EvmRevertReason, EvmSuccessOutput,
     EvmSuccessReason,

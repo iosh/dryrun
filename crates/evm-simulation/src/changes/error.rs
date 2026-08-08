@@ -3,24 +3,14 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum EvmNativeChangeError {
-    #[error(
-        "selfdestruct-to-self at observation {observation_index} burns \
-         {amount} from {contract}, which cannot be represented"
-    )]
-    UnsupportedSelfDestructToSelf {
-        observation_index: usize,
-        contract: Address,
-        amount: U256,
-    },
-
     #[error("native account {address} is missing from transaction state")]
-    NativeAccountMissing { address: Address },
+    AccountMissing { address: Address },
 
     #[error(
         "native balance underflow for {address}: \
          balance {balance}, cannot subtract {amount}"
     )]
-    NativeBalanceUnderflow {
+    BalanceUnderflow {
         address: Address,
         balance: U256,
         amount: U256,
@@ -30,7 +20,7 @@ pub enum EvmNativeChangeError {
         "native balance overflow for {address}: \
          balance {balance}, cannot add {amount}"
     )]
-    NativeBalanceOverflow {
+    BalanceOverflow {
         address: Address,
         balance: U256,
         amount: U256,
@@ -40,7 +30,7 @@ pub enum EvmNativeChangeError {
         "native balance mismatch for {address}: \
          replayed {replayed_balance}, transaction state {state_balance}"
     )]
-    NativeBalanceMismatch {
+    BalanceMismatch {
         address: Address,
         replayed_balance: U256,
         state_balance: U256,

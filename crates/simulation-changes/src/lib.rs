@@ -21,6 +21,11 @@ pub enum Change {
         raw_amount: U256,
         metadata: NativeMetadata,
     },
+    SelfDestructBurn {
+        contract_address: Address,
+        raw_amount: U256,
+        metadata: NativeMetadata,
+    },
     Erc20Transfer {
         contract_address: Address,
         from: Address,
@@ -304,7 +309,7 @@ impl ChangeMetadata {
 
     pub fn enrich_change(&self, change: &mut Change) {
         match change {
-            Change::NativeTransfer { metadata, .. } => {
+            Change::NativeTransfer { metadata, .. } | Change::SelfDestructBurn { metadata, .. } => {
                 *metadata = self.native.clone();
             }
             Change::Erc20Transfer {
