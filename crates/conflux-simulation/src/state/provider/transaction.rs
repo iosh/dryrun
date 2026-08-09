@@ -1,4 +1,5 @@
 use alloy::{
+    eips::BlockId,
     primitives::{Address as AlloyAddress, Bytes as AlloyBytes, TxKind, U256 as AlloyU256},
     providers::Provider,
     rpc::types::{
@@ -7,11 +8,10 @@ use alloy::{
     },
 };
 use cfx_rpc_cfx_types::EpochNumber;
-use cfx_rpc_eth_types::BlockId;
 use cfx_types::U256;
 use conflux_provider::{
-    BalanceCheckRequest, CoreAccessListItem, CoreAddress, CoreTransactionType,
-    EstimateGasAndCollateralRequest,
+    BalanceCheckRequest, BlockHashOrEpochNumber, CoreAccessListItem, CoreAddress,
+    CoreTransactionType, EstimateGasAndCollateralRequest,
 };
 use serde::Deserialize;
 use simulation_transaction::TransactionVariant;
@@ -36,7 +36,7 @@ impl ConfluxSimulationProvider {
         block: BlockId,
     ) -> Result<U256, ConfluxRpcError> {
         let nonce = self
-            .espace_provider_at(block)?
+            .espace_provider_at(block)
             .get_transaction_count(address)
             .await
             .map_err(|error| ConfluxRpcError {
@@ -80,7 +80,7 @@ impl ConfluxSimulationProvider {
         block: BlockId,
     ) -> Result<U256, ConfluxRpcError> {
         let estimate = self
-            .espace_provider_at(block)?
+            .espace_provider_at(block)
             .estimate_gas(espace_estimate_gas_request(
                 from, to, nonce, value, data, chain_id, variant,
             ))
@@ -95,10 +95,8 @@ impl ConfluxSimulationProvider {
     pub(crate) async fn cfx_get_next_nonce(
         &self,
         address: CoreAddress,
-        epoch: EpochNumber,
+        selector: BlockHashOrEpochNumber,
     ) -> Result<U256, ConfluxRpcError> {
-        let selector =
-            conflux_provider::BlockHashOrEpochNumber::Epoch(Self::provider_epoch(epoch)?);
         let value = Self::core_request(
             "cfx_getNextNonce",
             self.core_space_provider

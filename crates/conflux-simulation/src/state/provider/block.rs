@@ -2,9 +2,8 @@ use crate::state::{
     ConfluxRpcError,
     rpc_types::{CoreSpaceRpcBlock, CoreSpaceRpcPoSBlock, EspaceRpcBlock},
 };
-use alloy::{consensus::BlockHeader, primitives::B256, providers::Provider};
+use alloy::{consensus::BlockHeader, eips::BlockId, primitives::B256, providers::Provider};
 use cfx_rpc_cfx_types::EpochNumber;
-use cfx_rpc_eth_types::BlockId;
 use cfx_types::H256;
 
 use super::ConfluxSimulationProvider;
@@ -25,31 +24,33 @@ impl ConfluxSimulationProvider {
             .transpose()
     }
 
-    pub(crate) async fn eth_get_block_by_number(
+    pub(crate) async fn eth_get_block(
         &self,
-        block_number: BlockId,
+        block: BlockId,
     ) -> Result<Option<EspaceRpcBlock>, ConfluxRpcError> {
-        let block_tag = Self::alloy_block_number(block_number)?;
-        let block = self
+        let operation = if block.is_hash() {
+            "eth_getBlockByHash"
+        } else {
+            "eth_getBlockByNumber"
+        };
+        let response = self
             .espace_provider
-            .get_block_by_number(block_tag)
+            .get_block(block)
             .await
             .map_err(|error| ConfluxRpcError {
-                operation: "eth_getBlockByNumber",
+                operation,
                 reason: error.to_string(),
             })?;
 
-        block
-            .map(|block| {
-                let hash = block.hash();
-                let header = block.into_consensus_header();
-                Ok(EspaceRpcBlock {
-                    hash: H256::from_slice(hash.as_slice()),
-                    number: cfx_types::U256::from(header.number()),
-                    base_fee_per_gas: header.base_fee_per_gas().map(cfx_types::U256::from),
-                })
-            })
-            .transpose()
+        Ok(response.map(|block| {
+            let hash = block.hash();
+            let header = block.into_consensus_header();
+            EspaceRpcBlock {
+                hash,
+                number: header.number(),
+                base_fee_per_gas: header.base_fee_per_gas().map(cfx_types::U256::from),
+            }
+        }))
     }
 
     pub(crate) async fn pos_get_block_by_hash(

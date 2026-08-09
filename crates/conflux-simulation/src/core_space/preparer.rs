@@ -68,12 +68,9 @@ impl CoreSpaceSimulationPreparer {
             });
         }
 
-        let storage_payer = prepare_storage_payer(
-            self.backend.provider(),
-            context.state_anchor.core_space_epoch(),
-            &transaction,
-        )
-        .await?;
+        let storage_payer =
+            prepare_storage_payer(self.backend.provider(), context.state_anchor, &transaction)
+                .await?;
         let transaction = build_core_space_transaction_input(transaction, chain_id);
         let execution_input = TransactionExecutionInput {
             block_context: context.block_context,

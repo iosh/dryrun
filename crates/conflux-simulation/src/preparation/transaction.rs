@@ -4,13 +4,14 @@ use simulation_transaction::{
     Transaction, TransactionRequest, TransactionVariant, TransactionVariantRequest,
 };
 
-use super::{CoreSpaceSimulationContext, EspaceSimulationContext};
+use super::CoreSpaceSimulationContext;
 use crate::{
     ConfluxSimulationError, ConfluxSimulationProvider,
     core_space::{
         CoreSpaceTransaction, CoreSpaceTransactionRequest, CoreSpaceTransactionVariant,
         CoreSpaceTransactionVariantRequest, validate_core_space_transaction_network,
     },
+    espace::ResolvedEspaceContext,
 };
 
 #[derive(Debug)]
@@ -41,7 +42,7 @@ impl TransactionWithoutGasLimit {
 
 pub(crate) async fn complete_espace_transaction(
     provider: &ConfluxSimulationProvider,
-    context: &EspaceSimulationContext,
+    context: &ResolvedEspaceContext,
     request: TransactionRequest,
 ) -> Result<Transaction, ConfluxSimulationError> {
     let (transaction, gas_limit) =
@@ -92,7 +93,7 @@ pub(crate) async fn complete_core_space_transaction(
         Some(nonce) => nonce,
         None => {
             let nonce = provider
-                .cfx_get_next_nonce(from, context.state_epoch())
+                .cfx_get_next_nonce(from, context.state_pivot())
                 .await?;
             u64::try_from(nonce).map_err(|_| {
                 unsupported_value(
@@ -159,7 +160,7 @@ pub(crate) async fn complete_core_space_transaction(
 
 async fn complete_espace_without_gas_limit(
     provider: &ConfluxSimulationProvider,
-    context: &EspaceSimulationContext,
+    context: &ResolvedEspaceContext,
     request: TransactionRequest,
 ) -> Result<(TransactionWithoutGasLimit, Option<u64>), ConfluxSimulationError> {
     let TransactionRequest {
@@ -201,7 +202,7 @@ async fn complete_espace_without_gas_limit(
 
 async fn complete_espace_transaction_variant(
     provider: &ConfluxSimulationProvider,
-    context: &EspaceSimulationContext,
+    context: &ResolvedEspaceContext,
     variant: TransactionVariantRequest,
 ) -> Result<TransactionVariant, ConfluxSimulationError> {
     match variant {

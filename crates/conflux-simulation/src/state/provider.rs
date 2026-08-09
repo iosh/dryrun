@@ -1,7 +1,7 @@
 use std::future::Future;
 
 use alloy::{
-    eips::{BlockId, BlockNumberOrTag},
+    eips::BlockId,
     network::Ethereum,
     providers::{DynProvider, layers::BlockIdProvider},
 };
@@ -40,31 +40,9 @@ impl ConfluxSimulationProvider {
 
     pub(crate) fn espace_provider_at(
         &self,
-        block: cfx_rpc_eth_types::BlockId,
-    ) -> Result<BlockIdProvider<DynProvider<Ethereum>>, ConfluxRpcError> {
-        Ok(BlockIdProvider::new(
-            self.espace_provider.clone(),
-            Self::alloy_block_id(block)?,
-        ))
-    }
-
-    pub(crate) fn alloy_block_id(
-        block: cfx_rpc_eth_types::BlockId,
-    ) -> Result<BlockId, ConfluxRpcError> {
-        Ok(BlockId::Number(Self::alloy_block_number(block)?))
-    }
-
-    pub(crate) fn alloy_block_number(
-        block: cfx_rpc_eth_types::BlockId,
-    ) -> Result<BlockNumberOrTag, ConfluxRpcError> {
-        match block {
-            cfx_rpc_eth_types::BlockId::Latest => Ok(BlockNumberOrTag::Latest),
-            cfx_rpc_eth_types::BlockId::Num(number) => Ok(BlockNumberOrTag::Number(number)),
-            unsupported => Err(ConfluxRpcError {
-                operation: "convert eSpace block selector",
-                reason: format!("unsupported block selector: {unsupported:?}"),
-            }),
-        }
+        block: BlockId,
+    ) -> BlockIdProvider<DynProvider<Ethereum>> {
+        BlockIdProvider::new(self.espace_provider.clone(), block)
     }
 
     pub(crate) fn core_address(&self, address: Address) -> Result<CoreAddress, ConfluxRpcError> {

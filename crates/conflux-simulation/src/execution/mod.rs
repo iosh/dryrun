@@ -18,7 +18,8 @@ pub(crate) use context::{
     CoreSpacePivotBlockContext, ExecutionBlockContext, ExecutionConsensusContext,
 };
 pub(crate) use context::{
-    build_core_space_pivot_block_context, build_espace_block_context, build_execution_block_context,
+    build_core_space_pivot_block_context, build_espace_execution_block_context,
+    build_execution_block_context,
 };
 pub(crate) use env::build_conflux_state;
 pub(crate) use env::{build_execution_spec, build_transaction_env};

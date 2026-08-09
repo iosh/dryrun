@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use alloy_primitives::B256;
 use cfx_rpc_cfx_types::RpcAddress;
 use cfx_types::{H256, U64, U256};
 use serde::Deserialize;
@@ -53,11 +54,10 @@ pub(crate) struct EspaceAccountData {
     pub(crate) code: Arc<Vec<u8>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
 pub(crate) struct EspaceRpcBlock {
-    pub(crate) hash: H256,
-    pub(crate) number: U256,
+    pub(crate) hash: B256,
+    pub(crate) number: u64,
     pub(crate) base_fee_per_gas: Option<U256>,
 }
 #[derive(Debug, Clone, Deserialize)]

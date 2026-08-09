@@ -1,11 +1,7 @@
-use alloy_primitives::{B256, Bytes, U256};
+use alloy_primitives::{Bytes, U256};
 use simulation_execution::Outcome;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EspaceBlockContext {
-    pub number: u64,
-    pub hash: B256,
-}
+use super::EspaceBlockContext;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EspaceExecutionFailureCode {

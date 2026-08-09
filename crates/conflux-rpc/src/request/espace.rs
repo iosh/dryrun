@@ -56,7 +56,7 @@ impl TryFrom<SimulateEspaceTransactionRequest> for service_espace::EspaceSimulat
                 .block
                 .map(map_block_ref)
                 .transpose()?
-                .unwrap_or(service_espace::EspaceBlockRef::Latest),
+                .unwrap_or(service_espace::EspaceBlockSelector::Latest),
             transaction: map_transaction(request.transaction)?,
         })
     }
@@ -136,13 +136,13 @@ fn validate_reserved_option(field: &str, value: Option<&Value>) -> Result<(), Va
     Ok(())
 }
 
-fn map_block_ref(block: BlockRef) -> Result<service_espace::EspaceBlockRef, ValidationError> {
+fn map_block_ref(block: BlockRef) -> Result<service_espace::EspaceBlockSelector, ValidationError> {
     match block {
         BlockRef::Tag(value) => match value.as_str() {
-            "latest" => Ok(service_espace::EspaceBlockRef::Latest),
-            value => Ok(service_espace::EspaceBlockRef::Number(parse_u64_param(
-                value, "block",
-            )?)),
+            "latest" => Ok(service_espace::EspaceBlockSelector::Latest),
+            value => Ok(service_espace::EspaceBlockSelector::Number(
+                parse_u64_param(value, "block")?,
+            )),
         },
         BlockRef::Hash(_) => Err(ValidationError::not_supported(
             "eSpace block hash selectors are not supported yet",

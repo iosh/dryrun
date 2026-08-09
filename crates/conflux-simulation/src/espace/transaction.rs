@@ -11,12 +11,6 @@ pub use simulation_transaction::{
     Transaction as EspaceTransaction, TransactionVariant as EspaceTransactionVariant,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EspaceBlockRef {
-    Latest,
-    Number(u64),
-}
-
 pub(crate) fn build_espace_transaction_input(
     input: EspaceTransaction,
     chain_id: u32,

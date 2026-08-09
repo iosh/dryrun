@@ -1,5 +1,4 @@
 use alloy_primitives::{B256, Bytes, U256};
-use cfx_rpc_cfx_types::EpochNumber;
 use conflux_provider::{CoreAddress, Network};
 use primitives::transaction::{
     Action, Cip1559Transaction, Cip2930Transaction,
@@ -11,7 +10,7 @@ use crate::{
     ConfluxSimulationError,
     execution::CoreSpaceTransactionInput,
     primitive::{b256_to_cfx, u256_to_cfx},
-    state::ConfluxSimulationProvider,
+    state::{ConfluxSimulationProvider, ConfluxStateAnchor},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,7 +189,7 @@ impl PreparedStoragePayer {
 
 pub(crate) async fn prepare_storage_payer(
     provider: &ConfluxSimulationProvider,
-    epoch: EpochNumber,
+    state_anchor: ConfluxStateAnchor,
     transaction: &CoreSpaceTransaction,
 ) -> Result<PreparedStoragePayer, ConfluxSimulationError> {
     let Some(target) = transaction.to.as_ref() else {
@@ -200,7 +199,9 @@ pub(crate) async fn prepare_storage_payer(
     };
 
     let target_cfx = cfx_types::Address::from_slice(&target.bytes());
-    let code = provider.cfx_get_code(target_cfx, epoch.clone()).await?;
+    let code = provider
+        .cfx_get_code(target_cfx, state_anchor.core_space_pivot())
+        .await?;
     if code.is_empty() {
         return Ok(PreparedStoragePayer {
             storage_covered_by_sponsor: false,
@@ -215,7 +216,7 @@ pub(crate) async fn prepare_storage_payer(
             transaction.gas_limit,
             storage_payer_gas_price(&transaction.variant),
             storage_limit,
-            epoch,
+            state_anchor.core_space_epoch(),
         )
         .await?;
 

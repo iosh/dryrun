@@ -3,10 +3,11 @@ use std::{
     sync::{Arc, Mutex as SyncMutex},
 };
 
+use alloy::eips::BlockId as EspaceBlockId;
 use cfx_parameters::staking::DRIPS_PER_STORAGE_COLLATERAL_UNIT;
 use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;
-use cfx_rpc_eth_types::BlockId as EthBlockId;
 use cfx_storage::{Error as StorageError, Result as StorageResult};
+use conflux_provider::BlockHashOrEpochNumber;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::state::{
@@ -228,7 +229,7 @@ impl ConfluxStateSource {
             CoreSpaceStateItem::StorageSlot { address, slot } => {
                 // Public Core Space RPC returns the value without its storage owner.
                 self.provider
-                    .cfx_get_storage_at(address, slot, self.core_space_epoch())
+                    .cfx_get_storage_at(address, slot, self.core_space_pivot())
                     .await
                     .map_err(|error| self.provider_error("cfx_getStorageAt", error))
                     .map(|value| value.map(encode_storage_slot))
@@ -258,8 +259,12 @@ impl ConfluxStateSource {
         self.state_anchor.core_space_epoch()
     }
 
-    fn espace_block(&self) -> EthBlockId {
+    fn espace_block(&self) -> EspaceBlockId {
         self.state_anchor.espace_block()
+    }
+
+    fn core_space_pivot(&self) -> BlockHashOrEpochNumber {
+        self.state_anchor.core_space_pivot()
     }
 
     async fn espace_account_data(&self, address: Address) -> StorageResult<Arc<EspaceAccountData>> {
@@ -345,7 +350,7 @@ impl ConfluxStateSource {
     ) -> StorageResult<StateRead> {
         let code = self
             .provider
-            .cfx_get_code(address, self.core_space_epoch())
+            .cfx_get_code(address, self.core_space_pivot())
             .await
             .map_err(|error| self.provider_error("cfx_getCode", error))?;
 
@@ -379,7 +384,7 @@ impl ConfluxStateSource {
             .cfx_call(
                 key.control_contract_address(),
                 key.is_all_whitelisted_call_data(),
-                self.core_space_epoch(),
+                self.core_space_pivot(),
             )
             .await
             .and_then(|value| decode_abi_bool(value, "cfx_call"))
@@ -405,7 +410,7 @@ impl ConfluxStateSource {
             .cfx_call(
                 key.control_contract_address(),
                 key.is_user_whitelisted_call_data(),
-                self.core_space_epoch(),
+                self.core_space_pivot(),
             )
             .await
             .and_then(|value| decode_abi_bool(value, "cfx_call"))

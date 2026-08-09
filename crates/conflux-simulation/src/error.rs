@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use crate::{
     ConfluxRpcError,
+    espace::EspaceContextError,
     execution::{ExecutionBlockContextError, TransactionExecutionError},
 };
 
@@ -117,6 +118,9 @@ pub enum ConfluxInitializationError {
 
 #[derive(Debug, Error)]
 pub enum ConfluxSimulationError {
+    #[error(transparent)]
+    EspaceContext(#[from] EspaceContextError),
+
     #[error("block not found: {block}")]
     BlockNotFound { block: String },
 

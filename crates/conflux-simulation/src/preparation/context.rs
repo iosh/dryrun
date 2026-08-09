@@ -1,38 +1,21 @@
 use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;
-use cfx_rpc_eth_types::BlockId as EthBlockId;
 use cfx_types::{H256, U256};
+use conflux_provider::BlockHashOrEpochNumber;
 
 use crate::{
     ConfluxSimulationError,
     core_space::CoreSpaceEpochRef,
-    espace::{EspaceBlockContext, EspaceBlockRef},
     execution::{
         CoreSpacePivotBlockContext, ExecutionBlockContext, ExecutionConsensusContext,
-        build_core_space_pivot_block_context, build_espace_block_context,
+        build_core_space_pivot_block_context, build_espace_execution_block_context,
         build_execution_block_context,
     },
-    primitive::b256_from_cfx,
+    primitive::b256_to_cfx,
     state::{
         ConfluxSimulationProvider, ConfluxStateAnchor, CoreSpaceRpcBlock, CoreSpaceRpcPoSBlock,
         EspaceRpcBlock,
     },
 };
-
-pub(crate) struct EspaceSimulationContext {
-    pub(crate) block_context: ExecutionBlockContext,
-    pub(crate) state_anchor: ConfluxStateAnchor,
-    pub(crate) simulated_block: EspaceBlockContext,
-}
-
-impl EspaceSimulationContext {
-    pub fn base_fee_per_gas(&self) -> Option<U256> {
-        self.block_context.base_fees.espace_base_fee_per_gas
-    }
-
-    pub fn state_block(&self) -> EthBlockId {
-        self.state_anchor.espace_block()
-    }
-}
 
 pub(crate) struct CoreSpaceSimulationContext {
     pub(crate) block_context: ExecutionBlockContext,
@@ -51,44 +34,10 @@ impl CoreSpaceSimulationContext {
     pub fn state_epoch(&self) -> CfxEpochNumber {
         self.state_anchor.core_space_epoch()
     }
-}
 
-pub(crate) async fn load_espace_context(
-    provider: &ConfluxSimulationProvider,
-    block: &EspaceBlockRef,
-) -> Result<EspaceSimulationContext, ConfluxSimulationError> {
-    let espace_block = provider
-        .eth_get_block_by_number(espace_block_selector(block))
-        .await?
-        .ok_or_else(|| ConfluxSimulationError::BlockNotFound {
-            block: "eSpace block".to_string(),
-        })?;
-    let state_anchor = state_anchor_from_espace_block(&espace_block)?;
-    let core_space_pivot_block = load_core_space_pivot_block(provider, state_anchor).await?;
-
-    let simulated_block = EspaceBlockContext {
-        number: state_anchor.epoch_number(),
-        hash: b256_from_cfx(espace_block.hash),
-    };
-
-    let core_space_pivot = build_core_space_pivot_block_context(&core_space_pivot_block)?;
-    validate_same_state_anchor(
-        state_anchor,
-        state_anchor_from_core_space_pivot(&core_space_pivot),
-    )?;
-    let espace = build_espace_block_context(&espace_block);
-
-    let block_context = build_execution_block_context(
-        &core_space_pivot,
-        &espace,
-        ExecutionConsensusContext::default(),
-    );
-
-    Ok(EspaceSimulationContext {
-        block_context,
-        state_anchor,
-        simulated_block,
-    })
+    pub fn state_pivot(&self) -> BlockHashOrEpochNumber {
+        self.state_anchor.core_space_pivot()
+    }
 }
 
 pub(crate) async fn load_core_space_context(
@@ -105,8 +54,8 @@ pub(crate) async fn load_core_space_context(
     let core_space_pivot = build_core_space_pivot_block_context(&core_space_pivot_block)?;
     let state_anchor = state_anchor_from_core_space_pivot(&core_space_pivot);
     let espace_block = load_espace_block(provider, state_anchor).await?;
-    validate_same_state_anchor(state_anchor, state_anchor_from_espace_block(&espace_block)?)?;
-    let espace = build_espace_block_context(&espace_block);
+    validate_same_state_anchor(state_anchor, state_anchor_from_espace_block(&espace_block))?;
+    let espace = build_espace_execution_block_context(&espace_block);
     let consensus = load_core_space_consensus_context(provider, &core_space_pivot_block).await?;
     let block_context = build_execution_block_context(&core_space_pivot, &espace, consensus);
 
@@ -161,35 +110,16 @@ fn consensus_context_from_pos_block(
     })
 }
 
-async fn load_core_space_pivot_block(
-    provider: &ConfluxSimulationProvider,
-    anchor: ConfluxStateAnchor,
-) -> Result<CoreSpaceRpcBlock, ConfluxSimulationError> {
-    provider
-        .cfx_get_block_by_epoch_number(anchor.core_space_epoch())
-        .await?
-        .ok_or_else(|| ConfluxSimulationError::BlockNotFound {
-            block: "Core Space pivot block".to_string(),
-        })
-}
-
 async fn load_espace_block(
     provider: &ConfluxSimulationProvider,
     anchor: ConfluxStateAnchor,
 ) -> Result<EspaceRpcBlock, ConfluxSimulationError> {
     provider
-        .eth_get_block_by_number(anchor.espace_block())
+        .eth_get_block(anchor.espace_block())
         .await?
         .ok_or_else(|| ConfluxSimulationError::BlockNotFound {
             block: "eSpace block".to_string(),
         })
-}
-
-fn espace_block_selector(block: &EspaceBlockRef) -> EthBlockId {
-    match block {
-        EspaceBlockRef::Latest => EthBlockId::Latest,
-        EspaceBlockRef::Number(number) => EthBlockId::Num(*number),
-    }
 }
 
 fn core_space_epoch_selector(epoch: &CoreSpaceEpochRef) -> CfxEpochNumber {
@@ -199,13 +129,8 @@ fn core_space_epoch_selector(epoch: &CoreSpaceEpochRef) -> CfxEpochNumber {
     }
 }
 
-fn state_anchor_from_espace_block(
-    block: &EspaceRpcBlock,
-) -> Result<ConfluxStateAnchor, ConfluxSimulationError> {
-    Ok(ConfluxStateAnchor::new(
-        espace_block_number(block)?,
-        block.hash,
-    ))
+fn state_anchor_from_espace_block(block: &EspaceRpcBlock) -> ConfluxStateAnchor {
+    ConfluxStateAnchor::new(block.number, b256_to_cfx(block.hash))
 }
 
 fn state_anchor_from_core_space_pivot(pivot: &CoreSpacePivotBlockContext) -> ConfluxStateAnchor {
@@ -221,14 +146,4 @@ fn validate_same_state_anchor(
     }
 
     Ok(())
-}
-
-fn espace_block_number(block: &EspaceRpcBlock) -> Result<u64, ConfluxSimulationError> {
-    if block.number > U256::from(u64::MAX) {
-        return Err(ConfluxSimulationError::InvalidBlockContext {
-            message: format!("eSpace block number exceeds u64: {:?}", block.number),
-        });
-    }
-
-    Ok(block.number.as_u64())
 }

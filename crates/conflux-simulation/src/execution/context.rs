@@ -40,7 +40,7 @@ pub(crate) struct CoreSpacePivotBlockContext {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct EspaceBlockContext {
+pub(crate) struct EspaceExecutionBlockContext {
     pub(crate) base_fee_per_gas: Option<U256>,
 }
 
@@ -80,15 +80,17 @@ pub(crate) fn build_core_space_pivot_block_context(
     })
 }
 
-pub(crate) fn build_espace_block_context(block: &EspaceRpcBlock) -> EspaceBlockContext {
-    EspaceBlockContext {
+pub(crate) fn build_espace_execution_block_context(
+    block: &EspaceRpcBlock,
+) -> EspaceExecutionBlockContext {
+    EspaceExecutionBlockContext {
         base_fee_per_gas: block.base_fee_per_gas,
     }
 }
 
 pub(crate) fn build_execution_block_context(
     pivot: &CoreSpacePivotBlockContext,
-    espace: &EspaceBlockContext,
+    espace: &EspaceExecutionBlockContext,
     consensus: ExecutionConsensusContext,
 ) -> ExecutionBlockContext {
     ExecutionBlockContext {

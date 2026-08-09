@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
-use alloy::{primitives::U256 as AlloyU256, providers::Provider};
+use alloy::{eips::BlockId, primitives::U256 as AlloyU256, providers::Provider};
 use cfx_rpc_cfx_types::EpochNumber;
-use cfx_rpc_eth_types::BlockId;
 use cfx_types::{Address, H256, U256};
 use conflux_provider::{BlockHashOrEpochNumber, CoreTransactionRequest};
 use primitives::{DepositInfo, VoteStakeInfo};
@@ -29,7 +28,7 @@ impl ConfluxSimulationProvider {
         block_number: BlockId,
     ) -> Result<Option<U256>, ConfluxRpcError> {
         let value = self
-            .espace_provider_at(block_number)?
+            .espace_provider_at(block_number)
             .get_storage_at(
                 address_from_cfx(address),
                 AlloyU256::from_be_slice(slot.as_bytes()),
@@ -48,7 +47,7 @@ impl ConfluxSimulationProvider {
         address: Address,
         block_number: BlockId,
     ) -> Result<EspaceAccountData, ConfluxRpcError> {
-        let provider = self.espace_provider_at(block_number)?;
+        let provider = self.espace_provider_at(block_number);
         let balance = provider
             .get_balance(address_from_cfx(address))
             .await
@@ -267,14 +266,12 @@ impl ConfluxSimulationProvider {
     pub(crate) async fn cfx_get_code(
         &self,
         address: Address,
-        epoch: EpochNumber,
+        selector: BlockHashOrEpochNumber,
     ) -> Result<Vec<u8>, ConfluxRpcError> {
         let value = Self::core_request(
             "cfx_getCode",
-            self.core_space_provider.cfx_get_code(
-                self.core_address(address)?,
-                BlockHashOrEpochNumber::Epoch(Self::provider_epoch(epoch)?),
-            ),
+            self.core_space_provider
+                .cfx_get_code(self.core_address(address)?, selector),
         )
         .await?;
         Ok(value.to_vec())
@@ -284,14 +281,14 @@ impl ConfluxSimulationProvider {
         &self,
         address: Address,
         slot: H256,
-        epoch: EpochNumber,
+        selector: BlockHashOrEpochNumber,
     ) -> Result<Option<U256>, ConfluxRpcError> {
         let value = Self::core_request(
             "cfx_getStorageAt",
             self.core_space_provider.cfx_get_storage_at(
                 self.core_address(address)?,
                 AlloyU256::from_be_slice(slot.as_bytes()),
-                Some(BlockHashOrEpochNumber::Epoch(Self::provider_epoch(epoch)?)),
+                Some(selector),
             ),
         )
         .await?;
@@ -302,7 +299,7 @@ impl ConfluxSimulationProvider {
         &self,
         to: Address,
         data: Vec<u8>,
-        epoch: EpochNumber,
+        selector: BlockHashOrEpochNumber,
     ) -> Result<Vec<u8>, ConfluxRpcError> {
         let value = Self::core_request(
             "cfx_call",
@@ -323,7 +320,7 @@ impl ConfluxSimulationProvider {
                     chain_id: None,
                     epoch_height: None,
                 },
-                Some(BlockHashOrEpochNumber::Epoch(Self::provider_epoch(epoch)?)),
+                Some(selector),
             ),
         )
         .await?;
