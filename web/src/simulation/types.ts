@@ -1,7 +1,7 @@
 import type { EnvironmentId } from './environment.ts';
 import type {
   CoreChange,
-  HexChange,
+  EvmChange,
   RpcSimulationResponse,
 } from './rpc.ts';
 
@@ -70,7 +70,7 @@ export type SimulationRequest = HexSimulationRequest | CoreSimulationRequest;
 
 export type SimulationResponse = RpcSimulationResponse;
 
-export type SimulationChange = HexChange | CoreChange;
+export type SimulationChange = EvmChange | CoreChange;
 
 export interface SimulationRecord {
   id: string;

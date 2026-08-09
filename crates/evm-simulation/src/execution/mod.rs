@@ -16,7 +16,7 @@ use crate::{
 };
 use alloy::{
     consensus::{BlockHeader, Header, Sealed},
-    primitives::Address,
+    primitives::{Address, Log},
 };
 use revm::{
     Context, ExecuteCommitEvm, InspectEvm, MainBuilder, MainContext, MainnetEvm as RevmMainnetEvm,
@@ -77,6 +77,10 @@ impl<INSP> ExecutedTransaction<INSP> {
             .ok_or(EvmExecutionError::TransitionAlreadyApplied)
     }
 
+    pub(crate) fn committed_logs(&self) -> &[Log] {
+        self.result.logs()
+    }
+
     pub(crate) const fn fee_settlement(&self) -> &EvmFeeSettlement {
         &self.fee_settlement
     }
@@ -123,7 +127,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
     pub(crate) fn new(
         database: MainnetEvmDatabase,
         block: Sealed<Header>,
-        chain_spec: EthereumChainSpec,
+        chain_spec: &EthereumChainSpec,
         inspector: INSP,
     ) -> Result<Self, EvmSimulationError> {
         let block_number = block.number();

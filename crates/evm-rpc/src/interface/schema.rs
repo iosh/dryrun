@@ -188,206 +188,113 @@ pub struct ExecutionFailure {
     rename_all_fields = "camelCase"
 )]
 pub enum Change {
-    Transfer {
-        #[serde(flatten)]
-        asset: TransferAsset,
+    NativeTransfer {
         from: Address,
         to: Address,
-    },
-    Mint {
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
         #[serde(flatten)]
-        asset: TokenMovementAsset,
-        to: Address,
+        currency: NativeCurrency,
     },
-    Burn {
+    SelfDestructBurn {
+        contract_address: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
         #[serde(flatten)]
-        asset: BurnAsset,
+        currency: NativeCurrency,
+    },
+    WrappedNativeDeposit {
+        contract_address: Address,
+        account: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
+        #[serde(flatten)]
+        metadata: Erc20Metadata,
+    },
+    WrappedNativeWithdrawal {
+        contract_address: Address,
+        account: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
+        #[serde(flatten)]
+        metadata: Erc20Metadata,
+    },
+    Erc20Transfer {
+        contract_address: Address,
         from: Address,
-    },
-    Allowance {
+        to: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
         #[serde(flatten)]
-        asset: AllowanceAsset,
+        metadata: Erc20Metadata,
+    },
+    Erc20Approval {
+        contract_address: Address,
         owner: Address,
         spender: Address,
-    },
-    TokenApproval {
+        #[serde(serialize_with = "u256_hex::serialize")]
+        approved_amount: U256,
         #[serde(flatten)]
-        asset: TokenApprovalAsset,
+        metadata: Erc20Metadata,
+    },
+    Erc721Transfer {
+        contract_address: Address,
+        from: Address,
+        to: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        token_id: U256,
+        #[serde(flatten)]
+        metadata: Erc721CollectionMetadata,
+    },
+    Erc721Approval {
+        contract_address: Address,
+        owner: Address,
+        approved_address: Option<Address>,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        token_id: U256,
+        #[serde(flatten)]
+        metadata: Erc721CollectionMetadata,
     },
     OperatorApproval {
-        #[serde(flatten)]
-        asset: OperatorApprovalAsset,
+        contract_address: Address,
         owner: Address,
         operator: Address,
-        approved_before: bool,
-        approved_after: bool,
+        approved: bool,
     },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub enum TransferAsset {
-    Native {
-        #[serde(serialize_with = "u256_hex::serialize")]
-        raw_amount: U256,
-        #[serde(flatten)]
-        metadata: NativeMetadata,
-    },
-    Erc20 {
+    Erc1155TransferSingle {
         contract_address: Address,
-        #[serde(serialize_with = "u256_hex::serialize")]
-        raw_amount: U256,
-        #[serde(flatten)]
-        metadata: Erc20Metadata,
-    },
-    Erc721 {
-        contract_address: Address,
-        #[serde(serialize_with = "u256_hex::serialize")]
-        token_id: U256,
-        #[serde(flatten)]
-        metadata: Erc721CollectionMetadata,
-    },
-    Erc1155 {
-        contract_address: Address,
+        operator: Address,
+        from: Address,
+        to: Address,
         #[serde(serialize_with = "u256_hex::serialize")]
         token_id: U256,
         #[serde(serialize_with = "u256_hex::serialize")]
         raw_amount: U256,
     },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub enum TokenMovementAsset {
-    Erc20 {
+    Erc1155TransferBatch {
         contract_address: Address,
-        #[serde(serialize_with = "u256_hex::serialize")]
-        raw_amount: U256,
-        #[serde(flatten)]
-        metadata: Erc20Metadata,
-    },
-    Erc721 {
-        contract_address: Address,
-        #[serde(serialize_with = "u256_hex::serialize")]
-        token_id: U256,
-        #[serde(flatten)]
-        metadata: Erc721CollectionMetadata,
-    },
-    Erc1155 {
-        contract_address: Address,
-        #[serde(serialize_with = "u256_hex::serialize")]
-        token_id: U256,
-        #[serde(serialize_with = "u256_hex::serialize")]
-        raw_amount: U256,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub enum BurnAsset {
-    Native {
-        #[serde(serialize_with = "u256_hex::serialize")]
-        raw_amount: U256,
-        #[serde(flatten)]
-        metadata: NativeMetadata,
-    },
-    Erc20 {
-        contract_address: Address,
-        #[serde(serialize_with = "u256_hex::serialize")]
-        raw_amount: U256,
-        #[serde(flatten)]
-        metadata: Erc20Metadata,
-    },
-    Erc721 {
-        contract_address: Address,
-        #[serde(serialize_with = "u256_hex::serialize")]
-        token_id: U256,
-        #[serde(flatten)]
-        metadata: Erc721CollectionMetadata,
-    },
-    Erc1155 {
-        contract_address: Address,
-        #[serde(serialize_with = "u256_hex::serialize")]
-        token_id: U256,
-        #[serde(serialize_with = "u256_hex::serialize")]
-        raw_amount: U256,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub enum AllowanceAsset {
-    Erc20 {
-        contract_address: Address,
-        #[serde(serialize_with = "u256_hex::serialize")]
-        raw_amount_before: U256,
-        #[serde(serialize_with = "u256_hex::serialize")]
-        raw_amount_after: U256,
-        #[serde(flatten)]
-        metadata: Erc20Metadata,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub enum TokenApprovalAsset {
-    Erc721 {
-        contract_address: Address,
-        #[serde(serialize_with = "u256_hex::serialize")]
-        token_id: U256,
-        approved_address_before: Option<Address>,
-        approved_address_after: Option<Address>,
-        #[serde(flatten)]
-        metadata: Erc721CollectionMetadata,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub enum OperatorApprovalAsset {
-    Erc721 {
-        contract_address: Address,
-        #[serde(flatten)]
-        metadata: Erc721CollectionMetadata,
-    },
-    Erc1155 {
-        contract_address: Address,
+        operator: Address,
+        from: Address,
+        to: Address,
+        items: Vec<Erc1155TransferItem>,
     },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct NativeMetadata {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub symbol: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub decimals: Option<u8>,
+pub struct Erc1155TransferItem {
+    #[serde(serialize_with = "u256_hex::serialize")]
+    pub token_id: U256,
+    #[serde(serialize_with = "u256_hex::serialize")]
+    pub raw_amount: U256,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeCurrency {
+    pub name: String,
+    pub symbol: String,
+    pub decimals: u8,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

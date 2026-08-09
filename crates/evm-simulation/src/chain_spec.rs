@@ -1,42 +1,59 @@
 use alloy_chains::Chain;
-use alloy_hardforks::EthereumHardfork;
+use alloy_hardforks::{EthereumChainHardforks, EthereumHardfork, EthereumHardforks};
+use alloy_primitives::Address;
 use revm::primitives::hardfork::SpecId;
 use thiserror::Error;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use crate::NativeCurrency;
+
+#[derive(Debug, Clone)]
 pub(crate) struct EthereumChainSpec {
-    chain_id: u64,
+    chain: Chain,
+    hardforks: EthereumChainHardforks,
+    native_currency: NativeCurrency,
+    wrapped_native_token: Option<Address>,
 }
 
 impl EthereumChainSpec {
-    pub(crate) const fn mainnet() -> Self {
+    pub(crate) fn mainnet() -> Self {
+        let chain = Chain::mainnet();
         Self {
-            chain_id: Chain::mainnet().id(),
+            chain,
+            hardforks: EthereumChainHardforks::mainnet(),
+            native_currency: NativeCurrency {
+                name: "Ether".to_string(),
+                symbol: "ETH".to_string(),
+                decimals: 18,
+            },
+            wrapped_native_token: chain
+                .named()
+                .and_then(|network| network.wrapped_native_token()),
         }
     }
 
-    pub(crate) const fn chain_id(self) -> u64 {
-        self.chain_id
+    pub(crate) const fn chain_id(&self) -> u64 {
+        self.chain.id()
     }
 
-    pub(crate) const fn native_currency(self) -> NativeCurrency {
-        NativeCurrency {
-            name: "Ether",
-            symbol: "ETH",
-            decimals: 18,
-        }
+    pub(crate) const fn native_currency(&self) -> &NativeCurrency {
+        &self.native_currency
+    }
+
+    pub(crate) const fn wrapped_native_token_address(&self) -> Option<Address> {
+        self.wrapped_native_token
     }
 
     pub(crate) fn execution_spec_id(
-        self,
+        &self,
         block_number: u64,
         timestamp: u64,
     ) -> Result<SpecId, EthereumChainSpecError> {
-        let hardfork = EthereumHardfork::mainnet()
+        let hardfork = EthereumHardfork::VARIANTS
             .iter()
             .rev()
-            .find_map(|(hardfork, condition)| {
-                condition
+            .find_map(|hardfork| {
+                self.hardforks
+                    .ethereum_fork_activation(*hardfork)
                     .active_at_timestamp_or_number(timestamp, block_number)
                     .then_some(*hardfork)
             })
@@ -44,13 +61,6 @@ impl EthereumChainSpec {
 
         map_hardfork_to_spec_id(hardfork)
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct NativeCurrency {
-    pub(crate) name: &'static str,
-    pub(crate) symbol: &'static str,
-    pub(crate) decimals: u8,
 }
 
 #[derive(Debug, Error)]

@@ -18,7 +18,7 @@ pub(crate) async fn complete_transaction(
     input: TransactionInput,
     provider: &DynProvider<Ethereum>,
     block: &Sealed<Header>,
-    chain_spec: EthereumChainSpec,
+    chain_spec: &EthereumChainSpec,
 ) -> Result<CompleteTransaction, EvmTransactionCompletionError> {
     match input {
         TransactionInput::Complete(transaction) => Ok(transaction),
@@ -32,7 +32,7 @@ async fn complete_partial_transaction(
     transaction: PartialTransaction,
     provider: &DynProvider<Ethereum>,
     block: &Sealed<Header>,
-    chain_spec: EthereumChainSpec,
+    chain_spec: &EthereumChainSpec,
 ) -> Result<CompleteTransaction, EvmTransactionCompletionError> {
     let PartialTransaction {
         from,

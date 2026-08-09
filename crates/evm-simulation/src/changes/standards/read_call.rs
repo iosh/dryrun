@@ -1,38 +1,34 @@
-use alloy_primitives::{Address, Bytes, U256};
+use alloy::primitives::{Address, Bytes, U256};
 use revm::{
-    Database, ExecuteEvm,
+    ExecuteEvm,
     context::TxEnv,
     context_interface::{
-        result::{EVMError, ExecutionResult, HaltReason},
+        result::{EVMError, ExecutionResult},
         transaction::{AccessList as RevmAccessList, TransactionType},
     },
     handler::EvmTr,
     primitives::TxKind,
 };
 
-use crate::{CompleteTransaction, execution::MainnetEvmWithDb};
+use crate::{CompleteTransaction, EvmExecutionObserver, execution::MainnetEvm};
 
-const READ_CALL_GAS_LIMIT: u64 = 100_000;
+const METADATA_CALL_GAS_LIMIT: u64 = 100_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ReadCallOutcome {
     Success(Bytes),
-    Revert(Bytes),
-    Halt(HaltReason),
+    Reverted,
+    Halted,
 }
 
-pub(super) fn with_read_call_context<DB, INSP, T>(
-    evm: &mut MainnetEvmWithDb<DB, INSP>,
-    operation: impl FnOnce(&mut MainnetEvmWithDb<DB, INSP>) -> T,
-) -> T
-where
-    DB: Database,
-{
+pub(super) fn with_read_call_context<T>(
+    evm: &mut MainnetEvm<EvmExecutionObserver>,
+    operation: impl FnOnce(&mut MainnetEvm<EvmExecutionObserver>) -> T,
+) -> T {
     let original_cfg = evm.ctx().cfg.clone();
     let original_tx = evm.ctx().tx.clone();
 
     {
-        // Read calls are local probes rather than sendable transactions.
         let cfg = &mut evm.ctx_mut().cfg;
         cfg.disable_nonce_check = true;
         cfg.disable_balance_check = true;
@@ -49,23 +45,24 @@ where
     output
 }
 
-pub(super) fn execute_read_call<DB, INSP>(
-    evm: &mut MainnetEvmWithDb<DB, INSP>,
+pub(super) fn execute_read_call(
+    evm: &mut MainnetEvm<EvmExecutionObserver>,
     transaction: &CompleteTransaction,
     chain_id: u64,
     target: Address,
     data: Bytes,
-) -> Result<ReadCallOutcome, EVMError<DB::Error>>
-where
-    DB: Database,
-{
+) -> Result<ReadCallOutcome, EVMError<revm::database::AlloyDBError>> {
     let tx = build_read_call_tx(transaction, chain_id, target, data);
-    let result = evm.transact(tx)?.result;
+    let result = evm.transact(tx);
 
-    Ok(match result {
+    // A probe must not leave instrumentation behind even if a future Revm
+    // execution path invokes the configured inspector.
+    let _ = evm.inspector.take_observations();
+
+    Ok(match result?.result {
         ExecutionResult::Success { output, .. } => ReadCallOutcome::Success(output.into_data()),
-        ExecutionResult::Revert { output, .. } => ReadCallOutcome::Revert(output),
-        ExecutionResult::Halt { reason, .. } => ReadCallOutcome::Halt(reason),
+        ExecutionResult::Revert { .. } => ReadCallOutcome::Reverted,
+        ExecutionResult::Halt { .. } => ReadCallOutcome::Halted,
     })
 }
 
@@ -75,12 +72,10 @@ fn build_read_call_tx(
     target: Address,
     data: Bytes,
 ) -> TxEnv {
-    // A distinct preview nonce avoids colliding with the user transaction when
-    // both execute against the same local state.
     TxEnv {
         tx_type: TransactionType::Legacy as u8,
         caller: transaction.from,
-        gas_limit: READ_CALL_GAS_LIMIT,
+        gas_limit: METADATA_CALL_GAS_LIMIT,
         gas_price: 0,
         kind: TxKind::Call(target),
         value: U256::ZERO,

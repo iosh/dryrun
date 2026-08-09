@@ -185,7 +185,7 @@ where
                 to,
                 amount,
             } => {
-                let change_metadata = metadata.erc20(&token)?;
+                let change_metadata = metadata.erc20_metadata(&token)?;
                 StandardChange::Erc20Transfer {
                     contract_address: token,
                     from,
@@ -200,7 +200,7 @@ where
                 spender,
                 value,
             } => {
-                let change_metadata = metadata.erc20(&token)?;
+                let change_metadata = metadata.erc20_metadata(&token)?;
                 StandardChange::Erc20Approval {
                     contract_address: token,
                     owner,

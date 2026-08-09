@@ -1,9 +1,11 @@
-use alloy::{primitives::U256, transports::TransportError};
+use alloy::{
+    primitives::{Address, U256},
+    transports::TransportError,
+};
+use contract_standards::{MetadataCall, MissingMetadataOutcome};
 use revm::database::AlloyDBError;
 use thiserror::Error;
 use tokio::task::JoinError;
-
-use contract_standards::legacy::ContractStandardsError;
 
 use crate::{EvmBlockSelector, TransactionInputError, chain_spec::EthereumChainSpecError};
 
@@ -218,37 +220,69 @@ impl From<EthereumChainSpecError> for EvmNotReadyError {
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum EvmChangesError {
-    #[error("transaction changes failed: {source}")]
-    ContractStandards {
-        #[source]
-        source: Box<ContractStandardsError>,
+pub enum EvmNativeChangeError {
+    #[error("native account {address} is missing from transaction state")]
+    AccountMissing { address: Address },
+
+    #[error("native balance underflow for {address}: balance {balance}, cannot subtract {amount}")]
+    BalanceUnderflow {
+        address: Address,
+        balance: U256,
+        amount: U256,
     },
 
-    #[error("state access failed while {operation}: {source}")]
-    StateAccess {
-        operation: String,
+    #[error("native balance overflow for {address}: balance {balance}, cannot add {amount}")]
+    BalanceOverflow {
+        address: Address,
+        balance: U256,
+        amount: U256,
+    },
+
+    #[error(
+        "native balance mismatch for {address}: replayed {replayed_balance}, transaction state {state_balance}"
+    )]
+    BalanceMismatch {
+        address: Address,
+        replayed_balance: U256,
+        state_balance: U256,
+    },
+}
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum EvmChangesError {
+    #[error(transparent)]
+    Native(#[from] EvmNativeChangeError),
+
+    #[error(
+        "execution observer recorded {observed_count} committed logs, but the execution result contains {result_count}"
+    )]
+    CommittedLogCountMismatch {
+        observed_count: usize,
+        result_count: usize,
+    },
+
+    #[error("execution observer log {index} does not match the committed execution result")]
+    CommittedLogMismatch { index: usize },
+
+    #[error("state access failed while executing metadata probe {call:?}: {source}")]
+    MetadataStateAccess {
+        call: MetadataCall<Address>,
         #[source]
         source: EvmStateAccessError,
     },
 
-    #[error("{details}")]
-    Analysis { details: String },
-}
+    #[error("metadata probe {call:?} could not be executed: {details}")]
+    MetadataProbeExecution {
+        call: MetadataCall<Address>,
+        details: String,
+    },
 
-impl EvmChangesError {
-    pub(crate) fn state_access(operation: impl Into<String>, source: AlloyDBError) -> Self {
-        Self::StateAccess {
-            operation: operation.into(),
-            source: source.into(),
-        }
-    }
-
-    pub(crate) fn analysis(details: impl Into<String>) -> Self {
-        Self::Analysis {
-            details: details.into(),
-        }
-    }
+    #[error("a decoded change is missing a required metadata outcome")]
+    MissingMetadataOutcome {
+        #[from]
+        source: MissingMetadataOutcome,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -282,21 +316,5 @@ pub enum EvmSimulationError {
 impl EvmSimulationError {
     pub(crate) fn execution_task(source: JoinError) -> Self {
         Self::ExecutionTask { source }
-    }
-
-    pub(crate) fn changes(details: impl Into<String>) -> Self {
-        Self::Changes(EvmChangesError::analysis(details))
-    }
-
-    pub(crate) fn changes_state_access(operation: impl Into<String>, source: AlloyDBError) -> Self {
-        Self::Changes(EvmChangesError::state_access(operation, source))
-    }
-}
-
-impl From<ContractStandardsError> for EvmSimulationError {
-    fn from(error: ContractStandardsError) -> Self {
-        Self::Changes(EvmChangesError::ContractStandards {
-            source: Box::new(error),
-        })
     }
 }

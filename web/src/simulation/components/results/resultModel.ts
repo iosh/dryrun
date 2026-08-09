@@ -1,9 +1,8 @@
 import { formatAmount, formatNativeAmount } from '../../../lib/formatting.ts';
 import { getEnvironment } from '../../environment.ts';
 import {
-  isAssetFlowChange,
   normalizeAddress,
-  toAssetFlowItemViewModel,
+  toAssetFlowItemViewModels,
   type AssetFlowItemViewModel,
   type ChangeAddressViewModel,
   type FlowEndpoint,
@@ -22,12 +21,20 @@ export function createSimulationResultViewModel(
 ): SimulationResultViewModel {
   const environment = getEnvironment(record.environmentId);
   const changes = record.response.changes;
-  const flowItems = changes.flatMap((change, changeIndex) => {
-    const item = toAssetFlowItemViewModel(change, record.environmentId);
-    return item ? [{ ...item, changeIndex }] : [];
-  });
-  const stateEffects = changes.filter(
-    (change) => !isAssetFlowChange(change),
+  const changeFlows = changes.map((change) => ({
+    change,
+    items: toAssetFlowItemViewModels(change, record.environmentId),
+  }));
+  const flowItems = changeFlows
+    .flatMap(({ items }, changeIndex) =>
+      items.map((item) => ({
+        ...item,
+        changeIndex,
+      })),
+    )
+    .map((item, flowIndex) => ({ ...item, flowIndex }));
+  const stateEffects = changeFlows.flatMap(({ change, items }) =>
+    items.length === 0 ? [change] : [],
   );
 
   return {

@@ -1,8 +1,40 @@
-mod candidates;
 mod metadata;
 mod read_call;
-mod state_reads;
 
-pub(crate) use candidates::collect_standard_candidates;
-pub(crate) use metadata::load_standard_metadata;
-pub(crate) use state_reads::read_token_state_values as read_standard_state_values;
+use contract_standards::{DecodedStandardLog, decode_standard_log};
+
+use crate::EvmExecutionObservation;
+
+pub(super) use metadata::load_metadata;
+
+#[derive(Debug)]
+pub(super) struct DecodedStandardOccurrence {
+    pub(super) observation_index: usize,
+    pub(super) decoded_log: DecodedStandardLog<alloy::primitives::Address>,
+}
+
+pub(super) fn decode_standard_occurrences(
+    observations: &[EvmExecutionObservation],
+) -> Vec<DecodedStandardOccurrence> {
+    observations
+        .iter()
+        .enumerate()
+        .filter_map(|(observation_index, observation)| {
+            let EvmExecutionObservation::Log {
+                address,
+                topics,
+                data,
+            } = observation
+            else {
+                return None;
+            };
+
+            decode_standard_log(*address, topics, data, |address| address).map(|decoded_log| {
+                DecodedStandardOccurrence {
+                    observation_index,
+                    decoded_log,
+                }
+            })
+        })
+        .collect()
+}

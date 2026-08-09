@@ -1,34 +1,36 @@
 use std::collections::HashMap;
 
 use alloy::primitives::{Address, U256};
-use contract_standards::legacy::Position;
 use revm::state::EvmState;
-use simulation_changes::{Change, NativeMetadata, PositionedChange};
 
-use crate::{EvmExecutionObservation, EvmNativeChangeError, execution::EvmFeeSettlement};
+use crate::{
+    EvmChange, EvmExecutionObservation, EvmNativeChangeError, NativeCurrency,
+    changes::ChangeOccurrence, execution::EvmFeeSettlement,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeCandidate {
     Transfer {
-        position: Position,
+        observation_index: usize,
         from: Address,
         to: Address,
         amount: U256,
     },
     SelfDestructBurn {
-        position: Position,
+        observation_index: usize,
         contract: Address,
         amount: U256,
     },
 }
 
-pub(crate) fn analyze_native_changes(
+pub(super) fn analyze_native_changes(
     state: &EvmState,
     observations: &[EvmExecutionObservation],
     caller: Address,
     beneficiary: Address,
     fee_settlement: &EvmFeeSettlement,
-) -> Result<Vec<PositionedChange>, EvmNativeChangeError> {
+    currency: &NativeCurrency,
+) -> Result<Vec<ChangeOccurrence>, EvmNativeChangeError> {
     let candidates = collect_native_candidates(state, observations)?;
 
     check_native_balances(
@@ -36,9 +38,8 @@ pub(crate) fn analyze_native_changes(
         &candidates,
         caller,
         beneficiary,
-        fee_settlement.caller_precharge(),
-        fee_settlement.caller_refund(),
-        fee_settlement.beneficiary_reward(),
+        fee_settlement,
+        currency,
     )
 }
 
@@ -54,16 +55,15 @@ fn collect_native_candidates(
                 caller,
                 target,
                 value,
-                ..
             } if !value.is_zero() => Some(NativeCandidate::Transfer {
-                position: Position::new(observation_index, 0),
+                observation_index,
                 from: *caller,
                 to: *target,
                 amount: *value,
             }),
             EvmExecutionObservation::CreateTransfer { from, to, amount } if !amount.is_zero() => {
                 Some(NativeCandidate::Transfer {
-                    position: Position::new(observation_index, 0),
+                    observation_index,
                     from: *from,
                     to: *to,
                     amount: *amount,
@@ -82,7 +82,7 @@ fn collect_native_candidates(
                 account
                     .is_selfdestructed()
                     .then_some(NativeCandidate::SelfDestructBurn {
-                        position: Position::new(observation_index, 0),
+                        observation_index,
                         contract: *contract,
                         amount: *amount,
                     })
@@ -92,7 +92,7 @@ fn collect_native_candidates(
                 target,
                 amount,
             } => Some(NativeCandidate::Transfer {
-                position: Position::new(observation_index, 0),
+                observation_index,
                 from: *contract,
                 to: *target,
                 amount: *amount,
@@ -115,58 +115,61 @@ fn check_native_balances(
     candidates: &[NativeCandidate],
     caller: Address,
     beneficiary: Address,
-    caller_precharge: U256,
-    caller_refund: U256,
-    beneficiary_reward: U256,
-) -> Result<Vec<PositionedChange>, EvmNativeChangeError> {
+    fee_settlement: &EvmFeeSettlement,
+    currency: &NativeCurrency,
+) -> Result<Vec<ChangeOccurrence>, EvmNativeChangeError> {
     let mut balances = state
         .iter()
         .map(|(address, account)| (*address, account.original_info.balance))
         .collect::<HashMap<_, _>>();
     let mut changes = Vec::new();
 
-    decrease_balance(&mut balances, caller, caller_precharge)?;
+    decrease_balance(&mut balances, caller, fee_settlement.caller_precharge())?;
 
     for candidate in candidates {
         match candidate {
             NativeCandidate::Transfer {
-                position,
+                observation_index,
                 from,
                 to,
                 amount,
             } => {
                 decrease_balance(&mut balances, *from, *amount)?;
                 increase_balance(&mut balances, *to, *amount)?;
-                changes.push(PositionedChange::new(
-                    *position,
-                    Change::NativeTransfer {
+                changes.push(ChangeOccurrence::new(
+                    *observation_index,
+                    EvmChange::NativeTransfer {
                         from: *from,
                         to: *to,
                         raw_amount: *amount,
-                        metadata: NativeMetadata::default(),
+                        currency: currency.clone(),
                     },
                 ));
             }
             NativeCandidate::SelfDestructBurn {
-                position,
+                observation_index,
                 contract,
                 amount,
             } => {
                 decrease_balance(&mut balances, *contract, *amount)?;
-                changes.push(PositionedChange::new(
-                    *position,
-                    Change::SelfDestructBurn {
+                changes.push(ChangeOccurrence::new(
+                    *observation_index,
+                    EvmChange::SelfDestructBurn {
                         contract_address: *contract,
                         raw_amount: *amount,
-                        metadata: NativeMetadata::default(),
+                        currency: currency.clone(),
                     },
                 ));
             }
         }
     }
 
-    increase_balance(&mut balances, caller, caller_refund)?;
-    increase_balance(&mut balances, beneficiary, beneficiary_reward)?;
+    increase_balance(&mut balances, caller, fee_settlement.caller_refund())?;
+    increase_balance(
+        &mut balances,
+        beneficiary,
+        fee_settlement.beneficiary_reward(),
+    )?;
 
     for (address, account) in state {
         let replayed_balance = balances

@@ -1,7 +1,8 @@
-use alloy_primitives::{Bytes, U256};
+use alloy_primitives::{Address, Bytes, U256};
 use evm_simulation::{
-    Change, Erc20Metadata, Erc721CollectionMetadata, EvmBlockContext, EvmExecutionOutcome,
-    EvmHaltReason, EvmSimulation, EvmSuccessOutput, EvmTransactionRejection, NativeMetadata,
+    Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem, EvmBlockContext, EvmChange,
+    EvmExecutionOutcome, EvmHaltReason, EvmSimulation, EvmSuccessOutput, EvmTransactionRejection,
+    NativeCurrency, StandardChange,
 };
 
 use crate::interface as rpc;
@@ -148,12 +149,12 @@ fn rejection_failure_code(rejection: &EvmTransactionRejection) -> &'static str {
     }
 }
 
-impl From<NativeMetadata> for rpc::NativeMetadata {
-    fn from(metadata: NativeMetadata) -> Self {
+impl From<NativeCurrency> for rpc::NativeCurrency {
+    fn from(currency: NativeCurrency) -> Self {
         Self {
-            name: metadata.name,
-            symbol: metadata.symbol,
-            decimals: metadata.decimals,
+            name: currency.name,
+            symbol: currency.symbol,
+            decimals: currency.decimals,
         }
     }
 }
@@ -177,218 +178,159 @@ impl From<Erc721CollectionMetadata> for rpc::Erc721CollectionMetadata {
     }
 }
 
-impl From<Change> for rpc::Change {
-    fn from(change: Change) -> Self {
+impl From<EvmChange> for rpc::Change {
+    fn from(change: EvmChange) -> Self {
         match change {
-            Change::NativeTransfer {
+            EvmChange::NativeTransfer {
+                from,
+                to,
+                raw_amount,
+                currency,
+            } => Self::NativeTransfer {
+                from,
+                to,
+                raw_amount,
+                currency: currency.into(),
+            },
+            EvmChange::SelfDestructBurn {
+                contract_address,
+                raw_amount,
+                currency,
+            } => Self::SelfDestructBurn {
+                contract_address,
+                raw_amount,
+                currency: currency.into(),
+            },
+            EvmChange::WrappedNativeDeposit {
+                contract_address,
+                account,
+                raw_amount,
+                metadata,
+            } => Self::WrappedNativeDeposit {
+                contract_address,
+                account,
+                raw_amount,
+                metadata: metadata.into(),
+            },
+            EvmChange::WrappedNativeWithdrawal {
+                contract_address,
+                account,
+                raw_amount,
+                metadata,
+            } => Self::WrappedNativeWithdrawal {
+                contract_address,
+                account,
+                raw_amount,
+                metadata: metadata.into(),
+            },
+            EvmChange::Standard(change) => change.into(),
+        }
+    }
+}
+
+impl From<StandardChange<Address>> for rpc::Change {
+    fn from(change: StandardChange<Address>) -> Self {
+        match change {
+            StandardChange::Erc20Transfer {
+                contract_address,
                 from,
                 to,
                 raw_amount,
                 metadata,
-            } => Self::Transfer {
-                asset: rpc::TransferAsset::Native {
-                    raw_amount,
-                    metadata: metadata.into(),
-                },
-                from,
-                to,
-            },
-            Change::Erc20Transfer {
+            } => Self::Erc20Transfer {
                 contract_address,
                 from,
                 to,
                 raw_amount,
-                metadata,
-            } => Self::Transfer {
-                asset: rpc::TransferAsset::Erc20 {
-                    contract_address,
-                    raw_amount,
-                    metadata: metadata.into(),
-                },
-                from,
-                to,
+                metadata: metadata.into(),
             },
-            Change::Erc20Mint {
-                contract_address,
-                to,
-                raw_amount,
-                metadata,
-            } => Self::Mint {
-                asset: rpc::TokenMovementAsset::Erc20 {
-                    contract_address,
-                    raw_amount,
-                    metadata: metadata.into(),
-                },
-                to,
-            },
-            Change::Erc20Burn {
-                contract_address,
-                from,
-                raw_amount,
-                metadata,
-            } => Self::Burn {
-                asset: rpc::BurnAsset::Erc20 {
-                    contract_address,
-                    raw_amount,
-                    metadata: metadata.into(),
-                },
-                from,
-            },
-            Change::SelfDestructBurn {
-                contract_address,
-                raw_amount,
-                metadata,
-            } => Self::Burn {
-                asset: rpc::BurnAsset::Native {
-                    raw_amount,
-                    metadata: metadata.into(),
-                },
-                from: contract_address,
-            },
-            Change::Erc721Transfer {
-                contract_address,
-                from,
-                to,
-                token_id,
-                metadata,
-            } => Self::Transfer {
-                asset: rpc::TransferAsset::Erc721 {
-                    contract_address,
-                    token_id,
-                    metadata: metadata.into(),
-                },
-                from,
-                to,
-            },
-            Change::Erc721Mint {
-                contract_address,
-                to,
-                token_id,
-                metadata,
-            } => Self::Mint {
-                asset: rpc::TokenMovementAsset::Erc721 {
-                    contract_address,
-                    token_id,
-                    metadata: metadata.into(),
-                },
-                to,
-            },
-            Change::Erc721Burn {
-                contract_address,
-                from,
-                token_id,
-                metadata,
-            } => Self::Burn {
-                asset: rpc::BurnAsset::Erc721 {
-                    contract_address,
-                    token_id,
-                    metadata: metadata.into(),
-                },
-                from,
-            },
-            Change::Erc1155Transfer {
-                contract_address,
-                from,
-                to,
-                token_id,
-                raw_amount,
-            } => Self::Transfer {
-                asset: rpc::TransferAsset::Erc1155 {
-                    contract_address,
-                    token_id,
-                    raw_amount,
-                },
-                from,
-                to,
-            },
-            Change::Erc1155Mint {
-                contract_address,
-                to,
-                token_id,
-                raw_amount,
-            } => Self::Mint {
-                asset: rpc::TokenMovementAsset::Erc1155 {
-                    contract_address,
-                    token_id,
-                    raw_amount,
-                },
-                to,
-            },
-            Change::Erc1155Burn {
-                contract_address,
-                from,
-                token_id,
-                raw_amount,
-            } => Self::Burn {
-                asset: rpc::BurnAsset::Erc1155 {
-                    contract_address,
-                    token_id,
-                    raw_amount,
-                },
-                from,
-            },
-            Change::Erc20Allowance {
+            StandardChange::Erc20Approval {
                 contract_address,
                 owner,
                 spender,
-                raw_amount_before,
-                raw_amount_after,
+                approved_amount,
                 metadata,
-            } => Self::Allowance {
-                asset: rpc::AllowanceAsset::Erc20 {
-                    contract_address,
-                    raw_amount_before,
-                    raw_amount_after,
-                    metadata: metadata.into(),
-                },
+            } => Self::Erc20Approval {
+                contract_address,
                 owner,
                 spender,
+                approved_amount,
+                metadata: metadata.into(),
             },
-            Change::Erc721TokenApproval {
+            StandardChange::Erc721Transfer {
                 contract_address,
+                from,
+                to,
                 token_id,
-                approved_address_before,
-                approved_address_after,
                 metadata,
-            } => Self::TokenApproval {
-                asset: rpc::TokenApprovalAsset::Erc721 {
-                    contract_address,
-                    token_id,
-                    approved_address_before,
-                    approved_address_after,
-                    metadata: metadata.into(),
-                },
+            } => Self::Erc721Transfer {
+                contract_address,
+                from,
+                to,
+                token_id,
+                metadata: metadata.into(),
             },
-            Change::Erc721OperatorApproval {
+            StandardChange::Erc721Approval {
+                contract_address,
+                owner,
+                approved_address,
+                token_id,
+                metadata,
+            } => Self::Erc721Approval {
+                contract_address,
+                owner,
+                approved_address,
+                token_id,
+                metadata: metadata.into(),
+            },
+            StandardChange::OperatorApproval {
                 contract_address,
                 owner,
                 operator,
-                approved_before,
-                approved_after,
-                metadata,
+                approved,
             } => Self::OperatorApproval {
-                asset: rpc::OperatorApprovalAsset::Erc721 {
-                    contract_address,
-                    metadata: metadata.into(),
-                },
-                owner,
-                operator,
-                approved_before,
-                approved_after,
-            },
-            Change::Erc1155OperatorApproval {
                 contract_address,
                 owner,
                 operator,
-                approved_before,
-                approved_after,
-            } => Self::OperatorApproval {
-                asset: rpc::OperatorApprovalAsset::Erc1155 { contract_address },
-                owner,
-                operator,
-                approved_before,
-                approved_after,
+                approved,
             },
+            StandardChange::Erc1155TransferSingle {
+                contract_address,
+                operator,
+                from,
+                to,
+                token_id,
+                raw_amount,
+            } => Self::Erc1155TransferSingle {
+                contract_address,
+                operator,
+                from,
+                to,
+                token_id,
+                raw_amount,
+            },
+            StandardChange::Erc1155TransferBatch {
+                contract_address,
+                operator,
+                from,
+                to,
+                items,
+            } => Self::Erc1155TransferBatch {
+                contract_address,
+                operator,
+                from,
+                to,
+                items: items.into_iter().map(Into::into).collect(),
+            },
+        }
+    }
+}
+
+impl From<Erc1155TransferItem> for rpc::Erc1155TransferItem {
+    fn from(item: Erc1155TransferItem) -> Self {
+        Self {
+            token_id: item.token_id,
+            raw_amount: item.raw_amount,
         }
     }
 }

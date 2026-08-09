@@ -14,13 +14,16 @@ mod simulator;
 mod transaction;
 
 pub(crate) use chain_spec::EthereumChainSpec;
-pub(crate) use changes::EvmNativeChangeError;
+pub use changes::{EvmChange, NativeCurrency};
 pub(crate) use completion::complete_transaction;
 pub(crate) use context::resolve_block;
+pub use contract_standards::{
+    Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem, StandardChange,
+};
 pub use error::{
     EvmBlockEnvironmentError, EvmBlockResolutionError, EvmChangesError, EvmExecutionError,
-    EvmInitializationError, EvmNotReadyError, EvmResultIntegrationError, EvmSimulationError,
-    EvmStateAccessError, EvmTransactionCompletionError,
+    EvmInitializationError, EvmNativeChangeError, EvmNotReadyError, EvmResultIntegrationError,
+    EvmSimulationError, EvmStateAccessError, EvmTransactionCompletionError,
 };
 pub(crate) use execution::{
     EvmExecutionObservation, EvmExecutionObserver, EvmTransactionExecution, EvmTransactionExecutor,
@@ -33,7 +36,6 @@ pub use outcome::{
 };
 pub use rejection::EvmTransactionRejection;
 pub use simulation::{EvmBlockContext, EvmSimulation};
-pub use simulation_changes::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
 pub use simulator::EvmTransactionSimulator;
 pub use transaction::{
     AccessListItem, Authorization, CompleteTransaction, CompleteTransactionVariant,

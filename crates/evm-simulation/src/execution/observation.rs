@@ -2,15 +2,10 @@ use alloy::primitives::{Address, B256, Bytes, Log, U256};
 use revm::{
     Inspector,
     context::ContextTr,
-    context_interface::LocalContextTr,
     interpreter::{
-        CallInput, CallInputs, CallOutcome, CreateInputs, CreateOutcome, InstructionResult,
-        InterpreterTypes,
+        CallInputs, CallOutcome, CreateInputs, CreateOutcome, InstructionResult, InterpreterTypes,
     },
 };
-
-// transferFrom(address,address,uint256) is a 4-byte selector plus three ABI words.
-const CALL_INPUT_PREFIX_LIMIT: usize = 100;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum EvmExecutionObservation {
@@ -18,8 +13,6 @@ pub(crate) enum EvmExecutionObservation {
         caller: Address,
         target: Address,
         value: U256,
-        input_len: usize,
-        input_prefix: Bytes,
     },
     CreateTransfer {
         from: Address,
@@ -165,8 +158,8 @@ where
             .record_log_parts(log.address, log.data.topics(), &log.data.data);
     }
 
-    fn call(&mut self, context: &mut CTX, inputs: &mut CallInputs) -> Option<CallOutcome> {
-        self.journal.push_call_frame(observed_call(context, inputs));
+    fn call(&mut self, _context: &mut CTX, inputs: &mut CallInputs) -> Option<CallOutcome> {
+        self.journal.push_call_frame(observed_call(inputs));
         None
     }
 
@@ -205,10 +198,7 @@ where
     }
 }
 
-fn observed_call<CTX>(context: &CTX, inputs: &CallInputs) -> Option<EvmExecutionObservation>
-where
-    CTX: ContextTr,
-{
+fn observed_call(inputs: &CallInputs) -> Option<EvmExecutionObservation> {
     if !inputs.scheme.is_call() {
         return None;
     }
@@ -217,35 +207,7 @@ where
         caller: inputs.caller,
         target: inputs.target_address,
         value: inputs.transfer_value().unwrap_or_default(),
-        input_len: inputs.input.len(),
-        input_prefix: call_input_prefix(context, &inputs.input),
     })
-}
-
-fn call_input_prefix<CTX>(context: &CTX, input: &CallInput) -> Bytes
-where
-    CTX: ContextTr,
-{
-    let prefix_len = input.len().min(CALL_INPUT_PREFIX_LIMIT);
-
-    match input {
-        CallInput::Bytes(bytes) => copy_input_prefix(bytes),
-        // Internal CALL input points into Revm shared memory and must be copied
-        // before the child frame can overwrite that buffer.
-        CallInput::SharedBuffer(range) => {
-            let prefix = context
-                .local()
-                .shared_memory_buffer_slice(range.start..range.start.saturating_add(prefix_len))
-                .map(|bytes| copy_input_prefix(&bytes))
-                .unwrap_or_default();
-            debug_assert_eq!(prefix.len(), prefix_len);
-            prefix
-        }
-    }
-}
-
-fn copy_input_prefix(input: &[u8]) -> Bytes {
-    Bytes::copy_from_slice(&input[..input.len().min(CALL_INPUT_PREFIX_LIMIT)])
 }
 
 fn is_success(result: &InstructionResult) -> bool {

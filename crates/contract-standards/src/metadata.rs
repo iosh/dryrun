@@ -139,8 +139,9 @@ fn push_metadata_call<A>(
 
 /// Recorded outcomes for metadata calls.
 ///
-/// A present `None` value means the call was attempted but reverted, halted,
-/// or returned invalid ABI. An absent entry means no outcome was recorded and
+/// A present `None` value means metadata was unavailable, for example because
+/// the call reverted, halted, returned invalid ABI, or was skipped by the
+/// caller's probe limit. An absent entry means no outcome was recorded and
 /// prevents conversion into a public standard change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetadataValues<A: Eq + Hash = Address> {
@@ -180,8 +181,7 @@ where
         }
     }
 
-    /// Records a call that reverted, halted, or otherwise produced no return
-    /// data that can be decoded.
+    /// Records a metadata value as unavailable.
     pub fn record_unavailable(&mut self, call: MetadataCall<A>) {
         match call {
             MetadataCall::Name { contract_address } => {
@@ -196,7 +196,8 @@ where
         }
     }
 
-    pub(crate) fn erc20(&self, contract: &A) -> Result<Erc20Metadata, MissingMetadataOutcome> {
+    /// Returns ERC-20 metadata after all three getter outcomes were recorded.
+    pub fn erc20_metadata(&self, contract: &A) -> Result<Erc20Metadata, MissingMetadataOutcome> {
         Ok(Erc20Metadata {
             name: self
                 .names

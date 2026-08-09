@@ -1,112 +1,57 @@
-use std::collections::HashMap;
-
-use alloy_primitives::{Address, Bytes};
-use contract_standards::legacy::{
-    ERC721_METADATA_INTERFACE_ID, MetadataRequests, StandardMetadata, decimals_call,
-    decode_decimals, decode_name, decode_supports_interface, decode_symbol, name_call,
-    supports_interface_call, symbol_call,
-};
-use contract_standards::{Erc20Metadata, Erc721CollectionMetadata};
+use alloy::primitives::Address;
+use contract_standards::{MetadataCall, MetadataValues};
 use revm::context_interface::result::EVMError;
 
-use crate::{CompleteTransaction, EvmSimulationError};
+use crate::{CompleteTransaction, EvmChangesError, EvmExecutionObserver, execution::MainnetEvm};
 
 use super::read_call::{ReadCallOutcome, execute_read_call, with_read_call_context};
-use crate::execution::MainnetEvm;
 
-pub(crate) fn load_standard_metadata<INSP>(
-    evm: &mut MainnetEvm<INSP>,
+const MAX_METADATA_CALLS: usize = 64;
+const MAX_METADATA_OUTPUT_BYTES: usize = 4 * 1024;
+
+pub(crate) fn load_metadata(
+    evm: &mut MainnetEvm<EvmExecutionObserver>,
     transaction: &CompleteTransaction,
     chain_id: u64,
-    requests: MetadataRequests,
-) -> Result<StandardMetadata, EvmSimulationError> {
-    if requests.is_empty() {
-        return Ok(StandardMetadata::default());
-    }
-
+    calls: Vec<MetadataCall<Address>>,
+) -> Result<MetadataValues<Address>, EvmChangesError> {
     with_read_call_context(evm, |evm| {
-        MetadataReader {
-            evm,
-            transaction,
-            chain_id,
-        }
-        .read(&requests)
-    })
-}
+        let mut values = MetadataValues::default();
 
-struct MetadataReader<'evm, 'transaction, INSP> {
-    evm: &'evm mut MainnetEvm<INSP>,
-    transaction: &'transaction CompleteTransaction,
-    chain_id: u64,
-}
+        for (index, call) in calls.into_iter().enumerate() {
+            if index >= MAX_METADATA_CALLS {
+                values.record_unavailable(call);
+                continue;
+            }
 
-impl<INSP> MetadataReader<'_, '_, INSP> {
-    fn read(
-        &mut self,
-        requests: &MetadataRequests,
-    ) -> Result<StandardMetadata, EvmSimulationError> {
-        let mut erc20 = HashMap::new();
-        let mut erc721 = HashMap::new();
-
-        for &contract in requests.erc20_contracts() {
-            erc20.insert(contract, self.read_erc20(contract)?);
-        }
-
-        for &collection in requests.erc721_collections() {
-            erc721.insert(collection, self.read_erc721(collection)?);
-        }
-
-        Ok(StandardMetadata::new(erc20, erc721))
-    }
-
-    fn read_erc20(&mut self, contract: Address) -> Result<Erc20Metadata, EvmSimulationError> {
-        Ok(Erc20Metadata {
-            name: self.read_optional(contract, name_call(), decode_name)?,
-            symbol: self.read_optional(contract, symbol_call(), decode_symbol)?,
-            decimals: self.read_optional(contract, decimals_call(), decode_decimals)?,
-        })
-    }
-
-    fn read_erc721(
-        &mut self,
-        collection: Address,
-    ) -> Result<Erc721CollectionMetadata, EvmSimulationError> {
-        let supports_metadata = self.read_optional(
-            collection,
-            supports_interface_call(ERC721_METADATA_INTERFACE_ID),
-            decode_supports_interface,
-        )?;
-
-        if supports_metadata != Some(true) {
-            return Ok(Erc721CollectionMetadata::default());
-        }
-
-        Ok(Erc721CollectionMetadata {
-            name: self.read_optional(collection, name_call(), decode_name)?,
-            symbol: self.read_optional(collection, symbol_call(), decode_symbol)?,
-        })
-    }
-
-    fn read_optional<T>(
-        &mut self,
-        target: Address,
-        data: Bytes,
-        decode: impl FnOnce(&[u8]) -> Option<T>,
-    ) -> Result<Option<T>, EvmSimulationError> {
-        let outcome = execute_read_call(self.evm, self.transaction, self.chain_id, target, data)
+            let outcome = execute_read_call(
+                evm,
+                transaction,
+                chain_id,
+                *call.contract_address(),
+                call.call_data(),
+            )
             .map_err(|error| match error {
-                EVMError::Database(error) => EvmSimulationError::changes_state_access(
-                    format!("reading metadata from {target}"),
-                    error,
-                ),
-                error => EvmSimulationError::changes(format!(
-                    "metadata read from {target} failed: {error}"
-                )),
+                EVMError::Database(source) => EvmChangesError::MetadataStateAccess {
+                    call: call.clone(),
+                    source: source.into(),
+                },
+                error => EvmChangesError::MetadataProbeExecution {
+                    call: call.clone(),
+                    details: error.to_string(),
+                },
             })?;
 
-        Ok(match outcome {
-            ReadCallOutcome::Success(output) => decode(output.as_ref()),
-            ReadCallOutcome::Revert(_) | ReadCallOutcome::Halt(_) => None,
-        })
-    }
+            match outcome {
+                ReadCallOutcome::Success(output) if output.len() <= MAX_METADATA_OUTPUT_BYTES => {
+                    values.record_output(call, &output);
+                }
+                ReadCallOutcome::Success(_)
+                | ReadCallOutcome::Reverted
+                | ReadCallOutcome::Halted => values.record_unavailable(call),
+            }
+        }
+
+        Ok(values)
+    })
 }

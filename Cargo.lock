@@ -3058,7 +3058,6 @@ dependencies = [
  "alloy-primitives",
  "contract-standards",
  "revm",
- "simulation-changes",
  "thiserror 2.0.18",
  "tokio",
 ]

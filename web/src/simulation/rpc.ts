@@ -7,6 +7,118 @@ interface FungibleAssetMetadata extends AssetMetadata {
   decimals?: number;
 }
 
+interface EvmNativeCurrency {
+  name: string;
+  symbol: string;
+  decimals: number;
+}
+
+export interface EvmNativeTransferChange extends EvmNativeCurrency {
+  changeType: 'NATIVE_TRANSFER';
+  from: string;
+  to: string;
+  rawAmount: string;
+}
+
+export interface EvmSelfDestructBurnChange extends EvmNativeCurrency {
+  changeType: 'SELF_DESTRUCT_BURN';
+  contractAddress: string;
+  rawAmount: string;
+}
+
+export interface EvmWrappedNativeDepositChange
+  extends FungibleAssetMetadata {
+  changeType: 'WRAPPED_NATIVE_DEPOSIT';
+  contractAddress: string;
+  account: string;
+  rawAmount: string;
+}
+
+export interface EvmWrappedNativeWithdrawalChange
+  extends FungibleAssetMetadata {
+  changeType: 'WRAPPED_NATIVE_WITHDRAWAL';
+  contractAddress: string;
+  account: string;
+  rawAmount: string;
+}
+
+export interface EvmErc20TransferChange extends FungibleAssetMetadata {
+  changeType: 'ERC20_TRANSFER';
+  contractAddress: string;
+  from: string;
+  to: string;
+  rawAmount: string;
+}
+
+export interface EvmErc20ApprovalChange extends FungibleAssetMetadata {
+  changeType: 'ERC20_APPROVAL';
+  contractAddress: string;
+  owner: string;
+  spender: string;
+  approvedAmount: string;
+}
+
+export interface EvmErc721TransferChange extends AssetMetadata {
+  changeType: 'ERC721_TRANSFER';
+  contractAddress: string;
+  from: string;
+  to: string;
+  tokenId: string;
+}
+
+export interface EvmErc721ApprovalChange extends AssetMetadata {
+  changeType: 'ERC721_APPROVAL';
+  contractAddress: string;
+  owner: string;
+  approvedAddress: string | null;
+  tokenId: string;
+}
+
+export interface EvmOperatorApprovalChange {
+  changeType: 'OPERATOR_APPROVAL';
+  contractAddress: string;
+  owner: string;
+  operator: string;
+  approved: boolean;
+}
+
+export interface EvmErc1155TransferSingleChange {
+  changeType: 'ERC1155_TRANSFER_SINGLE';
+  contractAddress: string;
+  operator: string;
+  from: string;
+  to: string;
+  tokenId: string;
+  rawAmount: string;
+}
+
+export interface Erc1155TransferItem {
+  tokenId: string;
+  rawAmount: string;
+}
+
+export interface EvmErc1155TransferBatchChange {
+  changeType: 'ERC1155_TRANSFER_BATCH';
+  contractAddress: string;
+  operator: string;
+  from: string;
+  to: string;
+  items: Erc1155TransferItem[];
+}
+
+export type EvmChange =
+  | EvmNativeTransferChange
+  | EvmSelfDestructBurnChange
+  | EvmWrappedNativeDepositChange
+  | EvmWrappedNativeWithdrawalChange
+  | EvmErc20TransferChange
+  | EvmErc20ApprovalChange
+  | EvmErc721TransferChange
+  | EvmErc721ApprovalChange
+  | EvmOperatorApprovalChange
+  | EvmErc1155TransferSingleChange
+  | EvmErc1155TransferBatchChange;
+
 interface NativeAsset extends FungibleAssetMetadata {
   assetType: 'NATIVE';
   rawAmount: string;
@@ -304,7 +416,7 @@ export interface CoreExecution {
 
 export interface EthereumResponse {
   execution: EvmExecution;
-  changes: HexChange[];
+  changes: EvmChange[];
 }
 
 export interface EspaceResponse {

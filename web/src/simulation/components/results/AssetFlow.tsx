@@ -70,7 +70,7 @@ export function AssetFlow({
               addressHighlight={addressHighlight}
               gridTemplateColumns={gridTemplateColumns}
               item={item}
-              key={`${item.changeIndex}:${item.assetKey}`}
+              key={item.flowIndex}
               laneIndex={laneIndex}
               lanes={lanes}
             />

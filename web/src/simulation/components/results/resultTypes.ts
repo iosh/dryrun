@@ -23,6 +23,7 @@ export interface ExecutionAnchor {
 export interface SequencedAssetFlowItemViewModel
   extends AssetFlowItemViewModel {
   changeIndex: number;
+  flowIndex: number;
 }
 
 export type FlowLaneViewModel =
