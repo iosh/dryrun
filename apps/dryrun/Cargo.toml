@@ -9,7 +9,6 @@ conflux-rpc = { workspace = true }
 conflux-service = { workspace = true }
 evm-simulation = { workspace = true }
 evm-rpc = { workspace = true }
-evm-service = { workspace = true }
 simulation-tasks = { workspace = true }
 jsonrpsee = { workspace = true, features = ["server"] }
 tokio = { workspace = true, features = ["full"] }

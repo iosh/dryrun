@@ -11,5 +11,5 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 alloy-primitives = { workspace = true }
 alloy-serde = { workspace = true }
-evm-service = { workspace = true }
 evm-simulation = { workspace = true }
+simulation-tasks = { workspace = true }

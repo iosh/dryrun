@@ -43,12 +43,15 @@ impl EvmTransactionSimulator {
         })
     }
 
+    /// Simulates one transaction. The returned future must be polled inside an active Tokio runtime.
     pub async fn simulate(
         &self,
         request: EvmSimulationRequest,
     ) -> Result<EvmSimulation, EvmSimulationError> {
         let EvmSimulationRequest { block, transaction } = request;
         transaction.validate_requirements()?;
+        let runtime_handle =
+            Handle::try_current().map_err(|_| EvmSimulationError::RuntimeUnavailable)?;
         let block = resolve_block(&self.provider, block).await?;
         let transaction =
             crate::complete_transaction(transaction, &self.provider, &block, &self.chain_spec)
@@ -56,13 +59,20 @@ impl EvmTransactionSimulator {
 
         let provider = self.provider.clone();
         let chain_spec = Arc::clone(&self.chain_spec);
-        let runtime_handle = Handle::current();
+        let blocking_runtime_handle = runtime_handle.clone();
 
-        tokio::task::spawn_blocking(move || {
-            simulate_blocking(provider, runtime_handle, chain_spec, block, transaction)
-        })
-        .await
-        .map_err(EvmSimulationError::execution_task)?
+        runtime_handle
+            .spawn_blocking(move || {
+                simulate_blocking(
+                    provider,
+                    blocking_runtime_handle,
+                    chain_spec,
+                    block,
+                    transaction,
+                )
+            })
+            .await
+            .map_err(EvmSimulationError::execution_task)?
     }
 }
 

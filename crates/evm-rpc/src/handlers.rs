@@ -1,9 +1,7 @@
-use std::sync::Arc;
-
-use evm_service::{EvmServiceError, EvmSimulationService};
-use evm_simulation::{EvmSimulationError, EvmSimulationRequest};
+use evm_simulation::{EvmSimulationError, EvmSimulationRequest, EvmTransactionSimulator};
 use jsonrpsee::core::{RpcResult, async_trait};
 use jsonrpsee::types::ErrorObjectOwned;
+use simulation_tasks::{SimulationTaskError, SimulationTaskSet};
 use tracing::{error, instrument};
 
 use crate::{
@@ -17,12 +15,16 @@ use crate::{
 
 #[derive(Clone)]
 pub struct RpcHandler {
-    simulation_service: Arc<EvmSimulationService>,
+    simulator: EvmTransactionSimulator,
+    simulation_tasks: SimulationTaskSet,
 }
 
 impl RpcHandler {
-    pub fn new(simulation_service: Arc<EvmSimulationService>) -> Self {
-        Self { simulation_service }
+    pub fn new(simulator: EvmTransactionSimulator, simulation_tasks: SimulationTaskSet) -> Self {
+        Self {
+            simulator,
+            simulation_tasks,
+        }
     }
 
     #[instrument(
@@ -41,11 +43,13 @@ impl RpcHandler {
             options,
         };
         let input: EvmSimulationRequest = request.try_into()?;
+        let simulator = self.simulator.clone();
         let output = self
-            .simulation_service
-            .simulate_evm_transaction(input)
+            .simulation_tasks
+            .run(move || async move { simulator.simulate(input).await })
             .await
-            .map_err(map_service_error)?;
+            .map_err(map_task_error)?
+            .map_err(map_simulation_error)?;
 
         Ok(output.into())
     }
@@ -64,12 +68,12 @@ impl DryrunRpcServer for RpcHandler {
     }
 }
 
-fn map_service_error(error: EvmServiceError) -> ErrorObjectOwned {
+fn map_simulation_error(error: EvmSimulationError) -> ErrorObjectOwned {
     match error {
-        EvmServiceError::Simulation(EvmSimulationError::Input(error)) => {
+        EvmSimulationError::Input(error) => {
             ValidationError::invalid_params(error.to_string()).into()
         }
-        EvmServiceError::Simulation(EvmSimulationError::NotReady(error)) => {
+        EvmSimulationError::NotReady(error) => {
             ValidationError::not_supported(error.to_string()).into()
         }
         error => {
@@ -77,4 +81,9 @@ fn map_service_error(error: EvmServiceError) -> ErrorObjectOwned {
             internal_error()
         }
     }
+}
+
+fn map_task_error(error: SimulationTaskError) -> ErrorObjectOwned {
+    error!(error = ?error, "EVM simulation task failed");
+    internal_error()
 }

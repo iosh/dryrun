@@ -131,13 +131,13 @@ impl<INSP> EvmTransactionExecutor<INSP> {
         inspector: INSP,
     ) -> Result<Self, EvmSimulationError> {
         let block_number = block.number();
-        let spec_id = chain_spec
-            .execution_spec_id(block_number, block.timestamp())
+        let execution_spec = chain_spec
+            .execution_spec(block_number, block.timestamp())
             .map_err(EvmNotReadyError::from)?;
         let chain_id = chain_spec.chain_id();
-        let cfg_env = create_cfg_env(chain_id, spec_id);
+        let cfg_env = create_cfg_env(chain_id, execution_spec);
         let block_env =
-            create_block_env(block.inner(), spec_id).map_err(EvmExecutionError::from)?;
+            create_block_env(block.inner(), execution_spec).map_err(EvmExecutionError::from)?;
         let block_gas_limit = block_env.gas_limit;
         let base_fee_per_gas = block_env.basefee;
         let blob_gas_price = block_env

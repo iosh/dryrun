@@ -12,7 +12,6 @@ use conflux_simulation::{
     espace::{EspaceSimulationPreparer, EspaceSimulator},
 };
 use evm_rpc::{DryrunRpcServer, RpcHandler};
-use evm_service::EvmSimulationService;
 use evm_simulation::EvmTransactionSimulator;
 use jsonrpsee::{
     RpcModule,
@@ -71,17 +70,14 @@ async fn add_evm_rpc_module(
     simulation_tasks: SimulationTaskSet,
 ) -> io::Result<()> {
     let ethereum_provider = create_ethereum_provider(config)?.erased();
-    let evm_simulator = Arc::new(
-        EvmTransactionSimulator::ethereum_mainnet(ethereum_provider)
-            .await
-            .map_err(|error| {
-                startup_error(format!("failed to initialize Ethereum simulation: {error}"))
-            })?,
-    );
-    let simulation_service = Arc::new(EvmSimulationService::new(evm_simulator, simulation_tasks));
+    let evm_simulator = EvmTransactionSimulator::ethereum_mainnet(ethereum_provider)
+        .await
+        .map_err(|error| {
+            startup_error(format!("failed to initialize Ethereum simulation: {error}"))
+        })?;
 
     rpc_module
-        .merge(RpcHandler::new(simulation_service).into_rpc())
+        .merge(RpcHandler::new(evm_simulator, simulation_tasks).into_rpc())
         .map_err(|error| startup_error(format!("failed to merge EVM RPC module: {error}")))
 }
 

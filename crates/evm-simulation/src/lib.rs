@@ -13,7 +13,7 @@ mod simulation;
 mod simulator;
 mod transaction;
 
-pub(crate) use chain_spec::EthereumChainSpec;
+pub(crate) use chain_spec::{EthereumChainSpec, EthereumExecutionSpec};
 pub use changes::{EvmChange, NativeCurrency};
 pub(crate) use completion::complete_transaction;
 pub(crate) use context::resolve_block;

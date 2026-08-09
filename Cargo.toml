@@ -6,7 +6,6 @@ members = [
     "crates/conflux-provider",
     "crates/evm-simulation",
     "crates/evm-rpc",
-    "crates/evm-service",
     "crates/conflux-simulation",
     "crates/conflux-rpc",
     "crates/conflux-service",
@@ -25,7 +24,6 @@ contract-standards = { path = "crates/contract-standards" }
 conflux-provider = { path = "crates/conflux-provider" }
 evm-simulation = { path = "crates/evm-simulation" }
 evm-rpc = { path = "crates/evm-rpc" }
-evm-service = { path = "crates/evm-service" }
 conflux-simulation = { path = "crates/conflux-simulation" }
 conflux-rpc = { path = "crates/conflux-rpc" }
 conflux-service = { path = "crates/conflux-service" }

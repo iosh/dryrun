@@ -1,5 +1,6 @@
 use crate::{
-    AccessListItem, CompleteTransaction, CompleteTransactionVariant, EvmBlockEnvironmentError,
+    AccessListItem, CompleteTransaction, CompleteTransactionVariant, EthereumExecutionSpec,
+    EvmBlockEnvironmentError,
 };
 use alloy::consensus::{BlockHeader, Header};
 use alloy::primitives::{TxKind, U256};
@@ -14,14 +15,19 @@ use revm::{
     primitives::hardfork::SpecId,
 };
 
-pub(super) fn create_cfg_env(chain_id: u64, spec_id: SpecId) -> CfgEnv {
-    CfgEnv::new_with_spec(spec_id).with_chain_id(chain_id)
+pub(super) fn create_cfg_env(chain_id: u64, execution_spec: EthereumExecutionSpec) -> CfgEnv {
+    let mut cfg = CfgEnv::new_with_spec(execution_spec.spec_id).with_chain_id(chain_id);
+    if let Some(blob_params) = execution_spec.blob_params {
+        cfg.set_max_blobs_per_tx(blob_params.max_blobs_per_tx);
+    }
+    cfg
 }
 
 pub(super) fn create_block_env(
     header: &Header,
-    spec_id: SpecId,
+    execution_spec: EthereumExecutionSpec,
 ) -> Result<BlockEnv, EvmBlockEnvironmentError> {
+    let spec_id = execution_spec.spec_id;
     let basefee = if spec_id.is_enabled_in(SpecId::LONDON) {
         header
             .base_fee_per_gas()
@@ -44,7 +50,7 @@ pub(super) fn create_block_env(
         None
     };
 
-    let blob_excess_gas_and_price = if spec_id.is_enabled_in(SpecId::CANCUN) {
+    let blob_excess_gas_and_price = if let Some(blob_params) = execution_spec.blob_params {
         let excess_blob_gas =
             header
                 .excess_blob_gas()
@@ -52,10 +58,10 @@ pub(super) fn create_block_env(
                     block_number: header.number(),
                 })?;
 
-        Some(BlobExcessGasAndPrice::new_with_spec(
+        Some(BlobExcessGasAndPrice {
             excess_blob_gas,
-            spec_id,
-        ))
+            blob_gasprice: blob_params.calc_blob_fee(excess_blob_gas),
+        })
     } else {
         None
     };

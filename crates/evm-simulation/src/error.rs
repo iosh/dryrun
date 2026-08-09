@@ -303,6 +303,10 @@ pub enum EvmSimulationError {
     #[error(transparent)]
     Execution(#[from] EvmExecutionError),
 
+    /// No Tokio runtime was active while polling the simulation future.
+    #[error("EVM simulation requires an active Tokio runtime")]
+    RuntimeUnavailable,
+
     #[error("blocking EVM simulation task terminated unexpectedly: {source}")]
     ExecutionTask {
         #[source]

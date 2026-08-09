@@ -2809,7 +2809,6 @@ dependencies = [
  "conflux-service",
  "conflux-simulation",
  "evm-rpc",
- "evm-service",
  "evm-simulation",
  "jsonrpsee",
  "metrics-exporter-prometheus",
@@ -3029,23 +3028,13 @@ version = "0.1.0"
 dependencies = [
  "alloy-primitives",
  "alloy-serde",
- "evm-service",
  "evm-simulation",
  "jsonrpsee",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
-name = "evm-service"
-version = "0.1.0"
-dependencies = [
- "evm-simulation",
  "simulation-tasks",
  "thiserror 2.0.18",
- "tokio",
+ "tracing",
 ]
 
 [[package]]
