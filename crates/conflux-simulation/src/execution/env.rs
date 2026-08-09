@@ -1,7 +1,4 @@
-use cfx_executor::{
-    machine::{Machine, VmFactory},
-    state::State,
-};
+use cfx_executor::{machine::Machine, state::State};
 use cfx_parameters::consensus::TRANSACTION_DEFAULT_EPOCH_BOUND;
 use cfx_statedb::Result as StateDbResult;
 use cfx_types::U256;
@@ -11,7 +8,7 @@ use tokio::runtime::Handle;
 
 use crate::state::{ConfluxStateSource, new_conflux_state};
 
-use super::{ExecutionBlockContext, ExecutionBlockContextError, params::mainnet_common_params};
+use super::{ExecutionBlockContext, ExecutionBlockContextError};
 
 pub(crate) fn build_conflux_state(
     source: ConfluxStateSource,
@@ -68,10 +65,6 @@ pub(crate) fn build_transaction_env(
         burnt_gas_price,
         transaction_hash: tx.hash(),
     })
-}
-
-pub(crate) fn build_mainnet_machine() -> Machine {
-    Machine::new_with_builtin(mainnet_common_params(), VmFactory::default())
 }
 
 pub(crate) fn build_execution_spec(machine: &Machine, env: &Env) -> Spec {

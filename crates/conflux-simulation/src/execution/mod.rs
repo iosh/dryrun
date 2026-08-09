@@ -11,7 +11,6 @@ mod context;
 mod env;
 mod observer;
 mod outcome;
-mod params;
 mod transaction;
 
 pub use context::ExecutionBlockContextError;
@@ -22,7 +21,7 @@ pub(crate) use context::{
     build_core_space_pivot_block_context, build_espace_block_context, build_execution_block_context,
 };
 pub(crate) use env::build_conflux_state;
-pub(crate) use env::{build_execution_spec, build_mainnet_machine, build_transaction_env};
+pub(crate) use env::{build_execution_spec, build_transaction_env};
 pub(crate) use observer::{Observation, ObservationObserver};
 pub(crate) use outcome::{
     ConfluxExecutionOutcome, ConfluxExecutionOutput, TransactionExecutionError,

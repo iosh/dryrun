@@ -210,8 +210,8 @@ pub(crate) async fn prepare_storage_payer(
     let storage_limit = transaction.storage_limit;
     let balance_check = provider
         .cfx_check_balance_against_transaction(
-            transaction.from.clone(),
-            target.clone(),
+            transaction.from,
+            *target,
             transaction.gas_limit,
             storage_payer_gas_price(&transaction.variant),
             storage_limit,

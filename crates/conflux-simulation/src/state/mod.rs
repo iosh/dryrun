@@ -11,11 +11,12 @@ use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;
 use cfx_rpc_eth_types::BlockId as EthBlockId;
 use cfx_types::{H256, U64};
 
-pub use self::provider::{ConfluxRpcError, ConfluxSimulationProvider};
+pub use self::provider::ConfluxRpcError;
 
 pub(crate) use self::{
     core_space_internal::SponsorWhitelistStorageKey,
     phases::{StatePhaseValues, execute_with_state_phases},
+    provider::ConfluxSimulationProvider,
     reader::{AnchoredVoteLists, ConfluxStateSource, MaskedSponsorWhitelistEntries},
     rpc_types::{CoreSpaceRpcBlock, CoreSpaceRpcPoSBlock, EspaceRpcBlock},
     storage::new_conflux_state,

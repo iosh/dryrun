@@ -7,7 +7,7 @@ use crate::{
     ConfluxSimulationError,
     execution::{
         ConfluxExecutionOutcome, ConfluxTransactionExecution, ConfluxTransactionExecutor,
-        ObservationObserver, build_conflux_state, build_mainnet_machine,
+        ObservationObserver, build_conflux_state,
     },
     preparation::{
         PreparedCoreSpaceSimulation, PreparedCoreSpaceSimulationState, ReadyCoreSpaceSimulation,
@@ -39,6 +39,7 @@ fn simulate_ready(
     runtime_handle: &Handle,
 ) -> Result<CoreSpaceSimulation, ConfluxSimulationError> {
     let ReadyCoreSpaceSimulation {
+        backend,
         chain_id,
         state_anchor,
         gas_limit,
@@ -53,7 +54,7 @@ fn simulate_ready(
             message: error.to_string(),
         }
     })?;
-    let machine = build_mainnet_machine();
+    let machine = backend.chain_spec().build_machine();
     let (execution, phase_values) = execute_with_state_phases(
         &mut state,
         |state| {

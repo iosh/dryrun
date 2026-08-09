@@ -1,8 +1,9 @@
-use std::{future::Future, sync::Arc};
+use std::future::Future;
 
 use alloy::{
     eips::{BlockId, BlockNumberOrTag},
-    providers::{RootProvider, layers::BlockIdProvider},
+    network::Ethereum,
+    providers::{DynProvider, layers::BlockIdProvider},
 };
 use cfx_addr::Network as RpcNetwork;
 use cfx_rpc_cfx_types::RpcAddress;
@@ -17,16 +18,17 @@ mod block;
 mod state;
 mod transaction;
 
-pub struct ConfluxSimulationProvider {
+#[derive(Clone)]
+pub(crate) struct ConfluxSimulationProvider {
     core_space_address_network: ProviderNetwork,
-    pub(crate) espace_provider: RootProvider,
-    pub(crate) core_space_provider: Arc<ConfluxProvider>,
+    pub(crate) espace_provider: DynProvider<Ethereum>,
+    pub(crate) core_space_provider: ConfluxProvider,
 }
 
 impl ConfluxSimulationProvider {
-    pub fn new(
-        espace_provider: RootProvider,
-        core_space_provider: Arc<ConfluxProvider>,
+    pub(crate) fn new(
+        espace_provider: DynProvider<Ethereum>,
+        core_space_provider: ConfluxProvider,
         core_space_address_network: ProviderNetwork,
     ) -> Self {
         Self {
@@ -39,7 +41,7 @@ impl ConfluxSimulationProvider {
     pub(crate) fn espace_provider_at(
         &self,
         block: cfx_rpc_eth_types::BlockId,
-    ) -> Result<BlockIdProvider<RootProvider>, ConfluxRpcError> {
+    ) -> Result<BlockIdProvider<DynProvider<Ethereum>>, ConfluxRpcError> {
         Ok(BlockIdProvider::new(
             self.espace_provider.clone(),
             Self::alloy_block_id(block)?,
@@ -57,13 +59,7 @@ impl ConfluxSimulationProvider {
     ) -> Result<BlockNumberOrTag, ConfluxRpcError> {
         match block {
             cfx_rpc_eth_types::BlockId::Latest => Ok(BlockNumberOrTag::Latest),
-            cfx_rpc_eth_types::BlockId::Num(number) => {
-                let number = u64::try_from(number).map_err(|_| ConfluxRpcError {
-                    operation: "convert eSpace block selector",
-                    reason: format!("block number exceeds u64: {number}"),
-                })?;
-                Ok(BlockNumberOrTag::Number(number))
-            }
+            cfx_rpc_eth_types::BlockId::Num(number) => Ok(BlockNumberOrTag::Number(number)),
             unsupported => Err(ConfluxRpcError {
                 operation: "convert eSpace block selector",
                 reason: format!("unsupported block selector: {unsupported:?}"),

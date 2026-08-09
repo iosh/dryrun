@@ -34,5 +34,5 @@ simulation-execution = { workspace = true }
 simulation-transaction = { workspace = true }
 thiserror = { workspace = true }
 typemap = { package = "typemap-ors", version = "1.0" }
-tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
 tracing = { workspace = true }

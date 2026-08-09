@@ -101,7 +101,7 @@ impl AnchoredVoteLists {
 
 pub(crate) struct ConfluxStateSource {
     state_anchor: ConfluxStateAnchor,
-    provider: Arc<ConfluxSimulationProvider>,
+    provider: ConfluxSimulationProvider,
     core_space_globals: CoreSpaceGlobals,
     espace_account_cache: AsyncMutex<HashMap<Address, Arc<EspaceAccountData>>>,
     masked_sponsor_whitelist_entries: MaskedSponsorWhitelistEntries,
@@ -111,7 +111,7 @@ pub(crate) struct ConfluxStateSource {
 impl ConfluxStateSource {
     pub(crate) async fn prepare(
         state_anchor: ConfluxStateAnchor,
-        provider: Arc<ConfluxSimulationProvider>,
+        provider: ConfluxSimulationProvider,
     ) -> StorageResult<Self> {
         let core_space_epoch = state_anchor.core_space_epoch();
         let core_space_globals = provider

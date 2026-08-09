@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use cfx_executor::spec::CommonParams;
+use cfx_executor::{
+    machine::{Machine, VmFactory},
+    spec::CommonParams,
+};
 use cfx_internal_common::ChainIdParamsInner;
 use cfx_parameters::{
     block::{EVM_TRANSACTION_BLOCK_RATIO, EVM_TRANSACTION_GAS_RATIO},
@@ -11,18 +14,50 @@ use cfx_parameters::{
         MINING_REWARD_TANZANITE_IN_UCFX,
     },
 };
-use cfx_types::{AllChainID, SpaceMap, U256};
-use primitives::block_header::CIP112_TRANSITION_HEIGHT;
+use cfx_types::{AllChainID, Space, SpaceMap, U256};
+use conflux_provider::Network;
 
-/// Mainnet params mirrored from the current upstream commit.
-///
-/// Upstream keeps some config state outside `CommonParams` itself, so we mirror
-/// that here instead of relying on `cfx_config`.
-pub(crate) fn mainnet_common_params() -> CommonParams {
-    const MAINNET_NATIVE_CHAIN_ID: u32 = 1029;
-    const MAINNET_EVM_CHAIN_ID: u32 = 1030;
-    const MAINNET_NETWORK_ID: u64 = 1029;
+const MAINNET_CORE_SPACE_CHAIN_ID: u32 = 1029;
+const MAINNET_ESPACE_CHAIN_ID: u32 = 1030;
+const MAINNET_NETWORK_ID: u64 = 1029;
 
+#[derive(Debug, Clone)]
+pub(crate) struct ConfluxChainSpec {
+    common_params: CommonParams,
+    core_space_address_network: Network,
+}
+
+impl ConfluxChainSpec {
+    pub(crate) fn mainnet() -> Self {
+        Self {
+            common_params: mainnet_common_params(),
+            core_space_address_network: Network::Main,
+        }
+    }
+
+    pub(crate) fn core_space_chain_id(&self) -> u32 {
+        self.common_params.chain_id(0, Space::Native)
+    }
+
+    pub(crate) fn espace_chain_id(&self) -> u32 {
+        self.common_params.chain_id(0, Space::Ethereum)
+    }
+
+    pub(crate) fn network_id(&self) -> u64 {
+        self.common_params.network_id
+    }
+
+    pub(crate) fn core_space_address_network(&self) -> Network {
+        self.core_space_address_network
+    }
+
+    pub(crate) fn build_machine(&self) -> Machine {
+        Machine::new_with_builtin(self.common_params.clone(), VmFactory::default())
+    }
+}
+
+/// Conflux mainnet execution parameters for the upstream revision locked by `Cargo.lock`.
+fn mainnet_common_params() -> CommonParams {
     const HYDRA_TRANSITION_NUMBER: u64 = 92_060_600;
     const HYDRA_TRANSITION_HEIGHT: u64 = 36_935_000;
     const CIP43_INIT_END_NUMBER: u64 = 92_751_800;
@@ -30,19 +65,16 @@ pub(crate) fn mainnet_common_params() -> CommonParams {
     const DAO_VOTE_TRANSITION_HEIGHT: u64 = 56_800_000;
     const SIGMA_FIX_TRANSITION_NUMBER: u64 = 137_740_000;
     const BURN_COLLATERAL_TRANSITION_NUMBER: u64 = 188_900_000;
-    const CIP112_TRANSITION_HEIGHT_DEFAULT: u64 = 79_050_000;
+    const CIP112_TRANSITION_HEIGHT: u64 = 79_050_000;
     const BASE_FEE_BURN_TRANSITION_NUMBER: u64 = 247_480_000;
     const BASE_FEE_BURN_TRANSITION_HEIGHT: u64 = 101_900_000;
     const C2_FIX_TRANSITION_HEIGHT: u64 = 118_580_000;
     const EOA_CODE_TRANSITION_HEIGHT: u64 = 129_680_000;
-    let cip112_transition_height =
-        *CIP112_TRANSITION_HEIGHT.get_or_init(|| CIP112_TRANSITION_HEIGHT_DEFAULT);
-
     let mut params = CommonParams {
         network_id: MAINNET_NETWORK_ID,
         chain_id: ChainIdParamsInner::new_simple(AllChainID::new(
-            MAINNET_NATIVE_CHAIN_ID,
-            MAINNET_EVM_CHAIN_ID,
+            MAINNET_CORE_SPACE_CHAIN_ID,
+            MAINNET_ESPACE_CHAIN_ID,
         )),
         min_base_price: SpaceMap::new(INITIAL_1559_CORE_BASE_PRICE, INITIAL_1559_ETH_BASE_PRICE)
             .map_all(U256::from),
@@ -79,7 +111,7 @@ pub(crate) fn mainnet_common_params() -> CommonParams {
     params.transition_numbers.cip105 = DAO_VOTE_TRANSITION_NUMBER;
     params.transition_numbers.cip_sigma_fix = SIGMA_FIX_TRANSITION_NUMBER;
     params.transition_numbers.cip107 = BURN_COLLATERAL_TRANSITION_NUMBER;
-    params.transition_heights.cip112 = cip112_transition_height;
+    params.transition_heights.cip112 = CIP112_TRANSITION_HEIGHT;
     params.transition_numbers.cip118 = BURN_COLLATERAL_TRANSITION_NUMBER;
     params.transition_numbers.cip119 = BURN_COLLATERAL_TRANSITION_NUMBER;
 

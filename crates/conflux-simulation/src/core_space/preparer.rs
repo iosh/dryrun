@@ -1,12 +1,9 @@
-use std::sync::Arc;
-
 use crate::{
-    ConfluxSimulationError, ConfluxSimulationProvider, PreparedCoreSpaceSimulation,
-    config::ConfluxChainConfig,
+    ConfluxSimulationBackend, ConfluxSimulationError, PreparedCoreSpaceSimulation,
     execution::{DryRunTransactionInput, TransactionExecutionInput},
     preparation::{
         CoreSpaceSimulationContext, PreparedCoreSpaceSimulationState, ReadyCoreSpaceSimulation,
-        complete_core_space_transaction, load_core_space_context, prepare_state_source,
+        complete_core_space_transaction, load_core_space_context,
     },
 };
 
@@ -19,13 +16,12 @@ use super::{
 
 #[derive(Clone)]
 pub struct CoreSpaceSimulationPreparer {
-    chain: ConfluxChainConfig,
-    provider: Arc<ConfluxSimulationProvider>,
+    backend: ConfluxSimulationBackend,
 }
 
 impl CoreSpaceSimulationPreparer {
-    pub fn new(chain: ConfluxChainConfig, provider: Arc<ConfluxSimulationProvider>) -> Self {
-        Self { chain, provider }
+    pub fn new(backend: ConfluxSimulationBackend) -> Self {
+        Self { backend }
     }
 
     pub async fn prepare_transaction(
@@ -35,10 +31,13 @@ impl CoreSpaceSimulationPreparer {
         storage_limit: Option<u64>,
         epoch_height: Option<u64>,
     ) -> Result<PreparedCoreSpaceSimulation, ConfluxSimulationError> {
-        validate_core_space_transaction_network(&request, self.provider.provider_network())?;
-        let context = load_core_space_context(self.provider.as_ref(), &epoch).await?;
+        validate_core_space_transaction_network(
+            &request,
+            self.backend.core_space_address_network(),
+        )?;
+        let context = load_core_space_context(self.backend.provider(), &epoch).await?;
         let transaction = complete_core_space_transaction(
-            self.provider.as_ref(),
+            self.backend.provider(),
             &context,
             request,
             storage_limit,
@@ -55,7 +54,7 @@ impl CoreSpaceSimulationPreparer {
         transaction: CoreSpaceTransaction,
     ) -> Result<PreparedCoreSpaceSimulation, ConfluxSimulationError> {
         let gas_limit = transaction.gas_limit;
-        let chain_id = self.chain.core_space_chain_id;
+        let chain_id = self.backend.chain_spec().core_space_chain_id();
         let state_anchor = CoreSpaceStateAnchor {
             epoch_number: context.state_anchor.epoch_number(),
             pivot_hash: context.state_anchor.pivot_hash(),
@@ -70,7 +69,7 @@ impl CoreSpaceSimulationPreparer {
         }
 
         let storage_payer = prepare_storage_payer(
-            self.provider.as_ref(),
+            self.backend.provider(),
             context.state_anchor.core_space_epoch(),
             &transaction,
         )
@@ -80,11 +79,14 @@ impl CoreSpaceSimulationPreparer {
             block_context: context.block_context,
             transaction: DryRunTransactionInput::CoreSpace(transaction),
         };
-        let state_source =
-            prepare_state_source(Arc::clone(&self.provider), context.state_anchor).await?;
+        let state_source = self
+            .backend
+            .prepare_state_source(context.state_anchor)
+            .await?;
 
         Ok(PreparedCoreSpaceSimulation {
             state: PreparedCoreSpaceSimulationState::Ready(Box::new(ReadyCoreSpaceSimulation {
+                backend: self.backend.clone(),
                 chain_id,
                 state_anchor,
                 gas_limit,

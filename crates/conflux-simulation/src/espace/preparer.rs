@@ -1,12 +1,9 @@
-use std::sync::Arc;
-
 use crate::{
-    ConfluxSimulationError, ConfluxSimulationProvider, PreparedEspaceSimulation,
-    config::ConfluxChainConfig,
+    ConfluxSimulationBackend, ConfluxSimulationError, PreparedEspaceSimulation,
     execution::{DryRunTransactionInput, TransactionExecutionInput},
     preparation::{
         EspaceSimulationContext, PreparedEspaceSimulationState, ReadyEspaceSimulation,
-        complete_espace_transaction, load_espace_context, prepare_state_source,
+        complete_espace_transaction, load_espace_context,
     },
 };
 
@@ -17,13 +14,12 @@ use super::{
 
 #[derive(Clone)]
 pub struct EspaceSimulationPreparer {
-    chain: ConfluxChainConfig,
-    provider: Arc<ConfluxSimulationProvider>,
+    backend: ConfluxSimulationBackend,
 }
 
 impl EspaceSimulationPreparer {
-    pub fn new(chain: ConfluxChainConfig, provider: Arc<ConfluxSimulationProvider>) -> Self {
-        Self { chain, provider }
+    pub fn new(backend: ConfluxSimulationBackend) -> Self {
+        Self { backend }
     }
 
     pub async fn prepare_transaction(
@@ -31,9 +27,9 @@ impl EspaceSimulationPreparer {
         block: EspaceBlockRef,
         request: simulation_transaction::TransactionRequest,
     ) -> Result<PreparedEspaceSimulation, ConfluxSimulationError> {
-        let context = load_espace_context(self.provider.as_ref(), &block).await?;
+        let context = load_espace_context(self.backend.provider(), &block).await?;
         let transaction =
-            complete_espace_transaction(self.provider.as_ref(), &context, request).await?;
+            complete_espace_transaction(self.backend.provider(), &context, request).await?;
         self.prepare_completed_transaction(context, transaction)
             .await
     }
@@ -44,7 +40,7 @@ impl EspaceSimulationPreparer {
         transaction: EspaceTransaction,
     ) -> Result<PreparedEspaceSimulation, ConfluxSimulationError> {
         let gas_limit = transaction.gas_limit;
-        let chain_id = self.chain.evm_chain_id;
+        let chain_id = self.backend.chain_spec().espace_chain_id();
 
         if let Err(failure) = validate_espace_transaction(&transaction, chain_id) {
             return Ok(PreparedEspaceSimulation {
@@ -64,11 +60,14 @@ impl EspaceSimulationPreparer {
             block_context: context.block_context,
             transaction: DryRunTransactionInput::Espace(transaction),
         };
-        let state_source =
-            prepare_state_source(Arc::clone(&self.provider), context.state_anchor).await?;
+        let state_source = self
+            .backend
+            .prepare_state_source(context.state_anchor)
+            .await?;
 
         Ok(PreparedEspaceSimulation {
             state: PreparedEspaceSimulationState::Ready(Box::new(ReadyEspaceSimulation {
+                backend: self.backend.clone(),
                 chain_id,
                 simulated_block: context.simulated_block,
                 gas_limit,
