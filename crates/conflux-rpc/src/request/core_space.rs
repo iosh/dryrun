@@ -75,9 +75,8 @@ fn map_core_space_transaction(
     transaction: CoreSpaceTransactionRequest,
     expected_network: Network,
 ) -> Result<service_core_space::CoreSpaceTransactionInput, ValidationError> {
-    validate_core_space_address_networks(&transaction, expected_network)?;
-
     let transaction_type = infer_transaction_type(&transaction)?;
+    validate_core_space_address_networks(&transaction, transaction_type, expected_network)?;
 
     let CoreSpaceTransactionRequest {
         from,
@@ -98,10 +97,6 @@ fn map_core_space_transaction(
 
     let from = require_core_space_field(from, "transaction.from")?;
     let chain_id = require_core_space_field(chain_id, "transaction.chainId")?;
-    let access_list = access_list
-        .map(map_core_space_access_list)
-        .transpose()?
-        .unwrap_or_default();
     let variant = match transaction_type {
         CoreSpaceTransactionType::Cip155 => {
             service_core_space::CoreSpacePartialTransactionVariant::Cip155 {
@@ -111,14 +106,20 @@ fn map_core_space_transaction(
         CoreSpaceTransactionType::Cip2930 => {
             service_core_space::CoreSpacePartialTransactionVariant::Cip2930 {
                 gas_price: gas_price.map(cfx_u256_to_alloy),
-                access_list,
+                access_list: access_list
+                    .map(map_core_space_access_list)
+                    .transpose()?
+                    .unwrap_or_default(),
             }
         }
         CoreSpaceTransactionType::Cip1559 => {
             service_core_space::CoreSpacePartialTransactionVariant::Cip1559 {
                 max_fee_per_gas: max_fee_per_gas.map(cfx_u256_to_alloy),
                 max_priority_fee_per_gas: max_priority_fee_per_gas.map(cfx_u256_to_alloy),
-                access_list,
+                access_list: access_list
+                    .map(map_core_space_access_list)
+                    .transpose()?
+                    .unwrap_or_default(),
             }
         }
     };
@@ -169,27 +170,7 @@ fn infer_transaction_type(
     } else {
         CoreSpaceTransactionType::Cip155
     };
-    let transaction_type = explicit.unwrap_or(inferred);
-
-    if transaction_type == CoreSpaceTransactionType::Cip155 && transaction.access_list.is_some() {
-        return Err(ValidationError::invalid_params(
-            "CIP-155 transactions cannot include `transaction.accessList`",
-        ));
-    }
-    if transaction_type != CoreSpaceTransactionType::Cip1559
-        && (transaction.max_fee_per_gas.is_some() || transaction.max_priority_fee_per_gas.is_some())
-    {
-        return Err(ValidationError::invalid_params(
-            "only CIP-1559 transactions can include dynamic fee fields",
-        ));
-    }
-    if transaction_type == CoreSpaceTransactionType::Cip1559 && transaction.gas_price.is_some() {
-        return Err(ValidationError::invalid_params(
-            "CIP-1559 transactions cannot include `transaction.gasPrice`",
-        ));
-    }
-
-    Ok(transaction_type)
+    Ok(explicit.unwrap_or(inferred))
 }
 
 fn u32_param(value: U256, field: &str) -> Result<u32, ValidationError> {
@@ -203,6 +184,7 @@ fn u32_param(value: U256, field: &str) -> Result<u32, ValidationError> {
 
 fn validate_core_space_address_networks(
     transaction: &CoreSpaceTransactionRequest,
+    transaction_type: CoreSpaceTransactionType,
     expected_network: Network,
 ) -> Result<(), ValidationError> {
     if let Some(from) = transaction.from.as_ref() {
@@ -213,7 +195,9 @@ fn validate_core_space_address_networks(
         validate_core_space_address_network(to, expected_network, "transaction.to")?;
     }
 
-    if let Some(access_list) = transaction.access_list.as_ref() {
+    if transaction_type != CoreSpaceTransactionType::Cip155
+        && let Some(access_list) = transaction.access_list.as_ref()
+    {
         for (index, item) in access_list.iter().enumerate() {
             validate_core_space_address_network(
                 &item.address,

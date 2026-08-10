@@ -1,5 +1,3 @@
-use std::fmt;
-
 use evm_simulation::{
     AccessListItem, Authorization, PartialTransaction, PartialTransactionVariant,
     SignedAuthorization, TransactionInput,
@@ -47,102 +45,12 @@ impl RpcTransactionType {
             Self::Legacy
         })
     }
-
-    fn validate_field_compatibility(
-        self,
-        transaction: &rpc::Transaction,
-    ) -> Result<(), ValidationError> {
-        for field in RpcTransactionField::ALL {
-            if field.is_present(transaction) && !self.allows(field) {
-                return Err(ValidationError::invalid_params(format!(
-                    "`transaction.{}` is not valid for {self} transactions",
-                    field.wire_name(),
-                )));
-            }
-        }
-
-        Ok(())
-    }
-
-    const fn allows(self, field: RpcTransactionField) -> bool {
-        match field {
-            RpcTransactionField::AccessList => !matches!(self, Self::Legacy),
-            RpcTransactionField::GasPrice => matches!(self, Self::Legacy | Self::Eip2930),
-            RpcTransactionField::MaxFeePerGas | RpcTransactionField::MaxPriorityFeePerGas => {
-                matches!(self, Self::Eip1559 | Self::Eip4844 | Self::Eip7702)
-            }
-            RpcTransactionField::MaxFeePerBlobGas | RpcTransactionField::BlobVersionedHashes => {
-                matches!(self, Self::Eip4844)
-            }
-            RpcTransactionField::AuthorizationList => matches!(self, Self::Eip7702),
-        }
-    }
-}
-
-impl fmt::Display for RpcTransactionType {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Legacy => "legacy",
-            Self::Eip2930 => "EIP-2930",
-            Self::Eip1559 => "EIP-1559",
-            Self::Eip4844 => "EIP-4844",
-            Self::Eip7702 => "EIP-7702",
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RpcTransactionField {
-    AccessList,
-    GasPrice,
-    MaxFeePerGas,
-    MaxPriorityFeePerGas,
-    MaxFeePerBlobGas,
-    BlobVersionedHashes,
-    AuthorizationList,
-}
-
-impl RpcTransactionField {
-    const ALL: [Self; 7] = [
-        Self::AccessList,
-        Self::GasPrice,
-        Self::MaxFeePerGas,
-        Self::MaxPriorityFeePerGas,
-        Self::MaxFeePerBlobGas,
-        Self::BlobVersionedHashes,
-        Self::AuthorizationList,
-    ];
-
-    const fn wire_name(self) -> &'static str {
-        match self {
-            Self::AccessList => "accessList",
-            Self::GasPrice => "gasPrice",
-            Self::MaxFeePerGas => "maxFeePerGas",
-            Self::MaxPriorityFeePerGas => "maxPriorityFeePerGas",
-            Self::MaxFeePerBlobGas => "maxFeePerBlobGas",
-            Self::BlobVersionedHashes => "blobVersionedHashes",
-            Self::AuthorizationList => "authorizationList",
-        }
-    }
-
-    fn is_present(self, transaction: &rpc::Transaction) -> bool {
-        match self {
-            Self::AccessList => transaction.access_list.is_some(),
-            Self::GasPrice => transaction.gas_price.is_some(),
-            Self::MaxFeePerGas => transaction.max_fee_per_gas.is_some(),
-            Self::MaxPriorityFeePerGas => transaction.max_priority_fee_per_gas.is_some(),
-            Self::MaxFeePerBlobGas => transaction.max_fee_per_blob_gas.is_some(),
-            Self::BlobVersionedHashes => transaction.blob_versioned_hashes.is_some(),
-            Self::AuthorizationList => transaction.authorization_list.is_some(),
-        }
-    }
 }
 
 pub(super) fn map_transaction(
     transaction: rpc::Transaction,
 ) -> Result<TransactionInput, ValidationError> {
     let transaction_type = RpcTransactionType::classify(&transaction)?;
-    transaction_type.validate_field_compatibility(&transaction)?;
     let rpc::Transaction {
         tx_type: _,
         chain_id: _,
@@ -160,34 +68,28 @@ pub(super) fn map_transaction(
         blob_versioned_hashes,
         authorization_list,
     } = transaction;
-    let access_list = access_list
-        .unwrap_or_default()
-        .into_iter()
-        .map(map_access_list_item)
-        .collect();
-
     let variant = match transaction_type {
         RpcTransactionType::Legacy => PartialTransactionVariant::Legacy { gas_price },
         RpcTransactionType::Eip2930 => PartialTransactionVariant::Eip2930 {
             gas_price,
-            access_list,
+            access_list: map_access_list(access_list),
         },
         RpcTransactionType::Eip1559 => PartialTransactionVariant::Eip1559 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
-            access_list,
+            access_list: map_access_list(access_list),
         },
         RpcTransactionType::Eip4844 => PartialTransactionVariant::Eip4844 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             max_fee_per_blob_gas,
-            access_list,
+            access_list: map_access_list(access_list),
             blob_versioned_hashes: blob_versioned_hashes.unwrap_or_default(),
         },
         RpcTransactionType::Eip7702 => PartialTransactionVariant::Eip7702 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
-            access_list,
+            access_list: map_access_list(access_list),
             authorization_list: authorization_list
                 .unwrap_or_default()
                 .into_iter()
@@ -205,6 +107,14 @@ pub(super) fn map_transaction(
         input: data,
         variant,
     }))
+}
+
+fn map_access_list(items: Option<Vec<rpc::AccessListItem>>) -> Vec<AccessListItem> {
+    items
+        .unwrap_or_default()
+        .into_iter()
+        .map(map_access_list_item)
+        .collect()
 }
 
 fn map_access_list_item(item: rpc::AccessListItem) -> AccessListItem {

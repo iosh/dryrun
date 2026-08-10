@@ -1,4 +1,4 @@
-use std::{fmt, str::FromStr};
+use std::str::FromStr;
 
 use alloy_primitives::Bytes;
 use cfx_rpc_eth_types::Bytes as RpcBytes;
@@ -123,63 +123,6 @@ impl RpcTransactionType {
             Self::Legacy
         })
     }
-
-    fn validate_field_compatibility(
-        self,
-        transaction: &EspaceRpcTransactionRequest,
-    ) -> Result<(), ValidationError> {
-        let access_list_allowed = !matches!(self, Self::Legacy);
-        let gas_price_allowed = matches!(self, Self::Legacy | Self::Eip2930);
-        let dynamic_fee_allowed = matches!(self, Self::Eip1559 | Self::Eip7702);
-        let authorization_allowed = matches!(self, Self::Eip7702);
-
-        for (present, allowed, field) in [
-            (
-                transaction.access_list.is_some(),
-                access_list_allowed,
-                "accessList",
-            ),
-            (
-                transaction.gas_price.is_some(),
-                gas_price_allowed,
-                "gasPrice",
-            ),
-            (
-                transaction.max_fee_per_gas.is_some(),
-                dynamic_fee_allowed,
-                "maxFeePerGas",
-            ),
-            (
-                transaction.max_priority_fee_per_gas.is_some(),
-                dynamic_fee_allowed,
-                "maxPriorityFeePerGas",
-            ),
-            (
-                transaction.authorization_list.is_some(),
-                authorization_allowed,
-                "authorizationList",
-            ),
-        ] {
-            if present && !allowed {
-                return Err(ValidationError::invalid_params(format!(
-                    "`transaction.{field}` is not valid for {self} transactions"
-                )));
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl fmt::Display for RpcTransactionType {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(match self {
-            Self::Legacy => "legacy",
-            Self::Eip2930 => "EIP-2930",
-            Self::Eip1559 => "EIP-1559",
-            Self::Eip7702 => "EIP-7702",
-        })
-    }
 }
 
 impl TryFrom<SimulateEspaceTransactionRequest> for EspaceSimulationRequest {
@@ -272,7 +215,6 @@ fn map_transaction(
     transaction: EspaceRpcTransactionRequest,
 ) -> Result<EspaceTransactionInput, ValidationError> {
     let transaction_type = RpcTransactionType::classify(&transaction)?;
-    transaction_type.validate_field_compatibility(&transaction)?;
     let from = require_transaction_from(&transaction)?;
     let chain_id = transaction
         .chain_id
@@ -301,36 +243,23 @@ fn map_transaction(
         (Some(input), _) | (_, Some(input)) => Some(Bytes::from(input.0)),
         (None, None) => None,
     };
-    let access_list = access_list
-        .unwrap_or_default()
-        .into_iter()
-        .map(|item| AccessListItem {
-            address: cfx_address_to_alloy(item.address),
-            storage_keys: item
-                .storage_keys
-                .into_iter()
-                .map(cfx_h256_to_alloy)
-                .collect(),
-        })
-        .collect();
-
     let variant = match transaction_type {
         RpcTransactionType::Legacy => EspacePartialTransactionVariant::Legacy {
             gas_price: gas_price.map(cfx_u256_to_alloy),
         },
         RpcTransactionType::Eip2930 => EspacePartialTransactionVariant::Eip2930 {
             gas_price: gas_price.map(cfx_u256_to_alloy),
-            access_list,
+            access_list: map_access_list(access_list),
         },
         RpcTransactionType::Eip1559 => EspacePartialTransactionVariant::Eip1559 {
             max_fee_per_gas: max_fee_per_gas.map(cfx_u256_to_alloy),
             max_priority_fee_per_gas: max_priority_fee_per_gas.map(cfx_u256_to_alloy),
-            access_list,
+            access_list: map_access_list(access_list),
         },
         RpcTransactionType::Eip7702 => EspacePartialTransactionVariant::Eip7702 {
             max_fee_per_gas: max_fee_per_gas.map(cfx_u256_to_alloy),
             max_priority_fee_per_gas: max_priority_fee_per_gas.map(cfx_u256_to_alloy),
-            access_list,
+            access_list: map_access_list(access_list),
             authorization_list: authorization_list
                 .unwrap_or_default()
                 .into_iter()
@@ -353,6 +282,21 @@ fn map_transaction(
         chain_id: Some(chain_id),
         variant,
     }))
+}
+
+fn map_access_list(items: Option<Vec<RpcAccessListItem>>) -> Vec<AccessListItem> {
+    items
+        .unwrap_or_default()
+        .into_iter()
+        .map(|item| AccessListItem {
+            address: cfx_address_to_alloy(item.address),
+            storage_keys: item
+                .storage_keys
+                .into_iter()
+                .map(cfx_h256_to_alloy)
+                .collect(),
+        })
+        .collect()
 }
 
 fn map_signed_authorization(
