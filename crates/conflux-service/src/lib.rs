@@ -37,14 +37,7 @@ impl ConfluxService {
         let simulation = self
             .simulation_tasks
             .run(move || async move {
-                let prepared = preparer
-                    .prepare_transaction(
-                        epoch,
-                        transaction.transaction,
-                        transaction.storage_limit,
-                        transaction.epoch_height,
-                    )
-                    .await?;
+                let prepared = preparer.prepare_transaction(epoch, transaction).await?;
 
                 let simulation = tokio::task::spawn_blocking(move || simulator.simulate(prepared))
                     .await

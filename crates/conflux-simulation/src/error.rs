@@ -7,7 +7,9 @@ use thiserror::Error;
 
 use crate::{
     ConfluxRpcError,
-    core_space::CoreSpaceContextError,
+    core_space::{
+        CoreSpaceContextError, CoreSpaceTransactionCompletionError, CoreSpaceTransactionInputError,
+    },
     espace::EspaceContextError,
     execution::{ExecutionBlockContextError, TransactionExecutionError},
 };
@@ -126,10 +128,13 @@ pub enum ConfluxSimulationError {
     CoreSpaceContext(#[from] CoreSpaceContextError),
 
     #[error(transparent)]
-    BlockContext(#[from] ExecutionBlockContextError),
+    CoreSpaceInput(#[from] CoreSpaceTransactionInputError),
 
-    #[error("transaction completion failed: {message}")]
-    TransactionCompletion { message: String },
+    #[error(transparent)]
+    CoreSpaceCompletion(#[from] CoreSpaceTransactionCompletionError),
+
+    #[error(transparent)]
+    BlockContext(#[from] ExecutionBlockContextError),
 
     #[error(transparent)]
     Provider(#[from] ConfluxRpcError),
@@ -145,12 +150,6 @@ pub enum ConfluxSimulationError {
 }
 
 impl ConfluxSimulationError {
-    pub(crate) fn transaction_completion_failed(message: impl Into<String>) -> Self {
-        Self::TransactionCompletion {
-            message: message.into(),
-        }
-    }
-
     pub(crate) fn analysis_failed(message: impl Into<String>) -> Self {
         Self::Analysis {
             message: message.into(),

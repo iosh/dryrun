@@ -2116,7 +2116,6 @@ dependencies = [
  "serde",
  "serde_json",
  "simulation-tasks",
- "simulation-transaction",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -2159,7 +2158,6 @@ dependencies = [
  "serde_json",
  "simulation-changes",
  "simulation-execution",
- "simulation-transaction",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -6978,15 +6976,6 @@ version = "0.1.0"
 dependencies = [
  "thiserror 2.0.18",
  "tokio",
-]
-
-[[package]]
-name = "simulation-transaction"
-version = "0.1.0"
-dependencies = [
- "alloy-eips",
- "alloy-primitives",
- "thiserror 2.0.18",
 ]
 
 [[package]]

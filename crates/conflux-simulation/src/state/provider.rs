@@ -18,7 +18,7 @@ mod block;
 mod state;
 mod transaction;
 
-pub(crate) use transaction::EspaceEstimateTransaction;
+pub(crate) use transaction::{CoreSpaceResourceEstimate, EspaceEstimateTransaction};
 
 #[derive(Clone)]
 pub(crate) struct ConfluxSimulationProvider {

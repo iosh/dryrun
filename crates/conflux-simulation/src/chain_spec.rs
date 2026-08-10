@@ -45,6 +45,12 @@ pub(crate) struct EspaceTransactionValidationRules {
     pub(crate) max_initcode_size: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CoreSpaceTransactionValidationRules {
+    pub(crate) typed_transactions_active: bool,
+    pub(crate) priority_fee_cap_active: bool,
+}
+
 impl ConfluxChainSpec {
     pub(crate) fn mainnet() -> Self {
         Self {
@@ -109,6 +115,19 @@ impl ConfluxChainSpec {
             calldata_floor_active: epoch_height >= transitions.cip130
                 && epoch_height < transitions.align_evm,
             max_initcode_size: spec.init_code_data_limit,
+        }
+    }
+
+    pub(crate) fn core_space_transaction_validation_rules(
+        &self,
+        block_number: u64,
+        epoch_height: u64,
+    ) -> CoreSpaceTransactionValidationRules {
+        let spec = self.common_params.spec(block_number, epoch_height);
+        let transitions = &self.common_params.transition_heights;
+        CoreSpaceTransactionValidationRules {
+            typed_transactions_active: epoch_height >= transitions.cip1559 && spec.cip1559,
+            priority_fee_cap_active: epoch_height >= transitions.cip645,
         }
     }
 }

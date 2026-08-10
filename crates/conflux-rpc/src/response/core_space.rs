@@ -67,6 +67,7 @@ enum CoreSpaceExecutionFailureCode {
     ChainIdMismatch,
     ZeroGasPrice,
     PriorityFeeExceedsMaxFee,
+    TransactionTypeNotActivated,
     NonceTooLow,
     NonceTooHigh,
     EpochHeightOutOfBound,
@@ -90,7 +91,7 @@ impl SimulateCoreSpaceTransactionResponse {
         simulation: service_core_space::CoreSpaceSimulation,
         network: Network,
     ) -> Result<Self, ResponseMappingError> {
-        let (execution, changes) = simulation.into_parts();
+        let (_, _, execution, changes) = simulation.into_parts();
         Ok(Self {
             execution: CoreSpaceExecution::from_service(execution),
             changes: core_space_change::try_map_changes(changes, network)?,
@@ -157,7 +158,7 @@ impl CoreSpaceExecution {
             state: state.into(),
             status,
             gas_used,
-            gas_limit: gas_limit.into(),
+            gas_limit: u256_to_wire(gas_limit),
             gas_charged,
             fee,
             burnt_fee,
@@ -197,6 +198,9 @@ impl From<service_core_space::CoreSpaceExecutionFailureCode> for CoreSpaceExecut
             service_core_space::CoreSpaceExecutionFailureCode::ZeroGasPrice => Self::ZeroGasPrice,
             service_core_space::CoreSpaceExecutionFailureCode::PriorityFeeExceedsMaxFee => {
                 Self::PriorityFeeExceedsMaxFee
+            }
+            service_core_space::CoreSpaceExecutionFailureCode::TransactionTypeNotActivated => {
+                Self::TransactionTypeNotActivated
             }
             service_core_space::CoreSpaceExecutionFailureCode::NonceTooLow => Self::NonceTooLow,
             service_core_space::CoreSpaceExecutionFailureCode::NonceTooHigh => Self::NonceTooHigh,

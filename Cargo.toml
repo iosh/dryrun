@@ -11,7 +11,6 @@ members = [
     "crates/conflux-service",
     "crates/simulation-changes",
     "crates/simulation-execution",
-    "crates/simulation-transaction",
     "crates/simulation-tasks",
 ]
 
@@ -29,7 +28,6 @@ conflux-rpc = { path = "crates/conflux-rpc" }
 conflux-service = { path = "crates/conflux-service" }
 simulation-changes = { path = "crates/simulation-changes" }
 simulation-execution = { path = "crates/simulation-execution" }
-simulation-transaction = { path = "crates/simulation-transaction" }
 simulation-tasks = { path = "crates/simulation-tasks" }
 
 jsonrpsee = "0.26"

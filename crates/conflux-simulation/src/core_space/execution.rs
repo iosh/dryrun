@@ -8,6 +8,7 @@ pub enum CoreSpaceExecutionFailureCode {
     ChainIdMismatch,
     ZeroGasPrice,
     PriorityFeeExceedsMaxFee,
+    TransactionTypeNotActivated,
     NonceTooLow,
     NonceTooHigh,
     EpochHeightOutOfBound,
@@ -48,7 +49,7 @@ pub struct CoreSpaceExecutionDetails {
 pub struct CoreSpaceExecution {
     pub chain_id: u64,
     pub context: CoreSpaceBlockContext,
-    pub gas_limit: u64,
+    pub gas_limit: U256,
     pub outcome: CoreSpaceOutcome,
 }
 

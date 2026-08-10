@@ -25,8 +25,14 @@ pub(crate) fn simulate(
     runtime_handle: &Handle,
 ) -> Result<CoreSpaceSimulation, ConfluxSimulationError> {
     match prepared_simulation.state {
-        PreparedCoreSpaceSimulationState::Finished(core_execution) => {
-            Ok(CoreSpaceSimulation::new(*core_execution, Vec::new()))
+        PreparedCoreSpaceSimulationState::Finished(finished) => {
+            let finished = *finished;
+            Ok(CoreSpaceSimulation::new(
+                finished.context,
+                finished.transaction,
+                finished.execution,
+                Vec::new(),
+            ))
         }
         PreparedCoreSpaceSimulationState::Ready(ready_simulation) => {
             simulate_ready(*ready_simulation, runtime_handle)
@@ -42,7 +48,7 @@ fn simulate_ready(
         backend,
         chain_id,
         public_context,
-        gas_limit,
+        transaction,
         storage_payer,
         execution_input,
         state_source,
@@ -83,7 +89,7 @@ fn simulate_ready(
         return Ok(build_core_space_simulation(
             chain_id,
             public_context,
-            gas_limit,
+            transaction,
             storage_payer,
             execution,
             Vec::new(),
@@ -94,7 +100,7 @@ fn simulate_ready(
     Ok(build_core_space_simulation(
         chain_id,
         public_context,
-        gas_limit,
+        transaction,
         storage_payer,
         execution,
         core_changes,
@@ -104,13 +110,14 @@ fn simulate_ready(
 fn build_core_space_simulation(
     chain_id: u32,
     public_context: super::CoreSpaceBlockContext,
-    gas_limit: u64,
+    transaction: super::CoreSpaceCompleteTransaction,
     storage_payer: PreparedStoragePayer,
     execution: ConfluxTransactionExecution,
     changes: Vec<CoreSpaceChange>,
 ) -> CoreSpaceSimulation {
     let storage_payer =
         storage_payer_for_outcome(storage_payer, &execution.outcome, &execution.prepared.spec);
+    let gas_limit = transaction.gas_limit;
     let core_execution = build_core_space_execution(
         chain_id,
         public_context,
@@ -118,7 +125,7 @@ fn build_core_space_simulation(
         execution.outcome,
         storage_payer,
     );
-    CoreSpaceSimulation::new(core_execution, changes)
+    CoreSpaceSimulation::new(public_context, transaction, core_execution, changes)
 }
 
 fn storage_payer_for_outcome(

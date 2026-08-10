@@ -17,4 +17,3 @@ pub use error::{
 pub use execution::ExecutionBlockContextError;
 pub use preparation::PreparedCoreSpaceSimulation;
 pub use state::ConfluxRpcError;
-pub(crate) use state::ConfluxSimulationProvider;

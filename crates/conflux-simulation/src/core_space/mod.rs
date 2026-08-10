@@ -1,5 +1,6 @@
 mod analysis;
 mod changes;
+mod completion;
 mod context;
 mod execution;
 mod outcome;
@@ -9,10 +10,10 @@ pub(crate) mod simulation;
 mod simulator;
 mod transaction;
 
+pub(crate) use completion::complete_transaction;
 pub(crate) use outcome::{build_core_space_execution, build_core_space_not_executed};
 pub(crate) use transaction::{
     PreparedStoragePayer, build_core_space_transaction_input, prepare_storage_payer,
-    validate_core_space_transaction_network,
 };
 
 pub use changes::{
@@ -34,6 +35,7 @@ pub use result::CoreSpaceSimulation;
 pub use simulation_changes::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
 pub use simulator::CoreSpaceSimulator;
 pub use transaction::{
-    CoreSpaceAccessListItem, CoreSpaceTransactionRequest, CoreSpaceTransactionVariantRequest,
+    CoreSpaceAccessListItem, CoreSpaceCompleteTransaction, CoreSpaceCompleteTransactionVariant,
+    CoreSpacePartialTransaction, CoreSpacePartialTransactionVariant,
+    CoreSpaceTransactionCompletionError, CoreSpaceTransactionInput, CoreSpaceTransactionInputError,
 };
-pub(crate) use transaction::{CoreSpaceTransaction, CoreSpaceTransactionVariant};

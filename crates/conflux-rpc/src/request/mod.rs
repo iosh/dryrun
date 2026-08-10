@@ -13,10 +13,6 @@ fn u64_param(value: U256, field: &str) -> Result<u64, ValidationError> {
     u64::try_from(value).map_err(|_| param_exceeds_max(field, value, U256::from(u64::MAX)))
 }
 
-fn u128_param(value: U256, field: &str) -> Result<u128, ValidationError> {
-    u128::try_from(value).map_err(|_| param_exceeds_max(field, value, U256::from(u128::MAX)))
-}
-
 fn param_exceeds_max(field: &str, value: U256, max: U256) -> ValidationError {
     ValidationError::invalid_params(format!(
         "`{field}` value {value:#x} exceeds the simulator maximum {max:#x}"

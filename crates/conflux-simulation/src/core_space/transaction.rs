@@ -4,25 +4,45 @@ use primitives::transaction::{
     Action, Cip1559Transaction, Cip2930Transaction,
     NativeTransaction as PrimitiveNativeTransaction, TypedNativeTransaction,
 };
-use simulation_transaction::{TransactionType, TransactionVariantError};
+use thiserror::Error;
 
 use crate::{
-    ConfluxSimulationError,
-    execution::CoreSpaceTransactionInput,
+    ConfluxRpcError, ConfluxSimulationError,
+    execution::CoreSpaceTransactionInput as ExecutorCoreSpaceTransactionInput,
     primitive::{b256_to_cfx, u256_to_cfx},
     state::{ConfluxSimulationProvider, ConfluxStateAnchor},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoreSpaceTransactionRequest {
+pub enum CoreSpaceTransactionInput {
+    Complete(CoreSpaceCompleteTransaction),
+    Partial(CoreSpacePartialTransaction),
+}
+
+impl CoreSpaceTransactionInput {
+    pub(crate) fn validate_network(
+        &self,
+        expected: Network,
+    ) -> Result<(), CoreSpaceTransactionInputError> {
+        match self {
+            Self::Complete(transaction) => transaction.validate_network(expected),
+            Self::Partial(transaction) => transaction.validate_network(expected),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoreSpaceCompleteTransaction {
     pub from: CoreAddress,
     pub to: Option<CoreAddress>,
-    pub nonce: Option<u64>,
-    pub gas_limit: Option<u64>,
-    pub value: Option<U256>,
-    pub data: Option<Bytes>,
-    pub chain_id: u64,
-    pub variant: CoreSpaceTransactionVariantRequest,
+    pub nonce: U256,
+    pub gas_limit: U256,
+    pub value: U256,
+    pub data: Bytes,
+    pub chain_id: u32,
+    pub variant: CoreSpaceCompleteTransactionVariant,
+    pub storage_limit: u64,
+    pub epoch_height: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -32,142 +52,150 @@ pub struct CoreSpaceAccessListItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CoreSpaceTransactionVariantRequest {
-    Legacy {
-        gas_price: Option<u128>,
+pub enum CoreSpaceCompleteTransactionVariant {
+    Cip155 {
+        gas_price: U256,
     },
-    AccessList {
-        gas_price: Option<u128>,
+    Cip2930 {
+        gas_price: U256,
         access_list: Vec<CoreSpaceAccessListItem>,
     },
-    DynamicFee {
-        max_fee_per_gas: Option<u128>,
-        max_priority_fee_per_gas: Option<u128>,
-        access_list: Vec<CoreSpaceAccessListItem>,
-    },
-}
-
-impl CoreSpaceTransactionVariantRequest {
-    pub fn try_new(
-        transaction_type: TransactionType,
-        access_list: Option<Vec<CoreSpaceAccessListItem>>,
-        gas_price: Option<u128>,
-        max_fee_per_gas: Option<u128>,
-        max_priority_fee_per_gas: Option<u128>,
-    ) -> Result<Self, TransactionVariantError> {
-        let has_dynamic_fee = max_fee_per_gas.is_some() || max_priority_fee_per_gas.is_some();
-
-        match transaction_type {
-            TransactionType::Legacy => {
-                if access_list.as_ref().is_some_and(|items| !items.is_empty()) {
-                    return Err(TransactionVariantError::AccessListNotAllowed { transaction_type });
-                }
-
-                if has_dynamic_fee {
-                    return Err(TransactionVariantError::DynamicFeeNotAllowed { transaction_type });
-                }
-
-                Ok(Self::Legacy { gas_price })
-            }
-            TransactionType::AccessList => {
-                if has_dynamic_fee {
-                    return Err(TransactionVariantError::DynamicFeeNotAllowed { transaction_type });
-                }
-
-                Ok(Self::AccessList {
-                    gas_price,
-                    access_list: access_list.unwrap_or_default(),
-                })
-            }
-            TransactionType::DynamicFee => {
-                if gas_price.is_some() {
-                    return Err(TransactionVariantError::GasPriceNotAllowed { transaction_type });
-                }
-
-                Ok(Self::DynamicFee {
-                    max_fee_per_gas,
-                    max_priority_fee_per_gas,
-                    access_list: access_list.unwrap_or_default(),
-                })
-            }
-        }
-    }
-}
-
-pub(crate) fn validate_core_space_transaction_network(
-    transaction: &CoreSpaceTransactionRequest,
-    expected_network: Network,
-) -> Result<(), ConfluxSimulationError> {
-    validate_core_space_address_network(&transaction.from, expected_network, "transaction.from")?;
-
-    if let Some(to) = transaction.to.as_ref() {
-        validate_core_space_address_network(to, expected_network, "transaction.to")?;
-    }
-
-    let access_list = match &transaction.variant {
-        CoreSpaceTransactionVariantRequest::Legacy { .. } => None,
-        CoreSpaceTransactionVariantRequest::AccessList { access_list, .. }
-        | CoreSpaceTransactionVariantRequest::DynamicFee { access_list, .. } => Some(access_list),
-    };
-    if let Some(access_list) = access_list {
-        for (index, item) in access_list.iter().enumerate() {
-            validate_core_space_address_network(
-                &item.address,
-                expected_network,
-                &format!("transaction.accessList[{index}].address"),
-            )?;
-        }
-    }
-
-    Ok(())
-}
-
-fn validate_core_space_address_network(
-    address: &CoreAddress,
-    expected_network: Network,
-    field: &str,
-) -> Result<(), ConfluxSimulationError> {
-    if address.network() != expected_network {
-        return Err(ConfluxSimulationError::transaction_completion_failed(
-            format!(
-                "`{field}` uses address network {}, expected {}",
-                address.network(),
-                expected_network
-            ),
-        ));
-    }
-
-    Ok(())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CoreSpaceTransactionVariant {
-    Legacy {
-        gas_price: u128,
-    },
-    AccessList {
-        gas_price: u128,
-        access_list: Vec<CoreSpaceAccessListItem>,
-    },
-    DynamicFee {
-        max_fee_per_gas: u128,
-        max_priority_fee_per_gas: u128,
+    Cip1559 {
+        max_fee_per_gas: U256,
+        max_priority_fee_per_gas: U256,
         access_list: Vec<CoreSpaceAccessListItem>,
     },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoreSpaceTransaction {
+pub struct CoreSpacePartialTransaction {
     pub from: CoreAddress,
     pub to: Option<CoreAddress>,
-    pub nonce: u64,
-    pub gas_limit: u64,
-    pub value: U256,
-    pub data: Bytes,
-    pub chain_id: u64,
-    pub variant: CoreSpaceTransactionVariant,
-    pub storage_limit: u64,
-    pub epoch_height: u64,
+    pub nonce: Option<U256>,
+    pub gas_limit: Option<U256>,
+    pub value: Option<U256>,
+    pub data: Option<Bytes>,
+    pub chain_id: Option<u32>,
+    pub variant: CoreSpacePartialTransactionVariant,
+    pub storage_limit: Option<u64>,
+    pub epoch_height: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoreSpacePartialTransactionVariant {
+    Cip155 {
+        gas_price: Option<U256>,
+    },
+    Cip2930 {
+        gas_price: Option<U256>,
+        access_list: Vec<CoreSpaceAccessListItem>,
+    },
+    Cip1559 {
+        max_fee_per_gas: Option<U256>,
+        max_priority_fee_per_gas: Option<U256>,
+        access_list: Vec<CoreSpaceAccessListItem>,
+    },
+}
+
+impl CoreSpaceCompleteTransaction {
+    fn validate_network(&self, expected: Network) -> Result<(), CoreSpaceTransactionInputError> {
+        validate_transaction_network(
+            self.from,
+            self.to,
+            complete_access_list(&self.variant),
+            expected,
+        )
+    }
+}
+
+impl CoreSpacePartialTransaction {
+    fn validate_network(&self, expected: Network) -> Result<(), CoreSpaceTransactionInputError> {
+        validate_transaction_network(
+            self.from,
+            self.to,
+            partial_access_list(&self.variant),
+            expected,
+        )
+    }
+}
+
+fn complete_access_list(
+    variant: &CoreSpaceCompleteTransactionVariant,
+) -> Option<&[CoreSpaceAccessListItem]> {
+    match variant {
+        CoreSpaceCompleteTransactionVariant::Cip155 { .. } => None,
+        CoreSpaceCompleteTransactionVariant::Cip2930 { access_list, .. }
+        | CoreSpaceCompleteTransactionVariant::Cip1559 { access_list, .. } => Some(access_list),
+    }
+}
+
+fn partial_access_list(
+    variant: &CoreSpacePartialTransactionVariant,
+) -> Option<&[CoreSpaceAccessListItem]> {
+    match variant {
+        CoreSpacePartialTransactionVariant::Cip155 { .. } => None,
+        CoreSpacePartialTransactionVariant::Cip2930 { access_list, .. }
+        | CoreSpacePartialTransactionVariant::Cip1559 { access_list, .. } => Some(access_list),
+    }
+}
+
+fn validate_transaction_network(
+    from: CoreAddress,
+    to: Option<CoreAddress>,
+    access_list: Option<&[CoreSpaceAccessListItem]>,
+    expected: Network,
+) -> Result<(), CoreSpaceTransactionInputError> {
+    validate_address_network(from, expected)?;
+    if let Some(to) = to {
+        validate_address_network(to, expected)?;
+    }
+    if let Some(access_list) = access_list {
+        for item in access_list {
+            validate_address_network(item.address, expected)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_address_network(
+    address: CoreAddress,
+    expected: Network,
+) -> Result<(), CoreSpaceTransactionInputError> {
+    if address.network() != expected {
+        return Err(CoreSpaceTransactionInputError::AddressNetworkMismatch { address, expected });
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum CoreSpaceTransactionInputError {
+    #[error(
+        "Core Space address {address:?} uses network {}, expected {expected}",
+        address.network()
+    )]
+    AddressNetworkMismatch {
+        address: CoreAddress,
+        expected: Network,
+    },
+}
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum CoreSpaceTransactionCompletionError {
+    #[error(transparent)]
+    Provider(#[from] ConfluxRpcError),
+
+    #[error("estimated Core Space storage limit exceeds u64: {value}")]
+    StorageLimitOutOfRange { value: U256 },
+
+    #[error("Core Space epoch {epoch_number} has no base fee for dynamic-fee completion")]
+    MissingBaseFee { epoch_number: u64 },
+
+    #[error("calculated Core Space max fee per gas exceeds U256")]
+    MaxFeePerGasOverflow,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -184,7 +212,7 @@ impl PreparedStoragePayer {
 pub(crate) async fn prepare_storage_payer(
     provider: &ConfluxSimulationProvider,
     state_anchor: ConfluxStateAnchor,
-    transaction: &CoreSpaceTransaction,
+    transaction: &CoreSpaceCompleteTransaction,
 ) -> Result<PreparedStoragePayer, ConfluxSimulationError> {
     let Some(target) = transaction.to.as_ref() else {
         return Ok(PreparedStoragePayer {
@@ -219,31 +247,31 @@ pub(crate) async fn prepare_storage_payer(
     })
 }
 
-fn storage_payer_gas_price(variant: &CoreSpaceTransactionVariant) -> u128 {
+fn storage_payer_gas_price(variant: &CoreSpaceCompleteTransactionVariant) -> U256 {
     match variant {
-        CoreSpaceTransactionVariant::Legacy { gas_price }
-        | CoreSpaceTransactionVariant::AccessList { gas_price, .. } => *gas_price,
-        CoreSpaceTransactionVariant::DynamicFee {
+        CoreSpaceCompleteTransactionVariant::Cip155 { gas_price }
+        | CoreSpaceCompleteTransactionVariant::Cip2930 { gas_price, .. } => *gas_price,
+        CoreSpaceCompleteTransactionVariant::Cip1559 {
             max_fee_per_gas, ..
         } => *max_fee_per_gas,
     }
 }
 
 pub(crate) fn build_core_space_transaction_input(
-    input: CoreSpaceTransaction,
+    input: &CoreSpaceCompleteTransaction,
     chain_id: u32,
-) -> CoreSpaceTransactionInput {
+) -> ExecutorCoreSpaceTransactionInput {
     let sender = cfx_types::Address::from_slice(&input.from.bytes());
     let tx = build_typed_core_space_transaction(input, chain_id);
 
-    CoreSpaceTransactionInput { tx, sender }
+    ExecutorCoreSpaceTransactionInput { tx, sender }
 }
 
 fn build_typed_core_space_transaction(
-    input: CoreSpaceTransaction,
+    input: &CoreSpaceCompleteTransaction,
     chain_id: u32,
 ) -> TypedNativeTransaction {
-    let CoreSpaceTransaction {
+    let CoreSpaceCompleteTransaction {
         from: _,
         to,
         nonce,
@@ -256,56 +284,56 @@ fn build_typed_core_space_transaction(
         epoch_height,
     } = input;
 
-    let action = to.map_or(Action::Create, |address| {
+    let action = to.as_ref().map_or(Action::Create, |address| {
         Action::Call(cfx_types::Address::from_slice(&address.bytes()))
     });
-    let nonce = nonce.into();
-    let gas = gas_limit.into();
-    let value = u256_to_cfx(value);
+    let nonce = u256_to_cfx(*nonce);
+    let gas = u256_to_cfx(*gas_limit);
+    let value = u256_to_cfx(*value);
     let data = data.to_vec();
 
     match variant {
-        CoreSpaceTransactionVariant::Legacy { gas_price } => {
+        CoreSpaceCompleteTransactionVariant::Cip155 { gas_price } => {
             TypedNativeTransaction::Cip155(PrimitiveNativeTransaction {
                 nonce,
-                gas_price: gas_price.into(),
+                gas_price: u256_to_cfx(*gas_price),
                 gas,
                 action,
                 value,
-                storage_limit,
-                epoch_height,
+                storage_limit: *storage_limit,
+                epoch_height: *epoch_height,
                 chain_id,
                 data,
             })
         }
-        CoreSpaceTransactionVariant::AccessList {
+        CoreSpaceCompleteTransactionVariant::Cip2930 {
             gas_price,
             access_list,
         } => TypedNativeTransaction::Cip2930(Cip2930Transaction {
             nonce,
-            gas_price: gas_price.into(),
+            gas_price: u256_to_cfx(*gas_price),
             gas,
             action,
             value,
-            storage_limit,
-            epoch_height,
+            storage_limit: *storage_limit,
+            epoch_height: *epoch_height,
             chain_id,
             data,
             access_list: core_access_list_to_cfx(access_list),
         }),
-        CoreSpaceTransactionVariant::DynamicFee {
+        CoreSpaceCompleteTransactionVariant::Cip1559 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             access_list,
         } => TypedNativeTransaction::Cip1559(Cip1559Transaction {
             nonce,
-            max_priority_fee_per_gas: max_priority_fee_per_gas.into(),
-            max_fee_per_gas: max_fee_per_gas.into(),
+            max_priority_fee_per_gas: u256_to_cfx(*max_priority_fee_per_gas),
+            max_fee_per_gas: u256_to_cfx(*max_fee_per_gas),
             gas,
             action,
             value,
-            storage_limit,
-            epoch_height,
+            storage_limit: *storage_limit,
+            epoch_height: *epoch_height,
             chain_id,
             data,
             access_list: core_access_list_to_cfx(access_list),
@@ -313,12 +341,12 @@ fn build_typed_core_space_transaction(
     }
 }
 
-fn core_access_list_to_cfx(items: Vec<CoreSpaceAccessListItem>) -> Vec<primitives::AccessListItem> {
+fn core_access_list_to_cfx(items: &[CoreSpaceAccessListItem]) -> Vec<primitives::AccessListItem> {
     items
-        .into_iter()
+        .iter()
         .map(|item| primitives::AccessListItem {
             address: cfx_types::Address::from_slice(&item.address.bytes()),
-            storage_keys: item.storage_keys.into_iter().map(b256_to_cfx).collect(),
+            storage_keys: item.storage_keys.iter().copied().map(b256_to_cfx).collect(),
         })
         .collect()
 }

@@ -1,9 +1,0 @@
-[package]
-name = "simulation-transaction"
-version = { workspace = true }
-edition = { workspace = true }
-
-[dependencies]
-alloy-eips = { workspace = true }
-alloy-primitives = { workspace = true }
-thiserror = { workspace = true }

@@ -17,7 +17,7 @@ pub use self::provider::ConfluxRpcError;
 pub(crate) use self::{
     core_space_internal::SponsorWhitelistStorageKey,
     phases::{StatePhaseValues, execute_with_state_phases},
-    provider::{ConfluxSimulationProvider, EspaceEstimateTransaction},
+    provider::{ConfluxSimulationProvider, CoreSpaceResourceEstimate, EspaceEstimateTransaction},
     reader::{AnchoredVoteLists, ConfluxStateSource, MaskedSponsorWhitelistEntries},
     rpc_types::{CoreSpaceRpcBlock, EspaceRpcBlock},
     storage::new_conflux_state,

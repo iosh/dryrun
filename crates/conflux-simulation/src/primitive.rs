@@ -41,10 +41,6 @@ pub(crate) fn alloy_u256_from_u64(value: u64) -> U256 {
     U256::from_limbs([value, 0, 0, 0])
 }
 
-pub(crate) fn alloy_u256_from_u128(value: u128) -> U256 {
-    U256::from_limbs([value as u64, (value >> 64) as u64, 0, 0])
-}
-
 pub(crate) fn access_list_to_cfx(items: Vec<AccessListItem>) -> Vec<CfxAccessListItem> {
     items
         .into_iter()

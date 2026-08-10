@@ -1,3 +1,4 @@
+use alloy_primitives::U256;
 use cfx_executor::executive::{ExecutionError, ToRepackError, TxDropError};
 use cfx_vm_types as vm;
 
@@ -12,7 +13,7 @@ use super::PreparedStoragePayer;
 pub(crate) fn build_core_space_execution(
     chain_id: u32,
     state: super::CoreSpaceBlockContext,
-    gas_limit: u64,
+    gas_limit: U256,
     outcome: ConfluxExecutionOutcome,
     storage_payer: Option<PreparedStoragePayer>,
 ) -> CoreSpaceExecution {
@@ -47,7 +48,7 @@ pub(crate) fn build_core_space_execution(
 pub(crate) fn build_core_space_not_executed(
     chain_id: u32,
     state: super::CoreSpaceBlockContext,
-    gas_limit: u64,
+    gas_limit: U256,
     failure: CoreSpaceExecutionFailure,
 ) -> CoreSpaceExecution {
     CoreSpaceExecution {
