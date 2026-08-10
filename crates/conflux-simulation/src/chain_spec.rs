@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use alloy_primitives::{Address, address};
 use cfx_executor::{
     machine::{Machine, VmFactory},
     spec::CommonParams,
@@ -17,14 +18,31 @@ use cfx_parameters::{
 use cfx_types::{AllChainID, Space, SpaceMap, U256};
 use conflux_provider::Network;
 
+use crate::espace::EspaceNativeCurrency;
+
 const MAINNET_CORE_SPACE_CHAIN_ID: u32 = 1029;
 const MAINNET_ESPACE_CHAIN_ID: u32 = 1030;
 const MAINNET_NETWORK_ID: u64 = 1029;
+const MAINNET_ESPACE_WRAPPED_NATIVE_TOKEN: Address =
+    address!("14b2d3bc65e74dae1030eafd8ac30c533c976a9b");
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConfluxChainSpec {
     common_params: CommonParams,
     core_space_address_network: Network,
+    espace_native_currency: EspaceNativeCurrency,
+    espace_wrapped_native_token: Address,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct EspaceTransactionValidationRules {
+    pub(crate) legacy_transactions_active: bool,
+    pub(crate) typed_transactions_active: bool,
+    pub(crate) eip7702_transactions_active: bool,
+    pub(crate) priority_fee_cap_active: bool,
+    pub(crate) initcode_size_limit_active: bool,
+    pub(crate) calldata_floor_active: bool,
+    pub(crate) max_initcode_size: usize,
 }
 
 impl ConfluxChainSpec {
@@ -32,6 +50,12 @@ impl ConfluxChainSpec {
         Self {
             common_params: mainnet_common_params(),
             core_space_address_network: Network::Main,
+            espace_native_currency: EspaceNativeCurrency {
+                name: "Conflux".to_owned(),
+                symbol: "CFX".to_owned(),
+                decimals: 18,
+            },
+            espace_wrapped_native_token: MAINNET_ESPACE_WRAPPED_NATIVE_TOKEN,
         }
     }
 
@@ -53,6 +77,39 @@ impl ConfluxChainSpec {
 
     pub(crate) fn build_machine(&self) -> Machine {
         Machine::new_with_builtin(self.common_params.clone(), VmFactory::default())
+    }
+
+    pub(crate) const fn common_params(&self) -> &CommonParams {
+        &self.common_params
+    }
+
+    pub(crate) const fn espace_native_currency(&self) -> &EspaceNativeCurrency {
+        &self.espace_native_currency
+    }
+
+    pub(crate) const fn espace_wrapped_native_token(&self) -> Address {
+        self.espace_wrapped_native_token
+    }
+
+    pub(crate) fn espace_transaction_validation_rules(
+        &self,
+        block_number: u64,
+        epoch_height: u64,
+    ) -> EspaceTransactionValidationRules {
+        let spec = self.common_params.spec(block_number, epoch_height);
+        let transitions = &self.common_params.transition_heights;
+
+        let cip645_active = epoch_height >= transitions.cip645;
+        EspaceTransactionValidationRules {
+            legacy_transactions_active: epoch_height >= transitions.cip90a && spec.cip90,
+            typed_transactions_active: epoch_height >= transitions.cip1559 && spec.cip1559,
+            eip7702_transactions_active: epoch_height >= transitions.cip7702 && spec.cip7702,
+            priority_fee_cap_active: cip645_active,
+            initcode_size_limit_active: cip645_active && spec.cip645.eip3860,
+            calldata_floor_active: epoch_height >= transitions.cip130
+                && epoch_height < transitions.align_evm,
+            max_initcode_size: spec.init_code_data_limit,
+        }
     }
 }
 

@@ -15,6 +15,6 @@ pub use error::{
     ConfluxSimulationError,
 };
 pub use execution::ExecutionBlockContextError;
-pub use preparation::{PreparedCoreSpaceSimulation, PreparedEspaceSimulation};
+pub use preparation::PreparedCoreSpaceSimulation;
 pub use state::ConfluxRpcError;
 pub(crate) use state::ConfluxSimulationProvider;

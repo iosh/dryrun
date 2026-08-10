@@ -3,57 +3,49 @@ use std::collections::BTreeMap;
 use alloy_primitives::{Address, U256};
 use cfx_executor::state::State;
 use cfx_types::AddressSpaceUtil;
-use contract_standards::legacy::StatePhase;
-use simulation_changes::{Change, NativeMetadata, PositionedChange};
 
 use super::{NativeOperation, NativeOperations};
 use crate::{
-    ConfluxSimulationError,
+    espace::{
+        EspaceChange, EspaceChangesError, EspaceNativeChangeError, EspaceNativeCurrency,
+        EspaceStateAccessError,
+    },
     primitive::{address_to_cfx, u256_from_cfx},
 };
 
+use super::super::ChangeOccurrence;
+
 pub(crate) type NativeBalances = BTreeMap<Address, U256>;
 
-pub(crate) fn read_native_balances(
+pub(super) fn read_native_balances(
     state: &State,
-    phase: StatePhase,
+    operation: &'static str,
     native_operations: &NativeOperations,
-) -> Result<NativeBalances, ConfluxSimulationError> {
+) -> Result<NativeBalances, EspaceChangesError> {
     native_operations
         .balance_accounts
         .iter()
         .map(|&address| {
             let balance = state
                 .balance(&address_to_cfx(address).with_evm_space())
-                .map_err(|error| ConfluxSimulationError::StateAccess {
-                    message: format!(
-                        "failed to read {phase} eSpace balance for {address}: {error}"
-                    ),
+                .map_err(|error| EspaceStateAccessError::Operation {
+                    operation,
+                    source: error,
                 })?;
             Ok((address, u256_from_cfx(balance)))
         })
         .collect()
 }
 
-pub(crate) fn verify_native_changes(
+pub(super) fn verify_native_changes(
     native_operations: &NativeOperations,
     before_balances: &NativeBalances,
     after_balances: &NativeBalances,
-    execution_fee: U256,
-    burnt_fee: Option<U256>,
-) -> Result<Vec<PositionedChange>, ConfluxSimulationError> {
-    if let Some(burnt_fee) = burnt_fee
-        && burnt_fee > execution_fee
-    {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
-            "eSpace burnt fee exceeds total fee: burnt {burnt_fee}, total {execution_fee}"
-        )));
-    }
-
+    successful: bool,
+    currency: &EspaceNativeCurrency,
+) -> Result<Vec<ChangeOccurrence>, EspaceNativeChangeError> {
     let mut replayed_balances = before_balances.clone();
-    let mut positioned_changes = Vec::new();
-    let mut precharged_fee = U256::ZERO;
-    let mut refunded_fee = U256::ZERO;
+    let mut changes = Vec::new();
 
     for operation in &native_operations.operations {
         match operation {
@@ -65,81 +57,81 @@ pub(crate) fn verify_native_changes(
             } => {
                 decrease_balance(&mut replayed_balances, *from, *amount)?;
                 increase_balance(&mut replayed_balances, *to, *amount)?;
-                positioned_changes.push(PositionedChange::new(
+                changes.push(ChangeOccurrence::new(
                     *position,
-                    Change::NativeTransfer {
+                    EspaceChange::NativeTransfer {
                         from: *from,
                         to: *to,
                         raw_amount: *amount,
-                        metadata: NativeMetadata::default(),
+                        currency: currency.clone(),
+                    },
+                ));
+            }
+            NativeOperation::SelfDestructBurn {
+                position,
+                contract,
+                amount,
+            } => {
+                decrease_balance(&mut replayed_balances, *contract, *amount)?;
+                changes.push(ChangeOccurrence::new(
+                    *position,
+                    EspaceChange::SelfDestructBurn {
+                        contract_address: *contract,
+                        raw_amount: *amount,
+                        currency: currency.clone(),
                     },
                 ));
             }
             NativeOperation::GasPrecharge { payer, amount } => {
-                precharged_fee = precharged_fee.checked_add(*amount).ok_or_else(|| {
-                    ConfluxSimulationError::analysis_failed(
-                        "eSpace gas precharge overflowed during native analysis",
-                    )
-                })?;
                 decrease_balance(&mut replayed_balances, *payer, *amount)?;
             }
             NativeOperation::GasRefund { recipient, amount } => {
-                refunded_fee = refunded_fee.checked_add(*amount).ok_or_else(|| {
-                    ConfluxSimulationError::analysis_failed(
-                        "eSpace gas refund overflowed during native analysis",
-                    )
-                })?;
                 increase_balance(&mut replayed_balances, *recipient, *amount)?;
             }
         }
     }
 
-    let net_fee_from_operations = precharged_fee.checked_sub(refunded_fee).ok_or_else(|| {
-        ConfluxSimulationError::analysis_failed("eSpace gas refund exceeded precharge")
-    })?;
-    if net_fee_from_operations != execution_fee {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
-            "eSpace gas settlement mismatch: traced {net_fee_from_operations}, execution fee {execution_fee}"
-        )));
-    }
-
     for &address in &native_operations.balance_accounts {
-        let replayed_balance = replayed_balances.get(&address).copied().ok_or_else(|| {
-            ConfluxSimulationError::analysis_failed(format!(
-                "replayed eSpace balance is missing for {address}"
-            ))
-        })?;
-        let after_balance = after_balances.get(&address).copied().ok_or_else(|| {
-            ConfluxSimulationError::analysis_failed(format!(
-                "after eSpace balance is missing for {address}"
-            ))
-        })?;
-
-        if replayed_balance != after_balance {
-            return Err(ConfluxSimulationError::analysis_failed(format!(
-                "eSpace balance mismatch for {address}: replayed {replayed_balance}, after {after_balance}"
-            )));
+        let replayed = replayed_balances
+            .get(&address)
+            .copied()
+            .ok_or(EspaceNativeChangeError::BalanceMissing { address })?;
+        let actual = after_balances
+            .get(&address)
+            .copied()
+            .ok_or(EspaceNativeChangeError::BalanceMissing { address })?;
+        if replayed != actual {
+            return Err(EspaceNativeChangeError::BalanceMismatch {
+                address,
+                replayed,
+                actual,
+            });
         }
     }
 
-    Ok(positioned_changes)
+    if !successful && !changes.is_empty() {
+        return Err(EspaceNativeChangeError::BusinessEffectOnFailedExecution);
+    }
+
+    Ok(changes)
 }
 
 fn decrease_balance(
     balances: &mut NativeBalances,
     address: Address,
     amount: U256,
-) -> Result<(), ConfluxSimulationError> {
-    let balance = balances.get_mut(&address).ok_or_else(|| {
-        ConfluxSimulationError::analysis_failed(format!(
-            "before eSpace balance is missing for {address}"
-        ))
-    })?;
-    *balance = balance.checked_sub(amount).ok_or_else(|| {
-        ConfluxSimulationError::analysis_failed(format!(
-            "eSpace balance underflow for {address}: balance {balance}, debit {amount}"
-        ))
-    })?;
+) -> Result<(), EspaceNativeChangeError> {
+    let balance = balances
+        .get_mut(&address)
+        .ok_or(EspaceNativeChangeError::BalanceMissing { address })?;
+    let current = *balance;
+    *balance = current
+        .checked_sub(amount)
+        .ok_or(EspaceNativeChangeError::BalanceUnderflow {
+            address,
+            balance: current,
+            amount,
+        })?;
     Ok(())
 }
 
@@ -147,16 +139,17 @@ fn increase_balance(
     balances: &mut NativeBalances,
     address: Address,
     amount: U256,
-) -> Result<(), ConfluxSimulationError> {
-    let balance = balances.get_mut(&address).ok_or_else(|| {
-        ConfluxSimulationError::analysis_failed(format!(
-            "before eSpace balance is missing for {address}"
-        ))
-    })?;
-    *balance = balance.checked_add(amount).ok_or_else(|| {
-        ConfluxSimulationError::analysis_failed(format!(
-            "eSpace balance overflow for {address}: balance {balance}, credit {amount}"
-        ))
-    })?;
+) -> Result<(), EspaceNativeChangeError> {
+    let balance = balances
+        .get_mut(&address)
+        .ok_or(EspaceNativeChangeError::BalanceMissing { address })?;
+    let current = *balance;
+    *balance = current
+        .checked_add(amount)
+        .ok_or(EspaceNativeChangeError::BalanceOverflow {
+            address,
+            balance: current,
+            amount,
+        })?;
     Ok(())
 }

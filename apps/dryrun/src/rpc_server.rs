@@ -11,7 +11,7 @@ use conflux_service::ConfluxService;
 use conflux_simulation::{
     ConfluxSimulationBackend,
     core_space::{CoreSpaceSimulationPreparer, CoreSpaceSimulator},
-    espace::{EspaceSimulationPreparer, EspaceSimulator},
+    espace::EspaceTransactionSimulator,
 };
 use evm_rpc::{DryrunRpcServer, RpcHandler};
 use evm_simulation::EvmTransactionSimulator;
@@ -112,21 +112,20 @@ async fn add_conflux_rpc_module(
         })?;
     let core_space_address_network = backend.core_space_address_network();
     let runtime_handle = tokio::runtime::Handle::current();
-    let espace_preparer = Arc::new(EspaceSimulationPreparer::new(backend.clone()));
-    let espace_simulator = Arc::new(EspaceSimulator::new(runtime_handle.clone()));
+    let espace_simulator = EspaceTransactionSimulator::new(backend.clone());
     let core_space_preparer = Arc::new(CoreSpaceSimulationPreparer::new(backend));
     let core_space_simulator = Arc::new(CoreSpaceSimulator::new(runtime_handle));
     let conflux_service = Arc::new(ConfluxService::new(
-        espace_preparer,
-        espace_simulator,
         core_space_preparer,
         core_space_simulator,
-        simulation_tasks,
+        simulation_tasks.clone(),
     ));
 
     rpc_module
         .merge(build_conflux_rpc_module(
+            espace_simulator,
             conflux_service,
+            simulation_tasks,
             core_space_address_network,
         ))
         .map_err(|error| startup_error(format!("failed to merge Conflux RPC module: {error}")))

@@ -4,58 +4,54 @@ mod verification;
 use std::collections::BTreeSet;
 
 use alloy_primitives::{Address, U256};
-use cfx_executor::state::State;
-use contract_standards::legacy::{Position, StatePhase};
-use simulation_changes::PositionedChange;
 
-use crate::{ConfluxSimulationError, execution::ConfluxExecutionOutput};
+use crate::execution::ConfluxExecutionOutput;
 
-use self::verification::{read_native_balances, verify_native_changes};
+use super::{ChangeOccurrence, EspaceNativeCurrency};
+use crate::espace::{EspaceChangesError, EspaceNativeChangeError};
 
-pub(crate) use verification::NativeBalances;
+pub(super) use verification::NativeBalances;
 
-pub(crate) struct EspaceNativeAnalysis {
+pub(super) struct NativeAnalysis {
     operations: NativeOperations,
-    execution_fee: U256,
-    burnt_fee: Option<U256>,
 }
 
-impl EspaceNativeAnalysis {
-    pub(crate) fn from_execution(
+impl NativeAnalysis {
+    pub(super) fn from_execution(
         execution: &ConfluxExecutionOutput,
-    ) -> Result<Self, ConfluxSimulationError> {
+    ) -> Result<Self, EspaceNativeChangeError> {
         Ok(Self {
             operations: collection::collect_native_operations(&execution.observations)?,
-            execution_fee: execution.common.fee,
-            burnt_fee: execution.common.burnt_fee,
         })
     }
 
-    pub(crate) fn read_state(
+    pub(super) fn read_balances(
         &self,
-        state: &State,
-        phase: StatePhase,
-    ) -> Result<NativeBalances, ConfluxSimulationError> {
-        read_native_balances(state, phase, &self.operations)
+        state: &cfx_executor::state::State,
+        operation: &'static str,
+    ) -> Result<NativeBalances, EspaceChangesError> {
+        verification::read_native_balances(state, operation, &self.operations)
     }
 
-    pub(crate) fn verify(
+    pub(super) fn verify(
         &self,
         before_balances: &NativeBalances,
         after_balances: &NativeBalances,
-    ) -> Result<Vec<PositionedChange>, ConfluxSimulationError> {
-        verify_native_changes(
+        successful: bool,
+        currency: &EspaceNativeCurrency,
+    ) -> Result<Vec<ChangeOccurrence>, EspaceNativeChangeError> {
+        verification::verify_native_changes(
             &self.operations,
             before_balances,
             after_balances,
-            self.execution_fee,
-            self.burnt_fee,
+            successful,
+            currency,
         )
     }
 }
 
 #[derive(Debug)]
-pub(crate) struct NativeOperations {
+struct NativeOperations {
     balance_accounts: Vec<Address>,
     operations: Vec<NativeOperation>,
 }
@@ -63,12 +59,14 @@ pub(crate) struct NativeOperations {
 impl NativeOperations {
     fn from_operations(operations: Vec<NativeOperation>) -> Self {
         let mut balance_accounts = BTreeSet::new();
-
         for operation in &operations {
             match operation {
                 NativeOperation::AccountTransfer { from, to, .. } => {
                     balance_accounts.insert(*from);
                     balance_accounts.insert(*to);
+                }
+                NativeOperation::SelfDestructBurn { contract, .. } => {
+                    balance_accounts.insert(*contract);
                 }
                 NativeOperation::GasPrecharge { payer, .. } => {
                     balance_accounts.insert(*payer);
@@ -89,9 +87,14 @@ impl NativeOperations {
 #[derive(Debug)]
 enum NativeOperation {
     AccountTransfer {
-        position: Position,
+        position: usize,
         from: Address,
         to: Address,
+        amount: U256,
+    },
+    SelfDestructBurn {
+        position: usize,
+        contract: Address,
         amount: U256,
     },
     GasPrecharge {

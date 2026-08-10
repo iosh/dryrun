@@ -1,0 +1,64 @@
+use alloy_primitives::U256;
+use cfx_executor::executive_observer::AddressPocket;
+use cfx_types::Space;
+
+use super::EspaceResultIntegrationError;
+use crate::{
+    execution::{ConfluxExecutionOutput, Observation},
+    primitive::u256_from_cfx,
+};
+
+pub(crate) fn verify_observed_fee_settlement(
+    output: &ConfluxExecutionOutput,
+) -> Result<(), EspaceResultIntegrationError> {
+    let mut precharge = U256::ZERO;
+    let mut refund = U256::ZERO;
+
+    for observation in &output.observations {
+        let Observation::InternalTransfer {
+            from, to, value, ..
+        } = observation
+        else {
+            continue;
+        };
+        let amount = u256_from_cfx(*value);
+
+        match (from, to) {
+            (AddressPocket::Balance(address), AddressPocket::GasPayment)
+                if address.space == Space::Ethereum =>
+            {
+                precharge = precharge.checked_add(amount).ok_or_else(|| {
+                    EspaceResultIntegrationError::invalid_observed_fee_settlement(
+                        "gas precharge accumulation overflowed U256",
+                    )
+                })?;
+            }
+            (AddressPocket::GasPayment, AddressPocket::Balance(address))
+                if address.space == Space::Ethereum =>
+            {
+                refund = refund.checked_add(amount).ok_or_else(|| {
+                    EspaceResultIntegrationError::invalid_observed_fee_settlement(
+                        "gas refund accumulation overflowed U256",
+                    )
+                })?;
+            }
+            _ => {}
+        }
+    }
+
+    let traced = precharge.checked_sub(refund).ok_or_else(|| {
+        EspaceResultIntegrationError::invalid_observed_fee_settlement(format!(
+            "refund {refund} exceeds precharge {precharge}"
+        ))
+    })?;
+    if traced != output.common.fee {
+        return Err(
+            EspaceResultIntegrationError::invalid_observed_fee_settlement(format!(
+                "observations settle {traced}, executor reports {}",
+                output.common.fee
+            )),
+        );
+    }
+
+    Ok(())
+}

@@ -1,6 +1,9 @@
 use cfx_rpc_eth_types::Bytes as RpcBytes;
 use cfx_types::{H256, U64, U256};
-use conflux_service::espace as service_espace;
+use conflux_simulation::espace::{
+    EspaceBlockContext as SimulationBlockContext, EspaceExecutionFailure, EspaceExecutionOutcome,
+    EspaceSimulation, EspaceSuccessOutput, EspaceTransactionRejection,
+};
 use serde::Serialize;
 
 use super::{b256_to_wire, change::Change, u256_to_wire};
@@ -69,71 +72,89 @@ enum ExecutionFailureCode {
     VmError,
 }
 
-impl From<service_espace::EspaceSimulation> for SimulateEspaceTransactionResponse {
-    fn from(simulation: service_espace::EspaceSimulation) -> Self {
-        let (execution, changes) = simulation.into_parts();
+impl From<EspaceSimulation> for SimulateEspaceTransactionResponse {
+    fn from(simulation: EspaceSimulation) -> Self {
+        let EspaceSimulation {
+            context,
+            transaction,
+            execution,
+            changes,
+        } = simulation;
+        let gas_limit = transaction.gas_limit;
+        let chain_id = transaction.chain_id;
+
+        let (status, result, output, failure) = match execution {
+            EspaceExecutionOutcome::Success { result, output, .. } => {
+                let output = match output {
+                    EspaceSuccessOutput::Call { return_data } => return_data,
+                    EspaceSuccessOutput::Create { runtime_code, .. } => runtime_code,
+                };
+                (EspaceExecutionStatus::Success, Some(result), output, None)
+            }
+            EspaceExecutionOutcome::Reverted {
+                result,
+                revert_data,
+                reason,
+            } => (
+                EspaceExecutionStatus::Failed,
+                Some(result),
+                revert_data,
+                Some(ExecutionFailure {
+                    code: ExecutionFailureCode::Revert,
+                    message: "execution reverted".to_owned(),
+                    reason: reason.map(|reason| reason.to_string()),
+                }),
+            ),
+            EspaceExecutionOutcome::Failed { result, failure } => (
+                EspaceExecutionStatus::Failed,
+                Some(result),
+                Default::default(),
+                Some(failure.into()),
+            ),
+            EspaceExecutionOutcome::NotExecuted(rejection) => (
+                EspaceExecutionStatus::NotExecuted,
+                None,
+                Default::default(),
+                Some(rejection.into()),
+            ),
+        };
+        let (gas_used, gas_charged, fee, burnt_fee) = result.map_or(
+            (
+                0,
+                0,
+                alloy_primitives::U256::ZERO,
+                Some(alloy_primitives::U256::ZERO),
+            ),
+            |result| {
+                (
+                    result.gas().gas_used(),
+                    result.gas().gas_charged(),
+                    result.fee().charged_amount(),
+                    result.fee().burnt_amount(),
+                )
+            },
+        );
+
         Self {
-            execution: execution.into(),
+            execution: Execution {
+                chain_id: chain_id.into(),
+                block: context.into(),
+                status,
+                gas_used: gas_used.into(),
+                gas_limit: gas_limit.into(),
+                gas_charged: gas_charged.into(),
+                fee: u256_to_wire(fee),
+                burnt_fee: burnt_fee.map(u256_to_wire),
+                output: RpcBytes::from(output.to_vec()),
+                failure,
+            },
             changes: changes.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-impl From<service_espace::EspaceExecution> for Execution {
-    fn from(execution: service_espace::EspaceExecution) -> Self {
-        let service_espace::EspaceExecution {
-            chain_id,
-            context: block,
-            gas_limit,
-            outcome,
-        } = execution;
-        let (status, gas_used, gas_charged, fee, burnt_fee, output, failure) = match outcome {
-            service_espace::EspaceOutcome::Success(details) => (
-                EspaceExecutionStatus::Success,
-                details.gas_used.into(),
-                details.gas_charged.into(),
-                u256_to_wire(details.fee),
-                details.burnt_fee.map(u256_to_wire),
-                RpcBytes::from(details.output.to_vec()),
-                None,
-            ),
-            service_espace::EspaceOutcome::Failed { details, failure } => (
-                EspaceExecutionStatus::Failed,
-                details.gas_used.into(),
-                details.gas_charged.into(),
-                u256_to_wire(details.fee),
-                details.burnt_fee.map(u256_to_wire),
-                RpcBytes::from(details.output.to_vec()),
-                Some(failure.into()),
-            ),
-            service_espace::EspaceOutcome::NotExecuted(failure) => (
-                EspaceExecutionStatus::NotExecuted,
-                U256::zero(),
-                U256::zero(),
-                U256::zero(),
-                Some(U256::zero()),
-                RpcBytes::default(),
-                Some(failure.into()),
-            ),
-        };
-
-        Self {
-            chain_id: chain_id.into(),
-            block: block.into(),
-            status,
-            gas_used,
-            gas_limit: gas_limit.into(),
-            gas_charged,
-            fee,
-            burnt_fee,
-            output,
-            failure,
-        }
-    }
-}
-
-impl From<service_espace::EspaceBlockContext> for EspaceBlockContext {
-    fn from(block: service_espace::EspaceBlockContext) -> Self {
+impl From<SimulationBlockContext> for EspaceBlockContext {
+    fn from(block: SimulationBlockContext) -> Self {
         Self {
             number: block.number.into(),
             hash: b256_to_wire(block.hash),
@@ -141,41 +162,63 @@ impl From<service_espace::EspaceBlockContext> for EspaceBlockContext {
     }
 }
 
-impl From<service_espace::EspaceExecutionFailure> for ExecutionFailure {
-    fn from(failure: service_espace::EspaceExecutionFailure) -> Self {
+impl From<EspaceExecutionFailure> for ExecutionFailure {
+    fn from(failure: EspaceExecutionFailure) -> Self {
         Self {
-            code: failure.code.into(),
-            message: failure.message,
-            reason: failure.reason,
+            code: execution_failure_code(&failure),
+            message: failure.to_string(),
+            reason: None,
         }
     }
 }
 
-impl From<service_espace::EspaceExecutionFailureCode> for ExecutionFailureCode {
-    fn from(code: service_espace::EspaceExecutionFailureCode) -> Self {
-        match code {
-            service_espace::EspaceExecutionFailureCode::ChainIdMismatch => Self::ChainIdMismatch,
-            service_espace::EspaceExecutionFailureCode::ZeroGasPrice => Self::ZeroGasPrice,
-            service_espace::EspaceExecutionFailureCode::PriorityFeeExceedsMaxFee => {
-                Self::PriorityFeeExceedsMaxFee
-            }
-            service_espace::EspaceExecutionFailureCode::NonceTooLow => Self::NonceTooLow,
-            service_espace::EspaceExecutionFailureCode::NonceTooHigh => Self::NonceTooHigh,
-            service_espace::EspaceExecutionFailureCode::FeeBelowBaseFee => Self::FeeBelowBaseFee,
-            service_espace::EspaceExecutionFailureCode::IntrinsicGasTooLow => {
-                Self::IntrinsicGasTooLow
-            }
-            service_espace::EspaceExecutionFailureCode::SenderWithCode => Self::SenderWithCode,
-            service_espace::EspaceExecutionFailureCode::SenderDoesNotExist => {
-                Self::SenderDoesNotExist
-            }
-            service_espace::EspaceExecutionFailureCode::InsufficientFunds => {
-                Self::InsufficientFunds
-            }
-            service_espace::EspaceExecutionFailureCode::Revert => Self::Revert,
-            service_espace::EspaceExecutionFailureCode::OutOfGas => Self::OutOfGas,
-            service_espace::EspaceExecutionFailureCode::NonceOverflow => Self::NonceOverflow,
-            service_espace::EspaceExecutionFailureCode::VmError => Self::VmError,
+impl From<EspaceTransactionRejection> for ExecutionFailure {
+    fn from(rejection: EspaceTransactionRejection) -> Self {
+        Self {
+            code: rejection_failure_code(&rejection),
+            message: rejection.to_string(),
+            reason: None,
         }
+    }
+}
+
+fn execution_failure_code(failure: &EspaceExecutionFailure) -> ExecutionFailureCode {
+    match failure {
+        EspaceExecutionFailure::InsufficientFunds { .. } => ExecutionFailureCode::InsufficientFunds,
+        EspaceExecutionFailure::OutOfGas => ExecutionFailureCode::OutOfGas,
+        EspaceExecutionFailure::NonceOverflow { .. } => ExecutionFailureCode::NonceOverflow,
+        _ => ExecutionFailureCode::VmError,
+    }
+}
+
+fn rejection_failure_code(rejection: &EspaceTransactionRejection) -> ExecutionFailureCode {
+    match rejection {
+        EspaceTransactionRejection::InvalidChainId { .. } => ExecutionFailureCode::ChainIdMismatch,
+        EspaceTransactionRejection::ZeroGasPrice => ExecutionFailureCode::ZeroGasPrice,
+        EspaceTransactionRejection::PriorityFeeGreaterThanMaxFee { .. } => {
+            ExecutionFailureCode::PriorityFeeExceedsMaxFee
+        }
+        EspaceTransactionRejection::CalldataGasRequirement { .. }
+        | EspaceTransactionRejection::IntrinsicGasExceedsGasLimit { .. } => {
+            ExecutionFailureCode::IntrinsicGasTooLow
+        }
+        EspaceTransactionRejection::NonceTooLow { .. } => ExecutionFailureCode::NonceTooLow,
+        EspaceTransactionRejection::NonceTooHigh { .. } => ExecutionFailureCode::NonceTooHigh,
+        EspaceTransactionRejection::SenderHasCode { .. } => ExecutionFailureCode::SenderWithCode,
+        EspaceTransactionRejection::SenderDoesNotExist => ExecutionFailureCode::SenderDoesNotExist,
+        EspaceTransactionRejection::GasPriceBelowBaseFee { .. } => {
+            ExecutionFailureCode::FeeBelowBaseFee
+        }
+        EspaceTransactionRejection::InsufficientFunds { .. } => {
+            ExecutionFailureCode::InsufficientFunds
+        }
+        EspaceTransactionRejection::LegacyTransactionNotActivated
+        | EspaceTransactionRejection::Eip2930NotActivated
+        | EspaceTransactionRejection::Eip1559NotActivated
+        | EspaceTransactionRejection::Eip7702NotActivated
+        | EspaceTransactionRejection::CreateInitCodeSizeLimit { .. } => {
+            ExecutionFailureCode::VmError
+        }
+        _ => ExecutionFailureCode::VmError,
     }
 }

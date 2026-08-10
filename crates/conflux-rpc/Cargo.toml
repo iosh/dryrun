@@ -11,11 +11,13 @@ cfx-rpc-eth-types = { workspace = true }
 cfx-rpc-primitives = { workspace = true }
 cfx-types = { workspace = true }
 conflux-provider = { workspace = true }
+conflux-simulation = { workspace = true }
 conflux-service = { workspace = true }
 hex = "0.4"
 jsonrpsee = { workspace = true, features = ["server"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 simulation-transaction = { workspace = true }
+simulation-tasks = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

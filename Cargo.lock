@@ -2110,10 +2110,12 @@ dependencies = [
  "cfx-types",
  "conflux-provider",
  "conflux-service",
+ "conflux-simulation",
  "hex",
  "jsonrpsee",
  "serde",
  "serde_json",
+ "simulation-tasks",
  "simulation-transaction",
  "thiserror 2.0.18",
  "tracing",
@@ -2125,7 +2127,6 @@ version = "0.1.0"
 dependencies = [
  "conflux-simulation",
  "simulation-tasks",
- "simulation-transaction",
  "thiserror 2.0.18",
  "tokio",
 ]

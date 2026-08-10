@@ -1,6 +1,23 @@
 use alloy_primitives::{Address, U256};
-use conflux_service::espace as service_espace;
+use conflux_simulation::espace::{
+    Erc20Metadata as SimulationErc20Metadata,
+    Erc721CollectionMetadata as SimulationErc721CollectionMetadata,
+    Erc1155TransferItem as SimulationErc1155TransferItem, EspaceChange, EspaceNativeCurrency,
+    StandardChange,
+};
 use serde::Serialize;
+
+mod u256_hex {
+    use alloy_primitives::U256;
+    use serde::{Serialize, Serializer};
+
+    pub(super) fn serialize<S>(value: &U256, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        value.serialize(serializer)
+    }
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(
@@ -9,189 +26,113 @@ use serde::Serialize;
     rename_all_fields = "camelCase"
 )]
 pub(super) enum Change {
-    Transfer {
-        #[serde(flatten)]
-        asset: TransferAsset,
+    NativeTransfer {
         from: Address,
         to: Address,
-    },
-    Mint {
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
         #[serde(flatten)]
-        asset: TokenMovementAsset,
-        to: Address,
+        currency: NativeCurrency,
     },
-    Burn {
+    SelfDestructBurn {
+        contract_address: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
         #[serde(flatten)]
-        asset: BurnAsset,
+        currency: NativeCurrency,
+    },
+    WrappedNativeDeposit {
+        contract_address: Address,
+        account: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
+        #[serde(flatten)]
+        metadata: Erc20Metadata,
+    },
+    WrappedNativeWithdrawal {
+        contract_address: Address,
+        account: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
+        #[serde(flatten)]
+        metadata: Erc20Metadata,
+    },
+    Erc20Transfer {
+        contract_address: Address,
         from: Address,
-    },
-    Allowance {
+        to: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
         #[serde(flatten)]
-        asset: AllowanceAsset,
+        metadata: Erc20Metadata,
+    },
+    Erc20Approval {
+        contract_address: Address,
         owner: Address,
         spender: Address,
-    },
-    TokenApproval {
+        #[serde(serialize_with = "u256_hex::serialize")]
+        approved_amount: U256,
         #[serde(flatten)]
-        asset: TokenApprovalAsset,
+        metadata: Erc20Metadata,
+    },
+    Erc721Transfer {
+        contract_address: Address,
+        from: Address,
+        to: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        token_id: U256,
+        #[serde(flatten)]
+        metadata: Erc721CollectionMetadata,
+    },
+    Erc721Approval {
+        contract_address: Address,
+        owner: Address,
+        approved_address: Option<Address>,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        token_id: U256,
+        #[serde(flatten)]
+        metadata: Erc721CollectionMetadata,
     },
     OperatorApproval {
-        #[serde(flatten)]
-        asset: OperatorApprovalAsset,
+        contract_address: Address,
         owner: Address,
         operator: Address,
-        approved_before: bool,
-        approved_after: bool,
+        approved: bool,
     },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub(super) enum TransferAsset {
-    Native {
-        raw_amount: U256,
-        #[serde(flatten)]
-        metadata: NativeMetadata,
-    },
-    Erc20 {
+    Erc1155TransferSingle {
         contract_address: Address,
-        raw_amount: U256,
-        #[serde(flatten)]
-        metadata: Erc20Metadata,
-    },
-    Erc721 {
-        contract_address: Address,
+        operator: Address,
+        from: Address,
+        to: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
         token_id: U256,
-        #[serde(flatten)]
-        metadata: Erc721CollectionMetadata,
-    },
-    Erc1155 {
-        contract_address: Address,
-        token_id: U256,
+        #[serde(serialize_with = "u256_hex::serialize")]
         raw_amount: U256,
     },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub(super) enum TokenMovementAsset {
-    Erc20 {
+    Erc1155TransferBatch {
         contract_address: Address,
-        raw_amount: U256,
-        #[serde(flatten)]
-        metadata: Erc20Metadata,
-    },
-    Erc721 {
-        contract_address: Address,
-        token_id: U256,
-        #[serde(flatten)]
-        metadata: Erc721CollectionMetadata,
-    },
-    Erc1155 {
-        contract_address: Address,
-        token_id: U256,
-        raw_amount: U256,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub(super) enum BurnAsset {
-    Native {
-        raw_amount: U256,
-        #[serde(flatten)]
-        metadata: NativeMetadata,
-    },
-    Erc20 {
-        contract_address: Address,
-        raw_amount: U256,
-        #[serde(flatten)]
-        metadata: Erc20Metadata,
-    },
-    Erc721 {
-        contract_address: Address,
-        token_id: U256,
-        #[serde(flatten)]
-        metadata: Erc721CollectionMetadata,
-    },
-    Erc1155 {
-        contract_address: Address,
-        token_id: U256,
-        raw_amount: U256,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub(super) enum AllowanceAsset {
-    Erc20 {
-        contract_address: Address,
-        raw_amount_before: U256,
-        raw_amount_after: U256,
-        #[serde(flatten)]
-        metadata: Erc20Metadata,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub(super) enum TokenApprovalAsset {
-    Erc721 {
-        contract_address: Address,
-        token_id: U256,
-        approved_address_before: Option<Address>,
-        approved_address_after: Option<Address>,
-        #[serde(flatten)]
-        metadata: Erc721CollectionMetadata,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub(super) enum OperatorApprovalAsset {
-    Erc721 {
-        contract_address: Address,
-        #[serde(flatten)]
-        metadata: Erc721CollectionMetadata,
-    },
-    Erc1155 {
-        contract_address: Address,
+        operator: Address,
+        from: Address,
+        to: Address,
+        items: Vec<Erc1155TransferItem>,
     },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub(super) struct NativeMetadata {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    symbol: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    decimals: Option<u8>,
+pub(super) struct Erc1155TransferItem {
+    #[serde(serialize_with = "u256_hex::serialize")]
+    token_id: U256,
+    #[serde(serialize_with = "u256_hex::serialize")]
+    raw_amount: U256,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct NativeCurrency {
+    name: String,
+    symbol: String,
+    decimals: u8,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -214,247 +155,209 @@ pub(super) struct Erc721CollectionMetadata {
     symbol: Option<String>,
 }
 
-impl From<service_espace::NativeMetadata> for NativeMetadata {
-    fn from(metadata: service_espace::NativeMetadata) -> Self {
-        Self {
-            name: metadata.name,
-            symbol: metadata.symbol,
-            decimals: metadata.decimals,
-        }
-    }
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct NativeMetadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    symbol: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decimals: Option<u8>,
 }
 
-impl From<service_espace::Erc20Metadata> for Erc20Metadata {
-    fn from(metadata: service_espace::Erc20Metadata) -> Self {
-        Self {
-            name: metadata.name,
-            symbol: metadata.symbol,
-            decimals: metadata.decimals,
-        }
-    }
-}
-
-impl From<service_espace::Erc721CollectionMetadata> for Erc721CollectionMetadata {
-    fn from(metadata: service_espace::Erc721CollectionMetadata) -> Self {
-        Self {
-            name: metadata.name,
-            symbol: metadata.symbol,
-        }
-    }
-}
-
-impl From<service_espace::Change> for Change {
-    fn from(change: service_espace::Change) -> Self {
+impl From<EspaceChange> for Change {
+    fn from(change: EspaceChange) -> Self {
         match change {
-            service_espace::Change::NativeTransfer {
+            EspaceChange::NativeTransfer {
+                from,
+                to,
+                raw_amount,
+                currency,
+            } => Self::NativeTransfer {
+                from,
+                to,
+                raw_amount,
+                currency: currency.into(),
+            },
+            EspaceChange::SelfDestructBurn {
+                contract_address,
+                raw_amount,
+                currency,
+            } => Self::SelfDestructBurn {
+                contract_address,
+                raw_amount,
+                currency: currency.into(),
+            },
+            EspaceChange::WrappedNativeDeposit {
+                contract_address,
+                account,
+                raw_amount,
+                metadata,
+            } => Self::WrappedNativeDeposit {
+                contract_address,
+                account,
+                raw_amount,
+                metadata: metadata.into(),
+            },
+            EspaceChange::WrappedNativeWithdrawal {
+                contract_address,
+                account,
+                raw_amount,
+                metadata,
+            } => Self::WrappedNativeWithdrawal {
+                contract_address,
+                account,
+                raw_amount,
+                metadata: metadata.into(),
+            },
+            EspaceChange::Standard(change) => change.into(),
+        }
+    }
+}
+
+impl From<StandardChange<Address>> for Change {
+    fn from(change: StandardChange<Address>) -> Self {
+        match change {
+            StandardChange::Erc20Transfer {
+                contract_address,
                 from,
                 to,
                 raw_amount,
                 metadata,
-            } => Self::Transfer {
-                asset: TransferAsset::Native {
-                    raw_amount,
-                    metadata: metadata.into(),
-                },
-                from,
-                to,
-            },
-            service_espace::Change::Erc20Transfer {
+            } => Self::Erc20Transfer {
                 contract_address,
                 from,
                 to,
                 raw_amount,
-                metadata,
-            } => Self::Transfer {
-                asset: TransferAsset::Erc20 {
-                    contract_address,
-                    raw_amount,
-                    metadata: metadata.into(),
-                },
-                from,
-                to,
+                metadata: metadata.into(),
             },
-            service_espace::Change::Erc20Mint {
-                contract_address,
-                to,
-                raw_amount,
-                metadata,
-            } => Self::Mint {
-                asset: TokenMovementAsset::Erc20 {
-                    contract_address,
-                    raw_amount,
-                    metadata: metadata.into(),
-                },
-                to,
-            },
-            service_espace::Change::Erc20Burn {
-                contract_address,
-                from,
-                raw_amount,
-                metadata,
-            } => Self::Burn {
-                asset: BurnAsset::Erc20 {
-                    contract_address,
-                    raw_amount,
-                    metadata: metadata.into(),
-                },
-                from,
-            },
-            service_espace::Change::SelfDestructBurn {
-                contract_address,
-                raw_amount,
-                metadata,
-            } => Self::Burn {
-                asset: BurnAsset::Native {
-                    raw_amount,
-                    metadata: metadata.into(),
-                },
-                from: contract_address,
-            },
-            service_espace::Change::Erc721Transfer {
-                contract_address,
-                from,
-                to,
-                token_id,
-                metadata,
-            } => Self::Transfer {
-                asset: TransferAsset::Erc721 {
-                    contract_address,
-                    token_id,
-                    metadata: metadata.into(),
-                },
-                from,
-                to,
-            },
-            service_espace::Change::Erc721Mint {
-                contract_address,
-                to,
-                token_id,
-                metadata,
-            } => Self::Mint {
-                asset: TokenMovementAsset::Erc721 {
-                    contract_address,
-                    token_id,
-                    metadata: metadata.into(),
-                },
-                to,
-            },
-            service_espace::Change::Erc721Burn {
-                contract_address,
-                from,
-                token_id,
-                metadata,
-            } => Self::Burn {
-                asset: BurnAsset::Erc721 {
-                    contract_address,
-                    token_id,
-                    metadata: metadata.into(),
-                },
-                from,
-            },
-            service_espace::Change::Erc1155Transfer {
-                contract_address,
-                from,
-                to,
-                token_id,
-                raw_amount,
-            } => Self::Transfer {
-                asset: TransferAsset::Erc1155 {
-                    contract_address,
-                    token_id,
-                    raw_amount,
-                },
-                from,
-                to,
-            },
-            service_espace::Change::Erc1155Mint {
-                contract_address,
-                to,
-                token_id,
-                raw_amount,
-            } => Self::Mint {
-                asset: TokenMovementAsset::Erc1155 {
-                    contract_address,
-                    token_id,
-                    raw_amount,
-                },
-                to,
-            },
-            service_espace::Change::Erc1155Burn {
-                contract_address,
-                from,
-                token_id,
-                raw_amount,
-            } => Self::Burn {
-                asset: BurnAsset::Erc1155 {
-                    contract_address,
-                    token_id,
-                    raw_amount,
-                },
-                from,
-            },
-            service_espace::Change::Erc20Allowance {
+            StandardChange::Erc20Approval {
                 contract_address,
                 owner,
                 spender,
-                raw_amount_before,
-                raw_amount_after,
+                approved_amount,
                 metadata,
-            } => Self::Allowance {
-                asset: AllowanceAsset::Erc20 {
-                    contract_address,
-                    raw_amount_before,
-                    raw_amount_after,
-                    metadata: metadata.into(),
-                },
+            } => Self::Erc20Approval {
+                contract_address,
                 owner,
                 spender,
+                approved_amount,
+                metadata: metadata.into(),
             },
-            service_espace::Change::Erc721TokenApproval {
+            StandardChange::Erc721Transfer {
                 contract_address,
+                from,
+                to,
                 token_id,
-                approved_address_before,
-                approved_address_after,
                 metadata,
-            } => Self::TokenApproval {
-                asset: TokenApprovalAsset::Erc721 {
-                    contract_address,
-                    token_id,
-                    approved_address_before,
-                    approved_address_after,
-                    metadata: metadata.into(),
-                },
+            } => Self::Erc721Transfer {
+                contract_address,
+                from,
+                to,
+                token_id,
+                metadata: metadata.into(),
             },
-            service_espace::Change::Erc721OperatorApproval {
+            StandardChange::Erc721Approval {
+                contract_address,
+                owner,
+                approved_address,
+                token_id,
+                metadata,
+            } => Self::Erc721Approval {
+                contract_address,
+                owner,
+                approved_address,
+                token_id,
+                metadata: metadata.into(),
+            },
+            StandardChange::OperatorApproval {
                 contract_address,
                 owner,
                 operator,
-                approved_before,
-                approved_after,
-                metadata,
+                approved,
             } => Self::OperatorApproval {
-                asset: OperatorApprovalAsset::Erc721 {
-                    contract_address,
-                    metadata: metadata.into(),
-                },
-                owner,
-                operator,
-                approved_before,
-                approved_after,
-            },
-            service_espace::Change::Erc1155OperatorApproval {
                 contract_address,
                 owner,
                 operator,
-                approved_before,
-                approved_after,
-            } => Self::OperatorApproval {
-                asset: OperatorApprovalAsset::Erc1155 { contract_address },
-                owner,
-                operator,
-                approved_before,
-                approved_after,
+                approved,
             },
+            StandardChange::Erc1155TransferSingle {
+                contract_address,
+                operator,
+                from,
+                to,
+                token_id,
+                raw_amount,
+            } => Self::Erc1155TransferSingle {
+                contract_address,
+                operator,
+                from,
+                to,
+                token_id,
+                raw_amount,
+            },
+            StandardChange::Erc1155TransferBatch {
+                contract_address,
+                operator,
+                from,
+                to,
+                items,
+            } => Self::Erc1155TransferBatch {
+                contract_address,
+                operator,
+                from,
+                to,
+                items: items.into_iter().map(Into::into).collect(),
+            },
+        }
+    }
+}
+
+impl From<EspaceNativeCurrency> for NativeCurrency {
+    fn from(currency: EspaceNativeCurrency) -> Self {
+        Self {
+            name: currency.name,
+            symbol: currency.symbol,
+            decimals: currency.decimals,
+        }
+    }
+}
+
+impl From<SimulationErc20Metadata> for Erc20Metadata {
+    fn from(metadata: SimulationErc20Metadata) -> Self {
+        Self {
+            name: metadata.name,
+            symbol: metadata.symbol,
+            decimals: metadata.decimals,
+        }
+    }
+}
+
+impl From<SimulationErc721CollectionMetadata> for Erc721CollectionMetadata {
+    fn from(metadata: SimulationErc721CollectionMetadata) -> Self {
+        Self {
+            name: metadata.name,
+            symbol: metadata.symbol,
+        }
+    }
+}
+
+impl From<SimulationErc1155TransferItem> for Erc1155TransferItem {
+    fn from(item: SimulationErc1155TransferItem) -> Self {
+        Self {
+            token_id: item.token_id,
+            raw_amount: item.raw_amount,
+        }
+    }
+}
+
+impl From<conflux_service::core_space::NativeMetadata> for NativeMetadata {
+    fn from(metadata: conflux_service::core_space::NativeMetadata) -> Self {
+        Self {
+            name: metadata.name,
+            symbol: metadata.symbol,
+            decimals: metadata.decimals,
         }
     }
 }

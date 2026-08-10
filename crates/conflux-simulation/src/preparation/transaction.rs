@@ -1,8 +1,4 @@
-use alloy_primitives::{Address, Bytes, U256};
 use cfx_types::U256 as CfxU256;
-use simulation_transaction::{
-    Transaction, TransactionRequest, TransactionVariant, TransactionVariantRequest,
-};
 
 use super::CoreSpaceSimulationContext;
 use crate::{
@@ -11,65 +7,7 @@ use crate::{
         CoreSpaceTransaction, CoreSpaceTransactionRequest, CoreSpaceTransactionVariant,
         CoreSpaceTransactionVariantRequest, validate_core_space_transaction_network,
     },
-    espace::ResolvedEspaceContext,
 };
-
-#[derive(Debug)]
-struct TransactionWithoutGasLimit {
-    from: Address,
-    to: Option<Address>,
-    nonce: u64,
-    value: U256,
-    data: Bytes,
-    chain_id: u64,
-    variant: TransactionVariant,
-}
-
-impl TransactionWithoutGasLimit {
-    fn into_transaction(self, gas_limit: u64) -> Transaction {
-        Transaction {
-            from: self.from,
-            to: self.to,
-            nonce: self.nonce,
-            gas_limit,
-            value: self.value,
-            data: self.data,
-            chain_id: self.chain_id,
-            variant: self.variant,
-        }
-    }
-}
-
-pub(crate) async fn complete_espace_transaction(
-    provider: &ConfluxSimulationProvider,
-    context: &ResolvedEspaceContext,
-    request: TransactionRequest,
-) -> Result<Transaction, ConfluxSimulationError> {
-    let (transaction, gas_limit) =
-        complete_espace_without_gas_limit(provider, context, request).await?;
-    let gas_limit = match gas_limit {
-        Some(gas_limit) => gas_limit,
-        None => {
-            let estimate = provider
-                .eth_estimate_gas(
-                    transaction.from,
-                    transaction.to,
-                    transaction.nonce,
-                    transaction.value,
-                    &transaction.data,
-                    transaction.chain_id,
-                    &transaction.variant,
-                    context.state_block(),
-                )
-                .await?;
-            u64::try_from(estimate).map_err(|_| {
-                unsupported_value("eSpace gas estimate", estimate, CfxU256::from(u64::MAX))
-            })?
-        }
-    };
-
-    Ok(transaction.into_transaction(gas_limit))
-}
 
 pub(crate) async fn complete_core_space_transaction(
     provider: &ConfluxSimulationProvider,
@@ -158,98 +96,6 @@ pub(crate) async fn complete_core_space_transaction(
     })
 }
 
-async fn complete_espace_without_gas_limit(
-    provider: &ConfluxSimulationProvider,
-    context: &ResolvedEspaceContext,
-    request: TransactionRequest,
-) -> Result<(TransactionWithoutGasLimit, Option<u64>), ConfluxSimulationError> {
-    let TransactionRequest {
-        from,
-        to,
-        nonce,
-        gas_limit,
-        value,
-        data,
-        chain_id,
-        variant,
-    } = request;
-    let nonce = match nonce {
-        Some(nonce) => nonce,
-        None => {
-            let nonce = provider
-                .eth_get_transaction_count(from, context.state_block())
-                .await?;
-            u64::try_from(nonce).map_err(|_| {
-                unsupported_value("eSpace transaction nonce", nonce, CfxU256::from(u64::MAX))
-            })?
-        }
-    };
-    let variant = complete_espace_transaction_variant(provider, context, variant).await?;
-
-    Ok((
-        TransactionWithoutGasLimit {
-            from,
-            to,
-            nonce,
-            value: value.unwrap_or_default(),
-            data: data.unwrap_or_default(),
-            chain_id,
-            variant,
-        },
-        gas_limit,
-    ))
-}
-
-async fn complete_espace_transaction_variant(
-    provider: &ConfluxSimulationProvider,
-    context: &ResolvedEspaceContext,
-    variant: TransactionVariantRequest,
-) -> Result<TransactionVariant, ConfluxSimulationError> {
-    match variant {
-        TransactionVariantRequest::Legacy { gas_price } => Ok(TransactionVariant::Legacy {
-            gas_price: suggested_espace_gas_price(provider, gas_price).await?,
-        }),
-        TransactionVariantRequest::AccessList {
-            gas_price,
-            access_list,
-        } => Ok(TransactionVariant::AccessList {
-            gas_price: suggested_espace_gas_price(provider, gas_price).await?,
-            access_list,
-        }),
-        TransactionVariantRequest::DynamicFee {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            access_list,
-        } => {
-            let max_priority_fee_per_gas = match max_priority_fee_per_gas {
-                Some(value) => value,
-                None => {
-                    let fee = provider.eth_max_priority_fee_per_gas().await?;
-                    u128::try_from(fee).map_err(|_| {
-                        unsupported_value(
-                            "eSpace max priority fee per gas",
-                            fee,
-                            CfxU256::from(u128::MAX),
-                        )
-                    })?
-                }
-            };
-            let max_fee_per_gas = match max_fee_per_gas {
-                Some(value) => value,
-                None => {
-                    suggested_dynamic_fee_cap(context.base_fee_per_gas(), max_priority_fee_per_gas)?
-                }
-            };
-
-            Ok(TransactionVariant::DynamicFee {
-                max_fee_per_gas,
-                max_priority_fee_per_gas,
-                access_list,
-            })
-        }
-    }
-}
-
 async fn complete_core_space_transaction_variant(
     provider: &ConfluxSimulationProvider,
     context: &CoreSpaceSimulationContext,
@@ -297,21 +143,6 @@ async fn complete_core_space_transaction_variant(
                 max_fee_per_gas,
                 max_priority_fee_per_gas,
                 access_list,
-            })
-        }
-    }
-}
-
-async fn suggested_espace_gas_price(
-    provider: &ConfluxSimulationProvider,
-    gas_price: Option<u128>,
-) -> Result<u128, ConfluxSimulationError> {
-    match gas_price {
-        Some(value) => Ok(value),
-        None => {
-            let gas_price = provider.eth_gas_price().await?;
-            u128::try_from(gas_price).map_err(|_| {
-                unsupported_value("eSpace gas price", gas_price, CfxU256::from(u128::MAX))
             })
         }
     }

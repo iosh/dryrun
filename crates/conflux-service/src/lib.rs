@@ -1,20 +1,14 @@
 pub mod core_space;
-pub mod espace;
 
 use std::sync::Arc;
 
-use conflux_simulation::{
-    core_space::{CoreSpaceSimulationPreparer, CoreSpaceSimulator},
-    espace::{EspaceSimulationPreparer, EspaceSimulator},
-};
+use conflux_simulation::core_space::{CoreSpaceSimulationPreparer, CoreSpaceSimulator};
 use simulation_tasks::{SimulationTaskError, SimulationTaskSet};
 use thiserror::Error;
 use tokio::task::JoinError;
 
 #[derive(Clone)]
 pub struct ConfluxService {
-    espace_preparer: Arc<EspaceSimulationPreparer>,
-    espace_simulator: Arc<EspaceSimulator>,
     core_space_preparer: Arc<CoreSpaceSimulationPreparer>,
     core_space_simulator: Arc<CoreSpaceSimulator>,
     simulation_tasks: SimulationTaskSet,
@@ -22,45 +16,15 @@ pub struct ConfluxService {
 
 impl ConfluxService {
     pub fn new(
-        espace_preparer: Arc<EspaceSimulationPreparer>,
-        espace_simulator: Arc<EspaceSimulator>,
         core_space_preparer: Arc<CoreSpaceSimulationPreparer>,
         core_space_simulator: Arc<CoreSpaceSimulator>,
         simulation_tasks: SimulationTaskSet,
     ) -> Self {
         Self {
-            espace_preparer,
-            espace_simulator,
             core_space_preparer,
             core_space_simulator,
             simulation_tasks,
         }
-    }
-
-    pub async fn simulate_espace_transaction(
-        &self,
-        input: espace::EspaceSimulationInput,
-    ) -> Result<espace::EspaceSimulation, ConfluxServiceError> {
-        let espace::EspaceSimulationInput { block, transaction } = input;
-        let preparer = Arc::clone(&self.espace_preparer);
-        let simulator = Arc::clone(&self.espace_simulator);
-        let simulation = self
-            .simulation_tasks
-            .run(move || async move {
-                let prepared = preparer.prepare_transaction(block, transaction).await?;
-
-                let simulation = tokio::task::spawn_blocking(move || simulator.simulate(prepared))
-                    .await
-                    .map_err(|source| ConfluxServiceError::ExecutionTask {
-                        space: "eSpace",
-                        source,
-                    })??;
-
-                Ok::<_, ConfluxServiceError>(simulation)
-            })
-            .await??;
-
-        Ok(simulation)
     }
 
     pub async fn simulate_core_space_transaction(

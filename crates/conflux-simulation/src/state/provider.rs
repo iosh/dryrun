@@ -18,6 +18,8 @@ mod block;
 mod state;
 mod transaction;
 
+pub(crate) use transaction::EspaceEstimateTransaction;
+
 #[derive(Clone)]
 pub(crate) struct ConfluxSimulationProvider {
     core_space_address_network: ProviderNetwork,
@@ -128,4 +130,16 @@ impl ConfluxSimulationProvider {
 pub struct ConfluxRpcError {
     pub(crate) operation: &'static str,
     pub(crate) reason: String,
+}
+
+impl ConfluxRpcError {
+    /// Returns the provider operation that failed.
+    pub const fn operation(&self) -> &'static str {
+        self.operation
+    }
+
+    /// Returns the provider's diagnostic message.
+    pub fn reason(&self) -> &str {
+        &self.reason
+    }
 }

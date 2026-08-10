@@ -22,7 +22,10 @@ pub(crate) use context::{
     build_execution_block_context,
 };
 pub(crate) use env::build_conflux_state;
-pub(crate) use env::{build_execution_spec, build_transaction_env};
+pub(crate) use env::{
+    build_execution_spec, build_transaction_env, next_execution_block_number,
+    next_execution_epoch_height,
+};
 pub(crate) use observer::{Observation, ObservationObserver};
 pub(crate) use outcome::{
     ConfluxExecutionOutcome, ConfluxExecutionOutput, TransactionExecutionError,

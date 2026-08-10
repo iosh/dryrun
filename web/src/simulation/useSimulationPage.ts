@@ -160,6 +160,10 @@ function rpcErrorTitle(code: number) {
       return 'Invalid request';
     case -32603:
       return 'Server error';
+    case -32001:
+      return 'Block not found';
+    case -32002:
+      return 'Transaction completion failed';
     case -32004:
       return 'Not supported';
     default:

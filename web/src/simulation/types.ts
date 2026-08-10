@@ -1,6 +1,7 @@
 import type { EnvironmentId } from './environment.ts';
 import type {
   CoreChange,
+  EspaceChange,
   EvmChange,
   RpcSimulationResponse,
 } from './rpc.ts';
@@ -9,9 +10,15 @@ export type TxTypeOption =
   | 'auto'
   | 'legacy'
   | 'access-list'
-  | 'dynamic-fee';
+  | 'dynamic-fee'
+  | 'eip7702';
 
-export type ContextMode = 'latest' | 'safe' | 'finalized' | 'number';
+export type ContextMode =
+  | 'latest'
+  | 'safe'
+  | 'finalized'
+  | 'number'
+  | 'hash';
 
 export interface SimulationFormValues {
   from: string;
@@ -27,6 +34,7 @@ export interface SimulationFormValues {
   maxFeePerGas: string;
   maxPriorityFeePerGas: string;
   accessListJson: string;
+  authorizationListJson: string;
   storageLimit: string;
   epochHeight: string;
 }
@@ -34,6 +42,15 @@ export interface SimulationFormValues {
 export interface RpcAccessListItem {
   address: string;
   storageKeys: string[];
+}
+
+export interface RpcSignedAuthorization {
+  chainId: string;
+  address: string;
+  nonce: string;
+  yParity: string;
+  r: string;
+  s: string;
 }
 
 export interface HexTransactionRequest {
@@ -49,6 +66,7 @@ export interface HexTransactionRequest {
   gasPrice?: string;
   maxFeePerGas?: string;
   maxPriorityFeePerGas?: string;
+  authorizationList?: RpcSignedAuthorization[];
 }
 
 export interface HexSimulationRequest {
@@ -70,7 +88,7 @@ export type SimulationRequest = HexSimulationRequest | CoreSimulationRequest;
 
 export type SimulationResponse = RpcSimulationResponse;
 
-export type SimulationChange = EvmChange | CoreChange;
+export type SimulationChange = EvmChange | EspaceChange | CoreChange;
 
 export interface SimulationRecord {
   id: string;

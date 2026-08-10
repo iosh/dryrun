@@ -1,9 +1,16 @@
 use conflux_service::ConfluxServiceError;
+use conflux_simulation::espace::{
+    EspaceContextError, EspaceSimulationError, EspaceTransactionCompletionError,
+};
 use jsonrpsee::types::{
     ErrorObjectOwned,
     error::{INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
 };
-use tracing::error;
+use simulation_tasks::SimulationTaskError;
+use tracing::{error, warn};
+
+const CONTEXT_NOT_FOUND_CODE: i32 = -32001;
+const TRANSACTION_COMPLETION_FAILED_CODE: i32 = -32002;
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum ValidationError {
@@ -45,6 +52,14 @@ fn internal_error() -> ErrorObjectOwned {
     ErrorObjectOwned::owned(INTERNAL_ERROR_CODE, "Internal error", None::<()>)
 }
 
+fn context_not_found(details: impl Into<String>) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(CONTEXT_NOT_FOUND_CODE, details.into(), None::<()>)
+}
+
+fn transaction_completion_failed(details: &'static str) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(TRANSACTION_COMPLETION_FAILED_CODE, details, None::<()>)
+}
+
 pub(super) fn core_space_response_mapping_error(details: impl Into<String>) -> ErrorObjectOwned {
     let details = details.into();
     error!(details, "Conflux Core Space response mapping failed");
@@ -56,7 +71,42 @@ pub(super) fn map_core_space_service_error(error: ConfluxServiceError) -> ErrorO
     internal_error()
 }
 
-pub(super) fn map_espace_service_error(error: ConfluxServiceError) -> ErrorObjectOwned {
-    error!(error = ?error, "Conflux eSpace simulation failed");
+pub(super) fn map_espace_simulation_error(error: EspaceSimulationError) -> ErrorObjectOwned {
+    match error {
+        EspaceSimulationError::Input(error) => invalid_params(error.to_string()),
+        EspaceSimulationError::Context(error @ EspaceContextError::EspaceBlockNotFound { .. }) => {
+            context_not_found(error.to_string())
+        }
+        EspaceSimulationError::Completion(error) => {
+            warn!(error = ?error, "Conflux eSpace transaction completion failed");
+            transaction_completion_failed(transaction_completion_message(&error))
+        }
+        error => {
+            error!(error = ?error, "Conflux eSpace simulation failed");
+            internal_error()
+        }
+    }
+}
+
+fn transaction_completion_message(error: &EspaceTransactionCompletionError) -> &'static str {
+    match error {
+        EspaceTransactionCompletionError::NonceLookup { .. } => {
+            "Unable to resolve the sender nonce; provide transaction.nonce explicitly"
+        }
+        EspaceTransactionCompletionError::GasEstimation { .. } => {
+            "Unable to estimate transaction gas; provide transaction.gas explicitly"
+        }
+        EspaceTransactionCompletionError::GasPriceSuggestion { .. } => {
+            "Unable to suggest a gas price; provide transaction.gasPrice explicitly"
+        }
+        EspaceTransactionCompletionError::PriorityFeeSuggestion { .. } => {
+            "Unable to suggest a priority fee; provide transaction.maxPriorityFeePerGas explicitly"
+        }
+        _ => "Unable to complete the transaction",
+    }
+}
+
+pub(super) fn map_simulation_task_error(error: SimulationTaskError) -> ErrorObjectOwned {
+    error!(error = ?error, "Conflux eSpace simulation task failed");
     internal_error()
 }

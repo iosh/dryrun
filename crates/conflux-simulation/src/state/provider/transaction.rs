@@ -1,25 +1,25 @@
-use alloy::{
-    eips::BlockId,
-    primitives::{Address as AlloyAddress, Bytes as AlloyBytes, TxKind, U256 as AlloyU256},
-    providers::Provider,
-    rpc::types::{
-        AccessList as RpcAccessList, TransactionInput,
-        TransactionRequest as AlloyTransactionRequest,
+use crate::{
+    core_space::{CoreSpaceAccessListItem, CoreSpaceTransactionVariant},
+    espace::EspaceCompleteTransactionVariant,
+    primitive::{
+        access_list_to_cfx, address_to_cfx, alloy_u256_from_u64, alloy_u256_from_u128, u256_to_cfx,
     },
 };
+use alloy::{
+    eips::BlockId,
+    primitives::{Address as AlloyAddress, Bytes as AlloyBytes, U256 as AlloyU256},
+    providers::Provider,
+    rpc::{client::NoParams, types::TransactionInput},
+};
 use cfx_rpc_cfx_types::EpochNumber;
-use cfx_types::U256;
+use cfx_rpc_eth_types::TransactionRequest as EspaceRpcTransactionRequest;
+use cfx_types::{U64, U256};
 use conflux_provider::{
     BalanceCheckRequest, BlockHashOrEpochNumber, CoreAccessListItem, CoreAddress,
     CoreTransactionType, EstimateGasAndCollateralRequest,
 };
+use primitives::transaction::AuthorizationListItem;
 use serde::Deserialize;
-use simulation_transaction::TransactionVariant;
-
-use crate::{
-    core_space::{CoreSpaceAccessListItem, CoreSpaceTransactionVariant},
-    primitive::{alloy_u256_from_u64, alloy_u256_from_u128},
-};
 
 use super::{ConfluxRpcError, ConfluxSimulationProvider};
 
@@ -27,6 +27,16 @@ use super::{ConfluxRpcError, ConfluxSimulationProvider};
 pub(crate) struct CoreSpaceResourceEstimate {
     pub gas_limit: U256,
     pub storage_limit: u64,
+}
+
+pub(crate) struct EspaceEstimateTransaction<'a> {
+    pub(crate) from: AlloyAddress,
+    pub(crate) to: Option<AlloyAddress>,
+    pub(crate) nonce: u64,
+    pub(crate) value: AlloyU256,
+    pub(crate) data: &'a AlloyBytes,
+    pub(crate) chain_id: u64,
+    pub(crate) variant: &'a EspaceCompleteTransactionVariant,
 }
 
 impl ConfluxSimulationProvider {
@@ -48,9 +58,8 @@ impl ConfluxSimulationProvider {
 
     pub(crate) async fn eth_gas_price(&self) -> Result<U256, ConfluxRpcError> {
         self.espace_provider
-            .get_gas_price()
+            .raw_request("eth_gasPrice".into(), NoParams::default())
             .await
-            .map(U256::from)
             .map_err(|error| ConfluxRpcError {
                 operation: "eth_gasPrice",
                 reason: error.to_string(),
@@ -59,9 +68,8 @@ impl ConfluxSimulationProvider {
 
     pub(crate) async fn eth_max_priority_fee_per_gas(&self) -> Result<U256, ConfluxRpcError> {
         self.espace_provider
-            .get_max_priority_fee_per_gas()
+            .raw_request("eth_maxPriorityFeePerGas".into(), NoParams::default())
             .await
-            .map(U256::from)
             .map_err(|error| ConfluxRpcError {
                 operation: "eth_maxPriorityFeePerGas",
                 reason: error.to_string(),
@@ -70,26 +78,21 @@ impl ConfluxSimulationProvider {
 
     pub(crate) async fn eth_estimate_gas(
         &self,
-        from: AlloyAddress,
-        to: Option<AlloyAddress>,
-        nonce: u64,
-        value: AlloyU256,
-        data: &AlloyBytes,
-        chain_id: u64,
-        variant: &TransactionVariant,
+        transaction: EspaceEstimateTransaction<'_>,
         block: BlockId,
     ) -> Result<U256, ConfluxRpcError> {
         let estimate = self
-            .espace_provider_at(block)
-            .estimate_gas(espace_estimate_gas_request(
-                from, to, nonce, value, data, chain_id, variant,
-            ))
+            .espace_provider
+            .raw_request(
+                "eth_estimateGas".into(),
+                (espace_estimate_gas_request(transaction), block),
+            )
             .await
             .map_err(|error| ConfluxRpcError {
                 operation: "eth_estimateGas",
                 reason: error.to_string(),
             })?;
-        Ok(U256::from(estimate))
+        Ok(estimate)
     }
 
     pub(crate) async fn cfx_get_next_nonce(
@@ -212,46 +215,68 @@ struct EstimateTransaction<'a> {
 }
 
 fn espace_estimate_gas_request(
-    from: AlloyAddress,
-    to: Option<AlloyAddress>,
-    nonce: u64,
-    value: AlloyU256,
-    data: &AlloyBytes,
-    chain_id: u64,
-    variant: &TransactionVariant,
-) -> AlloyTransactionRequest {
-    let mut request = AlloyTransactionRequest {
-        from: Some(from),
-        to: Some(to.map_or(TxKind::Create, TxKind::Call)),
-        value: Some(value),
-        input: TransactionInput::new(data.clone()),
-        nonce: Some(nonce),
-        chain_id: Some(chain_id),
+    transaction: EspaceEstimateTransaction<'_>,
+) -> EspaceRpcTransactionRequest {
+    let mut request = EspaceRpcTransactionRequest {
+        from: Some(address_to_cfx(transaction.from)),
+        to: transaction.to.map(address_to_cfx),
+        value: Some(u256_to_cfx(transaction.value)),
+        input: TransactionInput::new(transaction.data.clone()),
+        nonce: Some(U256::from(transaction.nonce)),
+        chain_id: Some(U256::from(transaction.chain_id)),
         ..Default::default()
     };
 
-    match variant {
-        TransactionVariant::Legacy { gas_price } => {
-            request.transaction_type = Some(0);
-            request.gas_price = Some(*gas_price);
+    match transaction.variant {
+        EspaceCompleteTransactionVariant::Legacy { gas_price } => {
+            request.transaction_type = Some(U64::from(0));
+            request.gas_price = Some(u256_to_cfx(*gas_price));
         }
-        TransactionVariant::AccessList {
+        EspaceCompleteTransactionVariant::Eip2930 {
             gas_price,
             access_list,
         } => {
-            request.transaction_type = Some(1);
-            request.gas_price = Some(*gas_price);
-            request.access_list = Some(RpcAccessList(access_list.to_vec()));
+            request.transaction_type = Some(U64::from(1));
+            request.gas_price = Some(u256_to_cfx(*gas_price));
+            request.access_list = Some(access_list_to_cfx(access_list.to_vec()));
         }
-        TransactionVariant::DynamicFee {
+        EspaceCompleteTransactionVariant::Eip1559 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             access_list,
         } => {
-            request.transaction_type = Some(2);
-            request.max_fee_per_gas = Some(*max_fee_per_gas);
-            request.max_priority_fee_per_gas = Some(*max_priority_fee_per_gas);
-            request.access_list = Some(RpcAccessList(access_list.to_vec()));
+            request.transaction_type = Some(U64::from(2));
+            request.max_fee_per_gas = Some(u256_to_cfx(*max_fee_per_gas));
+            request.max_priority_fee_per_gas = Some(u256_to_cfx(*max_priority_fee_per_gas));
+            request.access_list = Some(access_list_to_cfx(access_list.to_vec()));
+        }
+        EspaceCompleteTransactionVariant::Eip7702 {
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+            access_list,
+            authorization_list,
+        } => {
+            request.transaction_type = Some(U64::from(4));
+            request.max_fee_per_gas = Some(u256_to_cfx(*max_fee_per_gas));
+            request.max_priority_fee_per_gas = Some(u256_to_cfx(*max_priority_fee_per_gas));
+            request.access_list = Some(access_list_to_cfx(access_list.to_vec()));
+            request.authorization_list = Some(
+                authorization_list
+                    .iter()
+                    .map(|authorization| {
+                        let inner = authorization.inner();
+                        AuthorizationListItem {
+                            chain_id: u256_to_cfx(inner.chain_id),
+                            address: address_to_cfx(inner.address),
+                            nonce: inner.nonce,
+                            y_parity: authorization.y_parity(),
+                            r: u256_to_cfx(authorization.r()),
+                            s: u256_to_cfx(authorization.s()),
+                        }
+                        .into()
+                    })
+                    .collect(),
+            );
         }
     }
 

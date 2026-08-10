@@ -1,138 +1,139 @@
-use super::{EspaceExecutionFailure, EspaceExecutionFailureCode};
-use primitives::transaction::{
-    Action, Eip155Transaction, Eip1559Transaction, Eip2930Transaction, EthereumTransaction,
+use alloy::primitives::{Address, Bytes, U256};
+use thiserror::Error;
+
+pub use alloy::eips::{
+    eip2930::AccessListItem,
+    eip7702::{Authorization, SignedAuthorization},
 };
 
-use crate::{
-    execution::EspaceTransactionInput,
-    primitive::{access_list_to_cfx, address_to_cfx, u256_to_cfx},
-};
-pub use simulation_transaction::{
-    Transaction as EspaceTransaction, TransactionVariant as EspaceTransactionVariant,
-};
-
-pub(crate) fn build_espace_transaction_input(
-    input: EspaceTransaction,
-    chain_id: u32,
-) -> EspaceTransactionInput {
-    let sender = address_to_cfx(input.from);
-    let tx = build_ethereum_transaction(input, chain_id);
-
-    EspaceTransactionInput { tx, sender }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EspaceTransactionInput {
+    Complete(EspaceCompleteTransaction),
+    Partial(EspacePartialTransaction),
 }
 
-fn build_ethereum_transaction(input: EspaceTransaction, chain_id: u32) -> EthereumTransaction {
-    let EspaceTransaction {
-        to,
-        nonce,
-        gas_limit,
-        value,
-        data,
-        variant,
-        ..
-    } = input;
-
-    let action = to.map_or(Action::Create, |address| {
-        Action::Call(address_to_cfx(address))
-    });
-    let nonce = nonce.into();
-    let gas = gas_limit.into();
-    let value = u256_to_cfx(value);
-    let data = data.to_vec();
-
-    match variant {
-        EspaceTransactionVariant::Legacy { gas_price } => {
-            EthereumTransaction::Eip155(Eip155Transaction {
-                nonce,
-                gas_price: gas_price.into(),
-                gas,
-                action,
-                value,
-                chain_id: Some(chain_id),
-                data,
-            })
+impl EspaceTransactionInput {
+    pub(crate) fn validate_requirements(&self) -> Result<(), EspaceTransactionInputError> {
+        match self {
+            Self::Complete(transaction) => transaction.validate_requirements(),
+            Self::Partial(transaction) => transaction.validate_requirements(),
         }
-        EspaceTransactionVariant::AccessList {
-            gas_price,
-            access_list,
-        } => EthereumTransaction::Eip2930(Eip2930Transaction {
-            chain_id,
-            nonce,
-            gas_price: gas_price.into(),
-            gas,
-            action,
-            value,
-            data,
-            access_list: access_list_to_cfx(access_list),
-        }),
-        EspaceTransactionVariant::DynamicFee {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            access_list,
-        } => EthereumTransaction::Eip1559(Eip1559Transaction {
-            chain_id,
-            nonce,
-            max_priority_fee_per_gas: max_priority_fee_per_gas.into(),
-            max_fee_per_gas: max_fee_per_gas.into(),
-            gas,
-            action,
-            value,
-            data,
-            access_list: access_list_to_cfx(access_list),
-        }),
     }
 }
 
-pub(crate) fn validate_espace_transaction(
-    transaction: &EspaceTransaction,
-    expected_chain_id: u32,
-) -> Result<(), EspaceExecutionFailure> {
-    if transaction.chain_id != u64::from(expected_chain_id) {
-        return Err(EspaceExecutionFailure {
-            code: EspaceExecutionFailureCode::ChainIdMismatch,
-            message: format!(
-                "transaction chain id {} does not match simulation chain id {}",
-                transaction.chain_id, expected_chain_id
-            ),
-            reason: None,
-        });
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EspaceCompleteTransaction {
+    pub from: Address,
+    pub to: Option<Address>,
+    pub nonce: u64,
+    pub gas_limit: u64,
+    pub value: U256,
+    pub input: Bytes,
+    pub chain_id: u64,
+    pub variant: EspaceCompleteTransactionVariant,
+}
+
+impl EspaceCompleteTransaction {
+    fn validate_requirements(&self) -> Result<(), EspaceTransactionInputError> {
+        match &self.variant {
+            EspaceCompleteTransactionVariant::Eip7702 {
+                authorization_list, ..
+            } => validate_eip7702_requirements(self.to, authorization_list),
+            EspaceCompleteTransactionVariant::Legacy { .. }
+            | EspaceCompleteTransactionVariant::Eip2930 { .. }
+            | EspaceCompleteTransactionVariant::Eip1559 { .. } => Ok(()),
+        }
     }
+}
 
-    match &transaction.variant {
-        EspaceTransactionVariant::Legacy { gas_price }
-        | EspaceTransactionVariant::AccessList { gas_price, .. } => {
-            if *gas_price == 0 {
-                return Err(EspaceExecutionFailure {
-                    code: EspaceExecutionFailureCode::ZeroGasPrice,
-                    message: "transaction gas price must be greater than zero".to_string(),
-                    reason: None,
-                });
-            }
-        }
-        EspaceTransactionVariant::DynamicFee {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            ..
-        } => {
-            if *max_fee_per_gas == 0 {
-                return Err(EspaceExecutionFailure {
-                    code: EspaceExecutionFailureCode::ZeroGasPrice,
-                    message: "transaction max fee per gas must be greater than zero".to_string(),
-                    reason: None,
-                });
-            }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EspaceCompleteTransactionVariant {
+    Legacy {
+        gas_price: U256,
+    },
+    Eip2930 {
+        gas_price: U256,
+        access_list: Vec<AccessListItem>,
+    },
+    Eip1559 {
+        max_fee_per_gas: U256,
+        max_priority_fee_per_gas: U256,
+        access_list: Vec<AccessListItem>,
+    },
+    Eip7702 {
+        max_fee_per_gas: U256,
+        max_priority_fee_per_gas: U256,
+        access_list: Vec<AccessListItem>,
+        authorization_list: Vec<SignedAuthorization>,
+    },
+}
 
-            if max_priority_fee_per_gas > max_fee_per_gas {
-                return Err(EspaceExecutionFailure {
-                    code: EspaceExecutionFailureCode::PriorityFeeExceedsMaxFee,
-                    message: format!(
-                        "max priority fee per gas {} exceeds max fee per gas {}",
-                        max_priority_fee_per_gas, max_fee_per_gas
-                    ),
-                    reason: None,
-                });
-            }
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EspacePartialTransaction {
+    pub from: Address,
+    pub to: Option<Address>,
+    pub nonce: Option<u64>,
+    pub gas_limit: Option<u64>,
+    pub value: Option<U256>,
+    pub input: Option<Bytes>,
+    pub chain_id: Option<u64>,
+    pub variant: EspacePartialTransactionVariant,
+}
+
+impl EspacePartialTransaction {
+    fn validate_requirements(&self) -> Result<(), EspaceTransactionInputError> {
+        match &self.variant {
+            EspacePartialTransactionVariant::Eip7702 {
+                authorization_list, ..
+            } => validate_eip7702_requirements(self.to, authorization_list),
+            EspacePartialTransactionVariant::Legacy { .. }
+            | EspacePartialTransactionVariant::Eip2930 { .. }
+            | EspacePartialTransactionVariant::Eip1559 { .. } => Ok(()),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EspacePartialTransactionVariant {
+    Legacy {
+        gas_price: Option<U256>,
+    },
+    Eip2930 {
+        gas_price: Option<U256>,
+        access_list: Vec<AccessListItem>,
+    },
+    Eip1559 {
+        max_fee_per_gas: Option<U256>,
+        max_priority_fee_per_gas: Option<U256>,
+        access_list: Vec<AccessListItem>,
+    },
+    Eip7702 {
+        max_fee_per_gas: Option<U256>,
+        max_priority_fee_per_gas: Option<U256>,
+        access_list: Vec<AccessListItem>,
+        authorization_list: Vec<SignedAuthorization>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[non_exhaustive]
+pub enum EspaceTransactionInputError {
+    #[error("EIP-7702 transactions require a call destination")]
+    Eip7702CallDestinationRequired,
+
+    #[error("EIP-7702 transactions require at least one signed authorization")]
+    Eip7702AuthorizationListRequired,
+}
+
+fn validate_eip7702_requirements(
+    to: Option<Address>,
+    authorization_list: &[SignedAuthorization],
+) -> Result<(), EspaceTransactionInputError> {
+    if to.is_none() {
+        return Err(EspaceTransactionInputError::Eip7702CallDestinationRequired);
+    }
+    if authorization_list.is_empty() {
+        return Err(EspaceTransactionInputError::Eip7702AuthorizationListRequired);
     }
 
     Ok(())

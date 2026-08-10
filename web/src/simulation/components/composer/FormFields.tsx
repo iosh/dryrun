@@ -163,6 +163,9 @@ export function ContextModeField({
                   <SelectItem value="finalized">Finalized</SelectItem>
                 </>
               ) : null}
+              {environmentId === 'conflux-espace-mainnet' ? (
+                <SelectItem value="hash">Hash</SelectItem>
+              ) : null}
               <SelectItem value="number">Number</SelectItem>
             </SelectContent>
           </Select>
@@ -172,7 +175,13 @@ export function ContextModeField({
   );
 }
 
-export function TxTypeField({ form }: Readonly<{ form: SimulationFormApi }>) {
+export function TxTypeField({
+  environmentId,
+  form,
+}: Readonly<{
+  environmentId: EnvironmentId;
+  form: SimulationFormApi;
+}>) {
   return (
     <form.Field name="txType">
       {(field) => (
@@ -193,6 +202,9 @@ export function TxTypeField({ form }: Readonly<{ form: SimulationFormApi }>) {
               <SelectItem value="legacy">Legacy</SelectItem>
               <SelectItem value="access-list">Access list</SelectItem>
               <SelectItem value="dynamic-fee">Dynamic fee</SelectItem>
+              {environmentId === 'conflux-espace-mainnet' ? (
+                <SelectItem value="eip7702">EIP-7702</SelectItem>
+              ) : null}
             </SelectContent>
           </Select>
         </LabeledField>
@@ -206,7 +218,12 @@ function clearIncompatibleTransactionFields(
   transactionType: TxTypeOption,
 ) {
   const clearField = (
-    field: 'accessListJson' | 'gasPrice' | 'maxFeePerGas' | 'maxPriorityFeePerGas',
+    field:
+      | 'accessListJson'
+      | 'authorizationListJson'
+      | 'gasPrice'
+      | 'maxFeePerGas'
+      | 'maxPriorityFeePerGas',
   ) => form.setFieldValue(field, '', { dontUpdateMeta: true });
 
   switch (transactionType) {
@@ -214,12 +231,18 @@ function clearIncompatibleTransactionFields(
       clearField('accessListJson');
       clearField('maxFeePerGas');
       clearField('maxPriorityFeePerGas');
+      clearField('authorizationListJson');
       break;
     case 'access-list':
       clearField('maxFeePerGas');
       clearField('maxPriorityFeePerGas');
+      clearField('authorizationListJson');
       break;
     case 'dynamic-fee':
+      clearField('gasPrice');
+      clearField('authorizationListJson');
+      break;
+    case 'eip7702':
       clearField('gasPrice');
       break;
     case 'auto':

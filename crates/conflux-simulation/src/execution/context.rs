@@ -1,4 +1,5 @@
-use cfx_types::{Address, H256, SpaceMap, U256};
+use cfx_executor::spec::CommonParams;
+use cfx_types::{Address, H256, Space, SpaceMap, U256};
 use primitives::BlockNumber;
 use thiserror::Error;
 
@@ -21,11 +22,30 @@ pub(crate) struct ExecutionBaseFees {
 }
 
 impl ExecutionBaseFees {
-    pub(crate) fn into_space_map(self) -> SpaceMap<U256> {
-        SpaceMap::new(
-            self.core_space_base_fee_per_gas.unwrap_or(U256::zero()),
-            self.espace_base_fee_per_gas.unwrap_or(U256::zero()),
-        )
+    fn resolve_for_execution(
+        self,
+        params: &CommonParams,
+        execution_epoch_height: u64,
+    ) -> Result<SpaceMap<U256>, ExecutionBlockContextError> {
+        let activation = params.transition_heights.cip1559;
+        if execution_epoch_height < activation {
+            return Ok(SpaceMap::new(U256::zero(), U256::zero()));
+        }
+        if execution_epoch_height == activation {
+            return Ok(params.init_base_price());
+        }
+
+        let core_space = self.core_space_base_fee_per_gas.ok_or(
+            ExecutionBlockContextError::MissingCoreSpaceBaseFee {
+                execution_epoch_height,
+            },
+        )?;
+        let espace = self.espace_base_fee_per_gas.ok_or(
+            ExecutionBlockContextError::MissingEspaceBaseFee {
+                execution_epoch_height,
+            },
+        )?;
+        Ok(SpaceMap::new(core_space, espace))
     }
 }
 
@@ -55,6 +75,32 @@ pub(crate) struct ExecutionBlockContext {
     pub(crate) base_fees: ExecutionBaseFees,
 }
 
+impl ExecutionBlockContext {
+    pub(crate) fn resolve_base_fees(
+        &mut self,
+        params: &CommonParams,
+        execution_epoch_height: u64,
+    ) -> Result<(), ExecutionBlockContextError> {
+        let base_fees = self
+            .base_fees
+            .resolve_for_execution(params, execution_epoch_height)?;
+        self.base_fees = ExecutionBaseFees {
+            core_space_base_fee_per_gas: Some(base_fees[Space::Native]),
+            espace_base_fee_per_gas: Some(base_fees[Space::Ethereum]),
+        };
+        Ok(())
+    }
+
+    pub(crate) fn base_fees_for_execution(
+        &self,
+        params: &CommonParams,
+        execution_epoch_height: u64,
+    ) -> Result<SpaceMap<U256>, ExecutionBlockContextError> {
+        self.base_fees
+            .resolve_for_execution(params, execution_epoch_height)
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ExecutionBlockContextError {
     #[error("Core Space pivot block is missing blockNumber")]
@@ -65,6 +111,14 @@ pub enum ExecutionBlockContextError {
     NextBlockNumberOverflow { pivot_block_number: BlockNumber },
     #[error("next execution epoch height overflows u64 after {pivot_epoch_height}")]
     NextEpochHeightOverflow { pivot_epoch_height: u64 },
+    #[error(
+        "Core Space base fee is missing for execution epoch {execution_epoch_height} after CIP-1559 activation"
+    )]
+    MissingCoreSpaceBaseFee { execution_epoch_height: u64 },
+    #[error(
+        "eSpace base fee is missing for execution epoch {execution_epoch_height} after CIP-1559 activation"
+    )]
+    MissingEspaceBaseFee { execution_epoch_height: u64 },
 }
 
 pub(crate) fn build_core_space_pivot_block_context(

@@ -25,14 +25,24 @@ export function AdvancedFields({
       {(values) => {
         const advancedCount = countAdvancedValues(environmentId, values);
         const contextLabel =
-          environment.contextKind === 'block' ? 'Block number' : 'Epoch number';
+          values.contextMode === 'hash'
+            ? 'Block hash'
+            : environment.contextKind === 'block'
+              ? 'Block number'
+              : 'Epoch number';
         const hasGasPrice = values.gasPrice.trim().length > 0;
         const hasDynamicFee =
           values.maxFeePerGas.trim().length > 0 ||
           values.maxPriorityFeePerGas.trim().length > 0;
+        const hasAuthorization =
+          values.authorizationListJson.trim().length > 0 &&
+          values.authorizationListJson.trim() !== '[]';
         const gasPriceDisabled =
           values.txType === 'dynamic-fee' ||
-          (values.txType === 'auto' && !hasGasPrice && hasDynamicFee);
+          values.txType === 'eip7702' ||
+          (values.txType === 'auto' &&
+            !hasGasPrice &&
+            (hasDynamicFee || hasAuthorization));
         const dynamicFeeDisabled =
           values.txType === 'legacy' ||
           values.txType === 'access-list' ||
@@ -66,11 +76,11 @@ export function AdvancedFields({
                   environmentId={environmentId}
                   form={form}
                 />
-                {values.contextMode === 'number' ? (
+                {values.contextMode === 'number' || values.contextMode === 'hash' ? (
                   <TextInputField
                     environmentId={environmentId}
                     form={form}
-                    inputMode="numeric"
+                    inputMode={values.contextMode === 'hash' ? 'text' : 'numeric'}
                     label={contextLabel}
                     name="contextNumber"
                   />
@@ -101,7 +111,7 @@ export function AdvancedFields({
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
-                <TxTypeField form={form} />
+                <TxTypeField environmentId={environmentId} form={form} />
                 <TextInputField
                   disabled={gasPriceDisabled}
                   environmentId={environmentId}
@@ -171,6 +181,22 @@ export function AdvancedFields({
                 placeholder="[]"
                 rows={5}
               />
+
+              {environmentId === 'conflux-espace-mainnet' ? (
+                <TextAreaField
+                  disabled={
+                    values.txType !== 'auto' && values.txType !== 'eip7702'
+                  }
+                  environmentId={environmentId}
+                  form={form}
+                  label="Signed authorizations (JSON)"
+                  monospace
+                  name="authorizationListJson"
+                  optional
+                  placeholder="[]"
+                  rows={6}
+                />
+              ) : null}
             </div>
           </details>
         );

@@ -17,7 +17,7 @@ pub(crate) fn build_conflux_state(
     new_conflux_state(source, runtime_handle)
 }
 
-fn next_execution_block_number(
+pub(crate) fn next_execution_block_number(
     pivot_block_number: BlockNumber,
 ) -> Result<BlockNumber, ExecutionBlockContextError> {
     // The loaded context points at the parent state. The simulated
@@ -27,7 +27,9 @@ fn next_execution_block_number(
         .ok_or(ExecutionBlockContextError::NextBlockNumberOverflow { pivot_block_number })
 }
 
-fn next_execution_epoch_height(pivot_epoch_height: u64) -> Result<u64, ExecutionBlockContextError> {
+pub(crate) fn next_execution_epoch_height(
+    pivot_epoch_height: u64,
+) -> Result<u64, ExecutionBlockContextError> {
     // Epoch-dependent fork rules are evaluated at the execution epoch, not the
     // parent state epoch used for reads.
     pivot_epoch_height
@@ -43,7 +45,7 @@ pub(crate) fn build_transaction_env(
 ) -> Result<Env, ExecutionBlockContextError> {
     let execution_block_number = next_execution_block_number(input.pivot_block_number)?;
     let epoch_height = next_execution_epoch_height(input.pivot_epoch_height)?;
-    let base_gas_price = input.base_fees.into_space_map();
+    let base_gas_price = input.base_fees_for_execution(machine.params(), epoch_height)?;
     // Derived from state, not from public block RPC.
     let burnt_gas_price = base_gas_price.map_all(|x| state.burnt_gas_price(x));
 
