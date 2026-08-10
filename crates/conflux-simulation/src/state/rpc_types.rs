@@ -95,7 +95,7 @@ pub(crate) struct CoreSpaceSponsorInfo {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CoreSpaceRpcBlock {
     pub(crate) hash: H256,
-    pub(crate) height: U256,
+    pub(crate) epoch_number: Option<U256>,
     pub(crate) miner: RpcAddress,
     pub(crate) block_number: Option<U256>,
     pub(crate) base_fee_per_gas: Option<U256>,
@@ -106,7 +106,6 @@ pub(crate) struct CoreSpaceRpcBlock {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CoreSpaceRpcPoSBlock {
-    pub(crate) hash: H256,
     pub(crate) height: U64,
     pub(crate) pivot_decision: Option<CoreSpaceRpcPoSPivotDecision>,
 }

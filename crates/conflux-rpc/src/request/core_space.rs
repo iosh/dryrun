@@ -60,10 +60,10 @@ impl SimulateCoreSpaceTransactionRequest {
 
 fn map_core_space_epoch(
     epoch: Option<EpochNumber>,
-) -> Result<service_core_space::CoreSpaceEpochRef, ValidationError> {
+) -> Result<service_core_space::CoreSpaceBlockSelector, ValidationError> {
     match epoch.unwrap_or(EpochNumber::LatestState) {
-        EpochNumber::LatestState => Ok(service_core_space::CoreSpaceEpochRef::LatestState),
-        EpochNumber::Num(number) => Ok(service_core_space::CoreSpaceEpochRef::Number(
+        EpochNumber::LatestState => Ok(service_core_space::CoreSpaceBlockSelector::LatestState),
+        EpochNumber::Num(number) => Ok(service_core_space::CoreSpaceBlockSelector::Number(
             number.as_u64(),
         )),
         _ => Err(ValidationError::not_supported(

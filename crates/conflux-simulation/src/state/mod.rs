@@ -19,7 +19,7 @@ pub(crate) use self::{
     phases::{StatePhaseValues, execute_with_state_phases},
     provider::{ConfluxSimulationProvider, EspaceEstimateTransaction},
     reader::{AnchoredVoteLists, ConfluxStateSource, MaskedSponsorWhitelistEntries},
-    rpc_types::{CoreSpaceRpcBlock, CoreSpaceRpcPoSBlock, EspaceRpcBlock},
+    rpc_types::{CoreSpaceRpcBlock, EspaceRpcBlock},
     storage::new_conflux_state,
 };
 

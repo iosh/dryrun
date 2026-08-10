@@ -169,11 +169,11 @@ impl CoreSpaceExecution {
     }
 }
 
-impl From<service_core_space::CoreSpaceStateAnchor> for CoreSpaceStateAnchor {
-    fn from(state: service_core_space::CoreSpaceStateAnchor) -> Self {
+impl From<service_core_space::CoreSpaceBlockContext> for CoreSpaceStateAnchor {
+    fn from(state: service_core_space::CoreSpaceBlockContext) -> Self {
         Self {
             epoch_number: state.epoch_number.into(),
-            pivot_hash: state.pivot_hash,
+            pivot_hash: H256::from_slice(state.pivot_hash.as_slice()),
         }
     }
 }

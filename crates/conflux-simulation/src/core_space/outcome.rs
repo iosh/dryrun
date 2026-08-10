@@ -3,7 +3,7 @@ use cfx_vm_types as vm;
 
 use super::{
     CoreSpaceExecution, CoreSpaceExecutionDetails, CoreSpaceExecutionFailure,
-    CoreSpaceExecutionFailureCode, CoreSpaceOutcome, CoreSpaceStateAnchor,
+    CoreSpaceExecutionFailureCode, CoreSpaceOutcome,
 };
 use crate::execution::{ConfluxExecutionOutcome, ConfluxExecutionOutput};
 
@@ -11,7 +11,7 @@ use super::PreparedStoragePayer;
 
 pub(crate) fn build_core_space_execution(
     chain_id: u32,
-    state: CoreSpaceStateAnchor,
+    state: super::CoreSpaceBlockContext,
     gas_limit: u64,
     outcome: ConfluxExecutionOutcome,
     storage_payer: Option<PreparedStoragePayer>,
@@ -46,7 +46,7 @@ pub(crate) fn build_core_space_execution(
 
 pub(crate) fn build_core_space_not_executed(
     chain_id: u32,
-    state: CoreSpaceStateAnchor,
+    state: super::CoreSpaceBlockContext,
     gas_limit: u64,
     failure: CoreSpaceExecutionFailure,
 ) -> CoreSpaceExecution {

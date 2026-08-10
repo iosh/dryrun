@@ -1,9 +1,9 @@
 use conflux_simulation as simulation;
 
 pub use simulation::core_space::{
-    Change, CoreSpaceChange, CoreSpaceEpochRef, CoreSpaceExecution, CoreSpaceExecutionDetails,
-    CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode, CoreSpaceOutcome,
-    CoreSpaceSimulation, CoreSpaceStateAnchor, CrossSpaceAddress, Erc20Metadata,
+    Change, CoreSpaceBlockContext, CoreSpaceBlockSelector, CoreSpaceChange, CoreSpaceExecution,
+    CoreSpaceExecutionDetails, CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode,
+    CoreSpaceOutcome, CoreSpaceSimulation, CrossSpaceAddress, Erc20Metadata,
     Erc721CollectionMetadata, NativeMetadata, SponsoredResource, SponsorshipConfiguration,
     SponsorshipEligibilityTarget,
 };
@@ -21,6 +21,6 @@ pub struct CoreSpaceTransactionInput {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreSpaceSimulationInput {
-    pub epoch: CoreSpaceEpochRef,
+    pub epoch: CoreSpaceBlockSelector,
     pub transaction: CoreSpaceTransactionInput,
 }

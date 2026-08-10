@@ -14,12 +14,6 @@ use crate::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CoreSpaceEpochRef {
-    LatestState,
-    Number(u64),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreSpaceTransactionRequest {
     pub from: CoreAddress,
     pub to: Option<CoreAddress>,

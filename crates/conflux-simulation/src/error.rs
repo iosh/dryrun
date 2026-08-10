@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use crate::{
     ConfluxRpcError,
+    core_space::CoreSpaceContextError,
     espace::EspaceContextError,
     execution::{ExecutionBlockContextError, TransactionExecutionError},
 };
@@ -121,17 +122,11 @@ pub enum ConfluxSimulationError {
     #[error(transparent)]
     EspaceContext(#[from] EspaceContextError),
 
-    #[error("block not found: {block}")]
-    BlockNotFound { block: String },
+    #[error(transparent)]
+    CoreSpaceContext(#[from] CoreSpaceContextError),
 
     #[error(transparent)]
     BlockContext(#[from] ExecutionBlockContextError),
-
-    #[error("block context error: {message}")]
-    InvalidBlockContext { message: String },
-
-    #[error("state anchor is inconsistent")]
-    StateAnchorInconsistent,
 
     #[error("transaction completion failed: {message}")]
     TransactionCompletion { message: String },

@@ -41,7 +41,7 @@ fn simulate_ready(
     let ReadyCoreSpaceSimulation {
         backend,
         chain_id,
-        state_anchor,
+        public_context,
         gas_limit,
         storage_payer,
         execution_input,
@@ -82,7 +82,7 @@ fn simulate_ready(
     let Some((analysis, phase_values)) = phase_values else {
         return Ok(build_core_space_simulation(
             chain_id,
-            state_anchor,
+            public_context,
             gas_limit,
             storage_payer,
             execution,
@@ -93,7 +93,7 @@ fn simulate_ready(
 
     Ok(build_core_space_simulation(
         chain_id,
-        state_anchor,
+        public_context,
         gas_limit,
         storage_payer,
         execution,
@@ -103,7 +103,7 @@ fn simulate_ready(
 
 fn build_core_space_simulation(
     chain_id: u32,
-    state_anchor: super::CoreSpaceStateAnchor,
+    public_context: super::CoreSpaceBlockContext,
     gas_limit: u64,
     storage_payer: PreparedStoragePayer,
     execution: ConfluxTransactionExecution,
@@ -113,7 +113,7 @@ fn build_core_space_simulation(
         storage_payer_for_outcome(storage_payer, &execution.outcome, &execution.prepared.spec);
     let core_execution = build_core_space_execution(
         chain_id,
-        state_anchor,
+        public_context,
         gas_limit,
         execution.outcome,
         storage_payer,

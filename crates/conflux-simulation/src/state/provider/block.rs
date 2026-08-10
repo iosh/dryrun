@@ -9,6 +9,20 @@ use cfx_types::H256;
 use super::ConfluxSimulationProvider;
 
 impl ConfluxSimulationProvider {
+    pub(crate) async fn cfx_get_block_by_hash(
+        &self,
+        hash: B256,
+    ) -> Result<Option<CoreSpaceRpcBlock>, ConfluxRpcError> {
+        let block = Self::core_request(
+            "cfx_getBlockByHash",
+            self.core_space_provider.cfx_get_block_by_hash(hash, false),
+        )
+        .await?;
+        block
+            .map(|block| self.convert_core_block(block))
+            .transpose()
+    }
+
     pub(crate) async fn cfx_get_block_by_epoch_number(
         &self,
         epoch_number: EpochNumber,
@@ -66,7 +80,6 @@ impl ConfluxSimulationProvider {
         block
             .map(|block| {
                 Ok(CoreSpaceRpcPoSBlock {
-                    hash: cfx_types::H256::from_slice(block.hash.as_slice()),
                     height: cfx_types::U64::from(Self::alloy_u256_to_u64(
                         block.height,
                         "pos_getBlockByHash",
@@ -95,7 +108,7 @@ impl ConfluxSimulationProvider {
     ) -> Result<CoreSpaceRpcBlock, ConfluxRpcError> {
         Ok(CoreSpaceRpcBlock {
             hash: cfx_types::H256::from_slice(block.hash.as_slice()),
-            height: crate::primitive::u256_to_cfx(block.height),
+            epoch_number: block.epoch_number.map(crate::primitive::u256_to_cfx),
             miner: Self::provider_address_to_rpc(block.miner)?,
             block_number: block.block_number.map(crate::primitive::u256_to_cfx),
             base_fee_per_gas: block.base_fee_per_gas.map(crate::primitive::u256_to_cfx),

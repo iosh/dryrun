@@ -1,17 +1,17 @@
 use cfx_types::U256 as CfxU256;
 
-use super::CoreSpaceSimulationContext;
 use crate::{
     ConfluxSimulationError, ConfluxSimulationProvider,
     core_space::{
         CoreSpaceTransaction, CoreSpaceTransactionRequest, CoreSpaceTransactionVariant,
-        CoreSpaceTransactionVariantRequest, validate_core_space_transaction_network,
+        CoreSpaceTransactionVariantRequest, ResolvedCoreSpaceContext,
+        validate_core_space_transaction_network,
     },
 };
 
 pub(crate) async fn complete_core_space_transaction(
     provider: &ConfluxSimulationProvider,
-    context: &CoreSpaceSimulationContext,
+    context: &ResolvedCoreSpaceContext,
     request: CoreSpaceTransactionRequest,
     requested_storage_limit: Option<u64>,
     requested_epoch_height: Option<u64>,
@@ -98,7 +98,7 @@ pub(crate) async fn complete_core_space_transaction(
 
 async fn complete_core_space_transaction_variant(
     provider: &ConfluxSimulationProvider,
-    context: &CoreSpaceSimulationContext,
+    context: &ResolvedCoreSpaceContext,
     variant: CoreSpaceTransactionVariantRequest,
 ) -> Result<CoreSpaceTransactionVariant, ConfluxSimulationError> {
     match variant {

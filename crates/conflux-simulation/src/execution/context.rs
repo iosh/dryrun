@@ -103,6 +103,8 @@ impl ExecutionBlockContext {
 
 #[derive(Debug, Error)]
 pub enum ExecutionBlockContextError {
+    #[error("Core Space pivot block is missing epochNumber")]
+    MissingEpochNumber,
     #[error("Core Space pivot block is missing blockNumber")]
     MissingBlockNumber,
     #[error("Core Space pivot block {field} exceeds u64: {value:?}")]
@@ -126,7 +128,10 @@ pub(crate) fn build_core_space_pivot_block_context(
 ) -> Result<CoreSpacePivotBlockContext, ExecutionBlockContextError> {
     Ok(CoreSpacePivotBlockContext {
         block_number: required_block_number(block.block_number)?,
-        epoch_height: u256_to_u64(block.height, "height")?,
+        epoch_height: block
+            .epoch_number
+            .ok_or(ExecutionBlockContextError::MissingEpochNumber)
+            .and_then(|value| u256_to_u64(value, "epochNumber"))?,
         author: block.miner.hex_address,
         timestamp: u256_to_u64(block.timestamp, "timestamp")?,
         hash: block.hash,
