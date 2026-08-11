@@ -11,7 +11,7 @@ use crate::{
         ConfluxExecutionOutcome, ConfluxTransactionExecution, PreparedTransactionExecution,
     },
     standards::{collect_standard_candidates, load_change_metadata, read_standard_state_values},
-    state::{AnchoredVoteLists, MaskedSponsorWhitelistEntries, StatePhaseValues},
+    state::{AnchoredVoteLists, MaskedSponsorWhitelistEntries},
 };
 
 use super::changes::{
@@ -151,14 +151,14 @@ impl CoreSpaceChangeAnalysis {
         state: &mut State,
         machine: &Machine,
         prepared_execution: &PreparedTransactionExecution,
-        phase_values: StatePhaseValues<CoreSpaceStateValues>,
+        before: CoreSpaceStateValues,
+        after: CoreSpaceStateValues,
     ) -> Result<Vec<CoreSpaceChange>, ConfluxSimulationError> {
         let Self {
             input: analysis_input,
             anchored_vote_lists,
             ..
         } = self;
-        let StatePhaseValues { before, after } = phase_values;
         let CoreSpaceStateValues {
             cfx: before_cfx_state,
             pos: before_pos_state,

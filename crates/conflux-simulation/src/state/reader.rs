@@ -70,15 +70,7 @@ impl AnchoredVoteLists {
             .vote_lists_by_account
             .lock()
             .map_err(|_| Self::lock_error())?;
-        if let Some(existing) = vote_lists_by_account.get(&address) {
-            if existing != &vote_list {
-                return Err(StorageError::Msg(format!(
-                    "anchored cfx_getVoteList returned inconsistent results for {address:?}"
-                )));
-            }
-            return Ok(());
-        }
-        vote_lists_by_account.insert(address, vote_list);
+        vote_lists_by_account.entry(address).or_insert(vote_list);
         Ok(())
     }
 

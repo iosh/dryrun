@@ -4,7 +4,7 @@ use crate::{
         CoreSpaceBlockContext, CoreSpaceCompleteTransaction, CoreSpaceExecution,
         PreparedStoragePayer,
     },
-    execution::TransactionExecutionInput,
+    execution::ExecutionBlockContext,
     state::ConfluxStateSource,
 };
 
@@ -29,6 +29,6 @@ pub(crate) struct ReadyCoreSpaceSimulation {
     pub(crate) public_context: CoreSpaceBlockContext,
     pub(crate) transaction: CoreSpaceCompleteTransaction,
     pub(crate) storage_payer: PreparedStoragePayer,
-    pub(crate) execution_input: TransactionExecutionInput,
+    pub(crate) execution_block_context: ExecutionBlockContext,
     pub(crate) state_source: ConfluxStateSource,
 }

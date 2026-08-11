@@ -257,7 +257,7 @@ fn storage_payer_gas_price(variant: &CoreSpaceCompleteTransactionVariant) -> U25
     }
 }
 
-pub(crate) fn build_core_space_transaction_input(
+pub(super) fn build_core_space_transaction_input(
     input: &CoreSpaceCompleteTransaction,
     chain_id: u32,
 ) -> ExecutorCoreSpaceTransactionInput {

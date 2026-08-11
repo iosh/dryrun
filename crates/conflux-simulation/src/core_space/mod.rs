@@ -6,15 +6,14 @@ mod execution;
 mod outcome;
 mod preparer;
 mod result;
+mod session;
 pub(crate) mod simulation;
 mod simulator;
 mod transaction;
 
 pub(crate) use completion::complete_transaction;
 pub(crate) use outcome::{build_core_space_execution, build_core_space_not_executed};
-pub(crate) use transaction::{
-    PreparedStoragePayer, build_core_space_transaction_input, prepare_storage_payer,
-};
+pub(crate) use transaction::{PreparedStoragePayer, prepare_storage_payer};
 
 pub use changes::{
     CoreSpaceChange, CrossSpaceAddress, SponsoredResource, SponsorshipConfiguration,

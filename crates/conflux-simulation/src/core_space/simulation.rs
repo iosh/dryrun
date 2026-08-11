@@ -1,23 +1,18 @@
 use cfx_executor::executive::ExecutionError;
-use cfx_types::Space;
 use cfx_vm_types as vm;
 use tokio::runtime::Handle;
 
 use crate::{
     ConfluxSimulationError,
-    execution::{
-        ConfluxExecutionOutcome, ConfluxTransactionExecution, ConfluxTransactionExecutor,
-        ObservationObserver, build_conflux_state,
-    },
+    execution::{ConfluxExecutionOutcome, ConfluxTransactionExecution},
     preparation::{
         PreparedCoreSpaceSimulation, PreparedCoreSpaceSimulationState, ReadyCoreSpaceSimulation,
     },
-    state::execute_with_state_phases,
 };
 
 use super::{
-    CoreSpaceChange, CoreSpaceSimulation, PreparedStoragePayer, analysis::CoreSpaceChangeAnalysis,
-    build_core_space_execution,
+    CoreSpaceChange, CoreSpaceSimulation, PreparedStoragePayer, build_core_space_execution,
+    session::CoreSpaceExecutionSession,
 };
 
 pub(crate) fn simulate(
@@ -50,60 +45,19 @@ fn simulate_ready(
         public_context,
         transaction,
         storage_payer,
-        execution_input,
+        execution_block_context,
         state_source,
     } = ready_simulation;
-    let masked_sponsor_whitelist_entries = state_source.masked_sponsor_whitelist_entries();
-    let anchored_vote_lists = state_source.anchored_vote_lists();
-    let mut state = build_conflux_state(state_source, runtime_handle.clone()).map_err(|error| {
-        ConfluxSimulationError::StateAccess {
-            message: error.to_string(),
-        }
-    })?;
-    let machine = backend.chain_spec().build_machine();
-    let (execution, phase_values) = execute_with_state_phases(
-        &mut state,
-        |state| {
-            ConfluxTransactionExecutor::new(state, &machine)
-                .execute(execution_input, ObservationObserver::new(Space::Native))
-                .map_err(ConfluxSimulationError::from)
-        },
-        |execution| {
-            if !matches!(&execution.outcome, ConfluxExecutionOutcome::Success(_)) {
-                return Ok(None);
-            }
-            CoreSpaceChangeAnalysis::from_execution(
-                execution,
-                &machine,
-                &masked_sponsor_whitelist_entries,
-                &anchored_vote_lists,
-            )
-            .map(Some)
-        },
-        |state, execution, analysis, state_phase| {
-            analysis.read_state(state, &machine, &execution.prepared, state_phase)
-        },
-    )?;
-
-    let Some((analysis, phase_values)) = phase_values else {
-        return Ok(build_core_space_simulation(
-            chain_id,
-            public_context,
-            transaction,
-            storage_payer,
-            execution,
-            Vec::new(),
-        ));
-    };
-    let core_changes = analysis.analyze(&mut state, &machine, &execution.prepared, phase_values)?;
+    let session = CoreSpaceExecutionSession::new(&backend, state_source, runtime_handle.clone())?;
+    let session_result = session.execute(&transaction, execution_block_context)?;
 
     Ok(build_core_space_simulation(
         chain_id,
         public_context,
         transaction,
         storage_payer,
-        execution,
-        core_changes,
+        session_result.execution,
+        session_result.changes,
     ))
 }
 

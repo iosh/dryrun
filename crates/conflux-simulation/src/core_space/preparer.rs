@@ -1,10 +1,7 @@
 use crate::{
     ConfluxSimulationBackend, ConfluxSimulationError, PreparedCoreSpaceSimulation,
     chain_spec::CoreSpaceTransactionValidationRules,
-    execution::{
-        DryRunTransactionInput, TransactionExecutionInput, next_execution_block_number,
-        next_execution_epoch_height,
-    },
+    execution::{next_execution_block_number, next_execution_epoch_height},
     preparation::{
         FinishedCoreSpaceSimulation, PreparedCoreSpaceSimulationState, ReadyCoreSpaceSimulation,
     },
@@ -13,8 +10,8 @@ use crate::{
 use super::{
     CoreSpaceBlockSelector, CoreSpaceCompleteTransaction, CoreSpaceCompleteTransactionVariant,
     CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode, CoreSpaceTransactionInput,
-    ResolvedCoreSpaceContext, build_core_space_not_executed, build_core_space_transaction_input,
-    complete_transaction, prepare_storage_payer, resolve_core_space_context,
+    ResolvedCoreSpaceContext, build_core_space_not_executed, complete_transaction,
+    prepare_storage_payer, resolve_core_space_context,
 };
 
 #[derive(Clone)]
@@ -81,11 +78,6 @@ impl CoreSpaceSimulationPreparer {
         let storage_payer =
             prepare_storage_payer(self.backend.provider(), context.state_anchor, &transaction)
                 .await?;
-        let executor_transaction = build_core_space_transaction_input(&transaction, chain_id);
-        let execution_input = TransactionExecutionInput {
-            block_context: context.execution_block_context,
-            transaction: DryRunTransactionInput::CoreSpace(executor_transaction),
-        };
         let state_source = self
             .backend
             .prepare_state_source(context.state_anchor)
@@ -98,7 +90,7 @@ impl CoreSpaceSimulationPreparer {
                 public_context,
                 transaction,
                 storage_payer,
-                execution_input,
+                execution_block_context: context.execution_block_context,
                 state_source,
             })),
         })
