@@ -2,8 +2,9 @@ use conflux_simulation as simulation;
 
 pub use simulation::core_space::{
     Change, CoreSpaceBlockContext, CoreSpaceBlockSelector, CoreSpaceChange, CoreSpaceExecution,
-    CoreSpaceExecutionDetails, CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode,
-    CoreSpaceOutcome, CoreSpaceSimulation, CrossSpaceAddress, Erc20Metadata,
+    CoreSpaceExecutionFailure, CoreSpaceExecutionOutcome, CoreSpaceExecutionResult, CoreSpaceGas,
+    CoreSpaceLog, CoreSpaceLogAddress, CoreSpaceRevertReason, CoreSpaceSimulation,
+    CoreSpaceSuccessOutput, CoreSpaceTransactionRejection, CrossSpaceAddress, Erc20Metadata,
     Erc721CollectionMetadata, NativeMetadata, SponsoredResource, SponsorshipConfiguration,
     SponsorshipEligibilityTarget,
 };

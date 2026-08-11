@@ -2157,7 +2157,6 @@ dependencies = [
  "serde",
  "serde_json",
  "simulation-changes",
- "simulation-execution",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

@@ -8,7 +8,8 @@ use thiserror::Error;
 use crate::{
     ConfluxRpcError,
     core_space::{
-        CoreSpaceContextError, CoreSpaceTransactionCompletionError, CoreSpaceTransactionInputError,
+        CoreSpaceContextError, CoreSpaceExecutionError, CoreSpaceTransactionCompletionError,
+        CoreSpaceTransactionInputError,
     },
     espace::EspaceContextError,
     execution::{ExecutionBlockContextError, TransactionExecutionError},
@@ -132,6 +133,9 @@ pub enum ConfluxSimulationError {
 
     #[error(transparent)]
     CoreSpaceCompletion(#[from] CoreSpaceTransactionCompletionError),
+
+    #[error(transparent)]
+    CoreSpaceExecution(#[from] CoreSpaceExecutionError),
 
     #[error(transparent)]
     BlockContext(#[from] ExecutionBlockContextError),

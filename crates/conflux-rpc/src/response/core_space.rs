@@ -38,6 +38,15 @@ struct CoreSpaceExecution {
     failure: Option<CoreSpaceExecutionFailure>,
 }
 
+struct ExecutedWireFields {
+    gas_used: U256,
+    gas_charged: U256,
+    fee: U256,
+    burnt_fee: Option<U256>,
+    gas_covered_by_sponsor: bool,
+    storage_covered_by_sponsor: bool,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct CoreSpaceStateAnchor {
@@ -118,29 +127,67 @@ impl CoreSpaceExecution {
             output,
             failure,
         ) = match outcome {
-            service_core_space::CoreSpaceOutcome::Success(details) => (
-                CoreSpaceExecutionStatus::Success,
-                details.gas_used.into(),
-                details.gas_charged.into(),
-                u256_to_wire(details.fee),
-                details.burnt_fee.map(u256_to_wire),
-                details.gas_covered_by_sponsor,
-                details.storage_covered_by_sponsor,
-                CoreSpaceRpcBytes::from(details.output.to_vec()),
-                None,
-            ),
-            service_core_space::CoreSpaceOutcome::Failed { details, failure } => (
-                CoreSpaceExecutionStatus::Failed,
-                details.gas_used.into(),
-                details.gas_charged.into(),
-                u256_to_wire(details.fee),
-                details.burnt_fee.map(u256_to_wire),
-                details.gas_covered_by_sponsor,
-                details.storage_covered_by_sponsor,
-                CoreSpaceRpcBytes::from(details.output.to_vec()),
-                Some(failure.into()),
-            ),
-            service_core_space::CoreSpaceOutcome::NotExecuted(failure) => (
+            service_core_space::CoreSpaceExecutionOutcome::Success { result, output, .. } => {
+                let fields = ExecutedWireFields::from_service(&result);
+                let output = match output {
+                    service_core_space::CoreSpaceSuccessOutput::Call { return_data } => return_data,
+                    service_core_space::CoreSpaceSuccessOutput::Create { runtime_code, .. } => {
+                        runtime_code
+                    }
+                };
+                (
+                    CoreSpaceExecutionStatus::Success,
+                    fields.gas_used,
+                    fields.gas_charged,
+                    fields.fee,
+                    fields.burnt_fee,
+                    fields.gas_covered_by_sponsor,
+                    fields.storage_covered_by_sponsor,
+                    CoreSpaceRpcBytes::from(output.to_vec()),
+                    None,
+                )
+            }
+            service_core_space::CoreSpaceExecutionOutcome::Reverted {
+                result,
+                revert_data,
+                reason: _,
+            } => {
+                let fields = ExecutedWireFields::from_service(&result);
+                (
+                    CoreSpaceExecutionStatus::Failed,
+                    fields.gas_used,
+                    fields.gas_charged,
+                    fields.fee,
+                    fields.burnt_fee,
+                    fields.gas_covered_by_sponsor,
+                    fields.storage_covered_by_sponsor,
+                    CoreSpaceRpcBytes::from(revert_data.to_vec()),
+                    Some(CoreSpaceExecutionFailure {
+                        code: CoreSpaceExecutionFailureCode::Revert,
+                        message: "execution reverted".to_string(),
+                        reason: None,
+                    }),
+                )
+            }
+            service_core_space::CoreSpaceExecutionOutcome::Failed { result, failure } => {
+                let fields = ExecutedWireFields::from_service(&result);
+                (
+                    CoreSpaceExecutionStatus::Failed,
+                    fields.gas_used,
+                    fields.gas_charged,
+                    fields.fee,
+                    fields.burnt_fee,
+                    fields.gas_covered_by_sponsor,
+                    fields.storage_covered_by_sponsor,
+                    CoreSpaceRpcBytes::default(),
+                    Some(CoreSpaceExecutionFailure {
+                        code: wire_failure_code_for_execution_failure(&failure),
+                        message: wire_message_for_execution_failure(&failure),
+                        reason: None,
+                    }),
+                )
+            }
+            service_core_space::CoreSpaceExecutionOutcome::NotExecuted(rejection) => (
                 CoreSpaceExecutionStatus::NotExecuted,
                 U256::zero(),
                 U256::zero(),
@@ -149,7 +196,11 @@ impl CoreSpaceExecution {
                 false,
                 false,
                 CoreSpaceRpcBytes::default(),
-                Some(failure.into()),
+                Some(CoreSpaceExecutionFailure {
+                    code: wire_failure_code_for_rejection(&rejection),
+                    message: wire_message_for_rejection(&rejection),
+                    reason: None,
+                }),
             ),
         };
 
@@ -170,6 +221,19 @@ impl CoreSpaceExecution {
     }
 }
 
+impl ExecutedWireFields {
+    fn from_service(result: &service_core_space::CoreSpaceExecutionResult) -> Self {
+        Self {
+            gas_used: result.gas().gas_used().into(),
+            gas_charged: result.gas().gas_charged().into(),
+            fee: u256_to_wire(result.charged_fee()),
+            burnt_fee: result.burnt_fee().map(u256_to_wire),
+            gas_covered_by_sponsor: result.gas_covered_by_sponsor(),
+            storage_covered_by_sponsor: result.storage_covered_by_sponsor(),
+        }
+    }
+}
+
 impl From<service_core_space::CoreSpaceBlockContext> for CoreSpaceStateAnchor {
     fn from(state: service_core_space::CoreSpaceBlockContext) -> Self {
         Self {
@@ -179,67 +243,206 @@ impl From<service_core_space::CoreSpaceBlockContext> for CoreSpaceStateAnchor {
     }
 }
 
-impl From<service_core_space::CoreSpaceExecutionFailure> for CoreSpaceExecutionFailure {
-    fn from(failure: service_core_space::CoreSpaceExecutionFailure) -> Self {
-        Self {
-            code: failure.code.into(),
-            message: failure.message,
-            reason: failure.reason,
+fn wire_failure_code_for_rejection(
+    rejection: &service_core_space::CoreSpaceTransactionRejection,
+) -> CoreSpaceExecutionFailureCode {
+    use service_core_space::CoreSpaceTransactionRejection as Rejection;
+
+    match rejection {
+        Rejection::InvalidChainId { .. } => CoreSpaceExecutionFailureCode::ChainIdMismatch,
+        Rejection::ZeroGasPrice | Rejection::ZeroMaxFeePerGas => {
+            CoreSpaceExecutionFailureCode::ZeroGasPrice
         }
+        Rejection::PriorityFeeGreaterThanMaxFee { .. } => {
+            CoreSpaceExecutionFailureCode::PriorityFeeExceedsMaxFee
+        }
+        Rejection::Cip2930NotActivated | Rejection::Cip1559NotActivated => {
+            CoreSpaceExecutionFailureCode::TransactionTypeNotActivated
+        }
+        Rejection::NonceTooLow { .. } => CoreSpaceExecutionFailureCode::NonceTooLow,
+        Rejection::NonceTooHigh { .. } => CoreSpaceExecutionFailureCode::NonceTooHigh,
+        Rejection::EpochHeightOutOfBounds { .. } => {
+            CoreSpaceExecutionFailureCode::EpochHeightOutOfBound
+        }
+        Rejection::IntrinsicGasExceedsGasLimit { .. } => {
+            CoreSpaceExecutionFailureCode::IntrinsicGasTooLow
+        }
+        Rejection::InvalidRecipient { .. } => CoreSpaceExecutionFailureCode::InvalidRecipient,
+        Rejection::SenderHasCode { .. } => CoreSpaceExecutionFailureCode::SenderWithCode,
+        Rejection::SenderDoesNotExist => CoreSpaceExecutionFailureCode::SenderDoesNotExist,
+        Rejection::GasPriceBelowBaseFee { .. } => CoreSpaceExecutionFailureCode::FeeBelowBaseFee,
+        Rejection::InsufficientFunds { .. } => CoreSpaceExecutionFailureCode::InsufficientFunds,
+        Rejection::SponsorBalanceInsufficient { .. } => {
+            CoreSpaceExecutionFailureCode::SponsorBalanceInsufficient
+        }
+        _ => CoreSpaceExecutionFailureCode::VmError,
     }
 }
 
-impl From<service_core_space::CoreSpaceExecutionFailureCode> for CoreSpaceExecutionFailureCode {
-    fn from(code: service_core_space::CoreSpaceExecutionFailureCode) -> Self {
-        match code {
-            service_core_space::CoreSpaceExecutionFailureCode::ChainIdMismatch => {
-                Self::ChainIdMismatch
-            }
-            service_core_space::CoreSpaceExecutionFailureCode::ZeroGasPrice => Self::ZeroGasPrice,
-            service_core_space::CoreSpaceExecutionFailureCode::PriorityFeeExceedsMaxFee => {
-                Self::PriorityFeeExceedsMaxFee
-            }
-            service_core_space::CoreSpaceExecutionFailureCode::TransactionTypeNotActivated => {
-                Self::TransactionTypeNotActivated
-            }
-            service_core_space::CoreSpaceExecutionFailureCode::NonceTooLow => Self::NonceTooLow,
-            service_core_space::CoreSpaceExecutionFailureCode::NonceTooHigh => Self::NonceTooHigh,
-            service_core_space::CoreSpaceExecutionFailureCode::EpochHeightOutOfBound => {
-                Self::EpochHeightOutOfBound
-            }
-            service_core_space::CoreSpaceExecutionFailureCode::FeeBelowBaseFee => {
-                Self::FeeBelowBaseFee
-            }
-            service_core_space::CoreSpaceExecutionFailureCode::IntrinsicGasTooLow => {
-                Self::IntrinsicGasTooLow
-            }
-            service_core_space::CoreSpaceExecutionFailureCode::InvalidRecipient => {
-                Self::InvalidRecipient
-            }
-            service_core_space::CoreSpaceExecutionFailureCode::SenderWithCode => {
-                Self::SenderWithCode
-            }
-            service_core_space::CoreSpaceExecutionFailureCode::SenderDoesNotExist => {
-                Self::SenderDoesNotExist
-            }
-            service_core_space::CoreSpaceExecutionFailureCode::InsufficientFunds => {
-                Self::InsufficientFunds
-            }
-            service_core_space::CoreSpaceExecutionFailureCode::SponsorBalanceInsufficient => {
-                Self::SponsorBalanceInsufficient
-            }
-            service_core_space::CoreSpaceExecutionFailureCode::Revert => Self::Revert,
-            service_core_space::CoreSpaceExecutionFailureCode::OutOfGas => Self::OutOfGas,
-            service_core_space::CoreSpaceExecutionFailureCode::StorageBalanceInsufficient => {
-                Self::StorageBalanceInsufficient
-            }
-            service_core_space::CoreSpaceExecutionFailureCode::StorageLimitExceeded => {
-                Self::StorageLimitExceeded
-            }
-            service_core_space::CoreSpaceExecutionFailureCode::NonceOverflow => Self::NonceOverflow,
-            service_core_space::CoreSpaceExecutionFailureCode::VmError => Self::VmError,
+fn wire_failure_code_for_execution_failure(
+    failure: &service_core_space::CoreSpaceExecutionFailure,
+) -> CoreSpaceExecutionFailureCode {
+    use service_core_space::CoreSpaceExecutionFailure as Failure;
+
+    match failure {
+        Failure::InsufficientFunds { .. } => CoreSpaceExecutionFailureCode::InsufficientFunds,
+        Failure::OutOfGas => CoreSpaceExecutionFailureCode::OutOfGas,
+        Failure::StorageBalanceInsufficient { .. } => {
+            CoreSpaceExecutionFailureCode::StorageBalanceInsufficient
         }
+        Failure::StorageLimitExceeded => CoreSpaceExecutionFailureCode::StorageLimitExceeded,
+        Failure::NonceOverflow { .. } => CoreSpaceExecutionFailureCode::NonceOverflow,
+        Failure::InvalidJump { .. }
+        | Failure::InvalidInstruction { .. }
+        | Failure::StackUnderflow { .. }
+        | Failure::StackOverflow { .. }
+        | Failure::SubroutineStackUnderflow { .. }
+        | Failure::SubroutineStackOverflow { .. }
+        | Failure::InvalidSubroutineEntry
+        | Failure::BuiltInContract { .. }
+        | Failure::InternalContract { .. }
+        | Failure::StateChangeDuringStaticCall
+        | Failure::CreateInitCodeSizeLimit
+        | Failure::Wasm { .. }
+        | Failure::ReturnDataOutOfBounds
+        | Failure::InvalidAddress { .. }
+        | Failure::CreateCollision { .. }
+        | Failure::CreateContractStartingWithEf => CoreSpaceExecutionFailureCode::VmError,
+        _ => CoreSpaceExecutionFailureCode::VmError,
     }
+}
+
+fn wire_message_for_rejection(
+    rejection: &service_core_space::CoreSpaceTransactionRejection,
+) -> String {
+    use service_core_space::CoreSpaceTransactionRejection as Rejection;
+
+    match rejection {
+        Rejection::InvalidChainId {
+            transaction_chain_id,
+            expected_chain_id,
+        } => format!(
+            "transaction chain id {transaction_chain_id} does not match simulation chain id {expected_chain_id}"
+        ),
+        Rejection::ZeroGasPrice => "transaction gas price must be greater than zero".to_string(),
+        Rejection::ZeroMaxFeePerGas => {
+            "transaction max fee per gas must be greater than zero".to_string()
+        }
+        Rejection::Cip2930NotActivated | Rejection::Cip1559NotActivated => {
+            "typed Core Space transactions are not active in the simulation context".to_string()
+        }
+        Rejection::InvalidRecipient { recipient } => format!(
+            "invalid Core Space recipient address: {:?}",
+            raw_core_address(*recipient)
+        ),
+        Rejection::SenderHasCode { sender } => format!(
+            "transaction sender has contract code: {:?}",
+            raw_core_address(*sender)
+        ),
+        Rejection::GasPriceBelowBaseFee {
+            gas_price,
+            base_fee_per_gas,
+        } => format!(
+            "transaction gas price {gas_price} is lower than required base fee {base_fee_per_gas}"
+        ),
+        _ => rejection.to_string(),
+    }
+}
+
+fn wire_message_for_execution_failure(
+    failure: &service_core_space::CoreSpaceExecutionFailure,
+) -> String {
+    use service_core_space::CoreSpaceExecutionFailure as Failure;
+
+    match failure {
+        Failure::InsufficientFunds {
+            required,
+            available,
+            actual_gas_cost,
+            maximum_storage_cost,
+        } => format!(
+            "sender balance {available} is lower than required cost {required}; actual gas cost is {actual_gas_cost}, maximum storage cost is {maximum_storage_cost}"
+        ),
+        Failure::OutOfGas => "execution ran out of gas".to_string(),
+        Failure::StorageBalanceInsufficient {
+            required,
+            available,
+        } => format!(
+            "storage collateral balance {available} is lower than required amount {required}"
+        ),
+        Failure::StorageLimitExceeded => {
+            "execution exceeded the transaction storage limit".to_string()
+        }
+        Failure::NonceOverflow { address } => {
+            format!(
+                "nonce overflow for address: {:?}",
+                raw_core_address(*address)
+            )
+        }
+        Failure::InvalidJump { destination } => {
+            format!("virtual machine execution failed: Bad jump destination {destination:x}")
+        }
+        Failure::InvalidInstruction { instruction } => {
+            format!("virtual machine execution failed: Bad instruction {instruction:x}")
+        }
+        Failure::StackUnderflow {
+            instruction,
+            wanted,
+            available,
+        } => format!(
+            "virtual machine execution failed: Stack underflow {instruction} {wanted}/{available}"
+        ),
+        Failure::StackOverflow {
+            instruction,
+            wanted,
+            limit,
+        } => {
+            format!("virtual machine execution failed: Out of stack {instruction} {wanted}/{limit}")
+        }
+        Failure::SubroutineStackUnderflow { wanted, available } => format!(
+            "virtual machine execution failed: Subroutine stack underflow {wanted}/{available}"
+        ),
+        Failure::SubroutineStackOverflow { wanted, limit } => {
+            format!("virtual machine execution failed: Out of subroutine stack {wanted}/{limit}")
+        }
+        Failure::InvalidSubroutineEntry => {
+            "virtual machine execution failed: Invalid Subroutine Entry via BEGINSUB".to_string()
+        }
+        Failure::BuiltInContract { details } => {
+            format!("virtual machine execution failed: Built-in failed: {details}")
+        }
+        Failure::InternalContract { details } => {
+            format!("virtual machine execution failed: InternalContract failed: {details}")
+        }
+        Failure::StateChangeDuringStaticCall => {
+            "virtual machine execution failed: Mutable call in static context".to_string()
+        }
+        Failure::CreateInitCodeSizeLimit => {
+            "virtual machine execution failed: Exceed create initcode size limit".to_string()
+        }
+        Failure::Wasm { details } => {
+            format!("virtual machine execution failed: Internal error: {details}")
+        }
+        Failure::ReturnDataOutOfBounds => {
+            "virtual machine execution failed: Out of bounds".to_string()
+        }
+        Failure::InvalidAddress { address } => format!(
+            "virtual machine execution failed: InvalidAddress: {}",
+            raw_core_address(*address)
+        ),
+        Failure::CreateCollision { address } => format!(
+            "virtual machine execution failed: Contract creation on an existing address: {}",
+            raw_core_address(*address)
+        ),
+        Failure::CreateContractStartingWithEf => {
+            "virtual machine execution failed: Create contract starting with EF".to_string()
+        }
+        _ => failure.to_string(),
+    }
+}
+
+fn raw_core_address(address: service_core_space::CoreAddress) -> Address {
+    Address::from_slice(&address.bytes())
 }
 
 pub(super) fn map_core_space_address(

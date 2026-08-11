@@ -9,9 +9,9 @@ use crate::{
 
 use super::{
     CoreSpaceBlockSelector, CoreSpaceCompleteTransaction, CoreSpaceCompleteTransactionVariant,
-    CoreSpaceExecutionFailure, CoreSpaceExecutionFailureCode, CoreSpaceTransactionInput,
-    ResolvedCoreSpaceContext, build_core_space_not_executed, complete_transaction,
-    prepare_storage_payer, resolve_core_space_context,
+    CoreSpaceTransactionInput, CoreSpaceTransactionRejection, ResolvedCoreSpaceContext,
+    build_core_space_not_executed, complete_transaction, prepare_storage_payer,
+    resolve_core_space_context,
 };
 
 #[derive(Clone)]
@@ -58,7 +58,7 @@ impl CoreSpaceSimulationPreparer {
             );
         let public_context = context.public_context;
 
-        if let Err(failure) = validate_core_space_transaction(&transaction, chain_id, rules) {
+        if let Some(rejection) = pre_execution_rejection(&transaction, chain_id, rules) {
             return Ok(PreparedCoreSpaceSimulation {
                 state: PreparedCoreSpaceSimulationState::Finished(Box::new(
                     FinishedCoreSpaceSimulation {
@@ -68,7 +68,7 @@ impl CoreSpaceSimulationPreparer {
                             chain_id,
                             public_context,
                             gas_limit,
-                            failure,
+                            rejection,
                         ),
                     },
                 )),
@@ -97,45 +97,35 @@ impl CoreSpaceSimulationPreparer {
     }
 }
 
-fn validate_core_space_transaction(
+fn pre_execution_rejection(
     transaction: &CoreSpaceCompleteTransaction,
     expected_chain_id: u32,
     rules: CoreSpaceTransactionValidationRules,
-) -> Result<(), CoreSpaceExecutionFailure> {
+) -> Option<CoreSpaceTransactionRejection> {
     if transaction.chain_id != expected_chain_id {
-        return Err(CoreSpaceExecutionFailure {
-            code: CoreSpaceExecutionFailureCode::ChainIdMismatch,
-            message: format!(
-                "transaction chain id {} does not match simulation chain id {}",
-                transaction.chain_id, expected_chain_id
-            ),
-            reason: None,
+        return Some(CoreSpaceTransactionRejection::InvalidChainId {
+            transaction_chain_id: transaction.chain_id,
+            expected_chain_id,
         });
     }
 
-    if !rules.typed_transactions_active
-        && !matches!(
-            transaction.variant,
-            CoreSpaceCompleteTransactionVariant::Cip155 { .. }
-        )
-    {
-        return Err(CoreSpaceExecutionFailure {
-            code: CoreSpaceExecutionFailureCode::TransactionTypeNotActivated,
-            message: "typed Core Space transactions are not active in the simulation context"
-                .to_string(),
-            reason: None,
-        });
+    if !rules.typed_transactions_active {
+        match &transaction.variant {
+            CoreSpaceCompleteTransactionVariant::Cip155 { .. } => {}
+            CoreSpaceCompleteTransactionVariant::Cip2930 { .. } => {
+                return Some(CoreSpaceTransactionRejection::Cip2930NotActivated);
+            }
+            CoreSpaceCompleteTransactionVariant::Cip1559 { .. } => {
+                return Some(CoreSpaceTransactionRejection::Cip1559NotActivated);
+            }
+        }
     }
 
     match &transaction.variant {
         CoreSpaceCompleteTransactionVariant::Cip155 { gas_price }
         | CoreSpaceCompleteTransactionVariant::Cip2930 { gas_price, .. } => {
             if gas_price.is_zero() {
-                return Err(CoreSpaceExecutionFailure {
-                    code: CoreSpaceExecutionFailureCode::ZeroGasPrice,
-                    message: "transaction gas price must be greater than zero".to_string(),
-                    reason: None,
-                });
+                return Some(CoreSpaceTransactionRejection::ZeroGasPrice);
             }
         }
         CoreSpaceCompleteTransactionVariant::Cip1559 {
@@ -144,25 +134,19 @@ fn validate_core_space_transaction(
             ..
         } => {
             if max_fee_per_gas.is_zero() {
-                return Err(CoreSpaceExecutionFailure {
-                    code: CoreSpaceExecutionFailureCode::ZeroGasPrice,
-                    message: "transaction max fee per gas must be greater than zero".to_string(),
-                    reason: None,
-                });
+                return Some(CoreSpaceTransactionRejection::ZeroMaxFeePerGas);
             }
 
             if rules.priority_fee_cap_active && max_priority_fee_per_gas > max_fee_per_gas {
-                return Err(CoreSpaceExecutionFailure {
-                    code: CoreSpaceExecutionFailureCode::PriorityFeeExceedsMaxFee,
-                    message: format!(
-                        "max priority fee per gas {} exceeds max fee per gas {}",
-                        max_priority_fee_per_gas, max_fee_per_gas
-                    ),
-                    reason: None,
-                });
+                return Some(
+                    CoreSpaceTransactionRejection::PriorityFeeGreaterThanMaxFee {
+                        max_priority_fee_per_gas: *max_priority_fee_per_gas,
+                        max_fee_per_gas: *max_fee_per_gas,
+                    },
+                );
             }
         }
     }
 
-    Ok(())
+    None
 }

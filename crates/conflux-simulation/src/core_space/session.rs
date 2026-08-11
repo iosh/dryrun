@@ -6,15 +6,17 @@ use tokio::runtime::Handle;
 use crate::{
     ConfluxSimulationBackend, ConfluxSimulationError,
     execution::{
-        ConfluxExecutionOutcome, ConfluxTransactionExecution, ConfluxTransactionExecutor,
-        DryRunTransactionInput, ExecutionBlockContext, ExecutionTraceObserver,
-        TransactionExecutionInput, build_conflux_state,
+        ConfluxExecutionOutcome, ConfluxTransactionExecutor, DryRunTransactionInput,
+        ExecutionBlockContext, ExecutionTraceObserver, TransactionExecutionInput,
+        build_conflux_state,
     },
     state::{AnchoredVoteLists, ConfluxStateSource, MaskedSponsorWhitelistEntries},
 };
 
 use super::{
-    CoreSpaceChange, CoreSpaceCompleteTransaction, analysis::CoreSpaceChangeAnalysis,
+    CoreSpaceChange, CoreSpaceCompleteTransaction, CoreSpaceExecutionError,
+    CoreSpaceExecutionOutcome, CoreSpaceStateAccessError, PreparedStoragePayer,
+    analysis::CoreSpaceChangeAnalysis, convert_executor_outcome,
     transaction::build_core_space_transaction_input,
 };
 
@@ -27,7 +29,7 @@ pub(super) struct CoreSpaceExecutionSession {
 }
 
 pub(super) struct CoreSpaceExecutionSessionResult {
-    pub(super) execution: ConfluxTransactionExecution,
+    pub(super) outcome: CoreSpaceExecutionOutcome,
     pub(super) changes: Vec<CoreSpaceChange>,
 }
 
@@ -39,10 +41,10 @@ impl CoreSpaceExecutionSession {
     ) -> Result<Self, ConfluxSimulationError> {
         let masked_sponsor_whitelist_entries = state_source.masked_sponsor_whitelist_entries();
         let anchored_vote_lists = state_source.anchored_vote_lists();
-        let state = build_conflux_state(state_source, runtime_handle).map_err(|error| {
-            ConfluxSimulationError::StateAccess {
-                message: error.to_string(),
-            }
+        let state = build_conflux_state(state_source, runtime_handle).map_err(|source| {
+            CoreSpaceExecutionError::StateAccess(CoreSpaceStateAccessError::Initialization {
+                source,
+            })
         })?;
 
         Ok(Self {
@@ -58,6 +60,7 @@ impl CoreSpaceExecutionSession {
         mut self,
         transaction: &CoreSpaceCompleteTransaction,
         block_context: ExecutionBlockContext,
+        storage_payer: PreparedStoragePayer,
     ) -> Result<CoreSpaceExecutionSessionResult, ConfluxSimulationError> {
         let execution_input = TransactionExecutionInput {
             block_context,
@@ -69,7 +72,7 @@ impl CoreSpaceExecutionSession {
         let state_before_execution = self.state.save();
         let execution = ConfluxTransactionExecutor::new(&mut self.state, &self.machine)
             .execute(execution_input, ExecutionTraceObserver::new(Space::Native))
-            .map_err(ConfluxSimulationError::from)?;
+            .map_err(CoreSpaceExecutionError::from)?;
 
         let changes = if matches!(&execution.outcome, ConfluxExecutionOutcome::Success(_)) {
             let mut analysis = CoreSpaceChangeAnalysis::from_execution(
@@ -109,6 +112,14 @@ impl CoreSpaceExecutionSession {
             Vec::new()
         };
 
-        Ok(CoreSpaceExecutionSessionResult { execution, changes })
+        let outcome = convert_executor_outcome(
+            execution.outcome,
+            &execution.prepared,
+            transaction,
+            &self.state,
+            storage_payer,
+        )?;
+
+        Ok(CoreSpaceExecutionSessionResult { outcome, changes })
     }
 }
