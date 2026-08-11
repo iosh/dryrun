@@ -87,6 +87,7 @@ pub struct PartialTransaction {
     pub gas_limit: Option<u64>,
     pub value: Option<U256>,
     pub input: Option<Bytes>,
+    pub chain_id: Option<u64>,
     pub variant: PartialTransactionVariant,
 }
 

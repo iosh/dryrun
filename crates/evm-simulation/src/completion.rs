@@ -41,6 +41,7 @@ async fn complete_partial_transaction(
         gas_limit,
         value,
         input,
+        chain_id,
         variant,
     } = transaction;
     let block_id = BlockId::Hash(block.hash().into());
@@ -58,7 +59,8 @@ async fn complete_partial_transaction(
     let variant = complete_variant(variant, provider, block).await?;
     let value = value.unwrap_or_default();
     let input = input.unwrap_or_default();
-    let chain_id = chain_spec.chain_id();
+    let estimation_chain_id = chain_spec.chain_id();
+    let chain_id = chain_id.unwrap_or(estimation_chain_id);
     let gas_limit = match gas_limit {
         Some(gas_limit) => gas_limit,
         None => anchored_provider
@@ -68,7 +70,7 @@ async fn complete_partial_transaction(
                 nonce,
                 value,
                 input.clone(),
-                chain_id,
+                estimation_chain_id,
                 &variant,
             ))
             .await

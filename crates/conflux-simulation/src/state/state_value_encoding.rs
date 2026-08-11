@@ -12,7 +12,7 @@ use primitives::{
     storage::StorageValue,
 };
 
-use crate::state::rpc_types::CoreSpaceSponsorInfo;
+use crate::state::rpc_types::{CoreSpaceRpcAccount, CoreSpaceSponsorInfo};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub(crate) enum StateValueEncodingError {
@@ -75,26 +75,21 @@ pub(crate) fn encode_core_space_basic_account(
 }
 
 pub(crate) fn encode_core_space_contract_account(
-    balance: U256,
-    nonce: U256,
-    code_hash: H256,
-    staking_balance: U256,
+    account: &CoreSpaceRpcAccount,
     token_collateral_for_storage: U256,
     used_storage_point_collateral: U256,
-    accumulated_interest_return: U256,
-    admin: Address,
     sponsor_info: CoreSpaceSponsorInfo,
 ) -> Result<Option<Box<[u8]>>, StateValueEncodingError> {
     let sponsor_info =
         core_space_sponsor_info_from_rpc(sponsor_info, used_storage_point_collateral)?;
 
-    if balance.is_zero()
-        && nonce.is_zero()
-        && code_hash == KECCAK_EMPTY
-        && staking_balance.is_zero()
+    if account.balance.is_zero()
+        && account.nonce.is_zero()
+        && account.code_hash == KECCAK_EMPTY
+        && account.staking_balance.is_zero()
         && token_collateral_for_storage.is_zero()
-        && accumulated_interest_return.is_zero()
-        && admin.is_zero()
+        && account.accumulated_interest_return.is_zero()
+        && account.admin.hex_address.is_zero()
         && sponsor_info == SponsorInfo::default()
     {
         return Ok(None);
@@ -102,13 +97,13 @@ pub(crate) fn encode_core_space_contract_account(
 
     Ok(Some(
         rlp::encode(&ContractAccount {
-            balance,
-            nonce,
-            code_hash,
-            staking_balance,
+            balance: account.balance,
+            nonce: account.nonce,
+            code_hash: account.code_hash,
+            staking_balance: account.staking_balance,
             collateral_for_storage: token_collateral_for_storage,
-            accumulated_interest_return,
-            admin,
+            accumulated_interest_return: account.accumulated_interest_return,
+            admin: account.admin.hex_address,
             sponsor_info,
         })
         .to_vec()

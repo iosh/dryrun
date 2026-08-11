@@ -7,7 +7,7 @@ use super::{
 };
 use crate::{
     primitive::u256_from_cfx,
-    state::{ConfluxSimulationProvider, CoreSpaceResourceEstimate},
+    state::{ConfluxSimulationProvider, CoreSpaceEstimateTransaction, CoreSpaceResourceEstimate},
 };
 
 pub(crate) async fn complete_transaction(
@@ -61,16 +61,18 @@ async fn complete_partial_transaction(
         (gas_limit, storage_limit) => {
             let estimate = provider
                 .cfx_estimate_gas_and_collateral(
-                    from,
-                    to,
-                    nonce,
-                    value,
-                    &data,
-                    chain_id,
-                    &variant,
-                    epoch_height,
-                    gas_limit,
-                    storage_limit,
+                    CoreSpaceEstimateTransaction {
+                        from,
+                        to,
+                        nonce,
+                        value,
+                        data: &data,
+                        chain_id,
+                        variant: &variant,
+                        epoch_height,
+                        gas_limit,
+                        storage_limit,
+                    },
                     context.state_epoch(),
                 )
                 .await?;

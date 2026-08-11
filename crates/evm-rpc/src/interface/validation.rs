@@ -4,12 +4,10 @@ use alloy_primitives::B256;
 
 use crate::errors::ValidationError;
 
-use super::{BlockRef, EvmSimulateTransactionRequest, SimulateTransactionOptions, Transaction};
+use super::{BlockRef, EvmSimulateTransactionRequest, SimulateTransactionOptions};
 
 impl EvmSimulateTransactionRequest {
     pub(crate) fn validate(&self) -> Result<(), ValidationError> {
-        self.transaction.validate_mainnet_chain_id()?;
-
         if let Some(block) = &self.block {
             block.validate()?;
         }
@@ -47,18 +45,6 @@ impl SimulateTransactionOptions {
         validate_reserved_option("stateOverrides", self.state_overrides.as_ref())?;
         validate_reserved_option("blockOverrides", self.block_overrides.as_ref())?;
         validate_reserved_option("include", self.include.as_ref())?;
-
-        Ok(())
-    }
-}
-
-impl Transaction {
-    fn validate_mainnet_chain_id(&self) -> Result<(), ValidationError> {
-        if self.chain_id != 1 {
-            return Err(ValidationError::invalid_params(
-                "`transaction.chainId` must be `0x1` for Ethereum mainnet",
-            ));
-        }
 
         Ok(())
     }

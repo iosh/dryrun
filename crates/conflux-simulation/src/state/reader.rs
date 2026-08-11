@@ -304,14 +304,9 @@ impl ConfluxStateSource {
                 .map_err(|error| self.provider_error("cfx_getSponsorInfo", error))?;
 
             return encode_core_space_contract_account(
-                account.balance,
-                account.nonce,
-                account.code_hash,
-                account.staking_balance,
+                &account,
                 token_collateral_for_storage,
                 used_storage_point_collateral,
-                account.accumulated_interest_return,
-                account.admin.hex_address,
                 sponsor_info,
             )
             .map_err(|error| self.encoding_error("encode_core_space_contract_account", error));

@@ -37,6 +37,19 @@ pub(crate) struct EspaceEstimateTransaction<'a> {
     pub(crate) variant: &'a EspaceCompleteTransactionVariant,
 }
 
+pub(crate) struct CoreSpaceEstimateTransaction<'a> {
+    pub(crate) from: CoreAddress,
+    pub(crate) to: Option<CoreAddress>,
+    pub(crate) nonce: AlloyU256,
+    pub(crate) value: AlloyU256,
+    pub(crate) data: &'a AlloyBytes,
+    pub(crate) chain_id: u32,
+    pub(crate) variant: &'a CoreSpaceCompleteTransactionVariant,
+    pub(crate) epoch_height: u64,
+    pub(crate) gas_limit: Option<AlloyU256>,
+    pub(crate) storage_limit: Option<u64>,
+}
+
 impl ConfluxSimulationProvider {
     pub(crate) async fn eth_get_transaction_count(
         &self,
@@ -124,32 +137,10 @@ impl ConfluxSimulationProvider {
 
     pub(crate) async fn cfx_estimate_gas_and_collateral(
         &self,
-        from: CoreAddress,
-        to: Option<CoreAddress>,
-        nonce: AlloyU256,
-        value: AlloyU256,
-        data: &AlloyBytes,
-        chain_id: u32,
-        variant: &CoreSpaceCompleteTransactionVariant,
-        epoch_height: u64,
-        gas_limit: Option<AlloyU256>,
-        storage_limit: Option<u64>,
+        transaction: CoreSpaceEstimateTransaction<'_>,
         epoch: EpochNumber,
     ) -> Result<CoreSpaceResourceEstimate, ConfluxRpcError> {
-        let request = self.cfx_estimate_gas_and_collateral_request(
-            EstimateTransaction {
-                from,
-                to,
-                nonce,
-                value,
-                data,
-                chain_id,
-                variant,
-            },
-            epoch_height,
-            gas_limit,
-            storage_limit,
-        )?;
+        let request = core_space_estimate_request(transaction);
         let estimate = Self::core_request(
             "cfx_estimateGasAndCollateral",
             self.core_space_provider
@@ -195,17 +186,6 @@ impl ConfluxSimulationProvider {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CoreSpaceBalanceCheck {
     pub(crate) will_pay_collateral: bool,
-}
-
-#[derive(Clone, Copy)]
-struct EstimateTransaction<'a> {
-    from: CoreAddress,
-    to: Option<CoreAddress>,
-    nonce: AlloyU256,
-    value: AlloyU256,
-    data: &'a AlloyBytes,
-    chain_id: u32,
-    variant: &'a CoreSpaceCompleteTransactionVariant,
 }
 
 fn espace_estimate_gas_request(
@@ -277,64 +257,58 @@ fn espace_estimate_gas_request(
     request
 }
 
-impl ConfluxSimulationProvider {
-    fn cfx_estimate_gas_and_collateral_request(
-        &self,
-        transaction: EstimateTransaction<'_>,
-        epoch_height: u64,
-        gas_limit: Option<AlloyU256>,
-        storage_limit: Option<u64>,
-    ) -> Result<EstimateGasAndCollateralRequest, ConfluxRpcError> {
-        let core_access_list = |items: &[CoreSpaceAccessListItem]| {
-            items
-                .iter()
-                .map(|item| CoreAccessListItem {
-                    address: item.address,
-                    storage_keys: item.storage_keys.clone(),
-                })
-                .collect::<Vec<_>>()
-        };
-        let mut request = EstimateGasAndCollateralRequest {
-            from: transaction.from,
-            to: transaction.to,
-            gas_price: None,
-            max_fee_per_gas: None,
-            max_priority_fee_per_gas: None,
-            gas: gas_limit,
-            value: transaction.value,
-            data: transaction.data.clone(),
-            nonce: transaction.nonce,
-            storage_limit: storage_limit.map(alloy_u256_from_u64),
-            access_list: None,
-            transaction_type: CoreTransactionType::Legacy,
-            chain_id: AlloyU256::from(transaction.chain_id),
-            epoch_height: Some(alloy_u256_from_u64(epoch_height)),
-        };
+fn core_space_estimate_request(
+    transaction: CoreSpaceEstimateTransaction<'_>,
+) -> EstimateGasAndCollateralRequest {
+    let core_access_list = |items: &[CoreSpaceAccessListItem]| {
+        items
+            .iter()
+            .map(|item| CoreAccessListItem {
+                address: item.address,
+                storage_keys: item.storage_keys.clone(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut request = EstimateGasAndCollateralRequest {
+        from: transaction.from,
+        to: transaction.to,
+        gas_price: None,
+        max_fee_per_gas: None,
+        max_priority_fee_per_gas: None,
+        gas: transaction.gas_limit,
+        value: transaction.value,
+        data: transaction.data.clone(),
+        nonce: transaction.nonce,
+        storage_limit: transaction.storage_limit.map(alloy_u256_from_u64),
+        access_list: None,
+        transaction_type: CoreTransactionType::Legacy,
+        chain_id: AlloyU256::from(transaction.chain_id),
+        epoch_height: Some(alloy_u256_from_u64(transaction.epoch_height)),
+    };
 
-        match transaction.variant {
-            CoreSpaceCompleteTransactionVariant::Cip155 { gas_price } => {
-                request.gas_price = Some(*gas_price);
-            }
-            CoreSpaceCompleteTransactionVariant::Cip2930 {
-                gas_price,
-                access_list,
-            } => {
-                request.gas_price = Some(*gas_price);
-                request.access_list = Some(core_access_list(access_list));
-                request.transaction_type = CoreTransactionType::AccessList;
-            }
-            CoreSpaceCompleteTransactionVariant::Cip1559 {
-                max_fee_per_gas,
-                max_priority_fee_per_gas,
-                access_list,
-            } => {
-                request.max_fee_per_gas = Some(*max_fee_per_gas);
-                request.max_priority_fee_per_gas = Some(*max_priority_fee_per_gas);
-                request.access_list = Some(core_access_list(access_list));
-                request.transaction_type = CoreTransactionType::DynamicFee;
-            }
+    match transaction.variant {
+        CoreSpaceCompleteTransactionVariant::Cip155 { gas_price } => {
+            request.gas_price = Some(*gas_price);
         }
-
-        Ok(request)
+        CoreSpaceCompleteTransactionVariant::Cip2930 {
+            gas_price,
+            access_list,
+        } => {
+            request.gas_price = Some(*gas_price);
+            request.access_list = Some(core_access_list(access_list));
+            request.transaction_type = CoreTransactionType::AccessList;
+        }
+        CoreSpaceCompleteTransactionVariant::Cip1559 {
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+            access_list,
+        } => {
+            request.max_fee_per_gas = Some(*max_fee_per_gas);
+            request.max_priority_fee_per_gas = Some(*max_priority_fee_per_gas);
+            request.access_list = Some(core_access_list(access_list));
+            request.transaction_type = CoreTransactionType::DynamicFee;
+        }
     }
+
+    request
 }

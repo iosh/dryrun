@@ -15,7 +15,7 @@ use super::{cfx_address_to_alloy, cfx_h256_to_alloy, cfx_u256_to_alloy, u64_para
 use crate::error::ValidationError;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct EspaceRpcTransactionRequest {
     from: Option<CfxAddress>,
     to: Option<CfxAddress>,
@@ -35,14 +35,14 @@ struct EspaceRpcTransactionRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct RpcAccessListItem {
     address: CfxAddress,
     storage_keys: Vec<H256>,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 struct RpcSignedAuthorization {
     chain_id: U256,
     address: CfxAddress,

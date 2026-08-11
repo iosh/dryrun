@@ -53,7 +53,7 @@ pub(super) fn map_transaction(
     let transaction_type = RpcTransactionType::classify(&transaction)?;
     let rpc::Transaction {
         tx_type: _,
-        chain_id: _,
+        chain_id,
         from,
         to,
         nonce,
@@ -105,6 +105,7 @@ pub(super) fn map_transaction(
         gas_limit: gas,
         value,
         input: data,
+        chain_id: Some(chain_id),
         variant,
     }))
 }
