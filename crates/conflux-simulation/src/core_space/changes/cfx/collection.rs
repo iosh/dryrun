@@ -17,7 +17,7 @@ use super::{
 };
 use crate::{
     ConfluxSimulationError,
-    execution::Observation,
+    execution::{CommittedExecutionTrace, FrameAction, TraceEvent},
     primitive::{address_from_cfx, u256_from_cfx},
 };
 
@@ -28,7 +28,7 @@ struct CfxOperationCollector {
 }
 
 pub(crate) fn collect_cfx_operations(
-    observations: &[Observation],
+    trace: &CommittedExecutionTrace,
     contracts_created: &[AddressWithSpace],
     storage_released: &[StorageChange],
     machine: &Machine,
@@ -36,8 +36,11 @@ pub(crate) fn collect_cfx_operations(
 ) -> Result<CfxOperations, ConfluxSimulationError> {
     let mut collector = CfxOperationCollector::new(storage_released)?;
     let mut contracts_with_admin_change_attempts = BTreeSet::new();
-    for observation in observations {
-        let Some(attempt) = collect_admin_change_attempt(observation, machine, spec)? else {
+    for event in trace.events() {
+        let TraceEvent::FrameStart { frame_id, .. } = event else {
+            continue;
+        };
+        let Some(attempt) = collect_admin_change_attempt(trace, *frame_id, machine, spec)? else {
             continue;
         };
         if attempt.is_destroy && !spec.cip131 {
@@ -48,22 +51,25 @@ pub(crate) fn collect_cfx_operations(
         contracts_with_admin_change_attempts.insert(attempt.contract_address);
     }
 
-    let mut observation_index = 0;
-    while observation_index < observations.len() {
-        let observation = &observations[observation_index];
-        match observation {
-            Observation::Call { .. } => {
-                if let Some((operation, consumed)) =
-                    collect_cross_space_call(observations, observation_index, machine, spec)?
+    let mut claimed_internal_transfers = BTreeSet::new();
+    for event in trace.events() {
+        if claimed_internal_transfers.contains(&event.position()) {
+            continue;
+        }
+        match event {
+            TraceEvent::FrameStart { position, frame_id } => {
+                let frame = trace.frame(*frame_id);
+                if let Some((operation, claimed_transfer_positions)) =
+                    collect_cross_space_call(trace, *position, *frame_id, machine, spec)?
                 {
                     collector
                         .operations
                         .push(CfxOperation::CrossSpace(operation));
-                    observation_index = advance_observation_index(observation_index, consumed)?;
+                    claimed_internal_transfers.extend(claimed_transfer_positions);
                     continue;
                 }
-                if let Some((collected_call, consumed)) =
-                    collect_sponsorship_call(observations, observation_index, machine, spec)?
+                if let Some((collected_call, claimed_transfer_positions)) =
+                    collect_sponsorship_call(trace, *position, *frame_id, machine, spec)?
                 {
                     match collected_call {
                         CollectedSponsorshipCall::Funding(operation) => collector.operations.push(
@@ -75,70 +81,59 @@ pub(crate) fn collect_cfx_operations(
                                 CfxOperation::Sponsorship(SponsorshipOperation::AccessRule(update))
                             })),
                     }
-                    observation_index = advance_observation_index(observation_index, consumed)?;
+                    claimed_internal_transfers.extend(claimed_transfer_positions);
                     continue;
                 }
-                if let Some(operation) =
-                    collector
-                        .core_space
-                        .collect_call_value_transfer(observation, machine, spec)?
-                {
-                    collector.operations.push(CfxOperation::Basic(operation));
+                match &frame.action {
+                    FrameAction::Call { .. } => {
+                        if let Some(operation) = collector.core_space.collect_call_value_transfer(
+                            trace, *position, *frame_id, machine, spec,
+                        )? {
+                            collector.operations.push(CfxOperation::Basic(operation));
+                        }
+                    }
+                    FrameAction::Create {
+                        creator,
+                        created_address,
+                        value,
+                    } => {
+                        if let Some(operation) = collector.core_space.collect_create_value_transfer(
+                            *position,
+                            frame.space,
+                            *creator,
+                            *created_address,
+                            u256_from_cfx(*value),
+                        ) {
+                            collector.operations.push(CfxOperation::Basic(operation));
+                        }
+                    }
                 }
-                observation_index = advance_observation_index(observation_index, 1)?;
             }
-            Observation::CreateTransfer {
-                position,
-                space,
-                from,
-                to,
-                value,
-            } => {
-                if let Some(operation) = collector.core_space.collect_create_value_transfer(
-                    *position,
-                    *space,
-                    *from,
-                    *to,
-                    u256_from_cfx(*value),
-                ) {
-                    collector.operations.push(CfxOperation::Basic(operation));
-                }
-                observation_index = advance_observation_index(observation_index, 1)?;
-            }
-            Observation::InternalTransfer { .. } => {
-                if let Some((conversion, consumed)) =
-                    collect_storage_point_conversion(observations, observation_index)?
+            TraceEvent::InternalTransfer { .. } => {
+                if let Some((conversion, claimed_transfer_positions)) =
+                    collect_storage_point_conversion(trace, event)?
                 {
                     collector.operations.push(CfxOperation::Sponsorship(
                         SponsorshipOperation::StoragePointConversion(conversion),
                     ));
-                    observation_index = advance_observation_index(observation_index, consumed)?;
+                    claimed_internal_transfers.extend(claimed_transfer_positions);
                     continue;
                 }
-                if let Some(refund) = collect_standalone_sponsorship_refund(
-                    observations.get(observation_index).ok_or_else(|| {
-                        ConfluxSimulationError::analysis_failed(
-                            "Core Space CFX collector received an inconsistent observation index",
-                        )
-                    })?,
-                )? {
+                if let Some(refund) = collect_standalone_sponsorship_refund(event)? {
                     collector.operations.push(CfxOperation::Sponsorship(
                         SponsorshipOperation::StandaloneRefund(refund),
                     ));
-                    observation_index = advance_observation_index(observation_index, 1)?;
                     continue;
                 }
-                let (operation, consumed) = collector
+                let (collected, claimed_transfer_positions) = collector
                     .core_space
-                    .collect_internal_transfer(observations, observation_index)?;
-                if let Some(operation) = operation {
+                    .collect_internal_transfer(trace, event)?;
+                if let Some(operation) = collected {
                     collector.operations.push(CfxOperation::Basic(operation));
                 }
-                observation_index = advance_observation_index(observation_index, consumed)?;
+                claimed_internal_transfers.extend(claimed_transfer_positions);
             }
-            Observation::Log { .. } => {
-                observation_index = advance_observation_index(observation_index, 1)?;
-            }
+            TraceEvent::Log { .. } => {}
         }
     }
 
@@ -147,17 +142,6 @@ pub(crate) fn collect_cfx_operations(
         contracts_created,
     )?;
     collector.into_operations()
-}
-
-fn advance_observation_index(
-    observation_index: usize,
-    consumed: usize,
-) -> Result<usize, ConfluxSimulationError> {
-    observation_index.checked_add(consumed).ok_or_else(|| {
-        ConfluxSimulationError::analysis_failed(
-            "Core Space CFX observation index overflowed during collection",
-        )
-    })
 }
 
 impl CfxOperationCollector {

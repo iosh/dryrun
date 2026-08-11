@@ -11,7 +11,7 @@ use primitives::receipt::StorageChange;
 use super::{BasicCfxOperation, CfxBalanceLocation, StorageCollateralReleaseOperation};
 use crate::{
     ConfluxSimulationError,
-    execution::Observation,
+    execution::{CommittedExecutionTrace, FrameAction, FrameId, TraceEvent},
     primitive::{address_from_cfx, u256_from_cfx},
 };
 
@@ -64,23 +64,24 @@ impl CoreSpaceOperationCollector {
 
     pub(super) fn collect_call_value_transfer(
         &self,
-        observation: &Observation,
+        trace: &CommittedExecutionTrace,
+        position: usize,
+        frame_id: FrameId,
         machine: &cfx_executor::machine::Machine,
         spec: &Spec,
     ) -> Result<Option<BasicCfxOperation>, ConfluxSimulationError> {
-        let Observation::Call {
-            position,
-            space,
+        let frame = trace.frame(frame_id);
+        let FrameAction::Call {
             call_type,
             caller,
             target,
             code_address,
             transferred_value,
             ..
-        } = observation
+        } = &frame.action
         else {
             return Err(ConfluxSimulationError::analysis_failed(
-                "Core Space operation collector received a non-call observation",
+                "Core Space operation collector received a non-call frame",
             ));
         };
         let amount = u256_from_cfx(*transferred_value);
@@ -88,7 +89,7 @@ impl CoreSpaceOperationCollector {
         if amount.is_zero() {
             return Ok(None);
         }
-        if *space == Space::Ethereum {
+        if frame.space == Space::Ethereum {
             if *call_type != CallType::Call {
                 return Err(ConfluxSimulationError::analysis_failed(format!(
                     "nonzero eSpace {call_type:?} value is not a balance transfer"
@@ -116,7 +117,7 @@ impl CoreSpaceOperationCollector {
         }
 
         Ok(Some(BasicCfxOperation::CoreSpaceBalanceTransfer {
-            position: Position::new(*position, 0),
+            position: Position::new(position, 0),
             from: address_from_cfx(*caller),
             to: address_from_cfx(*target),
             amount,
@@ -152,19 +153,20 @@ impl CoreSpaceOperationCollector {
 
     pub(super) fn collect_internal_transfer(
         &mut self,
-        observations: &[Observation],
-        observation_index: usize,
-    ) -> Result<(Option<BasicCfxOperation>, usize), ConfluxSimulationError> {
-        let Some(Observation::InternalTransfer {
+        trace: &CommittedExecutionTrace,
+        event: &TraceEvent,
+    ) -> Result<(Option<BasicCfxOperation>, Vec<usize>), ConfluxSimulationError> {
+        let TraceEvent::InternalTransfer {
             position,
+            frame_id,
             space,
             from,
             to,
             value,
-        }) = observations.get(observation_index)
+        } = event
         else {
             return Err(ConfluxSimulationError::analysis_failed(
-                "Core Space operation collector received an inconsistent observation index",
+                "Core Space operation collector received a non-movement operation",
             ));
         };
 
@@ -196,7 +198,7 @@ impl CoreSpaceOperationCollector {
                         observed_non_point_amount: amount,
                     },
                 )),
-                1,
+                vec![*position],
             ));
         }
 
@@ -204,11 +206,11 @@ impl CoreSpaceOperationCollector {
             (from, to),
             (AddressPocket::StakingBalance(_), AddressPocket::Balance(_))
         ) {
-            return self.collect_staking_withdrawal(observations, observation_index);
+            return self.collect_staking_withdrawal(trace, event, *frame_id);
         }
 
         if amount.is_zero() {
-            return Ok((None, 1));
+            return Ok((None, vec![*position]));
         }
 
         if *space == Space::Ethereum {
@@ -222,7 +224,7 @@ impl CoreSpaceOperationCollector {
                             to: address_from_cfx(to.address),
                             amount,
                         }),
-                        1,
+                        vec![*position],
                     ))
                 }
                 _ => Err(unsupported_internal_transfer(from, to)),
@@ -318,7 +320,7 @@ impl CoreSpaceOperationCollector {
             _ => return Err(unsupported_internal_transfer(from, to)),
         };
 
-        Ok((Some(operation), 1))
+        Ok((Some(operation), vec![*position]))
     }
 
     pub(super) fn finish(self) -> Result<Vec<BasicCfxOperation>, ConfluxSimulationError> {
@@ -337,19 +339,21 @@ impl CoreSpaceOperationCollector {
 
     fn collect_staking_withdrawal(
         &mut self,
-        observations: &[Observation],
-        observation_index: usize,
-    ) -> Result<(Option<BasicCfxOperation>, usize), ConfluxSimulationError> {
-        let Some(Observation::InternalTransfer {
+        trace: &CommittedExecutionTrace,
+        event: &TraceEvent,
+        frame_id: Option<FrameId>,
+    ) -> Result<(Option<BasicCfxOperation>, Vec<usize>), ConfluxSimulationError> {
+        let TraceEvent::InternalTransfer {
             position,
             space: withdrawal_space,
             from: AddressPocket::StakingBalance(staking_account),
             to: AddressPocket::Balance(withdrawal_destination),
             value: principal_value,
-        }) = observations.get(observation_index)
+            ..
+        } = event
         else {
             return Err(ConfluxSimulationError::analysis_failed(
-                "Core Space operation collector received a non-withdrawal observation",
+                "Core Space operation collector received a non-withdrawal internal transfer",
             ));
         };
         let principal_amount = u256_from_cfx(*principal_value);
@@ -363,34 +367,37 @@ impl CoreSpaceOperationCollector {
             )));
         }
 
-        let expected_reward_position = position.checked_add(1).ok_or_else(|| {
-            ConfluxSimulationError::analysis_failed(
-                "Core Space staking withdrawal observation position overflowed",
-            )
-        })?;
-        let Some(Observation::InternalTransfer {
-            position: reward_position,
-            space: reward_space,
-            from: AddressPocket::MintBurn,
-            to: AddressPocket::Balance(reward_recipient),
-            value: reward_value,
-        }) = observations.get(observation_index + 1)
-        else {
+        let mut rewards = trace
+            .internal_transfers_in_scope(frame_id)
+            .filter_map(|candidate| {
+                let TraceEvent::InternalTransfer {
+                    position: reward_position,
+                    space: Space::Native,
+                    from: AddressPocket::MintBurn,
+                    to: AddressPocket::Balance(reward_recipient),
+                    value: reward_value,
+                    ..
+                } = candidate
+                else {
+                    return None;
+                };
+                (*reward_position > *position
+                    && reward_recipient.space == Space::Native
+                    && reward_recipient.address == *staking_account)
+                    .then_some((*reward_position, *reward_value))
+            });
+        let Some((reward_position, reward_value)) = rewards.next() else {
             return Err(ConfluxSimulationError::analysis_failed(
                 "Core Space staking withdrawal is missing its issuance record",
             ));
         };
-        if *reward_position != expected_reward_position
-            || *reward_space != Space::Native
-            || reward_recipient.space != Space::Native
-            || reward_recipient.address != *staking_account
-        {
+        if rewards.next().is_some() {
             return Err(ConfluxSimulationError::analysis_failed(
-                "Core Space staking withdrawal has an inconsistent issuance record",
+                "Core Space staking withdrawal has ambiguous issuance records",
             ));
         }
 
-        let reward_amount = u256_from_cfx(*reward_value);
+        let reward_amount = u256_from_cfx(reward_value);
         let operation = (!principal_amount.is_zero() || !reward_amount.is_zero()).then(|| {
             BasicCfxOperation::StakingWithdrawal {
                 position: Position::new(*position, 0),
@@ -400,7 +407,7 @@ impl CoreSpaceOperationCollector {
             }
         });
 
-        Ok((operation, 2))
+        Ok((operation, vec![*position, reward_position]))
     }
 }
 

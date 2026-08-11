@@ -26,7 +26,9 @@ pub(crate) use env::{
     build_execution_spec, build_transaction_env, next_execution_block_number,
     next_execution_epoch_height,
 };
-pub(crate) use observer::{Observation, ObservationObserver};
+pub(crate) use observer::{
+    CommittedExecutionTrace, ExecutionTraceObserver, FrameAction, FrameId, TraceEvent,
+};
 pub(crate) use outcome::{
     ConfluxExecutionOutcome, ConfluxExecutionOutput, TransactionExecutionError,
 };
@@ -64,7 +66,7 @@ impl<'a> ConfluxTransactionExecutor<'a> {
     pub(crate) fn execute(
         self,
         input: TransactionExecutionInput,
-        observer: ObservationObserver,
+        observer: ExecutionTraceObserver,
     ) -> Result<ConfluxTransactionExecution, TransactionExecutionError> {
         let prepared = self.prepare(input)?;
         let options = transact_options_for(prepared.transaction.space(), observer);
@@ -105,8 +107,8 @@ impl<'a> ConfluxTransactionExecutor<'a> {
 
 fn transact_options_for(
     space: Space,
-    observer: ObservationObserver,
-) -> TransactOptions<ObservationObserver> {
+    observer: ExecutionTraceObserver,
+) -> TransactOptions<ExecutionTraceObserver> {
     let mut options = TransactOptions {
         observer,
         settings: TransactSettings::all_checks(),

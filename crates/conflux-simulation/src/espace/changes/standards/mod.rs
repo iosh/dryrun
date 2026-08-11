@@ -5,7 +5,7 @@ use cfx_types::Space;
 use contract_standards::{DecodedStandardLog, decode_standard_log};
 
 use crate::{
-    execution::Observation,
+    execution::{CommittedExecutionTrace, TraceEvent},
     primitive::{address_from_cfx, b256_from_cfx},
 };
 
@@ -18,21 +18,25 @@ pub(super) struct DecodedStandardOccurrence {
 }
 
 pub(super) fn decode_standard_occurrences(
-    observations: &[Observation],
+    trace: &CommittedExecutionTrace,
 ) -> Vec<DecodedStandardOccurrence> {
-    observations
+    trace
+        .events()
         .iter()
-        .filter_map(|observation| {
-            let Observation::Log {
+        .filter_map(|event| {
+            let TraceEvent::Log {
                 position,
-                space: Space::Ethereum,
+                frame_id,
                 address,
                 topics,
                 data,
-            } = observation
+            } = event
             else {
                 return None;
             };
+            if trace.frame(*frame_id).space != Space::Ethereum {
+                return None;
+            }
             let address = address_from_cfx(*address);
             let topics = topics
                 .iter()

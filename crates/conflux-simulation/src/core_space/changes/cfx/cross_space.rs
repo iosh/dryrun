@@ -12,7 +12,7 @@ use super::CrossSpaceTransferOperation;
 use crate::{
     ConfluxSimulationError,
     core_space::changes::CrossSpaceAddress,
-    execution::Observation,
+    execution::{CommittedExecutionTrace, FrameAction, FrameId, TraceEvent},
     primitive::{address_from_cfx, u256_from_cfx},
 };
 
@@ -21,22 +21,22 @@ sol! {
 }
 
 pub(super) fn collect_cross_space_call(
-    observations: &[Observation],
-    observation_index: usize,
+    trace: &CommittedExecutionTrace,
+    frame_position: usize,
+    frame_id: FrameId,
     machine: &Machine,
     spec: &Spec,
-) -> Result<Option<(CrossSpaceTransferOperation, usize)>, ConfluxSimulationError> {
-    let Some(Observation::Call {
-        position,
-        space,
+) -> Result<Option<(CrossSpaceTransferOperation, Vec<usize>)>, ConfluxSimulationError> {
+    let frame = trace.frame(frame_id);
+    let FrameAction::Call {
         call_type,
         caller,
         target,
         code_address,
         transferred_value,
-        input_len,
-        input_prefix,
-    }) = observations.get(observation_index)
+        calldata_len,
+        calldata_prefix,
+    } = &frame.action
     else {
         return Ok(None);
     };
@@ -54,7 +54,7 @@ pub(super) fn collect_cross_space_call(
         return Ok(None);
     }
 
-    let Some(selector) = call_selector(*input_len, input_prefix) else {
+    let Some(selector) = call_selector(*calldata_len, calldata_prefix) else {
         return Ok(None);
     };
     let transfers_to_espace = is_call_create_sig(&selector);
@@ -62,7 +62,7 @@ pub(super) fn collect_cross_space_call(
     if !transfers_to_espace && !withdraws_to_core_space {
         return Ok(None);
     }
-    if *space != Space::Native
+    if frame.space != Space::Native
         || *call_type != CallType::Call
         || *target != cross_space_contract
         || *code_address != cross_space_contract
@@ -71,91 +71,80 @@ pub(super) fn collect_cross_space_call(
             "Core cross-space call did not use the canonical active internal-contract form",
         ));
     }
-    let call_context = CrossSpaceCallContext {
-        observations,
-        observation_index,
-        position: *position,
+
+    let context = CrossSpaceCallContext {
+        trace,
+        frame_id,
+        frame_position,
         caller: *caller,
         transferred_value: *transferred_value,
-        input_len: *input_len,
-        input_prefix,
+        calldata_len: *calldata_len,
+        calldata_prefix,
     };
-
     if transfers_to_espace {
-        return collect_transfer_to_espace(call_context, cross_space_contract);
+        collect_transfer_to_espace(context, cross_space_contract)
+    } else {
+        collect_withdrawal_to_core_space(context)
     }
-
-    collect_withdrawal_to_core_space(call_context)
 }
 
 struct CrossSpaceCallContext<'a> {
-    observations: &'a [Observation],
-    observation_index: usize,
-    position: usize,
+    trace: &'a CommittedExecutionTrace,
+    frame_id: FrameId,
+    frame_position: usize,
     caller: cfx_types::Address,
     transferred_value: cfx_types::U256,
-    input_len: usize,
-    input_prefix: &'a [u8],
+    calldata_len: usize,
+    calldata_prefix: &'a [u8],
 }
 
 fn collect_transfer_to_espace(
-    call_context: CrossSpaceCallContext<'_>,
+    context: CrossSpaceCallContext<'_>,
     cross_space_contract: cfx_types::Address,
-) -> Result<Option<(CrossSpaceTransferOperation, usize)>, ConfluxSimulationError> {
-    let amount = u256_from_cfx(call_context.transferred_value);
+) -> Result<Option<(CrossSpaceTransferOperation, Vec<usize>)>, ConfluxSimulationError> {
+    let amount = u256_from_cfx(context.transferred_value);
     if amount.is_zero() {
         return Ok(None);
     }
 
-    let transfer = required_transfer(
-        call_context.observations,
-        call_context.observation_index,
-        "transfer into eSpace",
-    )?;
-    verify_next_position(
-        call_context.position,
-        transfer.position,
-        "transfer into eSpace",
-    )?;
-    let expected_mapped_account = call_context.caller.evm_map();
-    match (transfer.from, transfer.to) {
-        (AddressPocket::Balance(from), AddressPocket::Balance(to))
-            if transfer.space == Space::Native
-                && *from == cross_space_contract.with_native_space()
-                && *to == expected_mapped_account
-                && transfer.value == call_context.transferred_value =>
-        {
-            Ok(Some((
-                CrossSpaceTransferOperation {
-                    position: Position::new(call_context.position, 0),
-                    from: CrossSpaceAddress::CoreSpace(address_from_cfx(call_context.caller)),
-                    to: CrossSpaceAddress::Espace(address_from_cfx(to.address)),
-                    amount,
-                },
-                2,
-            )))
-        }
-        _ => Err(ConfluxSimulationError::analysis_failed(
-            "Core transfer into eSpace did not match its canonical mapped-account movement",
-        )),
-    }
+    let expected_mapped_account = context.caller.evm_map();
+    let transfer = unique_matching_transfer(&context, "transfer into eSpace", |transfer| {
+        matches!(
+            (transfer.from, transfer.to),
+            (AddressPocket::Balance(from), AddressPocket::Balance(to))
+                if transfer.space == Space::Native
+                    && *from == cross_space_contract.with_native_space()
+                    && *to == expected_mapped_account
+                    && transfer.value == context.transferred_value
+        )
+    })?;
+
+    Ok(Some((
+        CrossSpaceTransferOperation {
+            position: Position::new(context.frame_position, 0),
+            from: CrossSpaceAddress::CoreSpace(address_from_cfx(context.caller)),
+            to: CrossSpaceAddress::Espace(address_from_cfx(expected_mapped_account.address)),
+            amount,
+        },
+        vec![transfer.position],
+    )))
 }
 
 fn collect_withdrawal_to_core_space(
-    call_context: CrossSpaceCallContext<'_>,
-) -> Result<Option<(CrossSpaceTransferOperation, usize)>, ConfluxSimulationError> {
-    if !call_context.transferred_value.is_zero() {
+    context: CrossSpaceCallContext<'_>,
+) -> Result<Option<(CrossSpaceTransferOperation, Vec<usize>)>, ConfluxSimulationError> {
+    if !context.transferred_value.is_zero() {
         return Err(ConfluxSimulationError::analysis_failed(
             "Core cross-space withdrawal transferred call value",
         ));
     }
-    if call_context.input_prefix.len() != call_context.input_len {
+    if context.calldata_prefix.len() != context.calldata_len {
         return Err(ConfluxSimulationError::analysis_failed(
-            "Core cross-space withdrawal input was not fully captured",
+            "Core cross-space withdrawal calldata was not fully captured",
         ));
     }
-    let withdrawal = withdrawFromMappedCall::abi_decode_validate(call_context.input_prefix)
-        .map_err(|error| {
+    let withdrawal =
+        withdrawFromMappedCall::abi_decode_validate(context.calldata_prefix).map_err(|error| {
             ConfluxSimulationError::analysis_failed(format!(
                 "Core cross-space withdrawal call is not valid ABI data: {error}"
             ))
@@ -165,41 +154,31 @@ fn collect_withdrawal_to_core_space(
         return Ok(None);
     }
 
-    let transfer = required_transfer(
-        call_context.observations,
-        call_context.observation_index,
-        "withdrawal into Core Space",
-    )?;
-    verify_next_position(
-        call_context.position,
-        transfer.position,
-        "withdrawal into Core Space",
-    )?;
-    let mapped_account = call_context.caller.evm_map();
-    match (transfer.from, transfer.to) {
-        (AddressPocket::Balance(from), AddressPocket::Balance(to))
-            if transfer.space == Space::Native
-                && *from == mapped_account
-                && *to == call_context.caller.with_native_space()
-                && u256_from_cfx(transfer.value) == amount =>
-        {
-            Ok(Some((
-                CrossSpaceTransferOperation {
-                    position: Position::new(call_context.position, 0),
-                    from: CrossSpaceAddress::Espace(address_from_cfx(from.address)),
-                    to: CrossSpaceAddress::CoreSpace(address_from_cfx(call_context.caller)),
-                    amount,
-                },
-                2,
-            )))
-        }
-        _ => Err(ConfluxSimulationError::analysis_failed(
-            "Core cross-space withdrawal did not match its canonical mapped-account movement",
-        )),
-    }
+    let mapped_account = context.caller.evm_map();
+    let transfer = unique_matching_transfer(&context, "withdrawal into Core Space", |transfer| {
+        matches!(
+            (transfer.from, transfer.to),
+            (AddressPocket::Balance(from), AddressPocket::Balance(to))
+                if transfer.space == Space::Native
+                    && *from == mapped_account
+                    && *to == context.caller.with_native_space()
+                    && u256_from_cfx(transfer.value) == amount
+        )
+    })?;
+
+    Ok(Some((
+        CrossSpaceTransferOperation {
+            position: Position::new(context.frame_position, 0),
+            from: CrossSpaceAddress::Espace(address_from_cfx(mapped_account.address)),
+            to: CrossSpaceAddress::CoreSpace(address_from_cfx(context.caller)),
+            amount,
+        },
+        vec![transfer.position],
+    )))
 }
 
-struct ObservedInternalTransfer<'a> {
+#[derive(Clone, Copy)]
+struct ScopedInternalTransfer<'a> {
     position: usize,
     space: Space,
     from: &'a AddressPocket,
@@ -207,29 +186,42 @@ struct ObservedInternalTransfer<'a> {
     value: cfx_types::U256,
 }
 
-fn required_transfer<'a>(
-    observations: &'a [Observation],
-    observation_index: usize,
-    operation: &str,
-) -> Result<ObservedInternalTransfer<'a>, ConfluxSimulationError> {
-    let transfer_index = observation_index.checked_add(1).ok_or_else(|| {
+fn unique_matching_transfer<'a>(
+    context: &'a CrossSpaceCallContext<'_>,
+    transfer_name: &str,
+    matches_transfer: impl Fn(ScopedInternalTransfer<'_>) -> bool,
+) -> Result<ScopedInternalTransfer<'a>, ConfluxSimulationError> {
+    let mut matches = context
+        .trace
+        .internal_transfers_in_scope(Some(context.frame_id))
+        .filter_map(scoped_internal_transfer)
+        .filter(|transfer| matches_transfer(*transfer));
+    let transfer = matches.next().ok_or_else(|| {
         ConfluxSimulationError::analysis_failed(format!(
-            "Core cross-space {operation} observation index overflowed"
+            "Core cross-space {transfer_name} is missing its committed internal transfer"
         ))
     })?;
-    let Some(Observation::InternalTransfer {
+    if matches.next().is_some() {
+        return Err(ConfluxSimulationError::analysis_failed(format!(
+            "Core cross-space {transfer_name} has ambiguous committed internal transfers"
+        )));
+    }
+    Ok(transfer)
+}
+
+fn scoped_internal_transfer(event: &TraceEvent) -> Option<ScopedInternalTransfer<'_>> {
+    let TraceEvent::InternalTransfer {
         position,
         space,
         from,
         to,
         value,
-    }) = observations.get(transfer_index)
+        ..
+    } = event
     else {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
-            "Core cross-space {operation} is missing its internal movement"
-        )));
+        return None;
     };
-    Ok(ObservedInternalTransfer {
+    Some(ScopedInternalTransfer {
         position: *position,
         space: *space,
         from,
@@ -238,29 +230,11 @@ fn required_transfer<'a>(
     })
 }
 
-fn verify_next_position(
-    previous: usize,
-    next: usize,
-    operation: &str,
-) -> Result<(), ConfluxSimulationError> {
-    let expected = previous.checked_add(1).ok_or_else(|| {
-        ConfluxSimulationError::analysis_failed(format!(
-            "Core cross-space {operation} observation position overflowed"
-        ))
-    })?;
-    if next != expected {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
-            "Core cross-space {operation} internal movement was not contiguous"
-        )));
-    }
-    Ok(())
-}
-
-fn call_selector(input_len: usize, input_prefix: &[u8]) -> Option<[u8; 4]> {
-    if input_len < 4 || input_prefix.len() < 4 {
+fn call_selector(calldata_len: usize, calldata_prefix: &[u8]) -> Option<[u8; 4]> {
+    if calldata_len < 4 || calldata_prefix.len() < 4 {
         return None;
     }
     let mut selector = [0_u8; 4];
-    selector.copy_from_slice(&input_prefix[..4]);
+    selector.copy_from_slice(&calldata_prefix[..4]);
     Some(selector)
 }

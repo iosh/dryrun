@@ -7,7 +7,11 @@ use super::{
     CommittedPoSCall, CommittedVoteLockCall,
     codec::{PoSCall, decode_pos_call, decode_vote_lock_call},
 };
-use crate::{ConfluxSimulationError, execution::Observation, primitive::address_from_cfx};
+use crate::{
+    ConfluxSimulationError,
+    execution::{CommittedExecutionTrace, FrameAction, TraceEvent},
+    primitive::address_from_cfx,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StakingContractActivation {
@@ -58,7 +62,7 @@ impl CommittedStakingCalls {
 }
 
 pub(crate) fn collect_committed_staking_calls(
-    observations: &[Observation],
+    trace: &CommittedExecutionTrace,
     contract_activation: StakingContractActivation,
 ) -> Result<CommittedStakingCalls, ConfluxSimulationError> {
     let staking_contract_address =
@@ -67,25 +71,27 @@ pub(crate) fn collect_committed_staking_calls(
         cfx_parameters::internal_contract_addresses::POS_REGISTER_CONTRACT_ADDRESS;
     let mut committed_staking_calls = CommittedStakingCalls::default();
 
-    for observation in observations {
-        let Observation::Call {
-            position,
+    for event in trace.events() {
+        let TraceEvent::FrameStart { position, frame_id } = event else {
+            continue;
+        };
+        let frame = trace.frame(*frame_id);
+        let FrameAction::Call {
             caller,
             target,
             code_address,
-            input_len,
-            input_prefix,
-            space,
+            calldata_len,
+            calldata_prefix,
             call_type,
             transferred_value,
-            ..
-        } = observation
+        } = &frame.action
         else {
             continue;
         };
+        let space = frame.space;
 
         let uses_canonical_plain_call = |expected_address| {
-            *space == Space::Native
+            space == Space::Native
                 && *call_type == CallType::Call
                 && *target == expected_address
                 && *code_address == expected_address
@@ -95,7 +101,7 @@ pub(crate) fn collect_committed_staking_calls(
         if contract_activation.staking_is_active()
             && (*target == staking_contract_address || *code_address == staking_contract_address)
         {
-            if let Some(vote_lock) = decode_vote_lock_call(*input_len, input_prefix)? {
+            if let Some(vote_lock) = decode_vote_lock_call(*calldata_len, calldata_prefix)? {
                 validate_committed_call(
                     "voteLock",
                     uses_canonical_plain_call(staking_contract_address),
@@ -118,7 +124,7 @@ pub(crate) fn collect_committed_staking_calls(
         {
             continue;
         }
-        let Some(pos_call) = decode_pos_call(*input_len, input_prefix)? else {
+        let Some(pos_call) = decode_pos_call(*calldata_len, calldata_prefix)? else {
             continue;
         };
         validate_committed_call(

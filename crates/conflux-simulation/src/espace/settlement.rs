@@ -4,20 +4,20 @@ use cfx_types::Space;
 
 use super::EspaceResultIntegrationError;
 use crate::{
-    execution::{ConfluxExecutionOutput, Observation},
+    execution::{ConfluxExecutionOutput, TraceEvent},
     primitive::u256_from_cfx,
 };
 
-pub(crate) fn verify_observed_fee_settlement(
+pub(crate) fn verify_fee_settlement(
     output: &ConfluxExecutionOutput,
 ) -> Result<(), EspaceResultIntegrationError> {
     let mut precharge = U256::ZERO;
     let mut refund = U256::ZERO;
 
-    for observation in &output.observations {
-        let Observation::InternalTransfer {
+    for event in output.trace.events() {
+        let TraceEvent::InternalTransfer {
             from, to, value, ..
-        } = observation
+        } = event
         else {
             continue;
         };
@@ -46,15 +46,15 @@ pub(crate) fn verify_observed_fee_settlement(
         }
     }
 
-    let traced = precharge.checked_sub(refund).ok_or_else(|| {
+    let settled_fee = precharge.checked_sub(refund).ok_or_else(|| {
         EspaceResultIntegrationError::invalid_observed_fee_settlement(format!(
             "refund {refund} exceeds precharge {precharge}"
         ))
     })?;
-    if traced != output.common.fee {
+    if settled_fee != output.common.fee {
         return Err(
             EspaceResultIntegrationError::invalid_observed_fee_settlement(format!(
-                "observations settle {traced}, executor reports {}",
+                "committed internal transfers settle {settled_fee}, executor reports {}",
                 output.common.fee
             )),
         );

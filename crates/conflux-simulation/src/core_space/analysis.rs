@@ -47,14 +47,13 @@ impl CoreSpaceAnalysisInput {
         let staking_contract_activation =
             StakingContractActivation::from_machine_and_spec(machine, &execution.prepared.spec);
         let committed_staking_calls =
-            collect_committed_staking_calls(&details.observations, staking_contract_activation)?;
+            collect_committed_staking_calls(&details.trace, staking_contract_activation)?;
         let pos = PoSAnalysisInput::from_calls_and_logs(
             committed_staking_calls.pos_calls(),
             &details.logs,
             staking_contract_activation.pos_register_is_active(),
         )?;
-        let standard_candidates =
-            collect_standard_candidates(&details.observations, Space::Native)?;
+        let standard_candidates = collect_standard_candidates(&details.trace, Space::Native)?;
         let standard_state_requirements = state_requirements(&standard_candidates);
 
         Ok(Self {

@@ -5,14 +5,13 @@ use super::{
     EspaceChangesAnalysis, EspaceExecutionError, EspaceExecutionOutcome,
     EspaceResultIntegrationError, EspaceSimulation, EspaceSimulationError, EspaceSimulationRequest,
     EspaceStateAccessError, build_executor_transaction, classify_transaction_rejection,
-    complete_transaction, convert_executor_outcome, resolve_espace_context,
-    verify_observed_fee_settlement,
+    complete_transaction, convert_executor_outcome, resolve_espace_context, verify_fee_settlement,
 };
 use crate::{
     ConfluxSimulationBackend,
     execution::{
         ConfluxExecutionOutcome, ConfluxTransactionExecutor, DryRunTransactionInput,
-        ObservationObserver, TransactionExecutionInput, build_conflux_state,
+        ExecutionTraceObserver, TransactionExecutionInput, build_conflux_state,
         next_execution_block_number, next_execution_epoch_height,
     },
     state::ConfluxStateSource,
@@ -123,7 +122,10 @@ fn simulate_blocking(
 
     let state_before_execution = state.save();
     let execution = ConfluxTransactionExecutor::new(&mut state, &machine)
-        .execute(execution_input, ObservationObserver::new(Space::Ethereum))
+        .execute(
+            execution_input,
+            ExecutionTraceObserver::new(Space::Ethereum),
+        )
         .map_err(classify_executor_error)?;
 
     let execution_output = match &execution.outcome {
@@ -134,7 +136,7 @@ fn simulate_blocking(
     };
 
     let changes = if let Some((output, successful)) = execution_output {
-        verify_observed_fee_settlement(output).map_err(EspaceExecutionError::from)?;
+        verify_fee_settlement(output).map_err(EspaceExecutionError::from)?;
         let analysis = EspaceChangesAnalysis::from_execution(
             output,
             successful,
@@ -192,9 +194,9 @@ fn classify_executor_error(
             source,
         }
         .into(),
-        TransactionExecutionError::MissingObservations => {
+        TransactionExecutionError::MissingExecutionTrace => {
             EspaceResultIntegrationError::invalid_executor_output(
-                "executed transaction did not produce an observation journal",
+                "executed transaction did not produce a committed execution trace",
             )
             .into()
         }

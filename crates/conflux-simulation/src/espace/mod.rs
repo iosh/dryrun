@@ -33,7 +33,7 @@ pub use execution_result::{EspaceExecutionResult, EspaceFee, EspaceGas};
 pub(crate) use outcome_mapping::convert_executor_outcome;
 pub use rejection::EspaceTransactionRejection;
 pub use result::EspaceSimulation;
-pub(crate) use settlement::verify_observed_fee_settlement;
+pub(crate) use settlement::verify_fee_settlement;
 pub use simulator::EspaceTransactionSimulator;
 pub use transaction::{
     AccessListItem, Authorization, EspaceCompleteTransaction, EspaceCompleteTransactionVariant,

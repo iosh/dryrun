@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     ConfluxSimulationError,
-    execution::Observation,
+    execution::{CommittedExecutionTrace, FrameAction, FrameId, TraceEvent},
     primitive::{address_from_cfx, address_to_cfx, u256_from_cfx},
 };
 
@@ -43,22 +43,22 @@ pub(super) struct AdminChangeAttempt {
 }
 
 pub(super) fn collect_sponsorship_call(
-    observations: &[Observation],
-    observation_index: usize,
+    trace: &CommittedExecutionTrace,
+    frame_position: usize,
+    frame_id: FrameId,
     machine: &Machine,
     spec: &Spec,
-) -> Result<Option<(CollectedSponsorshipCall, usize)>, ConfluxSimulationError> {
-    let Some(Observation::Call {
-        position,
-        space,
+) -> Result<Option<(CollectedSponsorshipCall, Vec<usize>)>, ConfluxSimulationError> {
+    let frame = trace.frame(frame_id);
+    let FrameAction::Call {
         call_type,
         caller,
         target,
         code_address,
         transferred_value,
-        input_len,
-        input_prefix,
-    }) = observations.get(observation_index)
+        calldata_len,
+        calldata_prefix,
+    } = &frame.action
     else {
         return Ok(None);
     };
@@ -76,10 +76,10 @@ pub(super) fn collect_sponsorship_call(
         return Ok(None);
     }
 
-    let Some(decoded_call) = decode_sponsorship_call(*input_len, input_prefix)? else {
+    let Some(decoded_call) = decode_sponsorship_call(*calldata_len, calldata_prefix)? else {
         return Ok(None);
     };
-    if *space != Space::Native
+    if frame.space != Space::Native
         || *call_type != CallType::Call
         || *target != sponsor_contract
         || *code_address != sponsor_contract
@@ -113,7 +113,7 @@ pub(super) fn collect_sponsorship_call(
             .enumerate()
             .map(
                 |(item_index, account_address)| SponsorshipAccessRuleUpdate {
-                    position: Position::new(*position, item_index),
+                    position: Position::new(frame_position, item_index),
                     caller_role,
                     caller_address,
                     contract_address,
@@ -128,7 +128,7 @@ pub(super) fn collect_sponsorship_call(
             .collect();
         return Ok(Some((
             CollectedSponsorshipCall::AccessRuleUpdates(updates),
-            1,
+            Vec::new(),
         )));
     }
 
@@ -143,48 +143,49 @@ pub(super) fn collect_sponsorship_call(
     };
 
     let call_context = SponsorshipFundingCallContext {
-        call_position: *position,
+        frame_position,
         sponsor_contract,
         sponsor: address_to_cfx(caller_address),
         contract_address: address_to_cfx(contract_address),
         gross_deposit_amount: u256_from_cfx(*transferred_value),
     };
-    let (operation, consumed) = match funding_terms {
+    let transfers = funding_transfers(trace, frame_id)?;
+    let operation = match funding_terms {
         SponsorshipFundingTerms::Gas {
             gas_fee_upper_bound,
         } => {
-            let (mut operation, consumed) =
-                collect_gas_sponsorship_call(observations, observation_index, call_context)?;
+            let mut operation = collect_gas_sponsorship_call(&transfers, call_context)?;
             operation.funding_terms = SponsorshipFundingTerms::Gas {
                 gas_fee_upper_bound,
             };
-            (operation, consumed)
+            operation
         }
         SponsorshipFundingTerms::StorageCollateral => {
-            collect_storage_sponsorship_call(observations, observation_index, call_context)?
+            collect_storage_sponsorship_call(&transfers, call_context)?
         }
     };
     Ok(Some((
         CollectedSponsorshipCall::Funding(Box::new(operation)),
-        consumed,
+        transfers.iter().map(|transfer| transfer.position).collect(),
     )))
 }
 
 pub(super) fn collect_admin_change_attempt(
-    observation: &Observation,
+    trace: &CommittedExecutionTrace,
+    frame_id: FrameId,
     machine: &Machine,
     spec: &Spec,
 ) -> Result<Option<AdminChangeAttempt>, ConfluxSimulationError> {
-    let Observation::Call {
-        space,
+    let frame = trace.frame(frame_id);
+    let FrameAction::Call {
         call_type,
         target,
         code_address,
         transferred_value,
-        input_len,
-        input_prefix,
+        calldata_len,
+        calldata_prefix,
         ..
-    } = observation
+    } = &frame.action
     else {
         return Ok(None);
     };
@@ -201,10 +202,10 @@ pub(super) fn collect_admin_change_attempt(
         return Ok(None);
     }
 
-    let Some(attempt) = decode_admin_change_call(*input_len, input_prefix)? else {
+    let Some(attempt) = decode_admin_change_call(*calldata_len, calldata_prefix)? else {
         return Ok(None);
     };
-    if *space != Space::Native
+    if frame.space != Space::Native
         || *call_type != CallType::Call
         || *target != admin_contract
         || *code_address != admin_contract
@@ -218,15 +219,16 @@ pub(super) fn collect_admin_change_attempt(
 }
 
 pub(super) fn collect_standalone_sponsorship_refund(
-    observation: &Observation,
+    event: &TraceEvent,
 ) -> Result<Option<SponsorshipRefundOperation>, ConfluxSimulationError> {
-    let Observation::InternalTransfer {
+    let TraceEvent::InternalTransfer {
         position,
         space,
         from,
         to: AddressPocket::Balance(recipient),
         value,
-    } = observation
+        ..
+    } = event
     else {
         return Ok(None);
     };
@@ -256,67 +258,55 @@ pub(super) fn collect_standalone_sponsorship_refund(
 }
 
 pub(super) fn collect_storage_point_conversion(
-    observations: &[Observation],
-    observation_index: usize,
-) -> Result<Option<(StoragePointConversionOperation, usize)>, ConfluxSimulationError> {
-    let Some(first) = observations.get(observation_index) else {
+    trace: &CommittedExecutionTrace,
+    event: &TraceEvent,
+) -> Result<Option<(StoragePointConversionOperation, Vec<usize>)>, ConfluxSimulationError> {
+    let Some((position, contract_address, _, _)) = conversion_transfer(event)? else {
         return Ok(None);
     };
-    let Some((position, contract_address, source, amount)) = conversion_transfer(first)? else {
-        return Ok(None);
-    };
-    if amount.is_zero() {
-        return Err(ConfluxSimulationError::analysis_failed(
-            "Core Space storage-point conversion contained a zero transfer",
-        ));
-    }
 
     let mut from_sponsor_pool = alloy_primitives::U256::ZERO;
     let mut from_storage_collateral = alloy_primitives::U256::ZERO;
-    let mut consumed = 1;
-    match source {
-        ConversionSource::SponsorPool => {
-            from_sponsor_pool = amount;
-            if let Some(next) = observation_at_offset(
-                observations,
-                observation_index,
-                1,
-                "storage-point conversion",
-            )? && let Some((next_position, next_contract, next_source, next_amount)) =
-                conversion_transfer(next)?
-                && next_contract == contract_address
-            {
-                if next_source != ConversionSource::StorageCollateral {
-                    return Err(ConfluxSimulationError::analysis_failed(
-                        "Core Space storage-point conversion used an ambiguous source sequence",
-                    ));
-                }
-                verify_next_position(position, next_position, "storage-point conversion")?;
-                if next_amount.is_zero() {
-                    return Err(ConfluxSimulationError::analysis_failed(
-                        "Core Space storage-point conversion contained a zero transfer",
-                    ));
-                }
-                from_storage_collateral = next_amount;
-                consumed = 2;
-            }
+    let mut sponsor_position = None;
+    let mut collateral_position = None;
+    let mut transfer_positions = Vec::new();
+    for candidate in trace.internal_transfers_in_scope(event.frame_id()) {
+        let Some((candidate_position, candidate_contract, source, amount)) =
+            conversion_transfer(candidate)?
+        else {
+            continue;
+        };
+        if candidate_contract != contract_address {
+            continue;
         }
-        ConversionSource::StorageCollateral => {
-            from_storage_collateral = amount;
-            if let Some(next) = observation_at_offset(
-                observations,
-                observation_index,
-                1,
-                "storage-point conversion",
-            )? && let Some((_, next_contract, next_source, _)) = conversion_transfer(next)?
-                && next_contract == contract_address
-                && next_source == ConversionSource::SponsorPool
-            {
+        if amount.is_zero() {
+            return Err(ConfluxSimulationError::analysis_failed(
+                "Core Space storage-point conversion contained a zero transfer",
+            ));
+        }
+        transfer_positions.push(candidate_position);
+        match source {
+            ConversionSource::SponsorPool if sponsor_position.is_none() => {
+                sponsor_position = Some(candidate_position);
+                from_sponsor_pool = amount;
+            }
+            ConversionSource::StorageCollateral if collateral_position.is_none() => {
+                collateral_position = Some(candidate_position);
+                from_storage_collateral = amount;
+            }
+            ConversionSource::SponsorPool | ConversionSource::StorageCollateral => {
                 return Err(ConfluxSimulationError::analysis_failed(
-                    "Core Space storage-point conversion reversed its canonical source order",
+                    "Core Space storage-point conversion has ambiguous committed internal transfers",
                 ));
             }
         }
+    }
+    if let (Some(sponsor), Some(collateral)) = (sponsor_position, collateral_position)
+        && sponsor > collateral
+    {
+        return Err(ConfluxSimulationError::analysis_failed(
+            "Core Space storage-point conversion reversed its canonical source order",
+        ));
     }
 
     Ok(Some((
@@ -326,13 +316,13 @@ pub(super) fn collect_storage_point_conversion(
             from_sponsor_pool,
             from_storage_collateral,
         },
-        consumed,
+        transfer_positions,
     )))
 }
 
 #[derive(Clone, Copy)]
 struct SponsorshipFundingCallContext {
-    call_position: usize,
+    frame_position: usize,
     sponsor_contract: Address,
     sponsor: Address,
     contract_address: Address,
@@ -340,21 +330,15 @@ struct SponsorshipFundingCallContext {
 }
 
 fn collect_gas_sponsorship_call(
-    observations: &[Observation],
-    observation_index: usize,
+    transfers: &[FundingTransfer<'_>],
     call_context: SponsorshipFundingCallContext,
-) -> Result<(SponsorshipFundingOperation, usize), ConfluxSimulationError> {
-    let first = required_transfer(observations, observation_index, 1, "gas sponsorship")?;
-    verify_next_position(
-        call_context.call_position,
-        first.position,
-        "gas sponsorship",
-    )?;
+) -> Result<SponsorshipFundingOperation, ConfluxSimulationError> {
+    let first = required_transfer(transfers, 0, "gas sponsorship")?;
 
-    let (pool_deposit_amount, refund, consumed) =
+    let (pool_deposit_amount, refund) =
         if let Some((old_sponsor, pool_refund_amount)) = gas_pool_refund(first, call_context)? {
-            let deposit = required_transfer(observations, observation_index, 2, "gas sponsorship")?;
-            verify_next_position(first.position, deposit.position, "gas sponsorship")?;
+            let deposit = required_transfer(transfers, 1, "gas sponsorship")?;
+            require_transfer_count(transfers, 2, "gas sponsorship")?;
             let pool_deposit_amount = gas_pool_deposit(deposit, call_context)?;
             if pool_deposit_amount != call_context.gross_deposit_amount {
                 return Err(transit_mismatch("gas"));
@@ -369,58 +353,43 @@ fn collect_gas_sponsorship_call(
                     gross_refund_amount: pool_refund_amount,
                     pool_refund_amount,
                 }),
-                3,
             )
         } else {
+            require_transfer_count(transfers, 1, "gas sponsorship")?;
             let pool_deposit_amount = gas_pool_deposit(first, call_context)?;
             if pool_deposit_amount != call_context.gross_deposit_amount {
                 return Err(transit_mismatch("gas"));
             }
-            (pool_deposit_amount, None, 2)
+            (pool_deposit_amount, None)
         };
 
-    Ok((
-        SponsorshipFundingOperation {
-            position: Position::new(call_context.call_position, 0),
-            funding_terms: SponsorshipFundingTerms::Gas {
-                gas_fee_upper_bound: alloy_primitives::U256::ZERO,
-            },
-            sponsor: address_from_cfx(call_context.sponsor),
-            contract_address: address_from_cfx(call_context.contract_address),
-            gross_deposit_amount: call_context.gross_deposit_amount,
-            pool_deposit_amount,
-            refund,
+    Ok(SponsorshipFundingOperation {
+        position: Position::new(call_context.frame_position, 0),
+        funding_terms: SponsorshipFundingTerms::Gas {
+            gas_fee_upper_bound: alloy_primitives::U256::ZERO,
         },
-        consumed,
-    ))
+        sponsor: address_from_cfx(call_context.sponsor),
+        contract_address: address_from_cfx(call_context.contract_address),
+        gross_deposit_amount: call_context.gross_deposit_amount,
+        pool_deposit_amount,
+        refund,
+    })
 }
 
 fn collect_storage_sponsorship_call(
-    observations: &[Observation],
-    observation_index: usize,
+    transfers: &[FundingTransfer<'_>],
     call_context: SponsorshipFundingCallContext,
-) -> Result<(SponsorshipFundingOperation, usize), ConfluxSimulationError> {
-    let first = required_transfer(observations, observation_index, 1, "storage sponsorship")?;
-    verify_next_position(
-        call_context.call_position,
-        first.position,
-        "storage sponsorship",
-    )?;
+) -> Result<SponsorshipFundingOperation, ConfluxSimulationError> {
+    let first = required_transfer(transfers, 0, "storage sponsorship")?;
 
-    let (pool_deposit_amount, refund, consumed) = if let Some((old_sponsor, pool_refund_amount)) =
+    let (pool_deposit_amount, refund) = if let Some((old_sponsor, pool_refund_amount)) =
         storage_pool_refund(first, call_context)?
     {
-        let compensation =
-            required_transfer(observations, observation_index, 2, "storage sponsorship")?;
-        verify_next_position(first.position, compensation.position, "storage sponsorship")?;
+        let compensation = required_transfer(transfers, 1, "storage sponsorship")?;
         let collateral_compensation =
             storage_collateral_compensation(compensation, call_context, old_sponsor)?;
-        let deposit = required_transfer(observations, observation_index, 3, "storage sponsorship")?;
-        verify_next_position(
-            compensation.position,
-            deposit.position,
-            "storage sponsorship",
-        )?;
+        let deposit = required_transfer(transfers, 2, "storage sponsorship")?;
+        require_transfer_count(transfers, 3, "storage sponsorship")?;
         let pool_deposit_amount = storage_pool_deposit(deposit, call_context)?;
         let transit_total = collateral_compensation
             .checked_add(pool_deposit_amount)
@@ -449,32 +418,29 @@ fn collect_storage_sponsorship_call(
                 gross_refund_amount,
                 pool_refund_amount,
             }),
-            4,
         )
     } else {
+        require_transfer_count(transfers, 1, "storage sponsorship")?;
         let pool_deposit_amount = storage_pool_deposit(first, call_context)?;
         if pool_deposit_amount != call_context.gross_deposit_amount {
             return Err(transit_mismatch("storage"));
         }
-        (pool_deposit_amount, None, 2)
+        (pool_deposit_amount, None)
     };
 
-    Ok((
-        SponsorshipFundingOperation {
-            position: Position::new(call_context.call_position, 0),
-            funding_terms: SponsorshipFundingTerms::StorageCollateral,
-            sponsor: address_from_cfx(call_context.sponsor),
-            contract_address: address_from_cfx(call_context.contract_address),
-            gross_deposit_amount: call_context.gross_deposit_amount,
-            pool_deposit_amount,
-            refund,
-        },
-        consumed,
-    ))
+    Ok(SponsorshipFundingOperation {
+        position: Position::new(call_context.frame_position, 0),
+        funding_terms: SponsorshipFundingTerms::StorageCollateral,
+        sponsor: address_from_cfx(call_context.sponsor),
+        contract_address: address_from_cfx(call_context.contract_address),
+        gross_deposit_amount: call_context.gross_deposit_amount,
+        pool_deposit_amount,
+        refund,
+    })
 }
 
 #[derive(Clone, Copy)]
-struct ObservedTransfer<'a> {
+struct FundingTransfer<'a> {
     position: usize,
     from: &'a AddressPocket,
     to: &'a AddressPocket,
@@ -482,30 +448,63 @@ struct ObservedTransfer<'a> {
 }
 
 fn required_transfer<'a>(
-    observations: &'a [Observation],
-    observation_index: usize,
-    offset: usize,
-    operation: &str,
-) -> Result<ObservedTransfer<'a>, ConfluxSimulationError> {
-    let observation = observation_at_offset(observations, observation_index, offset, operation)?;
-    let Some(Observation::InternalTransfer {
+    transfers: &'a [FundingTransfer<'a>],
+    index: usize,
+    call_name: &str,
+) -> Result<FundingTransfer<'a>, ConfluxSimulationError> {
+    transfers.get(index).copied().ok_or_else(|| {
+        ConfluxSimulationError::analysis_failed(format!(
+            "Core Space {call_name} call is missing a committed internal transfer"
+        ))
+    })
+}
+
+fn require_transfer_count(
+    transfers: &[FundingTransfer<'_>],
+    expected: usize,
+    call_name: &str,
+) -> Result<(), ConfluxSimulationError> {
+    if transfers.len() != expected {
+        return Err(ConfluxSimulationError::analysis_failed(format!(
+            "Core Space {call_name} call produced {} funding internal transfers, expected {expected}",
+            transfers.len()
+        )));
+    }
+    Ok(())
+}
+
+fn funding_transfers(
+    trace: &CommittedExecutionTrace,
+    frame_id: FrameId,
+) -> Result<Vec<FundingTransfer<'_>>, ConfluxSimulationError> {
+    trace
+        .internal_transfers_in_scope(Some(frame_id))
+        .filter_map(|event| match conversion_transfer(event) {
+            Ok(Some(_)) => None,
+            Ok(None) => Some(funding_transfer(event)),
+            Err(error) => Some(Err(error)),
+        })
+        .collect()
+}
+
+fn funding_transfer(event: &TraceEvent) -> Result<FundingTransfer<'_>, ConfluxSimulationError> {
+    let TraceEvent::InternalTransfer {
         position,
         space,
         from,
         to,
         value,
-    }) = observation
+        ..
+    } = event
     else {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
-            "Core Space {operation} call is missing a contiguous internal transfer"
-        )));
+        unreachable!("internal transfer scope only contains internal transfers");
     };
     if *space != Space::Native {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
-            "Core Space {operation} transit used a non-native transfer"
-        )));
+        return Err(ConfluxSimulationError::analysis_failed(
+            "Core Space sponsorship transit used a non-native internal transfer",
+        ));
     }
-    Ok(ObservedTransfer {
+    Ok(FundingTransfer {
         position: *position,
         from,
         to,
@@ -513,22 +512,8 @@ fn required_transfer<'a>(
     })
 }
 
-fn observation_at_offset<'a>(
-    observations: &'a [Observation],
-    observation_index: usize,
-    offset: usize,
-    operation: &str,
-) -> Result<Option<&'a Observation>, ConfluxSimulationError> {
-    let target_index = observation_index.checked_add(offset).ok_or_else(|| {
-        ConfluxSimulationError::analysis_failed(format!(
-            "Core Space {operation} observation index overflowed"
-        ))
-    })?;
-    Ok(observations.get(target_index))
-}
-
 fn gas_pool_refund(
-    transfer: ObservedTransfer<'_>,
+    transfer: FundingTransfer<'_>,
     call_context: SponsorshipFundingCallContext,
 ) -> Result<Option<(Address, alloy_primitives::U256)>, ConfluxSimulationError> {
     match (transfer.from, transfer.to) {
@@ -548,7 +533,7 @@ fn gas_pool_refund(
 }
 
 fn gas_pool_deposit(
-    transfer: ObservedTransfer<'_>,
+    transfer: FundingTransfer<'_>,
     call_context: SponsorshipFundingCallContext,
 ) -> Result<alloy_primitives::U256, ConfluxSimulationError> {
     match (transfer.from, transfer.to) {
@@ -564,7 +549,7 @@ fn gas_pool_deposit(
 }
 
 fn storage_pool_refund(
-    transfer: ObservedTransfer<'_>,
+    transfer: FundingTransfer<'_>,
     call_context: SponsorshipFundingCallContext,
 ) -> Result<Option<(Address, alloy_primitives::U256)>, ConfluxSimulationError> {
     match (transfer.from, transfer.to) {
@@ -584,7 +569,7 @@ fn storage_pool_refund(
 }
 
 fn storage_collateral_compensation(
-    transfer: ObservedTransfer<'_>,
+    transfer: FundingTransfer<'_>,
     call_context: SponsorshipFundingCallContext,
     old_sponsor: Address,
 ) -> Result<alloy_primitives::U256, ConfluxSimulationError> {
@@ -602,7 +587,7 @@ fn storage_collateral_compensation(
 }
 
 fn storage_pool_deposit(
-    transfer: ObservedTransfer<'_>,
+    transfer: FundingTransfer<'_>,
     call_context: SponsorshipFundingCallContext,
 ) -> Result<alloy_primitives::U256, ConfluxSimulationError> {
     match (transfer.from, transfer.to) {
@@ -639,17 +624,17 @@ impl DecodedSponsorshipCall {
 }
 
 fn decode_sponsorship_call(
-    input_len: usize,
-    input_prefix: &[u8],
+    calldata_len: usize,
+    calldata_prefix: &[u8],
 ) -> Result<Option<DecodedSponsorshipCall>, ConfluxSimulationError> {
-    let Some(selector) = call_selector(input_len, input_prefix) else {
+    let Some(selector) = call_selector(calldata_len, calldata_prefix) else {
         return Ok(None);
     };
-    let input = complete_call_input(input_len, input_prefix, "sponsorship")?;
+    let calldata = complete_calldata(calldata_len, calldata_prefix, "sponsorship")?;
 
     if selector == ISponsorWhitelistControlCalls::setSponsorForGasCall::SELECTOR {
         let call = decode_canonical_call::<ISponsorWhitelistControlCalls::setSponsorForGasCall>(
-            input,
+            calldata,
             "setSponsorForGas",
         )?;
         Ok(Some(DecodedSponsorshipCall::Funding {
@@ -661,14 +646,14 @@ fn decode_sponsorship_call(
     } else if selector == ISponsorWhitelistControlCalls::setSponsorForCollateralCall::SELECTOR {
         let call = decode_canonical_call::<
             ISponsorWhitelistControlCalls::setSponsorForCollateralCall,
-        >(input, "setSponsorForCollateral")?;
+        >(calldata, "setSponsorForCollateral")?;
         Ok(Some(DecodedSponsorshipCall::Funding {
             funding_terms: SponsorshipFundingTerms::StorageCollateral,
             contract_address: call.contract_address,
         }))
     } else if selector == ISponsorWhitelistControlCalls::addPrivilegeCall::SELECTOR {
         let call = decode_canonical_call::<ISponsorWhitelistControlCalls::addPrivilegeCall>(
-            input,
+            calldata,
             "addPrivilege",
         )?;
         Ok(Some(DecodedSponsorshipCall::AccessRuleUpdates {
@@ -679,7 +664,7 @@ fn decode_sponsorship_call(
         }))
     } else if selector == ISponsorWhitelistControlCalls::removePrivilegeCall::SELECTOR {
         let call = decode_canonical_call::<ISponsorWhitelistControlCalls::removePrivilegeCall>(
-            input,
+            calldata,
             "removePrivilege",
         )?;
         Ok(Some(DecodedSponsorshipCall::AccessRuleUpdates {
@@ -690,7 +675,7 @@ fn decode_sponsorship_call(
         }))
     } else if selector == ISponsorWhitelistControlCalls::addPrivilegeByAdminCall::SELECTOR {
         let call = decode_canonical_call::<ISponsorWhitelistControlCalls::addPrivilegeByAdminCall>(
-            input,
+            calldata,
             "addPrivilegeByAdmin",
         )?;
         Ok(Some(DecodedSponsorshipCall::AccessRuleUpdates {
@@ -702,7 +687,7 @@ fn decode_sponsorship_call(
     } else if selector == ISponsorWhitelistControlCalls::removePrivilegeByAdminCall::SELECTOR {
         let call = decode_canonical_call::<
             ISponsorWhitelistControlCalls::removePrivilegeByAdminCall,
-        >(input, "removePrivilegeByAdmin")?;
+        >(calldata, "removePrivilegeByAdmin")?;
         Ok(Some(DecodedSponsorshipCall::AccessRuleUpdates {
             caller_role: SponsorshipAccessCallerRole::ContractAdmin,
             contract_address: call.contract_address,
@@ -715,22 +700,22 @@ fn decode_sponsorship_call(
 }
 
 fn decode_admin_change_call(
-    input_len: usize,
-    input_prefix: &[u8],
+    calldata_len: usize,
+    calldata_prefix: &[u8],
 ) -> Result<Option<AdminChangeAttempt>, ConfluxSimulationError> {
-    let Some(selector) = call_selector(input_len, input_prefix) else {
+    let Some(selector) = call_selector(calldata_len, calldata_prefix) else {
         return Ok(None);
     };
     if selector == IAdminControlCalls::setAdminCall::SELECTOR {
-        let input = complete_call_input(input_len, input_prefix, "setAdmin")?;
-        let call = decode_canonical_call::<IAdminControlCalls::setAdminCall>(input, "setAdmin")?;
+        let calldata = complete_calldata(calldata_len, calldata_prefix, "setAdmin")?;
+        let call = decode_canonical_call::<IAdminControlCalls::setAdminCall>(calldata, "setAdmin")?;
         Ok(Some(AdminChangeAttempt {
             contract_address: call.contract_address,
             is_destroy: false,
         }))
     } else if selector == IAdminControlCalls::destroyCall::SELECTOR {
-        let input = complete_call_input(input_len, input_prefix, "destroy")?;
-        let call = decode_canonical_call::<IAdminControlCalls::destroyCall>(input, "destroy")?;
+        let calldata = complete_calldata(calldata_len, calldata_prefix, "destroy")?;
+        let call = decode_canonical_call::<IAdminControlCalls::destroyCall>(calldata, "destroy")?;
         Ok(Some(AdminChangeAttempt {
             contract_address: call.contract_address,
             is_destroy: true,
@@ -740,40 +725,40 @@ fn decode_admin_change_call(
     }
 }
 
-fn call_selector(input_len: usize, input_prefix: &[u8]) -> Option<[u8; 4]> {
-    if input_len < 4 || input_prefix.len() < 4 {
+fn call_selector(calldata_len: usize, calldata_prefix: &[u8]) -> Option<[u8; 4]> {
+    if calldata_len < 4 || calldata_prefix.len() < 4 {
         return None;
     }
     let mut selector = [0_u8; 4];
-    selector.copy_from_slice(&input_prefix[..4]);
+    selector.copy_from_slice(&calldata_prefix[..4]);
     Some(selector)
 }
 
-fn complete_call_input<'a>(
-    input_len: usize,
-    input_prefix: &'a [u8],
-    operation: &str,
+fn complete_calldata<'a>(
+    calldata_len: usize,
+    calldata_prefix: &'a [u8],
+    call_name: &str,
 ) -> Result<&'a [u8], ConfluxSimulationError> {
-    if input_prefix.len() != input_len {
+    if calldata_prefix.len() != calldata_len {
         return Err(ConfluxSimulationError::analysis_failed(format!(
-            "Core Space {operation} input was not fully captured"
+            "Core Space {call_name} calldata was not fully captured"
         )));
     }
-    Ok(input_prefix)
+    Ok(calldata_prefix)
 }
 
 fn decode_canonical_call<C: SolCall>(
-    input: &[u8],
-    operation: &str,
+    calldata: &[u8],
+    call_name: &str,
 ) -> Result<C, ConfluxSimulationError> {
-    let call = C::abi_decode_validate(input).map_err(|error| {
+    let call = C::abi_decode_validate(calldata).map_err(|error| {
         ConfluxSimulationError::analysis_failed(format!(
-            "Core Space {operation} call is not valid ABI data: {error}"
+            "Core Space {call_name} call is not valid ABI data: {error}"
         ))
     })?;
-    if call.abi_encode() != input {
+    if call.abi_encode() != calldata {
         return Err(ConfluxSimulationError::analysis_failed(format!(
-            "Core Space {operation} call is not canonical ABI data"
+            "Core Space {call_name} call is not canonical ABI data"
         )));
     }
     Ok(call)
@@ -786,18 +771,19 @@ enum ConversionSource {
 }
 
 fn conversion_transfer(
-    observation: &Observation,
+    event: &TraceEvent,
 ) -> Result<
     Option<(usize, Address, ConversionSource, alloy_primitives::U256)>,
     ConfluxSimulationError,
 > {
-    let Observation::InternalTransfer {
+    let TraceEvent::InternalTransfer {
         position,
         space,
         from,
         to: AddressPocket::MintBurn,
         value,
-    } = observation
+        ..
+    } = event
     else {
         return Ok(None);
     };
@@ -821,24 +807,6 @@ fn conversion_transfer(
         source,
         u256_from_cfx(*value),
     )))
-}
-
-fn verify_next_position(
-    previous: usize,
-    next: usize,
-    operation: &str,
-) -> Result<(), ConfluxSimulationError> {
-    let expected = previous.checked_add(1).ok_or_else(|| {
-        ConfluxSimulationError::analysis_failed(format!(
-            "Core Space {operation} observation position overflowed"
-        ))
-    })?;
-    if next != expected {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
-            "Core Space {operation} internal transfers were not contiguous"
-        )));
-    }
-    Ok(())
 }
 
 fn transit_mismatch(resource: &str) -> ConfluxSimulationError {

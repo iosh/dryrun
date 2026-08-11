@@ -5,7 +5,7 @@ use cfx_types::Space;
 use super::{NativeOperation, NativeOperations};
 use crate::{
     espace::EspaceNativeChangeError,
-    execution::Observation,
+    execution::{CommittedExecutionTrace, FrameAction, TraceEvent},
     primitive::{address_from_cfx, u256_from_cfx},
 };
 
@@ -15,47 +15,46 @@ struct NativeOperationCollector {
 }
 
 pub(super) fn collect_native_operations(
-    observations: &[Observation],
+    trace: &CommittedExecutionTrace,
 ) -> Result<NativeOperations, EspaceNativeChangeError> {
     let mut collector = NativeOperationCollector::default();
 
-    for observation in observations {
-        match observation {
-            Observation::Call {
-                position,
-                space: Space::Ethereum,
-                caller,
-                target,
-                transferred_value,
-                ..
-            } => collector.push_account_transfer(
-                *position,
-                address_from_cfx(*caller),
-                address_from_cfx(*target),
-                u256_from_cfx(*transferred_value),
-            ),
-            Observation::CreateTransfer {
-                position,
-                space: Space::Ethereum,
-                from,
-                to,
-                value,
-            } => collector.push_account_transfer(
-                *position,
-                address_from_cfx(*from),
-                address_from_cfx(*to),
-                u256_from_cfx(*value),
-            ),
-            Observation::InternalTransfer {
+    for event in trace.events() {
+        match event {
+            TraceEvent::FrameStart { position, frame_id } => match &trace.frame(*frame_id).action {
+                FrameAction::Call {
+                    caller,
+                    target,
+                    transferred_value,
+                    ..
+                } if trace.frame(*frame_id).space == Space::Ethereum => collector
+                    .push_account_transfer(
+                        *position,
+                        address_from_cfx(*caller),
+                        address_from_cfx(*target),
+                        u256_from_cfx(*transferred_value),
+                    ),
+                FrameAction::Create {
+                    creator,
+                    created_address,
+                    value,
+                } if trace.frame(*frame_id).space == Space::Ethereum => collector
+                    .push_account_transfer(
+                        *position,
+                        address_from_cfx(*creator),
+                        address_from_cfx(*created_address),
+                        u256_from_cfx(*value),
+                    ),
+                FrameAction::Call { .. } | FrameAction::Create { .. } => {}
+            },
+            TraceEvent::InternalTransfer {
                 position,
                 from,
                 to,
                 value,
                 ..
             } => collector.collect_internal_transfer(*position, from, to, u256_from_cfx(*value))?,
-            Observation::Call { .. }
-            | Observation::CreateTransfer { .. }
-            | Observation::Log { .. } => {}
+            TraceEvent::Log { .. } => {}
         }
     }
 

@@ -50,22 +50,22 @@ pub(crate) enum PoSEvent {
 }
 
 pub(super) fn decode_vote_lock_call(
-    input_len: usize,
-    input_prefix: &[u8],
+    calldata_len: usize,
+    calldata_prefix: &[u8],
 ) -> Result<Option<VoteLockCall>, ConfluxSimulationError> {
-    if call_selector(input_len, input_prefix) != Some(VOTE_LOCK_SELECTOR) {
+    if call_selector(calldata_len, calldata_prefix) != Some(VOTE_LOCK_SELECTOR) {
         return Ok(None);
     }
     Ok(Some(VoteLockCall {
         amount: U256::from_be_bytes(read_call_word(
-            input_len,
-            input_prefix,
+            calldata_len,
+            calldata_prefix,
             4,
             "voteLock amount",
         )?),
         unlock_block_number: low_u64(read_call_word(
-            input_len,
-            input_prefix,
+            calldata_len,
+            calldata_prefix,
             36,
             "voteLock unlock block number",
         )?),
@@ -73,39 +73,39 @@ pub(super) fn decode_vote_lock_call(
 }
 
 pub(super) fn decode_pos_call(
-    input_len: usize,
-    input_prefix: &[u8],
+    calldata_len: usize,
+    calldata_prefix: &[u8],
 ) -> Result<Option<PoSCall>, ConfluxSimulationError> {
-    let Some(selector) = call_selector(input_len, input_prefix) else {
+    let Some(selector) = call_selector(calldata_len, calldata_prefix) else {
         return Ok(None);
     };
     match selector {
         POS_REGISTER_SELECTOR => Ok(Some(PoSCall::Registration {
             pos_identifier: B256::from(read_call_word(
-                input_len,
-                input_prefix,
+                calldata_len,
+                calldata_prefix,
                 4,
                 "PoS register identifier",
             )?),
             vote_count: low_u64(read_call_word(
-                input_len,
-                input_prefix,
+                calldata_len,
+                calldata_prefix,
                 36,
                 "PoS register vote count",
             )?),
         })),
         POS_INCREASE_STAKE_SELECTOR => Ok(Some(PoSCall::StakeIncrease {
             vote_count: low_u64(read_call_word(
-                input_len,
-                input_prefix,
+                calldata_len,
+                calldata_prefix,
                 4,
                 "PoS increase vote count",
             )?),
         })),
         POS_RETIRE_SELECTOR => Ok(Some(PoSCall::RetirementRequest {
             requested_vote_count: low_u64(read_call_word(
-                input_len,
-                input_prefix,
+                calldata_len,
+                calldata_prefix,
                 4,
                 "PoS retire vote count",
             )?),
@@ -130,29 +130,29 @@ pub(crate) fn decode_pos_staking_events(
         .collect()
 }
 
-fn call_selector(input_len: usize, input_prefix: &[u8]) -> Option<[u8; 4]> {
-    if input_len < 4 || input_prefix.len() < 4 {
+fn call_selector(calldata_len: usize, calldata_prefix: &[u8]) -> Option<[u8; 4]> {
+    if calldata_len < 4 || calldata_prefix.len() < 4 {
         return None;
     }
     let mut selector = [0_u8; 4];
-    selector.copy_from_slice(&input_prefix[..4]);
+    selector.copy_from_slice(&calldata_prefix[..4]);
     Some(selector)
 }
 
 fn read_call_word(
-    input_len: usize,
-    input_prefix: &[u8],
+    calldata_len: usize,
+    calldata_prefix: &[u8],
     offset: usize,
     field: &str,
 ) -> Result<[u8; 32], ConfluxSimulationError> {
     let end = offset + 32;
-    if input_len < end || input_prefix.len() < end {
+    if calldata_len < end || calldata_prefix.len() < end {
         return Err(ConfluxSimulationError::analysis_failed(format!(
-            "Core Space {field} was not fully captured in the call prefix"
+            "Core Space {field} was not fully captured in the calldata prefix"
         )));
     }
     let mut word = [0_u8; 32];
-    word.copy_from_slice(&input_prefix[offset..end]);
+    word.copy_from_slice(&calldata_prefix[offset..end]);
     Ok(word)
 }
 

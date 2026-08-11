@@ -8,7 +8,9 @@ use alloy_primitives::{Address, U256};
 use cfx_executor::{machine::Machine, state::State};
 use contract_standards::{Erc20Metadata, MetadataCall, StandardChange, metadata_calls};
 
-use crate::execution::{ConfluxExecutionOutput, Observation, PreparedTransactionExecution};
+use crate::execution::{
+    CommittedExecutionTrace, ConfluxExecutionOutput, PreparedTransactionExecution, TraceEvent,
+};
 
 use self::{
     native::{NativeAnalysis, NativeBalances},
@@ -79,7 +81,7 @@ impl EspaceChangesAnalysis {
         wrapped_native_token: Address,
         currency: &EspaceNativeCurrency,
     ) -> Result<Self, EspaceChangesError> {
-        verify_committed_logs(&output.observations, &output.logs)?;
+        verify_committed_logs(&output.trace, &output.logs)?;
         if !successful && !output.logs.is_empty() {
             return Err(EspaceChangesError::invalid_execution_evidence(
                 "failed execution returned committed receipt logs",
@@ -87,12 +89,12 @@ impl EspaceChangesAnalysis {
         }
 
         let standard_occurrences = if successful {
-            decode_standard_occurrences(&output.observations)
+            decode_standard_occurrences(&output.trace)
         } else {
             Vec::new()
         };
         let wrapped_native_occurrences = if successful {
-            decode_wrapped_native_occurrences(&output.observations, wrapped_native_token)
+            decode_wrapped_native_occurrences(&output.trace, wrapped_native_token)
         } else {
             Vec::new()
         };
@@ -194,40 +196,40 @@ fn collect_metadata_calls(
 }
 
 fn verify_committed_logs(
-    observations: &[Observation],
+    trace: &CommittedExecutionTrace,
     committed_logs: &[primitives::LogEntry],
 ) -> Result<(), EspaceChangesError> {
-    let observed_logs = observations.iter().filter_map(|observation| {
-        let Observation::Log {
-            space,
+    let trace_logs = trace.events().iter().filter_map(|event| {
+        let TraceEvent::Log {
+            frame_id,
             address,
             topics,
             data,
             ..
-        } = observation
+        } = event
         else {
             return None;
         };
-        Some((space, address, topics, data))
+        Some((trace.frame(*frame_id).space, address, topics, data))
     });
-    let observed_count = observed_logs.clone().count();
-    if observed_count != committed_logs.len() {
+    let trace_log_count = trace_logs.clone().count();
+    if trace_log_count != committed_logs.len() {
         return Err(EspaceChangesError::invalid_execution_evidence(format!(
-            "observer recorded {observed_count} committed logs, executor returned {}",
+            "trace contains {trace_log_count} committed logs, executor returned {}",
             committed_logs.len()
         )));
     }
 
     for (index, ((space, address, topics, data), committed)) in
-        observed_logs.zip(committed_logs).enumerate()
+        trace_logs.zip(committed_logs).enumerate()
     {
-        if *space != committed.space
+        if space != committed.space
             || *address != committed.address
             || topics != &committed.topics
             || data.as_slice() != committed.data.as_slice()
         {
             return Err(EspaceChangesError::invalid_execution_evidence(format!(
-                "observer log {index} does not match the committed executor log"
+                "trace log {index} does not match the committed executor log"
             )));
         }
     }

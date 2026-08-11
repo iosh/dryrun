@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use super::{
     ExecutionBlockContextError,
-    observer::{Observation, ObservationKey},
+    observer::{CommittedExecutionTrace, ExecutionTraceKey},
 };
 use crate::primitive::u256_from_cfx;
 
@@ -38,7 +38,7 @@ pub(crate) struct ConfluxExecutionOutput {
     pub(crate) storage_collateralized: Vec<StorageChange>,
     pub(crate) storage_released: Vec<StorageChange>,
     pub(crate) contracts_created: Vec<AddressWithSpace>,
-    pub(crate) observations: Vec<Observation>,
+    pub(crate) trace: CommittedExecutionTrace,
 }
 
 /// The normalized outcome exchanged between shared execution and each space.
@@ -61,8 +61,8 @@ pub(crate) enum TransactionExecutionError {
     #[error("state access failed: {0}")]
     StateAccess(#[source] StateDbError),
 
-    #[error("executed transaction did not produce a valid observation journal")]
-    MissingObservations,
+    #[error("executed transaction did not produce a valid committed execution trace")]
+    MissingExecutionTrace,
 
     #[error(
         "execution returned {field} value {value}, exceeding the simulator maximum \
@@ -116,9 +116,9 @@ fn executed_transaction_details(
         mut ext_result,
     } = executed;
 
-    let observations = ext_result
-        .remove::<ObservationKey>()
-        .ok_or(TransactionExecutionError::MissingObservations)?;
+    let trace = ext_result
+        .remove::<ExecutionTraceKey>()
+        .ok_or(TransactionExecutionError::MissingExecutionTrace)?;
     let gas_used =
         u64::try_from(gas_used).map_err(|_| TransactionExecutionError::GasValueOutOfRange {
             field: "gas used",
@@ -145,6 +145,6 @@ fn executed_transaction_details(
         storage_collateralized,
         storage_released,
         contracts_created,
-        observations,
+        trace,
     })
 }

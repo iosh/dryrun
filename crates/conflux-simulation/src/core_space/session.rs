@@ -7,7 +7,7 @@ use crate::{
     ConfluxSimulationBackend, ConfluxSimulationError,
     execution::{
         ConfluxExecutionOutcome, ConfluxTransactionExecution, ConfluxTransactionExecutor,
-        DryRunTransactionInput, ExecutionBlockContext, ObservationObserver,
+        DryRunTransactionInput, ExecutionBlockContext, ExecutionTraceObserver,
         TransactionExecutionInput, build_conflux_state,
     },
     state::{AnchoredVoteLists, ConfluxStateSource, MaskedSponsorWhitelistEntries},
@@ -68,7 +68,7 @@ impl CoreSpaceExecutionSession {
         };
         let state_before_execution = self.state.save();
         let execution = ConfluxTransactionExecutor::new(&mut self.state, &self.machine)
-            .execute(execution_input, ObservationObserver::new(Space::Native))
+            .execute(execution_input, ExecutionTraceObserver::new(Space::Native))
             .map_err(ConfluxSimulationError::from)?;
 
         let changes = if matches!(&execution.outcome, ConfluxExecutionOutcome::Success(_)) {

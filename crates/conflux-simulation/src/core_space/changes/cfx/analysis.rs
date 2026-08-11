@@ -37,7 +37,7 @@ impl CfxAnalysisInput {
         let expected_gas_fee_payer =
             determine_gas_fee_payer(&execution.prepared.transaction, details.gas_sponsor_paid)?;
         let operations = collect_cfx_operations(
-            &details.observations,
+            &details.trace,
             &details.contracts_created,
             &details.storage_released,
             machine,

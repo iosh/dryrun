@@ -21,7 +21,7 @@ impl NativeAnalysis {
         execution: &ConfluxExecutionOutput,
     ) -> Result<Self, EspaceNativeChangeError> {
         Ok(Self {
-            operations: collection::collect_native_operations(&execution.observations)?,
+            operations: collection::collect_native_operations(&execution.trace)?,
         })
     }
 
