@@ -10,8 +10,8 @@ use crate::{
 use super::{
     CoreSpaceBlockSelector, CoreSpaceCompleteTransaction, CoreSpaceCompleteTransactionVariant,
     CoreSpaceTransactionInput, CoreSpaceTransactionRejection, ResolvedCoreSpaceContext,
-    build_core_space_not_executed, complete_transaction, prepare_storage_payer,
-    resolve_core_space_context,
+    build_core_space_not_executed, complete_transaction, resolve_core_space_context,
+    resolve_storage_sponsorship,
 };
 
 #[derive(Clone)]
@@ -75,9 +75,12 @@ impl CoreSpaceSimulationPreparer {
             });
         }
 
-        let storage_payer =
-            prepare_storage_payer(self.backend.provider(), context.state_anchor, &transaction)
-                .await?;
+        let storage_sponsorship = resolve_storage_sponsorship(
+            self.backend.provider(),
+            context.state_anchor,
+            &transaction,
+        )
+        .await?;
         let state_source = self
             .backend
             .prepare_state_source(context.state_anchor)
@@ -89,7 +92,7 @@ impl CoreSpaceSimulationPreparer {
                 chain_id,
                 public_context,
                 transaction,
-                storage_payer,
+                storage_sponsorship,
                 execution_block_context: context.execution_block_context,
                 state_source,
             })),

@@ -15,7 +15,7 @@ use crate::{
 
 use super::{
     CoreSpaceChange, CoreSpaceCompleteTransaction, CoreSpaceExecutionError,
-    CoreSpaceExecutionOutcome, CoreSpaceStateAccessError, PreparedStoragePayer,
+    CoreSpaceExecutionOutcome, CoreSpaceStateAccessError, ResolvedStorageSponsorship,
     analysis::CoreSpaceChangeAnalysis, convert_executor_outcome,
     transaction::build_core_space_transaction_input,
 };
@@ -60,7 +60,7 @@ impl CoreSpaceExecutionSession {
         mut self,
         transaction: &CoreSpaceCompleteTransaction,
         block_context: ExecutionBlockContext,
-        storage_payer: PreparedStoragePayer,
+        storage_sponsorship: ResolvedStorageSponsorship,
     ) -> Result<CoreSpaceExecutionSessionResult, ConfluxSimulationError> {
         let execution_input = TransactionExecutionInput {
             block_context,
@@ -117,7 +117,7 @@ impl CoreSpaceExecutionSession {
             &execution.prepared,
             transaction,
             &self.state,
-            storage_payer,
+            storage_sponsorship,
         )?;
 
         Ok(CoreSpaceExecutionSessionResult { outcome, changes })

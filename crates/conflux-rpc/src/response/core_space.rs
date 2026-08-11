@@ -226,8 +226,8 @@ impl ExecutedWireFields {
         Self {
             gas_used: result.gas().gas_used().into(),
             gas_charged: result.gas().gas_charged().into(),
-            fee: u256_to_wire(result.charged_fee()),
-            burnt_fee: result.burnt_fee().map(u256_to_wire),
+            fee: u256_to_wire(result.gas_fee()),
+            burnt_fee: result.burnt_gas_fee().map(u256_to_wire),
             gas_covered_by_sponsor: result.gas_covered_by_sponsor(),
             storage_covered_by_sponsor: result.storage_covered_by_sponsor(),
         }

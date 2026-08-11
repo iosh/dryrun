@@ -18,7 +18,7 @@ pub(crate) use completion::complete_transaction;
 pub(crate) use outcome::{
     build_core_space_execution, build_core_space_not_executed, convert_executor_outcome,
 };
-pub(crate) use transaction::{PreparedStoragePayer, prepare_storage_payer};
+pub(crate) use transaction::{ResolvedStorageSponsorship, resolve_storage_sponsorship};
 
 pub use changes::{
     CoreSpaceChange, CrossSpaceAddress, SponsoredResource, SponsorshipConfiguration,

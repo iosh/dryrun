@@ -13,7 +13,7 @@ use super::{
     CoreSpaceExecutionError, CoreSpaceExecutionFailure, CoreSpaceExecutionOutcome,
     CoreSpaceExecutionResult, CoreSpaceGas, CoreSpaceLog, CoreSpaceLogAddress,
     CoreSpaceResultIntegrationError, CoreSpaceRevertReason, CoreSpaceStateAccessError,
-    CoreSpaceSuccessOutput, CoreSpaceTransactionRejection, PreparedStoragePayer,
+    CoreSpaceSuccessOutput, CoreSpaceTransactionRejection, ResolvedStorageSponsorship,
 };
 use crate::{
     execution::{ConfluxExecutionOutcome, ConfluxExecutionOutput, PreparedTransactionExecution},
@@ -53,13 +53,13 @@ pub(crate) fn convert_executor_outcome(
     prepared: &PreparedTransactionExecution,
     transaction: &CoreSpaceCompleteTransaction,
     state: &State,
-    storage_payer: PreparedStoragePayer,
+    storage_sponsorship: ResolvedStorageSponsorship,
 ) -> Result<CoreSpaceExecutionOutcome, CoreSpaceExecutionError> {
     let network = transaction.from.network();
     match outcome {
         ConfluxExecutionOutcome::Success(output) => {
             let storage_covered_by_sponsor = storage_covered_by_sponsor_for_outcome(
-                storage_payer,
+                storage_sponsorship,
                 output.storage_sponsor_paid,
                 StorageCoverageOutcome::Success,
                 &prepared.spec,
@@ -82,7 +82,7 @@ pub(crate) fn convert_executor_outcome(
                     StorageCoverageOutcome::FullyChargedFailure
                 };
             let storage_covered_by_sponsor = storage_covered_by_sponsor_for_outcome(
-                storage_payer,
+                storage_sponsorship,
                 details.storage_sponsor_paid,
                 storage_coverage_outcome,
                 &prepared.spec,
@@ -421,7 +421,7 @@ enum StorageCoverageOutcome {
 }
 
 fn storage_covered_by_sponsor_for_outcome(
-    prepared: PreparedStoragePayer,
+    resolved: ResolvedStorageSponsorship,
     executor_reported: bool,
     outcome: StorageCoverageOutcome,
     spec: &cfx_vm_types::Spec,
@@ -430,8 +430,10 @@ fn storage_covered_by_sponsor_for_outcome(
         StorageCoverageOutcome::Success | StorageCoverageOutcome::Reverted => spec.cip78a,
         StorageCoverageOutcome::FullyChargedFailure => spec.cip78b,
     };
+    // EstimateSender cannot report post-CIP-78 storage sponsorship. Reconstruct
+    // normal receipt semantics from the same anchored state in those branches.
     if use_prepared_value {
-        prepared.storage_covered_by_sponsor()
+        resolved.storage_covered_by_sponsor()
     } else {
         executor_reported
     }

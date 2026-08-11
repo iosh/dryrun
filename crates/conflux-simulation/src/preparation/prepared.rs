@@ -2,7 +2,7 @@ use crate::{
     ConfluxSimulationBackend,
     core_space::{
         CoreSpaceBlockContext, CoreSpaceCompleteTransaction, CoreSpaceExecution,
-        PreparedStoragePayer,
+        ResolvedStorageSponsorship,
     },
     execution::ExecutionBlockContext,
     state::ConfluxStateSource,
@@ -28,7 +28,7 @@ pub(crate) struct ReadyCoreSpaceSimulation {
     pub(crate) chain_id: u32,
     pub(crate) public_context: CoreSpaceBlockContext,
     pub(crate) transaction: CoreSpaceCompleteTransaction,
-    pub(crate) storage_payer: PreparedStoragePayer,
+    pub(crate) storage_sponsorship: ResolvedStorageSponsorship,
     pub(crate) execution_block_context: ExecutionBlockContext,
     pub(crate) state_source: ConfluxStateSource,
 }

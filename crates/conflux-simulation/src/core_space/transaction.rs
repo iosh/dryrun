@@ -199,23 +199,23 @@ pub enum CoreSpaceTransactionCompletionError {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct PreparedStoragePayer {
+pub(crate) struct ResolvedStorageSponsorship {
     storage_covered_by_sponsor: bool,
 }
 
-impl PreparedStoragePayer {
+impl ResolvedStorageSponsorship {
     pub(crate) const fn storage_covered_by_sponsor(self) -> bool {
         self.storage_covered_by_sponsor
     }
 }
 
-pub(crate) async fn prepare_storage_payer(
+pub(crate) async fn resolve_storage_sponsorship(
     provider: &ConfluxSimulationProvider,
     state_anchor: ConfluxStateAnchor,
     transaction: &CoreSpaceCompleteTransaction,
-) -> Result<PreparedStoragePayer, ConfluxSimulationError> {
+) -> Result<ResolvedStorageSponsorship, ConfluxSimulationError> {
     let Some(target) = transaction.to.as_ref() else {
-        return Ok(PreparedStoragePayer {
+        return Ok(ResolvedStorageSponsorship {
             storage_covered_by_sponsor: false,
         });
     };
@@ -225,7 +225,7 @@ pub(crate) async fn prepare_storage_payer(
         .cfx_get_code(target_cfx, state_anchor.core_space_pivot())
         .await?;
     if code.is_empty() {
-        return Ok(PreparedStoragePayer {
+        return Ok(ResolvedStorageSponsorship {
             storage_covered_by_sponsor: false,
         });
     }
@@ -236,18 +236,18 @@ pub(crate) async fn prepare_storage_payer(
             transaction.from,
             *target,
             transaction.gas_limit,
-            storage_payer_gas_price(&transaction.variant),
+            sponsorship_check_gas_price(&transaction.variant),
             storage_limit,
             state_anchor.core_space_epoch(),
         )
         .await?;
 
-    Ok(PreparedStoragePayer {
+    Ok(ResolvedStorageSponsorship {
         storage_covered_by_sponsor: !balance_check.will_pay_collateral,
     })
 }
 
-fn storage_payer_gas_price(variant: &CoreSpaceCompleteTransactionVariant) -> U256 {
+fn sponsorship_check_gas_price(variant: &CoreSpaceCompleteTransactionVariant) -> U256 {
     match variant {
         CoreSpaceCompleteTransactionVariant::Cip155 { gas_price }
         | CoreSpaceCompleteTransactionVariant::Cip2930 { gas_price, .. } => *gas_price,

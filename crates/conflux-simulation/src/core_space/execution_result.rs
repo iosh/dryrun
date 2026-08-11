@@ -51,8 +51,8 @@ impl CoreSpaceGas {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreSpaceExecutionResult {
     gas: CoreSpaceGas,
-    charged_fee: U256,
-    burnt_fee: Option<U256>,
+    gas_fee: U256,
+    burnt_gas_fee: Option<U256>,
     gas_covered_by_sponsor: bool,
     storage_covered_by_sponsor: bool,
 }
@@ -60,15 +60,15 @@ pub struct CoreSpaceExecutionResult {
 impl CoreSpaceExecutionResult {
     pub(crate) const fn new(
         gas: CoreSpaceGas,
-        charged_fee: U256,
-        burnt_fee: Option<U256>,
+        gas_fee: U256,
+        burnt_gas_fee: Option<U256>,
         gas_covered_by_sponsor: bool,
         storage_covered_by_sponsor: bool,
     ) -> Self {
         Self {
             gas,
-            charged_fee,
-            burnt_fee,
+            gas_fee,
+            burnt_gas_fee,
             gas_covered_by_sponsor,
             storage_covered_by_sponsor,
         }
@@ -78,12 +78,12 @@ impl CoreSpaceExecutionResult {
         &self.gas
     }
 
-    pub const fn charged_fee(&self) -> U256 {
-        self.charged_fee
+    pub const fn gas_fee(&self) -> U256 {
+        self.gas_fee
     }
 
-    pub const fn burnt_fee(&self) -> Option<U256> {
-        self.burnt_fee
+    pub const fn burnt_gas_fee(&self) -> Option<U256> {
+        self.burnt_gas_fee
     }
 
     pub const fn gas_covered_by_sponsor(&self) -> bool {

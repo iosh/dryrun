@@ -38,12 +38,13 @@ fn simulate_ready(
         chain_id,
         public_context,
         transaction,
-        storage_payer,
+        storage_sponsorship,
         execution_block_context,
         state_source,
     } = ready_simulation;
     let session = CoreSpaceExecutionSession::new(&backend, state_source, runtime_handle.clone())?;
-    let session_result = session.execute(&transaction, execution_block_context, storage_payer)?;
+    let session_result =
+        session.execute(&transaction, execution_block_context, storage_sponsorship)?;
     let gas_limit = transaction.gas_limit;
     let core_execution =
         build_core_space_execution(chain_id, public_context, gas_limit, session_result.outcome);
