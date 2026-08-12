@@ -1,32 +1,27 @@
 use cfx_executor::{machine::Machine, state::State};
-use cfx_types::Space;
-use contract_standards::legacy::{
-    StandardCandidate, StandardStateValues, StatePhase, StateRequirements, metadata_requests,
-    state_requirements, verify,
-};
+use conflux_provider::Network;
 
 use crate::{
     ConfluxSimulationError,
     execution::{
         ConfluxExecutionOutcome, ConfluxTransactionExecution, PreparedTransactionExecution,
     },
-    standards::{collect_standard_candidates, load_change_metadata, read_standard_state_values},
     state::{AnchoredVoteLists, MaskedSponsorWhitelistEntries},
 };
 
 use super::changes::{
-    CfxAnalysisInput, CfxStateValues, CommittedStakingCalls, CoreSpaceChange, PoSAnalysisInput,
-    PoSStateReader, PoSStateValues, PositionedCoreSpaceChange, StakingContractActivation,
-    collect_committed_staking_calls, order_and_enrich_core_space_changes,
-    verify_pos_staking_changes, verify_vote_lock_changes,
+    CfxAnalysisInput, CfxStateValues, CommittedStakingCalls, CoreSpaceChange,
+    CoreSpaceNativeCurrency, PoSAnalysisInput, PoSStateReader, PoSStateValues,
+    PositionedCoreSpaceChange, StakingContractActivation, StatePhase,
+    collect_committed_staking_calls, collect_standard_changes, finish_core_space_changes,
+    load_standard_metadata, verify_pos_staking_changes, verify_vote_lock_changes,
 };
 
 struct CoreSpaceAnalysisInput {
     cfx: CfxAnalysisInput,
     committed_staking_calls: CommittedStakingCalls,
     pos: PoSAnalysisInput,
-    standard_candidates: Vec<StandardCandidate>,
-    standard_state_requirements: StateRequirements,
+    standard_changes: Vec<PositionedCoreSpaceChange>,
 }
 
 impl CoreSpaceAnalysisInput {
@@ -53,15 +48,13 @@ impl CoreSpaceAnalysisInput {
             &details.logs,
             staking_contract_activation.pos_register_is_active(),
         )?;
-        let standard_candidates = collect_standard_candidates(&details.trace, Space::Native)?;
-        let standard_state_requirements = state_requirements(&standard_candidates);
+        let standard_changes = collect_standard_changes(details)?;
 
         Ok(Self {
             cfx,
             committed_staking_calls,
             pos,
-            standard_candidates,
-            standard_state_requirements,
+            standard_changes,
         })
     }
 }
@@ -70,7 +63,6 @@ impl CoreSpaceAnalysisInput {
 pub(super) struct CoreSpaceStateValues {
     cfx: CfxStateValues,
     pos: Option<PoSStateValues>,
-    standards: StandardStateValues,
 }
 
 #[derive(Default)]
@@ -82,8 +74,8 @@ impl CoreSpaceStateReader {
     fn read(
         &mut self,
         state: &mut State,
-        machine: &Machine,
-        prepared_execution: &PreparedTransactionExecution,
+        _machine: &Machine,
+        _prepared_execution: &PreparedTransactionExecution,
         analysis_input: &CoreSpaceAnalysisInput,
         phase: StatePhase,
     ) -> Result<CoreSpaceStateValues, ConfluxSimulationError> {
@@ -94,19 +86,7 @@ impl CoreSpaceStateReader {
             analysis_input.pos.state_requirements(),
             phase,
         )?;
-        let standards = read_standard_state_values(
-            state,
-            machine,
-            prepared_execution,
-            phase,
-            &analysis_input.standard_state_requirements,
-        )?;
-
-        Ok(CoreSpaceStateValues {
-            cfx,
-            pos,
-            standards,
-        })
+        Ok(CoreSpaceStateValues { cfx, pos })
     }
 }
 
@@ -114,6 +94,8 @@ pub(super) struct CoreSpaceChangeAnalysis {
     input: CoreSpaceAnalysisInput,
     state_reader: CoreSpaceStateReader,
     anchored_vote_lists: AnchoredVoteLists,
+    network: Network,
+    currency: CoreSpaceNativeCurrency,
 }
 
 impl CoreSpaceChangeAnalysis {
@@ -122,6 +104,8 @@ impl CoreSpaceChangeAnalysis {
         machine: &Machine,
         masked_sponsor_whitelist_entries: &MaskedSponsorWhitelistEntries,
         anchored_vote_lists: &AnchoredVoteLists,
+        network: Network,
+        currency: &CoreSpaceNativeCurrency,
     ) -> Result<Self, ConfluxSimulationError> {
         Ok(Self {
             input: CoreSpaceAnalysisInput::from_execution(
@@ -131,6 +115,8 @@ impl CoreSpaceChangeAnalysis {
             )?,
             state_reader: CoreSpaceStateReader::default(),
             anchored_vote_lists: anchored_vote_lists.clone(),
+            network,
+            currency: currency.clone(),
         })
     }
 
@@ -156,25 +142,18 @@ impl CoreSpaceChangeAnalysis {
         let Self {
             input: analysis_input,
             anchored_vote_lists,
+            network,
+            currency,
             ..
         } = self;
         let CoreSpaceStateValues {
             cfx: before_cfx_state,
             pos: before_pos_state,
-            standards: before_standard_state,
         } = before;
         let CoreSpaceStateValues {
             cfx: after_cfx_state,
             pos: after_pos_state,
-            standards: after_standard_state,
         } = after;
-
-        let positioned_standard_changes = verify(
-            &analysis_input.standard_candidates,
-            &before_standard_state,
-            &after_standard_state,
-        )?;
-        let metadata_requests = metadata_requests(&positioned_standard_changes);
         let mut positioned_core_changes = analysis_input
             .cfx
             .verify(&before_cfx_state, &after_cfx_state)?;
@@ -207,21 +186,14 @@ impl CoreSpaceChangeAnalysis {
             }
         }
 
-        positioned_core_changes.extend(
-            positioned_standard_changes
-                .into_iter()
-                .map(PositionedCoreSpaceChange::from),
-        );
+        positioned_core_changes.extend(analysis_input.standard_changes);
 
         if positioned_core_changes.is_empty() {
             return Ok(Vec::new());
         }
 
         let metadata =
-            load_change_metadata(state, machine, prepared_execution, &metadata_requests)?;
-        Ok(order_and_enrich_core_space_changes(
-            positioned_core_changes,
-            &metadata,
-        ))
+            load_standard_metadata(state, machine, prepared_execution, &positioned_core_changes)?;
+        finish_core_space_changes(positioned_core_changes, &metadata, network, &currency)
     }
 }

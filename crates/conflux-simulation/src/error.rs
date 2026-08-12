@@ -2,18 +2,7 @@ use std::fmt;
 
 use alloy::{primitives::U256, transports::TransportError};
 use conflux_provider::ConfluxProviderError;
-use contract_standards::legacy::ContractStandardsError;
 use thiserror::Error;
-
-use crate::{
-    ConfluxRpcError,
-    core_space::{
-        CoreSpaceContextError, CoreSpaceExecutionError, CoreSpaceTransactionCompletionError,
-        CoreSpaceTransactionInputError,
-    },
-    espace::EspaceContextError,
-    execution::{ExecutionBlockContextError, TransactionExecutionError},
-};
 
 /// Chain identity values expected from or observed at the paired Conflux endpoints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -121,28 +110,7 @@ pub enum ConfluxInitializationError {
 }
 
 #[derive(Debug, Error)]
-pub enum ConfluxSimulationError {
-    #[error(transparent)]
-    EspaceContext(#[from] EspaceContextError),
-
-    #[error(transparent)]
-    CoreSpaceContext(#[from] CoreSpaceContextError),
-
-    #[error(transparent)]
-    CoreSpaceInput(#[from] CoreSpaceTransactionInputError),
-
-    #[error(transparent)]
-    CoreSpaceCompletion(#[from] CoreSpaceTransactionCompletionError),
-
-    #[error(transparent)]
-    CoreSpaceExecution(#[from] CoreSpaceExecutionError),
-
-    #[error(transparent)]
-    BlockContext(#[from] ExecutionBlockContextError),
-
-    #[error(transparent)]
-    Provider(#[from] ConfluxRpcError),
-
+pub(crate) enum ConfluxSimulationError {
     #[error("state access failed: {message}")]
     StateAccess { message: String },
 
@@ -157,26 +125,6 @@ impl ConfluxSimulationError {
     pub(crate) fn analysis_failed(message: impl Into<String>) -> Self {
         Self::Analysis {
             message: message.into(),
-        }
-    }
-}
-
-impl From<ContractStandardsError> for ConfluxSimulationError {
-    fn from(error: ContractStandardsError) -> Self {
-        Self::analysis_failed(error.to_string())
-    }
-}
-
-impl From<TransactionExecutionError> for ConfluxSimulationError {
-    fn from(error: TransactionExecutionError) -> Self {
-        match error {
-            TransactionExecutionError::BlockContext(error) => Self::BlockContext(error),
-            TransactionExecutionError::StateAccess(error) => Self::StateAccess {
-                message: error.to_string(),
-            },
-            error => Self::ExecutionInternal {
-                message: error.to_string(),
-            },
         }
     }
 }

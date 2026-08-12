@@ -1,13 +1,26 @@
 use alloy_primitives::U256;
 use cfx_statedb::Error as StateDbError;
+use cfx_storage::Error as StorageError;
 use conflux_provider::CoreAddress;
 use thiserror::Error;
+use tokio::task::JoinError;
 
-use crate::execution::{ExecutionBlockContextError, TransactionExecutionError};
+use super::{
+    CoreSpaceContextError, CoreSpaceTransactionCompletionError, CoreSpaceTransactionInputError,
+};
+use crate::{
+    ConfluxRpcError, ConfluxSimulationError,
+    execution::{ExecutionBlockContextError, TransactionExecutionError},
+};
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum CoreSpaceStateAccessError {
+    #[error("failed to prepare anchored Core Space state: {source}")]
+    Preparation {
+        #[source]
+        source: StorageError,
+    },
     #[error("failed to initialize anchored Core Space state: {source}")]
     Initialization {
         #[source]
@@ -19,6 +32,51 @@ pub enum CoreSpaceStateAccessError {
         #[source]
         source: StateDbError,
     },
+}
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum CoreSpaceStorageSponsorshipError {
+    #[error("failed to inspect Core Space contract {contract} for storage sponsorship: {source}")]
+    ContractCodeLookup {
+        contract: CoreAddress,
+        #[source]
+        source: ConfluxRpcError,
+    },
+    #[error(
+        "failed to resolve storage sponsorship for sender {sender} and contract {contract}: {source}"
+    )]
+    EligibilityLookup {
+        sender: CoreAddress,
+        contract: CoreAddress,
+        #[source]
+        source: ConfluxRpcError,
+    },
+}
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum CoreSpaceChangesError {
+    #[error("Core Space change analysis could not access anchored state: {details}")]
+    StateAccess { details: String },
+    #[error("Core Space execution facts were inconsistent: {details}")]
+    InvalidExecutionFacts { details: String },
+    #[error("Core Space change analysis failed: {details}")]
+    Analysis { details: String },
+}
+
+impl CoreSpaceChangesError {
+    pub(crate) fn from_internal(error: ConfluxSimulationError) -> Self {
+        match error {
+            ConfluxSimulationError::StateAccess { message } => {
+                Self::StateAccess { details: message }
+            }
+            ConfluxSimulationError::ExecutionInternal { message } => {
+                Self::InvalidExecutionFacts { details: message }
+            }
+            ConfluxSimulationError::Analysis { message } => Self::Analysis { details: message },
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -79,5 +137,35 @@ impl From<TransactionExecutionError> for CoreSpaceExecutionError {
                 error.to_string(),
             )),
         }
+    }
+}
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum CoreSpaceSimulationError {
+    #[error(transparent)]
+    Input(#[from] CoreSpaceTransactionInputError),
+    #[error(transparent)]
+    Context(#[from] CoreSpaceContextError),
+    #[error(transparent)]
+    Completion(#[from] CoreSpaceTransactionCompletionError),
+    #[error(transparent)]
+    StorageSponsorship(#[from] CoreSpaceStorageSponsorshipError),
+    #[error(transparent)]
+    Execution(#[from] CoreSpaceExecutionError),
+    #[error(transparent)]
+    Changes(#[from] CoreSpaceChangesError),
+    #[error("Core Space simulation requires an active Tokio runtime")]
+    RuntimeUnavailable,
+    #[error("blocking Core Space simulation task terminated unexpectedly: {source}")]
+    ExecutionTask {
+        #[source]
+        source: JoinError,
+    },
+}
+
+impl CoreSpaceSimulationError {
+    pub(crate) const fn execution_task(source: JoinError) -> Self {
+        Self::ExecutionTask { source }
     }
 }

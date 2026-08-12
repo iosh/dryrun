@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
 
 import { cn } from '../../../lib/cn.ts';
-import type { SimulationRecord } from '../../types.ts';
 import { AssetFlow } from './AssetFlow.tsx';
 import { buildParticipantMap } from './resultModel.ts';
 import { StateEffects } from './StateEffects.tsx';
@@ -12,11 +11,9 @@ import type {
 
 export function TransactionEffects({
   addressHighlight,
-  record,
   viewModel,
 }: Readonly<{
   addressHighlight: AddressHighlightController;
-  record: SimulationRecord;
   viewModel: SimulationResultViewModel;
 }>) {
   const participantMap = useMemo(
@@ -80,7 +77,6 @@ export function TransactionEffects({
       <StateEffects
         addressHighlight={addressHighlight}
         changes={viewModel.stateEffects}
-        environmentId={record.environmentId}
         participantMap={participantMap}
       />
     </section>

@@ -1,4 +1,4 @@
-use std::{io, sync::Arc, time::Duration};
+use std::{io, time::Duration};
 
 use alloy::{
     providers::{Provider, RootProvider},
@@ -7,10 +7,8 @@ use alloy::{
 use alloy_rpc_client::RpcClient;
 use conflux_provider::ConfluxProvider;
 use conflux_rpc::build_rpc_module as build_conflux_rpc_module;
-use conflux_service::ConfluxService;
 use conflux_simulation::{
-    ConfluxSimulationBackend,
-    core_space::{CoreSpaceSimulationPreparer, CoreSpaceSimulator},
+    ConfluxSimulationBackend, core_space::CoreSpaceTransactionSimulator,
     espace::EspaceTransactionSimulator,
 };
 use evm_rpc::{DryrunRpcServer, RpcHandler};
@@ -111,20 +109,13 @@ async fn add_conflux_rpc_module(
             startup_error(format!("failed to initialize Conflux simulation: {error}"))
         })?;
     let core_space_address_network = backend.core_space_address_network();
-    let runtime_handle = tokio::runtime::Handle::current();
     let espace_simulator = EspaceTransactionSimulator::new(backend.clone());
-    let core_space_preparer = Arc::new(CoreSpaceSimulationPreparer::new(backend));
-    let core_space_simulator = Arc::new(CoreSpaceSimulator::new(runtime_handle));
-    let conflux_service = Arc::new(ConfluxService::new(
-        core_space_preparer,
-        core_space_simulator,
-        simulation_tasks.clone(),
-    ));
+    let core_space_simulator = CoreSpaceTransactionSimulator::new(backend);
 
     rpc_module
         .merge(build_conflux_rpc_module(
             espace_simulator,
-            conflux_service,
+            core_space_simulator,
             simulation_tasks,
             core_space_address_network,
         ))

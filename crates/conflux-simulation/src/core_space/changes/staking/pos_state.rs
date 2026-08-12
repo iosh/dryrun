@@ -6,11 +6,11 @@ use cfx_executor::{
     state::State,
 };
 use cfx_types::{Address as CfxAddress, AddressSpaceUtil, BigEndianHash, H256};
-use contract_standards::legacy::StatePhase;
 
 use super::CommittedPoSCall;
 use crate::{
     ConfluxSimulationError,
+    core_space::changes::StatePhase,
     primitive::{address_from_cfx, address_to_cfx, b256_from_cfx, b256_to_cfx, u256_from_cfx},
 };
 

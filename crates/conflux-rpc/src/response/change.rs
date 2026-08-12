@@ -155,17 +155,6 @@ pub(super) struct Erc721CollectionMetadata {
     symbol: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct NativeMetadata {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    symbol: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    decimals: Option<u8>,
-}
-
 impl From<EspaceChange> for Change {
     fn from(change: EspaceChange) -> Self {
         match change {
@@ -348,16 +337,6 @@ impl From<SimulationErc1155TransferItem> for Erc1155TransferItem {
         Self {
             token_id: item.token_id,
             raw_amount: item.raw_amount,
-        }
-    }
-}
-
-impl From<conflux_service::core_space::NativeMetadata> for NativeMetadata {
-    fn from(metadata: conflux_service::core_space::NativeMetadata) -> Self {
-        Self {
-            name: metadata.name,
-            symbol: metadata.symbol,
-            decimals: metadata.decimals,
         }
     }
 }

@@ -1,12 +1,12 @@
+use crate::core_space::changes::ChangePosition;
 use alloy_sol_types::{SolCall, sol};
 use cfx_executor::{executive_observer::AddressPocket, machine::Machine};
 use cfx_types::{Address, AddressSpaceUtil, Space};
 use cfx_vm_types::{CallType, Spec};
-use contract_standards::legacy::Position;
 
 use super::{
-    SponsoredResource, SponsorshipAccessCallerRole, SponsorshipAccessRuleUpdate,
-    SponsorshipEligibilityTarget, SponsorshipFundingOperation, SponsorshipFundingTerms,
+    PendingSponsorshipEligibilityTarget, SponsoredResource, SponsorshipAccessCallerRole,
+    SponsorshipAccessRuleUpdate, SponsorshipFundingOperation, SponsorshipFundingTerms,
     SponsorshipRefundOperation, StoragePointConversionOperation,
 };
 use crate::{
@@ -113,14 +113,14 @@ pub(super) fn collect_sponsorship_call(
             .enumerate()
             .map(
                 |(item_index, account_address)| SponsorshipAccessRuleUpdate {
-                    position: Position::new(frame_position, item_index),
+                    position: ChangePosition::new(frame_position, item_index),
                     caller_role,
                     caller_address,
                     contract_address,
                     account_scope: if account_address.is_zero() {
-                        SponsorshipEligibilityTarget::AllAccounts
+                        PendingSponsorshipEligibilityTarget::AllAccounts
                     } else {
-                        SponsorshipEligibilityTarget::Account(account_address)
+                        PendingSponsorshipEligibilityTarget::Account(account_address)
                     },
                     enabled_after,
                 },
@@ -248,7 +248,7 @@ pub(super) fn collect_standalone_sponsorship_refund(
     }
     let amount = u256_from_cfx(*value);
     Ok(Some(SponsorshipRefundOperation {
-        position: Position::new(*position, 0),
+        position: ChangePosition::new(*position, 0),
         resource,
         sponsor: address_from_cfx(recipient.address),
         contract_address: address_from_cfx(contract_address),
@@ -311,7 +311,7 @@ pub(super) fn collect_storage_point_conversion(
 
     Ok(Some((
         StoragePointConversionOperation {
-            position: Position::new(position, 0),
+            position: ChangePosition::new(position, 0),
             contract_address: address_from_cfx(contract_address),
             from_sponsor_pool,
             from_storage_collateral,
@@ -346,7 +346,7 @@ fn collect_gas_sponsorship_call(
             (
                 pool_deposit_amount,
                 Some(SponsorshipRefundOperation {
-                    position: Position::new(first.position, 0),
+                    position: ChangePosition::new(first.position, 0),
                     resource: SponsoredResource::Gas,
                     sponsor: address_from_cfx(old_sponsor),
                     contract_address: address_from_cfx(call_context.contract_address),
@@ -364,7 +364,7 @@ fn collect_gas_sponsorship_call(
         };
 
     Ok(SponsorshipFundingOperation {
-        position: Position::new(call_context.frame_position, 0),
+        position: ChangePosition::new(call_context.frame_position, 0),
         funding_terms: SponsorshipFundingTerms::Gas {
             gas_fee_upper_bound: alloy_primitives::U256::ZERO,
         },
@@ -411,7 +411,7 @@ fn collect_storage_sponsorship_call(
         (
             pool_deposit_amount,
             Some(SponsorshipRefundOperation {
-                position: Position::new(first.position, 0),
+                position: ChangePosition::new(first.position, 0),
                 resource: SponsoredResource::StorageCollateral,
                 sponsor: address_from_cfx(old_sponsor),
                 contract_address: address_from_cfx(call_context.contract_address),
@@ -429,7 +429,7 @@ fn collect_storage_sponsorship_call(
     };
 
     Ok(SponsorshipFundingOperation {
-        position: Position::new(call_context.frame_position, 0),
+        position: ChangePosition::new(call_context.frame_position, 0),
         funding_terms: SponsorshipFundingTerms::StorageCollateral,
         sponsor: address_from_cfx(call_context.sponsor),
         contract_address: address_from_cfx(call_context.contract_address),

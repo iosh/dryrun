@@ -6,7 +6,6 @@ edition = { workspace = true }
 [dependencies]
 conflux-simulation = { workspace = true }
 conflux-rpc = { workspace = true }
-conflux-service = { workspace = true }
 evm-simulation = { workspace = true }
 evm-rpc = { workspace = true }
 simulation-tasks = { workspace = true }

@@ -3,8 +3,6 @@ use std::collections::BTreeMap;
 use alloy_primitives::{Address, U256};
 use cfx_executor::state::State;
 use cfx_types::{AddressSpaceUtil, address_util::AddressUtil};
-use contract_standards::legacy::StatePhase;
-use simulation_changes::{Change, NativeMetadata};
 
 use super::{
     BasicCfxOperation, CfxBalanceLocation, CfxOperation, CfxOperations,
@@ -17,8 +15,9 @@ use super::{
 use crate::{
     ConfluxSimulationError,
     core_space::changes::{
-        CoreSpaceChange, CrossSpaceAddress, PositionedCoreSpaceChange, SponsoredResource,
-        SponsorshipConfiguration, SponsorshipEligibilityTarget,
+        PendingCoreSpaceChange, PendingCrossSpaceAddress, PendingSponsorshipConfiguration,
+        PendingSponsorshipEligibilityTarget, PositionedCoreSpaceChange, SponsoredResource,
+        StatePhase,
     },
     primitive::{address_to_cfx, u256_from_cfx},
     state::SponsorWhitelistStorageKey,
@@ -152,10 +151,10 @@ pub(crate) fn read_cfx_state_values(
     let mut sponsorship_access_rules = BTreeMap::new();
     for &rule_key in &cfx_operations.sponsorship_access_rule_keys {
         let account_address = match rule_key.account_scope {
-            SponsorshipEligibilityTarget::Account(account_address) => {
+            PendingSponsorshipEligibilityTarget::Account(account_address) => {
                 address_to_cfx(account_address)
             }
-            SponsorshipEligibilityTarget::AllAccounts => cfx_types::Address::zero(),
+            PendingSponsorshipEligibilityTarget::AllAccounts => cfx_types::Address::zero(),
         };
         let storage_key = SponsorWhitelistStorageKey {
             contract_address: address_to_cfx(rule_key.contract_address),
@@ -268,12 +267,11 @@ pub(crate) fn verify_cfx_changes(
                 )?;
                 positioned_core_changes.push(PositionedCoreSpaceChange::new(
                     *position,
-                    CoreSpaceChange::Asset(Change::NativeTransfer {
+                    PendingCoreSpaceChange::NativeTransfer {
                         from: *from,
                         to: *to,
                         raw_amount: *amount,
-                        metadata: NativeMetadata::default(),
-                    }),
+                    },
                 ));
             }
             CfxOperation::Basic(BasicCfxOperation::EspaceBalanceTransfer { from, to, amount }) => {
@@ -327,7 +325,7 @@ pub(crate) fn verify_cfx_changes(
                     })?;
                 positioned_core_changes.push(PositionedCoreSpaceChange::new(
                     *position,
-                    CoreSpaceChange::StakingDeposit {
+                    PendingCoreSpaceChange::StakingDeposit {
                         account: *account,
                         raw_amount: *amount,
                     },
@@ -373,7 +371,7 @@ pub(crate) fn verify_cfx_changes(
                     })?;
                 positioned_core_changes.push(PositionedCoreSpaceChange::new(
                     *position,
-                    CoreSpaceChange::StakingWithdrawal {
+                    PendingCoreSpaceChange::StakingWithdrawal {
                         account: *account,
                         raw_amount: *principal_amount,
                         reward_raw_amount: *reward_amount,
@@ -392,10 +390,9 @@ pub(crate) fn verify_cfx_changes(
                 replayed_state.debit_total_issued(*amount, "a native balance burn")?;
                 positioned_core_changes.push(PositionedCoreSpaceChange::new(
                     *position,
-                    CoreSpaceChange::NativeBurn {
+                    PendingCoreSpaceChange::NativeBurn {
                         from: *account,
                         raw_amount: *amount,
-                        metadata: NativeMetadata::default(),
                     },
                 ));
             }
@@ -409,7 +406,7 @@ pub(crate) fn verify_cfx_changes(
                 replayed_state.debit_total_issued(*amount, "a staking balance burn")?;
                 positioned_core_changes.push(PositionedCoreSpaceChange::new(
                     *position,
-                    CoreSpaceChange::StakingBurn {
+                    PendingCoreSpaceChange::StakingBurn {
                         account: *account,
                         raw_amount: *amount,
                     },
@@ -468,7 +465,7 @@ impl CfxStateValues {
             )
         })?;
         match (transfer.from, transfer.to) {
-            (CrossSpaceAddress::CoreSpace(_), CrossSpaceAddress::Espace(_)) => {
+            (PendingCrossSpaceAddress::CoreSpace(_), PendingCrossSpaceAddress::Espace(_)) => {
                 *total_espace_tokens = total_espace_tokens
                     .checked_add(transfer.amount)
                     .ok_or_else(|| {
@@ -477,7 +474,7 @@ impl CfxStateValues {
                         )
                     })?;
             }
-            (CrossSpaceAddress::Espace(_), CrossSpaceAddress::CoreSpace(_)) => {
+            (PendingCrossSpaceAddress::Espace(_), PendingCrossSpaceAddress::CoreSpace(_)) => {
                 *total_espace_tokens = total_espace_tokens
                     .checked_sub(transfer.amount)
                     .ok_or_else(|| {
@@ -494,7 +491,7 @@ impl CfxStateValues {
         }
         positioned_changes.push(PositionedCoreSpaceChange::new(
             transfer.position,
-            CoreSpaceChange::CrossSpaceTransfer {
+            PendingCoreSpaceChange::CrossSpaceTransfer {
                 from: transfer.from,
                 to: transfer.to,
                 raw_amount: transfer.amount,
@@ -580,7 +577,7 @@ impl CfxStateValues {
             if !refund.gross_refund_amount.is_zero() {
                 positioned_changes.push(PositionedCoreSpaceChange::new(
                     refund.position,
-                    CoreSpaceChange::SponsorshipRefund {
+                    PendingCoreSpaceChange::SponsorshipRefund {
                         sponsored_resource: refund.resource,
                         sponsor: refund.sponsor,
                         contract_address: refund.contract_address,
@@ -615,7 +612,7 @@ impl CfxStateValues {
                 self.set_gas_fee_upper_bound(funding.contract_address, gas_fee_upper_bound_after)?;
                 (current_sponsor != new_sponsor
                     || gas_fee_upper_bound_before != gas_fee_upper_bound_after)
-                    .then_some(SponsorshipConfiguration::Gas {
+                    .then_some(PendingSponsorshipConfiguration::Gas {
                         sponsor_before: current_sponsor,
                         sponsor_after: new_sponsor,
                         max_sponsored_gas_fee_raw_amount_before: gas_fee_upper_bound_before,
@@ -623,7 +620,7 @@ impl CfxStateValues {
                     })
             }
             SponsorshipFundingTerms::StorageCollateral => (current_sponsor != new_sponsor)
-                .then_some(SponsorshipConfiguration::StorageCollateral {
+                .then_some(PendingSponsorshipConfiguration::StorageCollateral {
                     sponsor_before: current_sponsor,
                     sponsor_after: new_sponsor,
                 }),
@@ -631,7 +628,7 @@ impl CfxStateValues {
         if let Some(configuration) = changed_configuration {
             positioned_changes.push(PositionedCoreSpaceChange::new(
                 funding.position,
-                CoreSpaceChange::SponsorshipConfiguration {
+                PendingCoreSpaceChange::SponsorshipConfiguration {
                     contract_address: funding.contract_address,
                     configuration,
                 },
@@ -640,7 +637,7 @@ impl CfxStateValues {
         if !funding.gross_deposit_amount.is_zero() {
             positioned_changes.push(PositionedCoreSpaceChange::new(
                 funding.position,
-                CoreSpaceChange::SponsorshipDeposit {
+                PendingCoreSpaceChange::SponsorshipDeposit {
                     sponsored_resource,
                     sponsor: funding.sponsor,
                     contract_address: funding.contract_address,
@@ -685,21 +682,23 @@ impl CfxStateValues {
                 let gas_fee_upper_bound_before =
                     self.gas_fee_upper_bound(refund.contract_address)?;
                 self.set_gas_fee_upper_bound(refund.contract_address, U256::ZERO)?;
-                SponsorshipConfiguration::Gas {
+                PendingSponsorshipConfiguration::Gas {
                     sponsor_before: Some(refund.sponsor),
                     sponsor_after: None,
                     max_sponsored_gas_fee_raw_amount_before: gas_fee_upper_bound_before,
                     max_sponsored_gas_fee_raw_amount_after: U256::ZERO,
                 }
             }
-            SponsoredResource::StorageCollateral => SponsorshipConfiguration::StorageCollateral {
-                sponsor_before: Some(refund.sponsor),
-                sponsor_after: None,
-            },
+            SponsoredResource::StorageCollateral => {
+                PendingSponsorshipConfiguration::StorageCollateral {
+                    sponsor_before: Some(refund.sponsor),
+                    sponsor_after: None,
+                }
+            }
         };
         positioned_changes.push(PositionedCoreSpaceChange::new(
             refund.position,
-            CoreSpaceChange::SponsorshipConfiguration {
+            PendingCoreSpaceChange::SponsorshipConfiguration {
                 contract_address: refund.contract_address,
                 configuration,
             },
@@ -707,7 +706,7 @@ impl CfxStateValues {
         if !refund.gross_refund_amount.is_zero() {
             positioned_changes.push(PositionedCoreSpaceChange::new(
                 refund.position,
-                CoreSpaceChange::SponsorshipRefund {
+                PendingCoreSpaceChange::SponsorshipRefund {
                     sponsored_resource: refund.resource,
                     sponsor: refund.sponsor,
                     contract_address: refund.contract_address,
@@ -759,7 +758,7 @@ impl CfxStateValues {
         *enabled_before = update.enabled_after;
         positioned_changes.push(PositionedCoreSpaceChange::new(
             update.position,
-            CoreSpaceChange::SponsorshipEligibilityRule {
+            PendingCoreSpaceChange::SponsorshipEligibilityRule {
                 contract_address: update.contract_address,
                 applies_to: update.account_scope,
                 enabled_before: previous,
@@ -869,7 +868,7 @@ impl CfxStateValues {
 
         positioned_changes.push(PositionedCoreSpaceChange::new(
             conversion.position,
-            CoreSpaceChange::StoragePointConversion {
+            PendingCoreSpaceChange::StoragePointConversion {
                 contract_address: conversion.contract_address,
                 converted_cfx_raw_amount: converted_amount,
             },

@@ -7,7 +7,7 @@ use primitives::VoteStakeList;
 use super::CommittedVoteLockCall;
 use crate::{
     ConfluxSimulationError,
-    core_space::changes::{CoreSpaceChange, PositionedCoreSpaceChange},
+    core_space::changes::{PendingCoreSpaceChange, PositionedCoreSpaceChange},
     primitive::{address_to_cfx, u256_from_cfx, u256_to_cfx},
     state::AnchoredVoteLists,
 };
@@ -55,7 +55,7 @@ pub(crate) fn verify_vote_lock_changes(
         if *vote_list != vote_list_before_call {
             positioned_changes.push(PositionedCoreSpaceChange::new(
                 *position,
-                CoreSpaceChange::StakingVoteLock {
+                PendingCoreSpaceChange::StakingVoteLock {
                     account: *account,
                     unlock_block_number: *unlock_block_number,
                     required_locked_raw_amount_before,

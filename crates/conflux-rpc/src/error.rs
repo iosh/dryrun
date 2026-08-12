@@ -1,6 +1,6 @@
-use conflux_service::ConfluxServiceError;
-use conflux_simulation::espace::{
-    EspaceContextError, EspaceSimulationError, EspaceTransactionCompletionError,
+use conflux_simulation::{
+    core_space::{CoreSpaceContextError, CoreSpaceSimulationError},
+    espace::{EspaceContextError, EspaceSimulationError, EspaceTransactionCompletionError},
 };
 use jsonrpsee::types::{
     ErrorObjectOwned,
@@ -66,9 +66,22 @@ pub(super) fn core_space_response_mapping_error(details: impl Into<String>) -> E
     internal_error()
 }
 
-pub(super) fn map_core_space_service_error(error: ConfluxServiceError) -> ErrorObjectOwned {
-    error!(error = ?error, "Conflux Core Space simulation failed");
-    internal_error()
+pub(super) fn map_core_space_simulation_error(error: CoreSpaceSimulationError) -> ErrorObjectOwned {
+    match error {
+        CoreSpaceSimulationError::Input(error) => invalid_params(error.to_string()),
+        CoreSpaceSimulationError::Context(
+            error @ (CoreSpaceContextError::PivotBlockNotFound { .. }
+            | CoreSpaceContextError::EspaceBlockNotFound { .. }),
+        ) => context_not_found(error.to_string()),
+        CoreSpaceSimulationError::Completion(error) => {
+            warn!(error = ?error, "Conflux Core Space transaction completion failed");
+            transaction_completion_failed("Unable to complete the transaction")
+        }
+        error => {
+            error!(error = ?error, "Conflux Core Space simulation failed");
+            internal_error()
+        }
+    }
 }
 
 pub(super) fn map_espace_simulation_error(error: EspaceSimulationError) -> ErrorObjectOwned {
@@ -107,6 +120,6 @@ fn transaction_completion_message(error: &EspaceTransactionCompletionError) -> &
 }
 
 pub(super) fn map_simulation_task_error(error: SimulationTaskError) -> ErrorObjectOwned {
-    error!(error = ?error, "Conflux eSpace simulation task failed");
+    error!(error = ?error, "Conflux simulation task failed");
     internal_error()
 }

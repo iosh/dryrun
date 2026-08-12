@@ -23,7 +23,7 @@ export function createSimulationResultViewModel(
   const changes = record.response.changes;
   const changeFlows = changes.map((change) => ({
     change,
-    items: toAssetFlowItemViewModels(change, record.environmentId),
+    items: toAssetFlowItemViewModels(change),
   }));
   const flowItems = changeFlows
     .flatMap(({ items }, changeIndex) =>

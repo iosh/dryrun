@@ -48,7 +48,6 @@ export function ChangesList({
             <ChangeRow
               addressHighlight={addressHighlight}
               change={change}
-              environmentId={record.environmentId}
               key={`${record.id}:${index}`}
               record={record}
             />
@@ -66,15 +65,13 @@ export function ChangesList({
 function ChangeRow({
   addressHighlight,
   change,
-  environmentId,
   record,
 }: Readonly<{
   addressHighlight: AddressHighlightController;
   change: SimulationChange;
-  environmentId: SimulationRecord['environmentId'];
   record: SimulationRecord;
 }>) {
-  const view = toChangeItemViewModel(change, environmentId);
+  const view = toChangeItemViewModel(change);
   const addresses = getChangeAddresses(change);
   const highlighted = hasHighlightedAddress(
     addresses,

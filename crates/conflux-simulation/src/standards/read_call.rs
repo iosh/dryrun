@@ -23,7 +23,7 @@ const STANDARD_READ_CALL_GAS_LIMIT: u64 = 100_000;
 pub(crate) enum StandardReadCallOutcome {
     Success(Bytes),
     Revert,
-    Halt(String),
+    Halt,
 }
 
 pub(crate) fn execute_standard_read_call(
@@ -128,15 +128,9 @@ pub(crate) fn execute_standard_read_call(
             ExecutionError::VmError(vm::Error::Reverted),
             _,
         ) => StandardReadCallOutcome::Revert,
-        ExecutionOutcome::ExecutionErrorBumpNonce(error, _) => {
-            StandardReadCallOutcome::Halt(format!("{error:?}"))
-        }
-        ExecutionOutcome::NotExecutedDrop(error) => {
-            StandardReadCallOutcome::Halt(format!("getter transaction was dropped: {error:?}"))
-        }
-        ExecutionOutcome::NotExecutedToReconsiderPacking(error) => StandardReadCallOutcome::Halt(
-            format!("getter transaction was not executable: {error:?}"),
-        ),
+        ExecutionOutcome::ExecutionErrorBumpNonce(_, _) => StandardReadCallOutcome::Halt,
+        ExecutionOutcome::NotExecutedDrop(_)
+        | ExecutionOutcome::NotExecutedToReconsiderPacking(_) => StandardReadCallOutcome::Halt,
     };
 
     state.update_state_post_tx_execution(!prepared_execution.spec.cip645.fix_eip1153);

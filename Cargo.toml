@@ -8,7 +8,6 @@ members = [
     "crates/evm-rpc",
     "crates/conflux-simulation",
     "crates/conflux-rpc",
-    "crates/conflux-service",
     "crates/simulation-changes",
     "crates/simulation-execution",
     "crates/simulation-tasks",
@@ -25,7 +24,6 @@ evm-simulation = { path = "crates/evm-simulation" }
 evm-rpc = { path = "crates/evm-rpc" }
 conflux-simulation = { path = "crates/conflux-simulation" }
 conflux-rpc = { path = "crates/conflux-rpc" }
-conflux-service = { path = "crates/conflux-service" }
 simulation-changes = { path = "crates/simulation-changes" }
 simulation-execution = { path = "crates/simulation-execution" }
 simulation-tasks = { path = "crates/simulation-tasks" }

@@ -3,7 +3,6 @@ import {
   formatNativeAmount,
   formatRawAmount,
 } from '../lib/formatting.ts';
-import { getEnvironment, type EnvironmentId } from './environment.ts';
 import type { SimulationChange } from './types.ts';
 
 export type ChangeTone = 'amber' | 'blue' | 'green' | 'red' | 'violet';
@@ -17,14 +16,8 @@ export interface ChangeItemViewModel {
   value?: string;
 }
 
-type AssetChange = Extract<
-  SimulationChange,
-  { changeType: 'TRANSFER' | 'MINT' | 'BURN' }
->;
-
 export function toChangeItemViewModel(
   change: SimulationChange,
-  environmentId: EnvironmentId,
 ): ChangeItemViewModel {
   switch (change.changeType) {
     case 'NATIVE_TRANSFER':
@@ -32,6 +25,17 @@ export function toChangeItemViewModel(
         label: 'Transfer',
         title: change.symbol,
         tone: 'blue',
+        value: formatFungibleAmount(
+          change.rawAmount,
+          change.decimals,
+          change.symbol,
+        ),
+      };
+    case 'NATIVE_BURN':
+      return {
+        label: 'Burn',
+        title: change.symbol,
+        tone: 'red',
         value: formatFungibleAmount(
           change.rawAmount,
           change.decimals,
@@ -132,60 +136,13 @@ export function toChangeItemViewModel(
         tone: 'blue',
         value: `${change.items.length} ${change.items.length === 1 ? 'item' : 'items'}`,
       };
-    case 'TRANSFER':
-      return withAsset(change, environmentId, {
-        label: 'Transfer',
-        tone: 'blue',
-      });
-    case 'MINT':
-      return withAsset(change, environmentId, {
-        label: 'Mint',
-        tone: 'violet',
-      });
-    case 'BURN':
-      return withAsset(change, environmentId, {
-        label: 'Burn',
-        tone: 'red',
-      });
-    case 'ALLOWANCE':
-      return {
-        identifier: change.contractAddress,
-        label: 'Allowance',
-        title: tokenName(change, 'ERC-20'),
-        tone:
-          BigInt(change.rawAmountAfter) >= BigInt(change.rawAmountBefore)
-            ? 'green'
-            : 'amber',
-        value: formatAllowanceDelta(change),
-      };
-    case 'TOKEN_APPROVAL':
-      return {
-        detail: `Token #${formatHexQuantity(change.tokenId)}`,
-        identifier: change.contractAddress,
-        label: 'Token approval',
-        title: tokenName(change, 'ERC-721'),
-        tone: 'green',
-        value: addressTransition(
-          change.approvedAddressBefore,
-          change.approvedAddressAfter,
-        ),
-      };
     case 'OPERATOR_APPROVAL':
-      if ('approved' in change) {
-        return {
-          identifier: change.contractAddress,
-          label: 'Operator approval',
-          title: 'Token collection',
-          tone: change.approved ? 'green' : 'amber',
-          value: change.approved ? 'Enabled' : 'Disabled',
-        };
-      }
       return {
         identifier: change.contractAddress,
         label: 'Operator approval',
-        title: tokenName(change, change.assetType === 'ERC721' ? 'ERC-721' : 'ERC-1155'),
-        tone: 'green',
-        value: booleanTransition(change.approvedBefore, change.approvedAfter),
+        title: 'Token collection',
+        tone: change.approved ? 'green' : 'amber',
+        value: change.approved ? 'Enabled' : 'Disabled',
       };
     case 'STAKING_DEPOSIT':
       return coreAmountChange(
@@ -290,55 +247,6 @@ export function toChangeItemViewModel(
   }
 }
 
-function withAsset(
-  change: AssetChange,
-  environmentId: EnvironmentId,
-  base: Pick<ChangeItemViewModel, 'label' | 'tone'>,
-): ChangeItemViewModel {
-  return {
-    ...base,
-    identifier:
-      change.assetType === 'NATIVE' ? undefined : change.contractAddress,
-    title: assetTitle(change, environmentId),
-    value: assetValue(change, environmentId),
-  };
-}
-
-function assetTitle(change: AssetChange, environmentId: EnvironmentId) {
-  switch (change.assetType) {
-    case 'NATIVE':
-      return metadataSymbol(change) ?? getEnvironment(environmentId).nativeSymbol;
-    case 'ERC20':
-      return tokenName(change, 'ERC-20');
-    case 'ERC721':
-      return `${tokenName(change, 'ERC-721')} #${formatHexQuantity(change.tokenId)}`;
-    case 'ERC1155':
-      return `ERC-1155 #${formatHexQuantity(change.tokenId)}`;
-  }
-}
-
-function assetValue(change: AssetChange, environmentId: EnvironmentId) {
-  switch (change.assetType) {
-    case 'NATIVE':
-      return formatNativeAmount(
-        change.rawAmount,
-        metadataSymbol(change) ?? getEnvironment(environmentId).nativeSymbol,
-      );
-    case 'ERC20': {
-      const symbol = metadataSymbol(change);
-      const amount = formatTokenAmount(
-        change.rawAmount,
-        metadataDecimals(change),
-      );
-      return symbol ? `${amount} ${symbol}` : amount;
-    }
-    case 'ERC721':
-      return undefined;
-    case 'ERC1155':
-      return formatHexQuantity(change.rawAmount);
-  }
-}
-
 function tokenName(
   change: object,
   fallback: string,
@@ -375,27 +283,6 @@ function formatFungibleAmount(
 ) {
   const amount = formatTokenAmount(rawAmount, decimals);
   return symbol ? `${amount} ${symbol}` : amount;
-}
-
-function formatAllowanceDelta(
-  change: Extract<SimulationChange, { changeType: 'ALLOWANCE' }>,
-) {
-  const delta =
-    BigInt(change.rawAmountAfter) - BigInt(change.rawAmountBefore);
-  if (delta === 0n) return 'No change';
-
-  const amount = formatTokenAmount(
-    (delta < 0n ? -delta : delta).toString(),
-    metadataDecimals(change),
-  );
-  const symbol = metadataSymbol(change);
-  return `${delta > 0n ? '+' : '-'}${amount}${symbol ? ` ${symbol}` : ''}`;
-}
-
-function addressTransition(before: string | null, after: string | null) {
-  if (before === after) return after ? 'Unchanged' : 'None';
-  if (!after) return 'Revoked';
-  return before ? 'Changed' : 'Approved';
 }
 
 function sponsorTransition(before: string | null, after: string | null) {

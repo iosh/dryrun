@@ -1,11 +1,11 @@
 use alloy_primitives::U256;
 use cfx_executor::{machine::Machine, state::State};
-use contract_standards::legacy::StatePhase;
 
 use super::{
     CfxBalanceLocation, CfxOperations, CfxStateValues, StakingBalanceEffects,
     collect_cfx_operations, determine_gas_fee_payer, read_cfx_state_values, verify_cfx_changes,
 };
+use crate::core_space::changes::StatePhase;
 use crate::{
     ConfluxSimulationError,
     core_space::changes::PositionedCoreSpaceChange,

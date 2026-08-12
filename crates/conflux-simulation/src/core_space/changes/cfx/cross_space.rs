@@ -1,3 +1,4 @@
+use crate::core_space::changes::ChangePosition;
 use alloy_sol_types::{SolCall, sol};
 use cfx_executor::{
     executive_observer::AddressPocket,
@@ -6,12 +7,11 @@ use cfx_executor::{
 };
 use cfx_types::{AddressSpaceUtil, Space, address_util::AddressUtil};
 use cfx_vm_types::{CallType, Spec};
-use contract_standards::legacy::Position;
 
 use super::CrossSpaceTransferOperation;
 use crate::{
     ConfluxSimulationError,
-    core_space::changes::CrossSpaceAddress,
+    core_space::changes::PendingCrossSpaceAddress,
     execution::{CommittedExecutionTrace, FrameAction, FrameId, TraceEvent},
     primitive::{address_from_cfx, u256_from_cfx},
 };
@@ -121,9 +121,9 @@ fn collect_transfer_to_espace(
 
     Ok(Some((
         CrossSpaceTransferOperation {
-            position: Position::new(context.frame_position, 0),
-            from: CrossSpaceAddress::CoreSpace(address_from_cfx(context.caller)),
-            to: CrossSpaceAddress::Espace(address_from_cfx(expected_mapped_account.address)),
+            position: ChangePosition::new(context.frame_position, 0),
+            from: PendingCrossSpaceAddress::CoreSpace(address_from_cfx(context.caller)),
+            to: PendingCrossSpaceAddress::Espace(address_from_cfx(expected_mapped_account.address)),
             amount,
         },
         vec![transfer.position],
@@ -168,9 +168,9 @@ fn collect_withdrawal_to_core_space(
 
     Ok(Some((
         CrossSpaceTransferOperation {
-            position: Position::new(context.frame_position, 0),
-            from: CrossSpaceAddress::Espace(address_from_cfx(mapped_account.address)),
-            to: CrossSpaceAddress::CoreSpace(address_from_cfx(context.caller)),
+            position: ChangePosition::new(context.frame_position, 0),
+            from: PendingCrossSpaceAddress::Espace(address_from_cfx(mapped_account.address)),
+            to: PendingCrossSpaceAddress::CoreSpace(address_from_cfx(context.caller)),
             amount,
         },
         vec![transfer.position],

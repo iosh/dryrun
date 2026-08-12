@@ -106,7 +106,6 @@ function SimulationResult({ record }: Readonly<{ record: SimulationRecord }>) {
 
       <TransactionEffects
         addressHighlight={addressHighlight}
-        record={record}
         viewModel={viewModel}
       />
 

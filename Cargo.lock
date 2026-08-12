@@ -2109,7 +2109,6 @@ dependencies = [
  "cfx-rpc-primitives",
  "cfx-types",
  "conflux-provider",
- "conflux-service",
  "conflux-simulation",
  "hex",
  "jsonrpsee",
@@ -2118,16 +2117,6 @@ dependencies = [
  "simulation-tasks",
  "thiserror 2.0.18",
  "tracing",
-]
-
-[[package]]
-name = "conflux-service"
-version = "0.1.0"
-dependencies = [
- "conflux-simulation",
- "simulation-tasks",
- "thiserror 2.0.18",
- "tokio",
 ]
 
 [[package]]
@@ -2156,7 +2145,6 @@ dependencies = [
  "rlp 0.4.6",
  "serde",
  "serde_json",
- "simulation-changes",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -2804,7 +2792,6 @@ dependencies = [
  "config",
  "conflux-provider",
  "conflux-rpc",
- "conflux-service",
  "conflux-simulation",
  "evm-rpc",
  "evm-simulation",

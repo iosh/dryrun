@@ -4,7 +4,7 @@ use cfx_rpc_cfx_types::{EpochNumber, RpcAddress};
 use cfx_rpc_primitives::Bytes as CoreSpaceRpcBytes;
 use cfx_types::{H256, U64, U256};
 use conflux_provider::Network as ProviderNetwork;
-use conflux_service::core_space as service_core_space;
+use conflux_simulation::core_space as simulation_core_space;
 use serde::Deserialize;
 
 use super::{cfx_h256_to_alloy, cfx_u256_to_alloy, u64_param};
@@ -46,12 +46,12 @@ struct CoreSpaceAccessListItem {
 }
 
 impl SimulateCoreSpaceTransactionRequest {
-    pub(crate) fn try_into_service_input(
+    pub(crate) fn try_into_simulation_request(
         self,
         expected_network: Network,
-    ) -> Result<service_core_space::CoreSpaceSimulationInput, ValidationError> {
-        Ok(service_core_space::CoreSpaceSimulationInput {
-            epoch: map_core_space_epoch(self.epoch)?,
+    ) -> Result<simulation_core_space::CoreSpaceSimulationRequest, ValidationError> {
+        Ok(simulation_core_space::CoreSpaceSimulationRequest {
+            block: map_core_space_epoch(self.epoch)?,
             transaction: map_core_space_transaction(self.transaction, expected_network)?,
         })
     }
@@ -59,10 +59,10 @@ impl SimulateCoreSpaceTransactionRequest {
 
 fn map_core_space_epoch(
     epoch: Option<EpochNumber>,
-) -> Result<service_core_space::CoreSpaceBlockSelector, ValidationError> {
+) -> Result<simulation_core_space::CoreSpaceBlockSelector, ValidationError> {
     match epoch.unwrap_or(EpochNumber::LatestState) {
-        EpochNumber::LatestState => Ok(service_core_space::CoreSpaceBlockSelector::LatestState),
-        EpochNumber::Num(number) => Ok(service_core_space::CoreSpaceBlockSelector::Number(
+        EpochNumber::LatestState => Ok(simulation_core_space::CoreSpaceBlockSelector::LatestState),
+        EpochNumber::Num(number) => Ok(simulation_core_space::CoreSpaceBlockSelector::Number(
             number.as_u64(),
         )),
         _ => Err(ValidationError::not_supported(
@@ -74,7 +74,7 @@ fn map_core_space_epoch(
 fn map_core_space_transaction(
     transaction: CoreSpaceTransactionRequest,
     expected_network: Network,
-) -> Result<service_core_space::CoreSpaceTransactionInput, ValidationError> {
+) -> Result<simulation_core_space::CoreSpaceTransactionInput, ValidationError> {
     let transaction_type = infer_transaction_type(&transaction)?;
     validate_core_space_address_networks(&transaction, transaction_type, expected_network)?;
 
@@ -99,12 +99,12 @@ fn map_core_space_transaction(
     let chain_id = require_core_space_field(chain_id, "transaction.chainId")?;
     let variant = match transaction_type {
         CoreSpaceTransactionType::Cip155 => {
-            service_core_space::CoreSpacePartialTransactionVariant::Cip155 {
+            simulation_core_space::CoreSpacePartialTransactionVariant::Cip155 {
                 gas_price: gas_price.map(cfx_u256_to_alloy),
             }
         }
         CoreSpaceTransactionType::Cip2930 => {
-            service_core_space::CoreSpacePartialTransactionVariant::Cip2930 {
+            simulation_core_space::CoreSpacePartialTransactionVariant::Cip2930 {
                 gas_price: gas_price.map(cfx_u256_to_alloy),
                 access_list: access_list
                     .map(map_core_space_access_list)
@@ -113,7 +113,7 @@ fn map_core_space_transaction(
             }
         }
         CoreSpaceTransactionType::Cip1559 => {
-            service_core_space::CoreSpacePartialTransactionVariant::Cip1559 {
+            simulation_core_space::CoreSpacePartialTransactionVariant::Cip1559 {
                 max_fee_per_gas: max_fee_per_gas.map(cfx_u256_to_alloy),
                 max_priority_fee_per_gas: max_priority_fee_per_gas.map(cfx_u256_to_alloy),
                 access_list: access_list
@@ -124,8 +124,8 @@ fn map_core_space_transaction(
         }
     };
 
-    Ok(service_core_space::CoreSpaceTransactionInput::Partial(
-        service_core_space::CoreSpacePartialTransaction {
+    Ok(simulation_core_space::CoreSpaceTransactionInput::Partial(
+        simulation_core_space::CoreSpacePartialTransaction {
             from: map_core_space_address(from)?,
             to: to.map(map_core_space_address).transpose()?,
             nonce: nonce.map(cfx_u256_to_alloy),
@@ -231,11 +231,11 @@ fn require_core_space_field<T>(value: Option<T>, field: &str) -> Result<T, Valid
 
 fn map_core_space_access_list(
     items: Vec<CoreSpaceAccessListItem>,
-) -> Result<Vec<service_core_space::CoreSpaceAccessListItem>, ValidationError> {
+) -> Result<Vec<simulation_core_space::CoreSpaceAccessListItem>, ValidationError> {
     items
         .into_iter()
         .map(|item| {
-            Ok(service_core_space::CoreSpaceAccessListItem {
+            Ok(simulation_core_space::CoreSpaceAccessListItem {
                 address: map_core_space_address(item.address)?,
                 storage_keys: item
                     .storage_keys
@@ -249,7 +249,7 @@ fn map_core_space_access_list(
 
 fn map_core_space_address(
     address: RpcAddress,
-) -> Result<service_core_space::CoreAddress, ValidationError> {
+) -> Result<simulation_core_space::CoreAddress, ValidationError> {
     let mut bytes = [0_u8; 20];
     bytes.copy_from_slice(address.hex_address.as_bytes());
     let network = match address.network {
@@ -258,6 +258,6 @@ fn map_core_space_address(
         Network::Id(id) => ProviderNetwork::Id(id),
     };
 
-    service_core_space::CoreAddress::from_bytes(bytes, network)
+    simulation_core_space::CoreAddress::from_bytes(bytes, network)
         .map_err(|error| ValidationError::invalid_params(error.to_string()))
 }

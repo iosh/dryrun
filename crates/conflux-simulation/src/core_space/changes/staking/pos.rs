@@ -10,7 +10,9 @@ use super::{
 };
 use crate::{
     ConfluxSimulationError,
-    core_space::changes::{CoreSpaceChange, PositionedCoreSpaceChange, cfx::StakingBalanceEffects},
+    core_space::changes::{
+        PendingCoreSpaceChange, PositionedCoreSpaceChange, cfx::StakingBalanceEffects,
+    },
     primitive::u256_from_cfx,
 };
 use primitives::LogEntry;
@@ -96,7 +98,7 @@ pub(crate) fn verify_pos_staking_changes(
                 )?;
                 positioned_changes.push(PositionedCoreSpaceChange::new(
                     *position,
-                    CoreSpaceChange::PoSRegistration {
+                    PendingCoreSpaceChange::PoSRegistration {
                         account: *account,
                         pos_identifier: *pos_identifier,
                         newly_locked_vote_count: *vote_count,
@@ -127,7 +129,7 @@ pub(crate) fn verify_pos_staking_changes(
                 )?;
                 positioned_changes.push(PositionedCoreSpaceChange::new(
                     *position,
-                    CoreSpaceChange::PoSStakeIncrease {
+                    PendingCoreSpaceChange::PoSStakeIncrease {
                         account: *account,
                         pos_identifier,
                         newly_locked_vote_count: *vote_count,
@@ -156,7 +158,7 @@ pub(crate) fn verify_pos_staking_changes(
                 )?;
                 positioned_changes.push(PositionedCoreSpaceChange::new(
                     *position,
-                    CoreSpaceChange::PoSRetirementRequest {
+                    PendingCoreSpaceChange::PoSRetirementRequest {
                         account: *account,
                         pos_identifier,
                         requested_vote_count: *requested_vote_count,

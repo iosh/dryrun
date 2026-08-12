@@ -10,8 +10,8 @@ use std::{
     fmt,
 };
 
+use crate::core_space::changes::ChangePosition;
 use alloy_primitives::{Address, U256};
-use contract_standards::legacy::Position;
 use primitives::{Action, SignedTransaction};
 
 pub(crate) use analysis::CfxAnalysisInput;
@@ -20,7 +20,9 @@ pub(crate) use verification::{CfxStateValues, read_cfx_state_values, verify_cfx_
 
 use crate::{
     ConfluxSimulationError,
-    core_space::changes::{CrossSpaceAddress, SponsoredResource, SponsorshipEligibilityTarget},
+    core_space::changes::{
+        PendingCrossSpaceAddress, PendingSponsorshipEligibilityTarget, SponsoredResource,
+    },
     primitive::{address_from_cfx, address_to_cfx},
     state::{MaskedSponsorWhitelistEntries, SponsorWhitelistStorageKey},
 };
@@ -227,7 +229,8 @@ impl CfxOperations {
                     message: error.to_string(),
                 })?;
         for key in &self.sponsorship_access_rule_keys {
-            let SponsorshipEligibilityTarget::Account(account_address) = key.account_scope else {
+            let PendingSponsorshipEligibilityTarget::Account(account_address) = key.account_scope
+            else {
                 continue;
             };
             let storage_key = SponsorWhitelistStorageKey {
@@ -400,7 +403,7 @@ enum CfxOperation {
 #[derive(Debug)]
 enum BasicCfxOperation {
     CoreSpaceBalanceTransfer {
-        position: Position,
+        position: ChangePosition,
         from: Address,
         to: Address,
         amount: U256,
@@ -419,23 +422,23 @@ enum BasicCfxOperation {
         amount: U256,
     },
     StakingDeposit {
-        position: Position,
+        position: ChangePosition,
         account: Address,
         amount: U256,
     },
     StakingWithdrawal {
-        position: Position,
+        position: ChangePosition,
         account: Address,
         principal_amount: U256,
         reward_amount: U256,
     },
     NativeBurn {
-        position: Position,
+        position: ChangePosition,
         account: Address,
         amount: U256,
     },
     StakingBurn {
-        position: Position,
+        position: ChangePosition,
         account: Address,
         amount: U256,
     },
@@ -452,22 +455,24 @@ enum SponsorshipOperation {
 
 #[derive(Debug, Clone, Copy)]
 struct CrossSpaceTransferOperation {
-    position: Position,
-    from: CrossSpaceAddress,
-    to: CrossSpaceAddress,
+    position: ChangePosition,
+    from: PendingCrossSpaceAddress,
+    to: PendingCrossSpaceAddress,
     amount: U256,
 }
 
-const fn cross_space_balance_location(address: CrossSpaceAddress) -> CfxBalanceLocation {
+const fn cross_space_balance_location(address: PendingCrossSpaceAddress) -> CfxBalanceLocation {
     match address {
-        CrossSpaceAddress::CoreSpace(account) => CfxBalanceLocation::CoreSpaceAccount { account },
-        CrossSpaceAddress::Espace(account) => CfxBalanceLocation::EspaceAccount { account },
+        PendingCrossSpaceAddress::CoreSpace(account) => {
+            CfxBalanceLocation::CoreSpaceAccount { account }
+        }
+        PendingCrossSpaceAddress::Espace(account) => CfxBalanceLocation::EspaceAccount { account },
     }
 }
 
 #[derive(Debug)]
 struct SponsorshipFundingOperation {
-    position: Position,
+    position: ChangePosition,
     funding_terms: SponsorshipFundingTerms,
     sponsor: Address,
     contract_address: Address,
@@ -493,7 +498,7 @@ impl SponsorshipFundingTerms {
 
 #[derive(Debug, Clone, Copy)]
 struct SponsorshipRefundOperation {
-    position: Position,
+    position: ChangePosition,
     resource: SponsoredResource,
     sponsor: Address,
     contract_address: Address,
@@ -503,7 +508,7 @@ struct SponsorshipRefundOperation {
 
 #[derive(Debug)]
 struct StoragePointConversionOperation {
-    position: Position,
+    position: ChangePosition,
     contract_address: Address,
     from_sponsor_pool: U256,
     from_storage_collateral: U256,
@@ -524,11 +529,11 @@ enum SponsorshipAccessCallerRole {
 
 #[derive(Debug)]
 struct SponsorshipAccessRuleUpdate {
-    position: Position,
+    position: ChangePosition,
     caller_role: SponsorshipAccessCallerRole,
     caller_address: Address,
     contract_address: Address,
-    account_scope: SponsorshipEligibilityTarget,
+    account_scope: PendingSponsorshipEligibilityTarget,
     enabled_after: bool,
 }
 
@@ -544,7 +549,7 @@ impl SponsorshipAccessRuleUpdate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct SponsorshipAccessRuleKey {
     contract_address: Address,
-    account_scope: SponsorshipEligibilityTarget,
+    account_scope: PendingSponsorshipEligibilityTarget,
 }
 
 pub(crate) fn determine_gas_fee_payer(

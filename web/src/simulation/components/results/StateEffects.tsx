@@ -4,10 +4,7 @@ import {
   getChangeAddresses,
   normalizeAddress,
 } from '../../flowView.ts';
-import type {
-  SimulationChange,
-  SimulationRecord,
-} from '../../types.ts';
+import type { SimulationChange } from '../../types.ts';
 import {
   AddressAliasValue,
   AddressValue,
@@ -22,12 +19,10 @@ import type {
 export function StateEffects({
   addressHighlight,
   changes,
-  environmentId,
   participantMap,
 }: Readonly<{
   addressHighlight: AddressHighlightController;
   changes: readonly SimulationChange[];
-  environmentId: SimulationRecord['environmentId'];
   participantMap: ReadonlyMap<string, FlowLaneViewModel>;
 }>) {
   if (changes.length === 0) return null;
@@ -42,7 +37,6 @@ export function StateEffects({
           <StateEffectSummary
             addressHighlight={addressHighlight}
             change={change}
-            environmentId={environmentId}
             key={`${change.changeType}:${index}`}
             participantMap={participantMap}
           />
@@ -55,15 +49,13 @@ export function StateEffects({
 function StateEffectSummary({
   addressHighlight,
   change,
-  environmentId,
   participantMap,
 }: Readonly<{
   addressHighlight: AddressHighlightController;
   change: SimulationChange;
-  environmentId: SimulationRecord['environmentId'];
   participantMap: ReadonlyMap<string, FlowLaneViewModel>;
 }>) {
-  const view = toChangeItemViewModel(change, environmentId);
+  const view = toChangeItemViewModel(change);
   const addresses = getChangeAddresses(change);
   const highlighted = hasHighlightedAddress(
     addresses,

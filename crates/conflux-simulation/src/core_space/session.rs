@@ -1,10 +1,10 @@
 use cfx_executor::{machine::Machine, state::State};
 use cfx_types::Space;
-use contract_standards::legacy::StatePhase;
+use conflux_provider::Network;
 use tokio::runtime::Handle;
 
 use crate::{
-    ConfluxSimulationBackend, ConfluxSimulationError,
+    ConfluxSimulationBackend,
     execution::{
         ConfluxExecutionOutcome, ConfluxTransactionExecutor, DryRunTransactionInput,
         ExecutionBlockContext, ExecutionTraceObserver, TransactionExecutionInput,
@@ -15,15 +15,17 @@ use crate::{
 
 use super::{
     CoreSpaceChange, CoreSpaceCompleteTransaction, CoreSpaceExecutionError,
-    CoreSpaceExecutionOutcome, CoreSpaceStateAccessError, ResolvedStorageSponsorship,
-    analysis::CoreSpaceChangeAnalysis, convert_executor_outcome,
-    transaction::build_core_space_transaction_input,
+    CoreSpaceExecutionOutcome, CoreSpaceNativeCurrency, CoreSpaceSimulationError,
+    CoreSpaceStateAccessError, ResolvedStorageSponsorship, analysis::CoreSpaceChangeAnalysis,
+    changes::StatePhase, convert_executor_outcome, transaction::build_core_space_transaction_input,
 };
 
 pub(super) struct CoreSpaceExecutionSession {
     state: State,
     machine: Machine,
     chain_id: u32,
+    network: Network,
+    currency: CoreSpaceNativeCurrency,
     masked_sponsor_whitelist_entries: MaskedSponsorWhitelistEntries,
     anchored_vote_lists: AnchoredVoteLists,
 }
@@ -38,7 +40,7 @@ impl CoreSpaceExecutionSession {
         backend: &ConfluxSimulationBackend,
         state_source: ConfluxStateSource,
         runtime_handle: Handle,
-    ) -> Result<Self, ConfluxSimulationError> {
+    ) -> Result<Self, CoreSpaceSimulationError> {
         let masked_sponsor_whitelist_entries = state_source.masked_sponsor_whitelist_entries();
         let anchored_vote_lists = state_source.anchored_vote_lists();
         let state = build_conflux_state(state_source, runtime_handle).map_err(|source| {
@@ -51,6 +53,8 @@ impl CoreSpaceExecutionSession {
             state,
             machine: backend.chain_spec().build_machine(),
             chain_id: backend.chain_spec().core_space_chain_id(),
+            network: backend.core_space_address_network(),
+            currency: backend.chain_spec().core_space_native_currency().clone(),
             masked_sponsor_whitelist_entries,
             anchored_vote_lists,
         })
@@ -61,7 +65,7 @@ impl CoreSpaceExecutionSession {
         transaction: &CoreSpaceCompleteTransaction,
         block_context: ExecutionBlockContext,
         storage_sponsorship: ResolvedStorageSponsorship,
-    ) -> Result<CoreSpaceExecutionSessionResult, ConfluxSimulationError> {
+    ) -> Result<CoreSpaceExecutionSessionResult, CoreSpaceSimulationError> {
         let execution_input = TransactionExecutionInput {
             block_context,
             transaction: DryRunTransactionInput::CoreSpace(build_core_space_transaction_input(
@@ -80,34 +84,43 @@ impl CoreSpaceExecutionSession {
                 &self.machine,
                 &self.masked_sponsor_whitelist_entries,
                 &self.anchored_vote_lists,
-            )?;
+                self.network,
+                &self.currency,
+            )
+            .map_err(super::CoreSpaceChangesError::from_internal)?;
             let state_after_execution = self.state.save();
 
             self.state.restore(state_before_execution);
-            let before = analysis.read_state(
-                &mut self.state,
-                &self.machine,
-                &execution.prepared,
-                StatePhase::Before,
-            )?;
+            let before = analysis
+                .read_state(
+                    &mut self.state,
+                    &self.machine,
+                    &execution.prepared,
+                    StatePhase::Before,
+                )
+                .map_err(super::CoreSpaceChangesError::from_internal)?;
             self.state.restore(state_after_execution);
 
             let state_before_after_reads = self.state.save();
-            let after = analysis.read_state(
-                &mut self.state,
-                &self.machine,
-                &execution.prepared,
-                StatePhase::After,
-            )?;
+            let after = analysis
+                .read_state(
+                    &mut self.state,
+                    &self.machine,
+                    &execution.prepared,
+                    StatePhase::After,
+                )
+                .map_err(super::CoreSpaceChangesError::from_internal)?;
             self.state.restore(state_before_after_reads);
 
-            analysis.analyze(
-                &mut self.state,
-                &self.machine,
-                &execution.prepared,
-                before,
-                after,
-            )?
+            analysis
+                .analyze(
+                    &mut self.state,
+                    &self.machine,
+                    &execution.prepared,
+                    before,
+                    after,
+                )
+                .map_err(super::CoreSpaceChangesError::from_internal)?
         } else {
             Vec::new()
         };

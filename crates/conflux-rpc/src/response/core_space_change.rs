@@ -2,13 +2,13 @@ use alloy_primitives::Address;
 use cfx_addr::Network;
 use cfx_rpc_cfx_types::RpcAddress;
 use cfx_types::{H256, U64, U256};
-use conflux_service::core_space as service_core_space;
+use conflux_simulation::core_space as simulation_core_space;
 use serde::Serialize;
 
 use super::{
     b256_to_wire,
-    change::{Erc20Metadata, Erc721CollectionMetadata, NativeMetadata},
-    core_space::{ResponseMappingError, map_core_space_address},
+    change::{Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem},
+    core_space::{ResponseMappingError, map_core_address},
     u256_to_wire,
 };
 
@@ -19,39 +19,71 @@ use super::{
     rename_all_fields = "camelCase"
 )]
 pub(super) enum Change {
-    Transfer {
-        #[serde(flatten)]
-        asset: TransferAsset,
+    NativeTransfer {
         from: RpcAddress,
         to: RpcAddress,
-    },
-    Mint {
+        raw_amount: U256,
         #[serde(flatten)]
-        asset: MintAsset,
-        to: RpcAddress,
+        currency: NativeCurrency,
     },
-    Burn {
-        #[serde(flatten)]
-        asset: BurnAsset,
+    NativeBurn {
         from: RpcAddress,
-    },
-    Allowance {
+        raw_amount: U256,
         #[serde(flatten)]
-        asset: AllowanceAsset,
+        currency: NativeCurrency,
+    },
+    Erc20Transfer {
+        contract_address: RpcAddress,
+        from: RpcAddress,
+        to: RpcAddress,
+        raw_amount: U256,
+        #[serde(flatten)]
+        metadata: Erc20Metadata,
+    },
+    Erc20Approval {
+        contract_address: RpcAddress,
         owner: RpcAddress,
         spender: RpcAddress,
-    },
-    TokenApproval {
+        approved_amount: U256,
         #[serde(flatten)]
-        asset: TokenApprovalAsset,
+        metadata: Erc20Metadata,
+    },
+    Erc721Transfer {
+        contract_address: RpcAddress,
+        from: RpcAddress,
+        to: RpcAddress,
+        token_id: U256,
+        #[serde(flatten)]
+        metadata: Erc721CollectionMetadata,
+    },
+    Erc721Approval {
+        contract_address: RpcAddress,
+        owner: RpcAddress,
+        approved_address: Option<RpcAddress>,
+        token_id: U256,
+        #[serde(flatten)]
+        metadata: Erc721CollectionMetadata,
     },
     OperatorApproval {
-        #[serde(flatten)]
-        asset: OperatorApprovalAsset,
+        contract_address: RpcAddress,
         owner: RpcAddress,
         operator: RpcAddress,
-        approved_before: bool,
-        approved_after: bool,
+        approved: bool,
+    },
+    Erc1155TransferSingle {
+        contract_address: RpcAddress,
+        operator: RpcAddress,
+        from: RpcAddress,
+        to: RpcAddress,
+        token_id: U256,
+        raw_amount: U256,
+    },
+    Erc1155TransferBatch {
+        contract_address: RpcAddress,
+        operator: RpcAddress,
+        from: RpcAddress,
+        to: RpcAddress,
+        items: Vec<Erc1155TransferItem>,
     },
     StakingDeposit {
         account: RpcAddress,
@@ -124,141 +156,11 @@ pub(super) enum Change {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub(super) enum TransferAsset {
-    Native {
-        raw_amount: U256,
-        #[serde(flatten)]
-        metadata: NativeMetadata,
-    },
-    Erc20 {
-        contract_address: RpcAddress,
-        raw_amount: U256,
-        #[serde(flatten)]
-        metadata: Erc20Metadata,
-    },
-    Erc721 {
-        contract_address: RpcAddress,
-        token_id: U256,
-        #[serde(flatten)]
-        metadata: Erc721CollectionMetadata,
-    },
-    Erc1155 {
-        contract_address: RpcAddress,
-        token_id: U256,
-        raw_amount: U256,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub(super) enum MintAsset {
-    Erc20 {
-        contract_address: RpcAddress,
-        raw_amount: U256,
-        #[serde(flatten)]
-        metadata: Erc20Metadata,
-    },
-    Erc721 {
-        contract_address: RpcAddress,
-        token_id: U256,
-        #[serde(flatten)]
-        metadata: Erc721CollectionMetadata,
-    },
-    Erc1155 {
-        contract_address: RpcAddress,
-        token_id: U256,
-        raw_amount: U256,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub(super) enum BurnAsset {
-    Native {
-        raw_amount: U256,
-        #[serde(flatten)]
-        metadata: NativeMetadata,
-    },
-    Erc20 {
-        contract_address: RpcAddress,
-        raw_amount: U256,
-        #[serde(flatten)]
-        metadata: Erc20Metadata,
-    },
-    Erc721 {
-        contract_address: RpcAddress,
-        token_id: U256,
-        #[serde(flatten)]
-        metadata: Erc721CollectionMetadata,
-    },
-    Erc1155 {
-        contract_address: RpcAddress,
-        token_id: U256,
-        raw_amount: U256,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub(super) enum AllowanceAsset {
-    Erc20 {
-        contract_address: RpcAddress,
-        raw_amount_before: U256,
-        raw_amount_after: U256,
-        #[serde(flatten)]
-        metadata: Erc20Metadata,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub(super) enum TokenApprovalAsset {
-    Erc721 {
-        contract_address: RpcAddress,
-        token_id: U256,
-        approved_address_before: Option<RpcAddress>,
-        approved_address_after: Option<RpcAddress>,
-        #[serde(flatten)]
-        metadata: Erc721CollectionMetadata,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "assetType",
-    rename_all = "SCREAMING_SNAKE_CASE",
-    rename_all_fields = "camelCase"
-)]
-pub(super) enum OperatorApprovalAsset {
-    Erc721 {
-        contract_address: RpcAddress,
-        #[serde(flatten)]
-        metadata: Erc721CollectionMetadata,
-    },
-    Erc1155 {
-        contract_address: RpcAddress,
-    },
+#[serde(rename_all = "camelCase")]
+pub(super) struct NativeCurrency {
+    name: String,
+    symbol: String,
+    decimals: u8,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -310,7 +212,7 @@ pub(super) enum CrossSpaceAddress {
 }
 
 pub(super) fn try_map_changes(
-    changes: Vec<service_core_space::CoreSpaceChange>,
+    changes: Vec<simulation_core_space::CoreSpaceChange>,
     network: Network,
 ) -> Result<Vec<Change>, ResponseMappingError> {
     changes
@@ -321,14 +223,34 @@ pub(super) fn try_map_changes(
 }
 
 fn try_map_change(
-    change: service_core_space::CoreSpaceChange,
+    change: simulation_core_space::CoreSpaceChange,
     network: Network,
     field: &str,
 ) -> Result<Change, ResponseMappingError> {
-    use service_core_space::CoreSpaceChange as Source;
+    use simulation_core_space::CoreSpaceChange as Source;
 
     Ok(match change {
-        Source::Asset(change) => try_map_asset_change(change, network, field)?,
+        Source::NativeTransfer {
+            from,
+            to,
+            raw_amount,
+            currency,
+        } => Change::NativeTransfer {
+            from: map_address(from, network, field, "from")?,
+            to: map_address(to, network, field, "to")?,
+            raw_amount: u256_to_wire(raw_amount),
+            currency: currency.into(),
+        },
+        Source::NativeBurn {
+            from,
+            raw_amount,
+            currency,
+        } => Change::NativeBurn {
+            from: map_address(from, network, field, "from")?,
+            raw_amount: u256_to_wire(raw_amount),
+            currency: currency.into(),
+        },
+        Source::Standard(change) => try_map_standard_change(change, network, field)?,
         Source::StakingDeposit {
             account,
             raw_amount,
@@ -344,17 +266,6 @@ fn try_map_change(
             account: map_address(account, network, field, "account")?,
             raw_amount: u256_to_wire(raw_amount),
             reward_raw_amount: u256_to_wire(reward_raw_amount),
-        },
-        Source::NativeBurn {
-            from,
-            raw_amount,
-            metadata,
-        } => Change::Burn {
-            asset: BurnAsset::Native {
-                raw_amount: u256_to_wire(raw_amount),
-                metadata: metadata.into(),
-            },
-            from: map_address(from, network, field, "from")?,
         },
         Source::StakingBurn {
             account,
@@ -464,78 +375,39 @@ fn try_map_change(
     })
 }
 
-fn try_map_asset_change(
-    change: service_core_space::Change,
+fn try_map_standard_change(
+    change: simulation_core_space::StandardChange<simulation_core_space::CoreAddress>,
     network: Network,
     field: &str,
 ) -> Result<Change, ResponseMappingError> {
-    use service_core_space::Change as Source;
+    use simulation_core_space::StandardChange as Source;
 
     Ok(match change {
-        Source::NativeTransfer {
-            from,
-            to,
-            raw_amount,
-            metadata,
-        } => Change::Transfer {
-            asset: TransferAsset::Native {
-                raw_amount: u256_to_wire(raw_amount),
-                metadata: metadata.into(),
-            },
-            from: map_address(from, network, field, "from")?,
-            to: map_address(to, network, field, "to")?,
-        },
         Source::Erc20Transfer {
             contract_address,
             from,
             to,
             raw_amount,
             metadata,
-        } => Change::Transfer {
-            asset: TransferAsset::Erc20 {
-                contract_address: map_address(contract_address, network, field, "contractAddress")?,
-                raw_amount: u256_to_wire(raw_amount),
-                metadata: metadata.into(),
-            },
+        } => Change::Erc20Transfer {
+            contract_address: map_address(contract_address, network, field, "contractAddress")?,
             from: map_address(from, network, field, "from")?,
             to: map_address(to, network, field, "to")?,
+            raw_amount: u256_to_wire(raw_amount),
+            metadata: metadata.into(),
         },
-        Source::Erc20Mint {
+        Source::Erc20Approval {
             contract_address,
-            to,
-            raw_amount,
+            owner,
+            spender,
+            approved_amount,
             metadata,
-        } => Change::Mint {
-            asset: MintAsset::Erc20 {
-                contract_address: map_address(contract_address, network, field, "contractAddress")?,
-                raw_amount: u256_to_wire(raw_amount),
-                metadata: metadata.into(),
-            },
-            to: map_address(to, network, field, "to")?,
-        },
-        Source::Erc20Burn {
-            contract_address,
-            from,
-            raw_amount,
-            metadata,
-        } => Change::Burn {
-            asset: BurnAsset::Erc20 {
-                contract_address: map_address(contract_address, network, field, "contractAddress")?,
-                raw_amount: u256_to_wire(raw_amount),
-                metadata: metadata.into(),
-            },
-            from: map_address(from, network, field, "from")?,
-        },
-        Source::SelfDestructBurn {
-            contract_address,
-            raw_amount,
-            metadata,
-        } => Change::Burn {
-            asset: BurnAsset::Native {
-                raw_amount: u256_to_wire(raw_amount),
-                metadata: metadata.into(),
-            },
-            from: map_address(contract_address, network, field, "from")?,
+        } => Change::Erc20Approval {
+            contract_address: map_address(contract_address, network, field, "contractAddress")?,
+            owner: map_address(owner, network, field, "owner")?,
+            spender: map_address(spender, network, field, "spender")?,
+            approved_amount: u256_to_wire(approved_amount),
+            metadata: metadata.into(),
         },
         Source::Erc721Transfer {
             contract_address,
@@ -543,166 +415,80 @@ fn try_map_asset_change(
             to,
             token_id,
             metadata,
-        } => Change::Transfer {
-            asset: TransferAsset::Erc721 {
-                contract_address: map_address(contract_address, network, field, "contractAddress")?,
-                token_id: u256_to_wire(token_id),
-                metadata: metadata.into(),
-            },
+        } => Change::Erc721Transfer {
+            contract_address: map_address(contract_address, network, field, "contractAddress")?,
             from: map_address(from, network, field, "from")?,
             to: map_address(to, network, field, "to")?,
+            token_id: u256_to_wire(token_id),
+            metadata: metadata.into(),
         },
-        Source::Erc721Mint {
-            contract_address,
-            to,
-            token_id,
-            metadata,
-        } => Change::Mint {
-            asset: MintAsset::Erc721 {
-                contract_address: map_address(contract_address, network, field, "contractAddress")?,
-                token_id: u256_to_wire(token_id),
-                metadata: metadata.into(),
-            },
-            to: map_address(to, network, field, "to")?,
-        },
-        Source::Erc721Burn {
-            contract_address,
-            from,
-            token_id,
-            metadata,
-        } => Change::Burn {
-            asset: BurnAsset::Erc721 {
-                contract_address: map_address(contract_address, network, field, "contractAddress")?,
-                token_id: u256_to_wire(token_id),
-                metadata: metadata.into(),
-            },
-            from: map_address(from, network, field, "from")?,
-        },
-        Source::Erc1155Transfer {
-            contract_address,
-            from,
-            to,
-            token_id,
-            raw_amount,
-        } => Change::Transfer {
-            asset: TransferAsset::Erc1155 {
-                contract_address: map_address(contract_address, network, field, "contractAddress")?,
-                token_id: u256_to_wire(token_id),
-                raw_amount: u256_to_wire(raw_amount),
-            },
-            from: map_address(from, network, field, "from")?,
-            to: map_address(to, network, field, "to")?,
-        },
-        Source::Erc1155Mint {
-            contract_address,
-            to,
-            token_id,
-            raw_amount,
-        } => Change::Mint {
-            asset: MintAsset::Erc1155 {
-                contract_address: map_address(contract_address, network, field, "contractAddress")?,
-                token_id: u256_to_wire(token_id),
-                raw_amount: u256_to_wire(raw_amount),
-            },
-            to: map_address(to, network, field, "to")?,
-        },
-        Source::Erc1155Burn {
-            contract_address,
-            from,
-            token_id,
-            raw_amount,
-        } => Change::Burn {
-            asset: BurnAsset::Erc1155 {
-                contract_address: map_address(contract_address, network, field, "contractAddress")?,
-                token_id: u256_to_wire(token_id),
-                raw_amount: u256_to_wire(raw_amount),
-            },
-            from: map_address(from, network, field, "from")?,
-        },
-        Source::Erc20Allowance {
+        Source::Erc721Approval {
             contract_address,
             owner,
-            spender,
-            raw_amount_before,
-            raw_amount_after,
-            metadata,
-        } => Change::Allowance {
-            asset: AllowanceAsset::Erc20 {
-                contract_address: map_address(contract_address, network, field, "contractAddress")?,
-                raw_amount_before: u256_to_wire(raw_amount_before),
-                raw_amount_after: u256_to_wire(raw_amount_after),
-                metadata: metadata.into(),
-            },
-            owner: map_address(owner, network, field, "owner")?,
-            spender: map_address(spender, network, field, "spender")?,
-        },
-        Source::Erc721TokenApproval {
-            contract_address,
+            approved_address,
             token_id,
-            approved_address_before,
-            approved_address_after,
             metadata,
-        } => Change::TokenApproval {
-            asset: TokenApprovalAsset::Erc721 {
-                contract_address: map_address(contract_address, network, field, "contractAddress")?,
-                token_id: u256_to_wire(token_id),
-                approved_address_before: try_map_optional_address(
-                    approved_address_before,
-                    network,
-                    field,
-                    "approvedAddressBefore",
-                )?,
-                approved_address_after: try_map_optional_address(
-                    approved_address_after,
-                    network,
-                    field,
-                    "approvedAddressAfter",
-                )?,
-                metadata: metadata.into(),
-            },
+        } => Change::Erc721Approval {
+            contract_address: map_address(contract_address, network, field, "contractAddress")?,
+            owner: map_address(owner, network, field, "owner")?,
+            approved_address: try_map_optional_address(
+                approved_address,
+                network,
+                field,
+                "approvedAddress",
+            )?,
+            token_id: u256_to_wire(token_id),
+            metadata: metadata.into(),
         },
-        Source::Erc721OperatorApproval {
+        Source::OperatorApproval {
             contract_address,
             owner,
             operator,
-            approved_before,
-            approved_after,
-            metadata,
+            approved,
         } => Change::OperatorApproval {
-            asset: OperatorApprovalAsset::Erc721 {
-                contract_address: map_address(contract_address, network, field, "contractAddress")?,
-                metadata: metadata.into(),
-            },
+            contract_address: map_address(contract_address, network, field, "contractAddress")?,
             owner: map_address(owner, network, field, "owner")?,
             operator: map_address(operator, network, field, "operator")?,
-            approved_before,
-            approved_after,
+            approved,
         },
-        Source::Erc1155OperatorApproval {
+        Source::Erc1155TransferSingle {
             contract_address,
-            owner,
             operator,
-            approved_before,
-            approved_after,
-        } => Change::OperatorApproval {
-            asset: OperatorApprovalAsset::Erc1155 {
-                contract_address: map_address(contract_address, network, field, "contractAddress")?,
-            },
-            owner: map_address(owner, network, field, "owner")?,
+            from,
+            to,
+            token_id,
+            raw_amount,
+        } => Change::Erc1155TransferSingle {
+            contract_address: map_address(contract_address, network, field, "contractAddress")?,
             operator: map_address(operator, network, field, "operator")?,
-            approved_before,
-            approved_after,
+            from: map_address(from, network, field, "from")?,
+            to: map_address(to, network, field, "to")?,
+            token_id: u256_to_wire(token_id),
+            raw_amount: u256_to_wire(raw_amount),
+        },
+        Source::Erc1155TransferBatch {
+            contract_address,
+            operator,
+            from,
+            to,
+            items,
+        } => Change::Erc1155TransferBatch {
+            contract_address: map_address(contract_address, network, field, "contractAddress")?,
+            operator: map_address(operator, network, field, "operator")?,
+            from: map_address(from, network, field, "from")?,
+            to: map_address(to, network, field, "to")?,
+            items: items.into_iter().map(Into::into).collect(),
         },
     })
 }
 
 fn try_map_sponsorship_configuration(
-    configuration: service_core_space::SponsorshipConfiguration,
+    configuration: simulation_core_space::SponsorshipConfiguration,
     network: Network,
     field: &str,
 ) -> Result<SponsorshipConfiguration, ResponseMappingError> {
     Ok(match configuration {
-        service_core_space::SponsorshipConfiguration::Gas {
+        simulation_core_space::SponsorshipConfiguration::Gas {
             sponsor_before,
             sponsor_after,
             max_sponsored_gas_fee_raw_amount_before,
@@ -722,7 +508,7 @@ fn try_map_sponsorship_configuration(
                 max_sponsored_gas_fee_raw_amount_after,
             ),
         },
-        service_core_space::SponsorshipConfiguration::StorageCollateral {
+        simulation_core_space::SponsorshipConfiguration::StorageCollateral {
             sponsor_before,
             sponsor_after,
         } => SponsorshipConfiguration::StorageCollateral {
@@ -738,40 +524,42 @@ fn try_map_sponsorship_configuration(
 }
 
 fn try_map_eligibility_target(
-    target: service_core_space::SponsorshipEligibilityTarget,
+    target: simulation_core_space::SponsorshipEligibilityTarget,
     network: Network,
     field: &str,
 ) -> Result<SponsorshipEligibilityTarget, ResponseMappingError> {
     Ok(match target {
-        service_core_space::SponsorshipEligibilityTarget::Account(address) => {
+        simulation_core_space::SponsorshipEligibilityTarget::Account(address) => {
             SponsorshipEligibilityTarget::Account {
                 address: map_address(address, network, field, "appliesTo.address")?,
             }
         }
-        service_core_space::SponsorshipEligibilityTarget::AllAccounts => {
+        simulation_core_space::SponsorshipEligibilityTarget::AllAccounts => {
             SponsorshipEligibilityTarget::AllAccounts
         }
     })
 }
 
 fn try_map_cross_space_address(
-    address: service_core_space::CrossSpaceAddress,
+    address: simulation_core_space::CrossSpaceAddress,
     network: Network,
     field: &str,
     endpoint: &str,
 ) -> Result<CrossSpaceAddress, ResponseMappingError> {
     Ok(match address {
-        service_core_space::CrossSpaceAddress::CoreSpace(address) => CrossSpaceAddress::CoreSpace {
-            address: map_address(address, network, field, &format!("{endpoint}.address"))?,
-        },
-        service_core_space::CrossSpaceAddress::Espace(address) => {
+        simulation_core_space::CrossSpaceAddress::CoreSpace(address) => {
+            CrossSpaceAddress::CoreSpace {
+                address: map_address(address, network, field, &format!("{endpoint}.address"))?,
+            }
+        }
+        simulation_core_space::CrossSpaceAddress::Espace(address) => {
             CrossSpaceAddress::Espace { address }
         }
     })
 }
 
 fn try_map_optional_address(
-    address: Option<Address>,
+    address: Option<simulation_core_space::CoreAddress>,
     network: Network,
     field: &str,
     name: &str,
@@ -782,23 +570,29 @@ fn try_map_optional_address(
 }
 
 fn map_address(
-    address: Address,
+    address: simulation_core_space::CoreAddress,
     network: Network,
     field: &str,
     name: &str,
 ) -> Result<RpcAddress, ResponseMappingError> {
-    map_core_space_address(
-        cfx_types::Address::from_slice(address.as_slice()),
-        network,
-        format!("{field}.{name}"),
-    )
+    map_core_address(address, network, format!("{field}.{name}"))
 }
 
-impl From<service_core_space::SponsoredResource> for SponsoredResource {
-    fn from(resource: service_core_space::SponsoredResource) -> Self {
+impl From<simulation_core_space::CoreSpaceNativeCurrency> for NativeCurrency {
+    fn from(currency: simulation_core_space::CoreSpaceNativeCurrency) -> Self {
+        Self {
+            name: currency.name,
+            symbol: currency.symbol,
+            decimals: currency.decimals,
+        }
+    }
+}
+
+impl From<simulation_core_space::SponsoredResource> for SponsoredResource {
+    fn from(resource: simulation_core_space::SponsoredResource) -> Self {
         match resource {
-            service_core_space::SponsoredResource::Gas => Self::Gas,
-            service_core_space::SponsoredResource::StorageCollateral => Self::StorageCollateral,
+            simulation_core_space::SponsoredResource::Gas => Self::Gas,
+            simulation_core_space::SponsoredResource::StorageCollateral => Self::StorageCollateral,
         }
     }
 }

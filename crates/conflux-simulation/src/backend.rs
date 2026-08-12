@@ -9,9 +9,7 @@ use conflux_provider::{ConfluxProvider, CoreStatus, Network};
 
 use crate::{
     ConfluxCoreStatusIdentityField, ConfluxEndpointIdentity, ConfluxInitializationError,
-    ConfluxSimulationError,
-    chain_spec::ConfluxChainSpec,
-    state::{ConfluxSimulationProvider, ConfluxStateAnchor, ConfluxStateSource},
+    chain_spec::ConfluxChainSpec, state::ConfluxSimulationProvider,
 };
 
 /// A reusable Conflux mainnet simulation backend verified against its RPC endpoints.
@@ -84,17 +82,6 @@ impl ConfluxSimulationBackend {
 
     pub(crate) fn provider(&self) -> &ConfluxSimulationProvider {
         &self.inner.provider
-    }
-
-    pub(crate) async fn prepare_state_source(
-        &self,
-        state_anchor: ConfluxStateAnchor,
-    ) -> Result<ConfluxStateSource, ConfluxSimulationError> {
-        ConfluxStateSource::prepare(state_anchor, self.provider().clone())
-            .await
-            .map_err(|error| ConfluxSimulationError::StateAccess {
-                message: error.to_string(),
-            })
     }
 }
 

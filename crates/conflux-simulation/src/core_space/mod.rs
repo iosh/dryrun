@@ -6,11 +6,10 @@ mod error;
 mod execution;
 mod execution_result;
 mod outcome;
-mod preparer;
 mod rejection;
+mod request;
 mod result;
 mod session;
-pub(crate) mod simulation;
 mod simulator;
 mod transaction;
 
@@ -21,8 +20,8 @@ pub(crate) use outcome::{
 pub(crate) use transaction::{ResolvedStorageSponsorship, resolve_storage_sponsorship};
 
 pub use changes::{
-    CoreSpaceChange, CrossSpaceAddress, SponsoredResource, SponsorshipConfiguration,
-    SponsorshipEligibilityTarget,
+    CoreSpaceChange, CoreSpaceNativeCurrency, CrossSpaceAddress, SponsoredResource,
+    SponsorshipConfiguration, SponsorshipEligibilityTarget,
 };
 pub use conflux_provider::CoreAddress;
 pub use context::{
@@ -30,19 +29,22 @@ pub use context::{
     CoreSpaceStateAnchor,
 };
 pub(crate) use context::{ResolvedCoreSpaceContext, resolve_core_space_context};
+pub use contract_standards::{
+    Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem, StandardChange,
+};
 pub use error::{
-    CoreSpaceExecutionError, CoreSpaceResultIntegrationError, CoreSpaceStateAccessError,
+    CoreSpaceChangesError, CoreSpaceExecutionError, CoreSpaceResultIntegrationError,
+    CoreSpaceSimulationError, CoreSpaceStateAccessError, CoreSpaceStorageSponsorshipError,
 };
 pub use execution::{
     CoreSpaceExecution, CoreSpaceExecutionFailure, CoreSpaceExecutionOutcome, CoreSpaceLog,
     CoreSpaceLogAddress, CoreSpaceRevertReason, CoreSpaceSuccessOutput,
 };
 pub use execution_result::{CoreSpaceExecutionResult, CoreSpaceGas};
-pub use preparer::CoreSpaceSimulationPreparer;
 pub use rejection::CoreSpaceTransactionRejection;
+pub use request::CoreSpaceSimulationRequest;
 pub use result::CoreSpaceSimulation;
-pub use simulation_changes::{Change, Erc20Metadata, Erc721CollectionMetadata, NativeMetadata};
-pub use simulator::CoreSpaceSimulator;
+pub use simulator::CoreSpaceTransactionSimulator;
 pub use transaction::{
     CoreSpaceAccessListItem, CoreSpaceCompleteTransaction, CoreSpaceCompleteTransactionVariant,
     CoreSpacePartialTransaction, CoreSpacePartialTransactionVariant,

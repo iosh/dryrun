@@ -2,7 +2,8 @@ use cfx_addr::Network;
 use cfx_rpc_cfx_types::RpcAddress;
 use cfx_rpc_primitives::Bytes as CoreSpaceRpcBytes;
 use cfx_types::{Address, H256, U64, U256};
-use conflux_service::core_space as service_core_space;
+use conflux_provider::CoreAddress;
+use conflux_simulation::core_space as simulation_core_space;
 use serde::Serialize;
 
 use super::{core_space_change, u256_to_wire};
@@ -97,20 +98,20 @@ enum CoreSpaceExecutionFailureCode {
 
 impl SimulateCoreSpaceTransactionResponse {
     pub(crate) fn try_from_output(
-        simulation: service_core_space::CoreSpaceSimulation,
+        simulation: simulation_core_space::CoreSpaceSimulation,
         network: Network,
     ) -> Result<Self, ResponseMappingError> {
         let (_, _, execution, changes) = simulation.into_parts();
         Ok(Self {
-            execution: CoreSpaceExecution::from_service(execution),
+            execution: CoreSpaceExecution::from_simulation(execution),
             changes: core_space_change::try_map_changes(changes, network)?,
         })
     }
 }
 
 impl CoreSpaceExecution {
-    fn from_service(execution: service_core_space::CoreSpaceExecution) -> Self {
-        let service_core_space::CoreSpaceExecution {
+    fn from_simulation(execution: simulation_core_space::CoreSpaceExecution) -> Self {
+        let simulation_core_space::CoreSpaceExecution {
             chain_id,
             context: state,
             gas_limit,
@@ -127,13 +128,17 @@ impl CoreSpaceExecution {
             output,
             failure,
         ) = match outcome {
-            service_core_space::CoreSpaceExecutionOutcome::Success { result, output, .. } => {
-                let fields = ExecutedWireFields::from_service(&result);
+            simulation_core_space::CoreSpaceExecutionOutcome::Success {
+                result, output, ..
+            } => {
+                let fields = ExecutedWireFields::from_simulation(&result);
                 let output = match output {
-                    service_core_space::CoreSpaceSuccessOutput::Call { return_data } => return_data,
-                    service_core_space::CoreSpaceSuccessOutput::Create { runtime_code, .. } => {
-                        runtime_code
+                    simulation_core_space::CoreSpaceSuccessOutput::Call { return_data } => {
+                        return_data
                     }
+                    simulation_core_space::CoreSpaceSuccessOutput::Create {
+                        runtime_code, ..
+                    } => runtime_code,
                 };
                 (
                     CoreSpaceExecutionStatus::Success,
@@ -147,12 +152,12 @@ impl CoreSpaceExecution {
                     None,
                 )
             }
-            service_core_space::CoreSpaceExecutionOutcome::Reverted {
+            simulation_core_space::CoreSpaceExecutionOutcome::Reverted {
                 result,
                 revert_data,
                 reason: _,
             } => {
-                let fields = ExecutedWireFields::from_service(&result);
+                let fields = ExecutedWireFields::from_simulation(&result);
                 (
                     CoreSpaceExecutionStatus::Failed,
                     fields.gas_used,
@@ -169,8 +174,8 @@ impl CoreSpaceExecution {
                     }),
                 )
             }
-            service_core_space::CoreSpaceExecutionOutcome::Failed { result, failure } => {
-                let fields = ExecutedWireFields::from_service(&result);
+            simulation_core_space::CoreSpaceExecutionOutcome::Failed { result, failure } => {
+                let fields = ExecutedWireFields::from_simulation(&result);
                 (
                     CoreSpaceExecutionStatus::Failed,
                     fields.gas_used,
@@ -187,7 +192,7 @@ impl CoreSpaceExecution {
                     }),
                 )
             }
-            service_core_space::CoreSpaceExecutionOutcome::NotExecuted(rejection) => (
+            simulation_core_space::CoreSpaceExecutionOutcome::NotExecuted(rejection) => (
                 CoreSpaceExecutionStatus::NotExecuted,
                 U256::zero(),
                 U256::zero(),
@@ -222,7 +227,7 @@ impl CoreSpaceExecution {
 }
 
 impl ExecutedWireFields {
-    fn from_service(result: &service_core_space::CoreSpaceExecutionResult) -> Self {
+    fn from_simulation(result: &simulation_core_space::CoreSpaceExecutionResult) -> Self {
         Self {
             gas_used: result.gas().gas_used().into(),
             gas_charged: result.gas().gas_charged().into(),
@@ -234,8 +239,8 @@ impl ExecutedWireFields {
     }
 }
 
-impl From<service_core_space::CoreSpaceBlockContext> for CoreSpaceStateAnchor {
-    fn from(state: service_core_space::CoreSpaceBlockContext) -> Self {
+impl From<simulation_core_space::CoreSpaceBlockContext> for CoreSpaceStateAnchor {
+    fn from(state: simulation_core_space::CoreSpaceBlockContext) -> Self {
         Self {
             epoch_number: state.epoch_number.into(),
             pivot_hash: H256::from_slice(state.pivot_hash.as_slice()),
@@ -244,9 +249,9 @@ impl From<service_core_space::CoreSpaceBlockContext> for CoreSpaceStateAnchor {
 }
 
 fn wire_failure_code_for_rejection(
-    rejection: &service_core_space::CoreSpaceTransactionRejection,
+    rejection: &simulation_core_space::CoreSpaceTransactionRejection,
 ) -> CoreSpaceExecutionFailureCode {
-    use service_core_space::CoreSpaceTransactionRejection as Rejection;
+    use simulation_core_space::CoreSpaceTransactionRejection as Rejection;
 
     match rejection {
         Rejection::InvalidChainId { .. } => CoreSpaceExecutionFailureCode::ChainIdMismatch,
@@ -280,9 +285,9 @@ fn wire_failure_code_for_rejection(
 }
 
 fn wire_failure_code_for_execution_failure(
-    failure: &service_core_space::CoreSpaceExecutionFailure,
+    failure: &simulation_core_space::CoreSpaceExecutionFailure,
 ) -> CoreSpaceExecutionFailureCode {
-    use service_core_space::CoreSpaceExecutionFailure as Failure;
+    use simulation_core_space::CoreSpaceExecutionFailure as Failure;
 
     match failure {
         Failure::InsufficientFunds { .. } => CoreSpaceExecutionFailureCode::InsufficientFunds,
@@ -313,9 +318,9 @@ fn wire_failure_code_for_execution_failure(
 }
 
 fn wire_message_for_rejection(
-    rejection: &service_core_space::CoreSpaceTransactionRejection,
+    rejection: &simulation_core_space::CoreSpaceTransactionRejection,
 ) -> String {
-    use service_core_space::CoreSpaceTransactionRejection as Rejection;
+    use simulation_core_space::CoreSpaceTransactionRejection as Rejection;
 
     match rejection {
         Rejection::InvalidChainId {
@@ -350,9 +355,9 @@ fn wire_message_for_rejection(
 }
 
 fn wire_message_for_execution_failure(
-    failure: &service_core_space::CoreSpaceExecutionFailure,
+    failure: &simulation_core_space::CoreSpaceExecutionFailure,
 ) -> String {
-    use service_core_space::CoreSpaceExecutionFailure as Failure;
+    use simulation_core_space::CoreSpaceExecutionFailure as Failure;
 
     match failure {
         Failure::InsufficientFunds {
@@ -441,8 +446,34 @@ fn wire_message_for_execution_failure(
     }
 }
 
-fn raw_core_address(address: service_core_space::CoreAddress) -> Address {
+fn raw_core_address(address: simulation_core_space::CoreAddress) -> Address {
     Address::from_slice(&address.bytes())
+}
+
+pub(super) fn map_core_address(
+    address: CoreAddress,
+    network: Network,
+    field: String,
+) -> Result<RpcAddress, ResponseMappingError> {
+    if address.network() != provider_network(network) {
+        return Err(ResponseMappingError {
+            field,
+            message: format!(
+                "address uses network {}, expected {network}",
+                address.network()
+            ),
+        });
+    }
+
+    map_core_space_address(Address::from_slice(&address.bytes()), network, field)
+}
+
+fn provider_network(network: Network) -> conflux_provider::Network {
+    match network {
+        Network::Main => conflux_provider::Network::Main,
+        Network::Test => conflux_provider::Network::Test,
+        Network::Id(id) => conflux_provider::Network::Id(id),
+    }
 }
 
 pub(super) fn map_core_space_address(

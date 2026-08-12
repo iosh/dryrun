@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
+use crate::core_space::changes::ChangePosition;
 use alloy_primitives::U256;
 use cfx_executor::executive_observer::AddressPocket;
 use cfx_parameters::staking::DRIPS_PER_STORAGE_COLLATERAL_UNIT;
 use cfx_types::{AddressSpaceUtil, Space, address_util::AddressUtil};
 use cfx_vm_types::{CallType, Spec};
-use contract_standards::legacy::Position;
 use primitives::receipt::StorageChange;
 
 use super::{BasicCfxOperation, CfxBalanceLocation, StorageCollateralReleaseOperation};
@@ -117,7 +117,7 @@ impl CoreSpaceOperationCollector {
         }
 
         Ok(Some(BasicCfxOperation::CoreSpaceBalanceTransfer {
-            position: Position::new(position, 0),
+            position: ChangePosition::new(position, 0),
             from: address_from_cfx(*caller),
             to: address_from_cfx(*target),
             amount,
@@ -144,7 +144,7 @@ impl CoreSpaceOperationCollector {
         }
 
         Some(BasicCfxOperation::CoreSpaceBalanceTransfer {
-            position: Position::new(position, 0),
+            position: ChangePosition::new(position, 0),
             from: address_from_cfx(from),
             to: address_from_cfx(to),
             amount,
@@ -240,7 +240,7 @@ impl CoreSpaceOperationCollector {
                 if from.space == Space::Native && to.space == Space::Native =>
             {
                 BasicCfxOperation::CoreSpaceBalanceTransfer {
-                    position: Position::new(*position, 0),
+                    position: ChangePosition::new(*position, 0),
                     from: address_from_cfx(from.address),
                     to: address_from_cfx(to.address),
                     amount,
@@ -286,7 +286,7 @@ impl CoreSpaceOperationCollector {
                 if account.space == Space::Native && account.address == *staking_account =>
             {
                 BasicCfxOperation::StakingDeposit {
-                    position: Position::new(*position, 0),
+                    position: ChangePosition::new(*position, 0),
                     account: address_from_cfx(account.address),
                     amount,
                 }
@@ -300,14 +300,14 @@ impl CoreSpaceOperationCollector {
                 if account.space == Space::Native =>
             {
                 BasicCfxOperation::NativeBurn {
-                    position: Position::new(*position, 0),
+                    position: ChangePosition::new(*position, 0),
                     account: address_from_cfx(account.address),
                     amount,
                 }
             }
             (AddressPocket::StakingBalance(account), AddressPocket::MintBurn) => {
                 BasicCfxOperation::StakingBurn {
-                    position: Position::new(*position, 0),
+                    position: ChangePosition::new(*position, 0),
                     account: address_from_cfx(*account),
                     amount,
                 }
@@ -400,7 +400,7 @@ impl CoreSpaceOperationCollector {
         let reward_amount = u256_from_cfx(reward_value);
         let operation = (!principal_amount.is_zero() || !reward_amount.is_zero()).then(|| {
             BasicCfxOperation::StakingWithdrawal {
-                position: Position::new(*position, 0),
+                position: ChangePosition::new(*position, 0),
                 account: address_from_cfx(*staking_account),
                 principal_amount,
                 reward_amount,

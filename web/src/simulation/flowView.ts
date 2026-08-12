@@ -3,7 +3,6 @@ import {
   type ChangeTone,
 } from './changeView.ts';
 import { formatHexQuantity } from '../lib/formatting.ts';
-import { getEnvironment, type EnvironmentId } from './environment.ts';
 import type { SimulationChange } from './types.ts';
 
 export interface ChangeAddressViewModel {
@@ -36,16 +35,10 @@ export interface AssetFlowItemViewModel {
   value: string;
 }
 
-type ConfluxAssetMovementChange = Extract<
-  SimulationChange,
-  { changeType: 'BURN' | 'MINT' | 'TRANSFER' }
->;
-
 export function toAssetFlowItemViewModels(
   change: SimulationChange,
-  environmentId: EnvironmentId,
 ): AssetFlowItemViewModel[] {
-  const view = toChangeItemViewModel(change, environmentId);
+  const view = toChangeItemViewModel(change);
 
   switch (change.changeType) {
     case 'NATIVE_TRANSFER':
@@ -58,6 +51,20 @@ export function toAssetFlowItemViewModels(
           label: view.label,
           rawAmount: change.rawAmount,
           to: addressEndpoint('To', change.to),
+          tone: view.tone,
+          value: view.value ?? view.title,
+        },
+      ];
+    case 'NATIVE_BURN':
+      return [
+        {
+          assetKey: `NATIVE:${change.symbol}`,
+          assetTitle: change.symbol,
+          decimals: change.decimals,
+          from: addressEndpoint('From', change.from),
+          label: view.label,
+          rawAmount: change.rawAmount,
+          to: { kind: 'terminal', label: 'Burn' },
           tone: view.tone,
           value: view.value ?? view.title,
         },
@@ -139,48 +146,6 @@ export function toAssetFlowItemViewModels(
           value: `${formatHexQuantity(item.rawAmount)} ${assetTitle}`,
         };
       });
-    case 'TRANSFER':
-      return [
-        {
-          assetKey: movementAssetKey(change, environmentId),
-          assetIdentifier: view.identifier,
-          assetTitle: view.title,
-          ...movementAmount(change),
-          from: addressEndpoint('From', change.from),
-          label: view.label,
-          to: addressEndpoint('To', change.to),
-          tone: view.tone,
-          value: movementValue(change, view.value, view.title),
-        },
-      ];
-    case 'MINT':
-      return [
-        {
-          assetKey: movementAssetKey(change, environmentId),
-          assetIdentifier: view.identifier,
-          assetTitle: view.title,
-          ...movementAmount(change),
-          from: { kind: 'terminal', label: 'Mint' },
-          label: view.label,
-          to: addressEndpoint('To', change.to),
-          tone: view.tone,
-          value: movementValue(change, view.value, view.title),
-        },
-      ];
-    case 'BURN':
-      return [
-        {
-          assetKey: movementAssetKey(change, environmentId),
-          assetIdentifier: view.identifier,
-          assetTitle: view.title,
-          ...movementAmount(change),
-          from: addressEndpoint('From', change.from),
-          label: view.label,
-          to: { kind: 'terminal', label: 'Burn' },
-          tone: view.tone,
-          value: movementValue(change, view.value, view.title),
-        },
-      ];
     case 'CROSS_SPACE_TRANSFER':
       return [
         {
@@ -217,6 +182,8 @@ export function getChangeAddresses(
         { address: change.from, label: 'From' },
         { address: change.to, label: 'To' },
       ];
+    case 'NATIVE_BURN':
+      return [{ address: change.from, label: 'From' }];
     case 'SELF_DESTRUCT_BURN':
       return [{ address: change.contractAddress, label: 'Contract' }];
     case 'WRAPPED_NATIVE_DEPOSIT':
@@ -251,35 +218,6 @@ export function getChangeAddresses(
         { address: change.owner, label: 'Owner' },
         change.approvedAddress
           ? { address: change.approvedAddress, label: 'Approved address' }
-          : null,
-        { address: change.contractAddress, label: 'Asset contract' },
-      ]);
-    case 'TRANSFER':
-      return withContractAddress(change, [
-        { address: change.from, label: 'From' },
-        { address: change.to, label: 'To' },
-      ]);
-    case 'MINT':
-      return withContractAddress(change, [
-        { address: change.to, label: 'To' },
-      ]);
-    case 'BURN':
-      return withContractAddress(change, [
-        { address: change.from, label: 'From' },
-      ]);
-    case 'ALLOWANCE':
-      return [
-        { address: change.owner, label: 'Owner' },
-        { address: change.spender, label: 'Spender' },
-        { address: change.contractAddress, label: 'Asset contract' },
-      ];
-    case 'TOKEN_APPROVAL':
-      return compactAddresses([
-        change.approvedAddressBefore
-          ? { address: change.approvedAddressBefore, label: 'Approved before' }
-          : null,
-        change.approvedAddressAfter
-          ? { address: change.approvedAddressAfter, label: 'Approved after' }
           : null,
         { address: change.contractAddress, label: 'Asset contract' },
       ]);
@@ -346,63 +284,6 @@ function addressEndpoint(
   context?: string,
 ): FlowEndpoint {
   return { address, context, kind: 'address', label };
-}
-
-function movementAssetKey(
-  change: ConfluxAssetMovementChange,
-  environmentId: EnvironmentId,
-) {
-  switch (change.assetType) {
-    case 'NATIVE':
-      return `NATIVE:${'symbol' in change && typeof change.symbol === 'string' ? change.symbol : getEnvironment(environmentId).nativeSymbol}`;
-    case 'ERC20':
-      return `ERC20:${normalizeAddress(change.contractAddress)}`;
-    case 'ERC721':
-      return `ERC721:${normalizeAddress(change.contractAddress)}:${change.tokenId}`;
-    case 'ERC1155':
-      return `ERC1155:${normalizeAddress(change.contractAddress)}:${change.tokenId}`;
-  }
-}
-
-function movementAmount(change: ConfluxAssetMovementChange) {
-  if (change.assetType === 'ERC721') {
-    return { decimals: 0, rawAmount: '0x1' };
-  }
-
-  return {
-    decimals:
-      change.assetType === 'NATIVE'
-        ? 18
-        : 'decimals' in change && typeof change.decimals === 'number'
-          ? change.decimals
-          : 0,
-    rawAmount: change.rawAmount,
-  };
-}
-
-function movementValue(
-  change: ConfluxAssetMovementChange,
-  value: string | undefined,
-  title: string,
-) {
-  if (change.assetType === 'ERC721') return title;
-  if (change.assetType === 'ERC1155') {
-    return value ? `${value} ${title}` : title;
-  }
-  return value ?? title;
-}
-
-function withContractAddress(
-  change: SimulationChange,
-  addresses: ChangeAddressViewModel[],
-) {
-  if ('contractAddress' in change) {
-    addresses.push({
-      address: change.contractAddress,
-      label: 'Asset contract',
-    });
-  }
-  return addresses;
 }
 
 function compactAddresses(

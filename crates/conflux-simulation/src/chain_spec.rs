@@ -18,7 +18,7 @@ use cfx_parameters::{
 use cfx_types::{AllChainID, Space, SpaceMap, U256};
 use conflux_provider::Network;
 
-use crate::espace::EspaceNativeCurrency;
+use crate::{core_space::CoreSpaceNativeCurrency, espace::EspaceNativeCurrency};
 
 const MAINNET_CORE_SPACE_CHAIN_ID: u32 = 1029;
 const MAINNET_ESPACE_CHAIN_ID: u32 = 1030;
@@ -30,6 +30,7 @@ const MAINNET_ESPACE_WRAPPED_NATIVE_TOKEN: Address =
 pub(crate) struct ConfluxChainSpec {
     common_params: CommonParams,
     core_space_address_network: Network,
+    core_space_native_currency: CoreSpaceNativeCurrency,
     espace_native_currency: EspaceNativeCurrency,
     espace_wrapped_native_token: Address,
 }
@@ -56,6 +57,11 @@ impl ConfluxChainSpec {
         Self {
             common_params: mainnet_common_params(),
             core_space_address_network: Network::Main,
+            core_space_native_currency: CoreSpaceNativeCurrency {
+                name: "Conflux".to_owned(),
+                symbol: "CFX".to_owned(),
+                decimals: 18,
+            },
             espace_native_currency: EspaceNativeCurrency {
                 name: "Conflux".to_owned(),
                 symbol: "CFX".to_owned(),
@@ -79,6 +85,10 @@ impl ConfluxChainSpec {
 
     pub(crate) fn core_space_address_network(&self) -> Network {
         self.core_space_address_network
+    }
+
+    pub(crate) const fn core_space_native_currency(&self) -> &CoreSpaceNativeCurrency {
+        &self.core_space_native_currency
     }
 
     pub(crate) fn build_machine(&self) -> Machine {

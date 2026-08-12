@@ -154,7 +154,7 @@ export interface EspaceWrappedNativeWithdrawalChange
   rawAmount: string;
 }
 
-export interface EspaceErc20TransferChange extends FungibleAssetMetadata {
+export interface Erc20TransferChange extends FungibleAssetMetadata {
   changeType: 'ERC20_TRANSFER';
   contractAddress: string;
   from: string;
@@ -162,7 +162,7 @@ export interface EspaceErc20TransferChange extends FungibleAssetMetadata {
   rawAmount: string;
 }
 
-export interface EspaceErc20ApprovalChange extends FungibleAssetMetadata {
+export interface Erc20ApprovalChange extends FungibleAssetMetadata {
   changeType: 'ERC20_APPROVAL';
   contractAddress: string;
   owner: string;
@@ -170,7 +170,7 @@ export interface EspaceErc20ApprovalChange extends FungibleAssetMetadata {
   approvedAmount: string;
 }
 
-export interface EspaceErc721TransferChange extends AssetMetadata {
+export interface Erc721TransferChange extends AssetMetadata {
   changeType: 'ERC721_TRANSFER';
   contractAddress: string;
   from: string;
@@ -178,7 +178,7 @@ export interface EspaceErc721TransferChange extends AssetMetadata {
   tokenId: string;
 }
 
-export interface EspaceErc721ApprovalChange extends AssetMetadata {
+export interface Erc721ApprovalChange extends AssetMetadata {
   changeType: 'ERC721_APPROVAL';
   contractAddress: string;
   owner: string;
@@ -186,7 +186,7 @@ export interface EspaceErc721ApprovalChange extends AssetMetadata {
   tokenId: string;
 }
 
-export interface EspaceOperatorApprovalChange {
+export interface OperatorApprovalChange {
   changeType: 'OPERATOR_APPROVAL';
   contractAddress: string;
   owner: string;
@@ -194,7 +194,7 @@ export interface EspaceOperatorApprovalChange {
   approved: boolean;
 }
 
-export interface EspaceErc1155TransferSingleChange {
+export interface Erc1155TransferSingleChange {
   changeType: 'ERC1155_TRANSFER_SINGLE';
   contractAddress: string;
   operator: string;
@@ -204,7 +204,7 @@ export interface EspaceErc1155TransferSingleChange {
   rawAmount: string;
 }
 
-export interface EspaceErc1155TransferBatchChange {
+export interface Erc1155TransferBatchChange {
   changeType: 'ERC1155_TRANSFER_BATCH';
   contractAddress: string;
   operator: string;
@@ -218,119 +218,32 @@ export type EspaceChange =
   | EspaceSelfDestructBurnChange
   | EspaceWrappedNativeDepositChange
   | EspaceWrappedNativeWithdrawalChange
-  | EspaceErc20TransferChange
-  | EspaceErc20ApprovalChange
-  | EspaceErc721TransferChange
-  | EspaceErc721ApprovalChange
-  | EspaceOperatorApprovalChange
-  | EspaceErc1155TransferSingleChange
-  | EspaceErc1155TransferBatchChange;
+  | Erc20TransferChange
+  | Erc20ApprovalChange
+  | Erc721TransferChange
+  | Erc721ApprovalChange
+  | OperatorApprovalChange
+  | Erc1155TransferSingleChange
+  | Erc1155TransferBatchChange;
 
-interface NativeAsset extends FungibleAssetMetadata {
-  assetType: 'NATIVE';
+interface CoreNativeCurrency {
+  name: string;
+  symbol: string;
+  decimals: number;
+}
+
+export interface CoreNativeTransferChange extends CoreNativeCurrency {
+  changeType: 'NATIVE_TRANSFER';
+  from: string;
+  to: string;
   rawAmount: string;
 }
 
-interface Erc20Asset extends FungibleAssetMetadata {
-  assetType: 'ERC20';
-  contractAddress: string;
+export interface CoreNativeBurnChange extends CoreNativeCurrency {
+  changeType: 'NATIVE_BURN';
+  from: string;
   rawAmount: string;
 }
-
-interface Erc721Asset extends AssetMetadata {
-  assetType: 'ERC721';
-  contractAddress: string;
-  tokenId: string;
-}
-
-interface Erc1155Asset {
-  assetType: 'ERC1155';
-  contractAddress: string;
-  tokenId: string;
-  rawAmount: string;
-}
-
-type TokenMovementAsset = Erc20Asset | Erc721Asset | Erc1155Asset;
-type BurnAsset = NativeAsset | TokenMovementAsset;
-type TransferAsset = NativeAsset | TokenMovementAsset;
-type WithFields<TValue, TFields> = TValue extends unknown
-  ? TValue & TFields
-  : never;
-
-export type TransferChange = WithFields<
-  TransferAsset,
-  {
-    changeType: 'TRANSFER';
-    from: string;
-    to: string;
-  }
->;
-
-export type MintChange = WithFields<
-  TokenMovementAsset,
-  {
-    changeType: 'MINT';
-    to: string;
-  }
->;
-
-export type BurnChange = WithFields<
-  BurnAsset,
-  {
-    changeType: 'BURN';
-    from: string;
-  }
->;
-
-export interface AllowanceChange extends FungibleAssetMetadata {
-  changeType: 'ALLOWANCE';
-  assetType: 'ERC20';
-  contractAddress: string;
-  rawAmountBefore: string;
-  rawAmountAfter: string;
-  owner: string;
-  spender: string;
-}
-
-export interface TokenApprovalChange extends AssetMetadata {
-  changeType: 'TOKEN_APPROVAL';
-  assetType: 'ERC721';
-  contractAddress: string;
-  tokenId: string;
-  approvedAddressBefore: string | null;
-  approvedAddressAfter: string | null;
-}
-
-export interface Erc721OperatorApprovalChange extends AssetMetadata {
-  changeType: 'OPERATOR_APPROVAL';
-  assetType: 'ERC721';
-  contractAddress: string;
-  owner: string;
-  operator: string;
-  approvedBefore: boolean;
-  approvedAfter: boolean;
-}
-
-export interface Erc1155OperatorApprovalChange {
-  changeType: 'OPERATOR_APPROVAL';
-  assetType: 'ERC1155';
-  contractAddress: string;
-  owner: string;
-  operator: string;
-  approvedBefore: boolean;
-  approvedAfter: boolean;
-}
-
-type CommonChange =
-  | TransferChange
-  | MintChange
-  | BurnChange
-  | AllowanceChange
-  | TokenApprovalChange
-  | Erc721OperatorApprovalChange
-  | Erc1155OperatorApprovalChange;
-
-export type HexChange = CommonChange;
 
 export interface StakingDepositChange {
   changeType: 'STAKING_DEPOSIT';
@@ -449,7 +362,15 @@ export interface CrossSpaceTransferChange {
 }
 
 export type CoreChange =
-  | CommonChange
+  | CoreNativeTransferChange
+  | CoreNativeBurnChange
+  | Erc20TransferChange
+  | Erc20ApprovalChange
+  | Erc721TransferChange
+  | Erc721ApprovalChange
+  | OperatorApprovalChange
+  | Erc1155TransferSingleChange
+  | Erc1155TransferBatchChange
   | StakingDepositChange
   | StakingWithdrawalChange
   | StakingBurnChange
