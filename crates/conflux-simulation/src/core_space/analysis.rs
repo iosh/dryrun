@@ -1,4 +1,5 @@
 use cfx_executor::{machine::Machine, state::State};
+use cfx_types::U256;
 use conflux_provider::Network;
 
 use crate::{
@@ -6,53 +7,73 @@ use crate::{
     execution::{
         ConfluxExecutionOutcome, ConfluxTransactionExecution, PreparedTransactionExecution,
     },
-    state::{AnchoredVoteLists, MaskedSponsorWhitelistEntries},
+    state::{ConfluxStateSource, MaskedWhitelistKeys, RecordedDepositLists, RecordedVoteLists},
 };
 
 use super::changes::{
-    CfxAnalysisInput, CfxStateValues, CommittedStakingCalls, CoreSpaceChange,
+    ActiveContracts, CfxAnalysisInput, CfxStateValues, CommittedCalls, CoreSpaceChange,
     CoreSpaceNativeCurrency, PoSAnalysisInput, PoSStateReader, PoSStateValues,
-    PositionedCoreSpaceChange, StakingContractActivation, StatePhase,
-    collect_committed_staking_calls, collect_standard_changes, finish_core_space_changes,
-    load_standard_metadata, verify_pos_staking_changes, verify_vote_lock_changes,
+    PositionedCoreSpaceChange, StatePhase, analyze_balance_changes, collect_calls,
+    collect_standard_changes, finish_core_space_changes, load_standard_metadata,
+    verify_pos_staking_changes, verify_vote_lock_changes,
 };
 
 struct CoreSpaceAnalysisInput {
     cfx: CfxAnalysisInput,
-    committed_staking_calls: CommittedStakingCalls,
+    calls: CommittedCalls,
     pos: PoSAnalysisInput,
     standard_changes: Vec<PositionedCoreSpaceChange>,
+}
+
+pub(super) struct CoreSpaceAnalysisData {
+    masked_whitelist_keys: MaskedWhitelistKeys,
+    deposit_lists: RecordedDepositLists,
+    vote_lists: RecordedVoteLists,
+    accumulated_interest_rate: U256,
+}
+
+impl CoreSpaceAnalysisData {
+    pub(super) fn from_state_source(state_source: &ConfluxStateSource) -> Self {
+        Self {
+            masked_whitelist_keys: state_source.masked_whitelist_keys(),
+            deposit_lists: state_source.deposit_lists(),
+            vote_lists: state_source.vote_lists(),
+            accumulated_interest_rate: state_source.accumulated_interest_rate(),
+        }
+    }
 }
 
 impl CoreSpaceAnalysisInput {
     fn from_execution(
         execution: &ConfluxTransactionExecution,
         machine: &Machine,
-        masked_sponsor_whitelist_entries: &MaskedSponsorWhitelistEntries,
+        masked_whitelist_keys: &MaskedWhitelistKeys,
     ) -> Result<Self, CoreSpaceChangesError> {
         let ConfluxExecutionOutcome::Success(details) = &execution.outcome else {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
+            return Err(CoreSpaceChangesError::internal_invariant(
                 "successful execution is required for Core Space analysis",
             ));
         };
 
-        let cfx =
-            CfxAnalysisInput::from_execution(execution, machine, masked_sponsor_whitelist_entries)?;
-
-        let staking_contract_activation =
-            StakingContractActivation::from_machine_and_spec(machine, &execution.prepared.spec);
-        let committed_staking_calls =
-            collect_committed_staking_calls(&details.trace, staking_contract_activation)?;
+        let active_contracts =
+            ActiveContracts::from_machine_and_spec(machine, &execution.prepared.spec);
+        let calls = collect_calls(&details.trace, active_contracts)?;
+        let cfx = CfxAnalysisInput::from_execution(
+            execution,
+            machine,
+            masked_whitelist_keys,
+            calls.staking_calls(),
+        )?;
         let pos = PoSAnalysisInput::from_calls_and_logs(
-            committed_staking_calls.pos_calls(),
+            calls.pos_calls(),
             &details.logs,
-            staking_contract_activation.pos_register_is_active(),
+            active_contracts.pos_register_is_active(),
         )?;
         let standard_changes = collect_standard_changes(details)?;
 
         Ok(Self {
             cfx,
-            committed_staking_calls,
+            calls,
             pos,
             standard_changes,
         })
@@ -82,7 +103,7 @@ impl CoreSpaceStateReader {
         let cfx = analysis_input.cfx.read_state(state, phase)?;
         let pos = self.pos_state_reader.read(
             state,
-            analysis_input.committed_staking_calls.pos_calls(),
+            analysis_input.calls.pos_calls(),
             analysis_input.pos.state_requirements(),
             phase,
         )?;
@@ -93,7 +114,7 @@ impl CoreSpaceStateReader {
 pub(super) struct CoreSpaceChangeAnalysis {
     input: CoreSpaceAnalysisInput,
     state_reader: CoreSpaceStateReader,
-    anchored_vote_lists: AnchoredVoteLists,
+    data: CoreSpaceAnalysisData,
     network: Network,
     currency: CoreSpaceNativeCurrency,
 }
@@ -102,8 +123,7 @@ impl CoreSpaceChangeAnalysis {
     pub(super) fn from_execution(
         execution: &ConfluxTransactionExecution,
         machine: &Machine,
-        masked_sponsor_whitelist_entries: &MaskedSponsorWhitelistEntries,
-        anchored_vote_lists: &AnchoredVoteLists,
+        data: CoreSpaceAnalysisData,
         network: Network,
         currency: &CoreSpaceNativeCurrency,
     ) -> Result<Self, CoreSpaceChangesError> {
@@ -111,10 +131,10 @@ impl CoreSpaceChangeAnalysis {
             input: CoreSpaceAnalysisInput::from_execution(
                 execution,
                 machine,
-                masked_sponsor_whitelist_entries,
+                &data.masked_whitelist_keys,
             )?,
             state_reader: CoreSpaceStateReader::default(),
-            anchored_vote_lists: anchored_vote_lists.clone(),
+            data,
             network,
             currency: currency.clone(),
         })
@@ -141,11 +161,17 @@ impl CoreSpaceChangeAnalysis {
     ) -> Result<Vec<CoreSpaceChange>, CoreSpaceChangesError> {
         let Self {
             input: analysis_input,
-            anchored_vote_lists,
+            data,
             network,
             currency,
             ..
         } = self;
+        let CoreSpaceAnalysisData {
+            deposit_lists,
+            vote_lists,
+            accumulated_interest_rate,
+            ..
+        } = data;
         let CoreSpaceStateValues {
             cfx: before_cfx_state,
             pos: before_pos_state,
@@ -157,11 +183,21 @@ impl CoreSpaceChangeAnalysis {
         let mut positioned_core_changes = analysis_input
             .cfx
             .verify(&before_cfx_state, &after_cfx_state)?;
+        positioned_core_changes.extend(analyze_balance_changes(
+            state,
+            analysis_input.calls.staking_calls(),
+            &deposit_lists,
+            accumulated_interest_rate,
+            prepared_execution.env.number,
+            prepared_execution.spec.cip97,
+            &before_cfx_state,
+        )?);
         positioned_core_changes.extend(verify_vote_lock_changes(
             state,
-            analysis_input.committed_staking_calls.vote_lock_calls(),
-            &anchored_vote_lists,
+            analysis_input.calls.staking_calls(),
+            &vote_lists,
             prepared_execution.env.number,
+            &before_cfx_state,
         )?);
 
         match (before_pos_state, after_pos_state) {

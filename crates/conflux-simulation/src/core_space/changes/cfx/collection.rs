@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use alloy_primitives::Address;
 use cfx_executor::machine::Machine;
@@ -7,7 +7,7 @@ use cfx_vm_types::Spec;
 use primitives::receipt::StorageChange;
 
 use super::{
-    CfxOperation, CfxOperations, SponsorshipOperation,
+    BasicCfxOperation, CfxOperation, CfxOperations, SponsorshipOperation,
     basic::CoreSpaceOperationCollector,
     cross_space::collect_cross_space_call,
     sponsorship::{
@@ -17,6 +17,7 @@ use super::{
 };
 use crate::{
     core_space::CoreSpaceChangesError,
+    core_space::changes::staking::CommittedStakingCall,
     execution::{CommittedExecutionTrace, FrameAction, TraceEvent},
     primitive::{address_from_cfx, u256_from_cfx},
 };
@@ -33,6 +34,7 @@ pub(crate) fn collect_cfx_operations(
     storage_released: &[StorageChange],
     machine: &Machine,
     spec: &Spec,
+    committed_staking_calls: &[CommittedStakingCall],
 ) -> Result<CfxOperations, CoreSpaceChangesError> {
     let mut collector = CfxOperationCollector::new(storage_released)?;
     let mut contracts_with_admin_change_attempts = BTreeSet::new();
@@ -51,13 +53,52 @@ pub(crate) fn collect_cfx_operations(
         contracts_with_admin_change_attempts.insert(attempt.contract_address);
     }
 
-    let mut claimed_internal_transfers = BTreeSet::new();
+    let mut owned_transfer_positions = BTreeSet::new();
+    let mut staking_ops = BTreeMap::new();
+    for call in committed_staking_calls {
+        for transfer_position in call.owned_transfer_positions() {
+            if !owned_transfer_positions.insert(transfer_position) {
+                return Err(CoreSpaceChangesError::inconsistent_execution(format!(
+                    "Core Space transfer at trace position {transfer_position} was owned by multiple staking operations"
+                )));
+            }
+        }
+        let staking_balance_operation = match *call {
+            CommittedStakingCall::Deposit {
+                account, amount, ..
+            } => Some(BasicCfxOperation::StakingDeposit { account, amount }),
+            CommittedStakingCall::Withdrawal {
+                account,
+                principal_amount,
+                reward_amount,
+                ..
+            } => Some(BasicCfxOperation::StakingWithdrawal {
+                account,
+                principal_amount,
+                reward_amount,
+            }),
+            CommittedStakingCall::VoteLock { .. } => None,
+        };
+        if let Some(staking_balance_operation) = staking_balance_operation
+            && staking_ops
+                .insert(call.frame_position(), staking_balance_operation)
+                .is_some()
+        {
+            return Err(CoreSpaceChangesError::inconsistent_execution(
+                "multiple Core Space staking operations used the same trace position",
+            ));
+        }
+    }
     for event in trace.events() {
-        if claimed_internal_transfers.contains(&event.position()) {
+        if owned_transfer_positions.contains(&event.position()) {
             continue;
         }
         match event {
             TraceEvent::FrameStart { position, frame_id } => {
+                if let Some(operation) = staking_ops.remove(position) {
+                    collector.operations.push(CfxOperation::Basic(operation));
+                    continue;
+                }
                 let frame = trace.frame(*frame_id);
                 if let Some((operation, claimed_transfer_positions)) =
                     collect_cross_space_call(trace, *position, *frame_id, machine, spec)?
@@ -65,7 +106,7 @@ pub(crate) fn collect_cfx_operations(
                     collector
                         .operations
                         .push(CfxOperation::CrossSpace(operation));
-                    claimed_internal_transfers.extend(claimed_transfer_positions);
+                    owned_transfer_positions.extend(claimed_transfer_positions);
                     continue;
                 }
                 if let Some((collected_call, claimed_transfer_positions)) =
@@ -81,7 +122,7 @@ pub(crate) fn collect_cfx_operations(
                                 CfxOperation::Sponsorship(SponsorshipOperation::AccessRule(update))
                             })),
                     }
-                    claimed_internal_transfers.extend(claimed_transfer_positions);
+                    owned_transfer_positions.extend(claimed_transfer_positions);
                     continue;
                 }
                 match &frame.action {
@@ -116,7 +157,7 @@ pub(crate) fn collect_cfx_operations(
                     collector.operations.push(CfxOperation::Sponsorship(
                         SponsorshipOperation::StoragePointConversion(conversion),
                     ));
-                    claimed_internal_transfers.extend(claimed_transfer_positions);
+                    owned_transfer_positions.extend(claimed_transfer_positions);
                     continue;
                 }
                 if let Some(refund) = collect_standalone_sponsorship_refund(event)? {
@@ -125,23 +166,28 @@ pub(crate) fn collect_cfx_operations(
                     ));
                     continue;
                 }
-                let (collected, claimed_transfer_positions) = collector
-                    .core_space
-                    .collect_internal_transfer(trace, event)?;
+                let (collected, claimed_transfer_positions) =
+                    collector.core_space.collect_internal_transfer(event)?;
                 if let Some(operation) = collected {
                     collector.operations.push(CfxOperation::Basic(operation));
                 }
-                claimed_internal_transfers.extend(claimed_transfer_positions);
+                owned_transfer_positions.extend(claimed_transfer_positions);
             }
             TraceEvent::Log { .. } => {}
         }
+    }
+
+    if !staking_ops.is_empty() {
+        return Err(CoreSpaceChangesError::inconsistent_execution(
+            "a committed Core Space staking operation had no matching frame position",
+        ));
     }
 
     collector.validate_sponsorship_access_admin_context(
         &contracts_with_admin_change_attempts,
         contracts_created,
     )?;
-    collector.into_operations()
+    collector.into_operations(committed_staking_calls.iter().map(|call| call.account()))
 }
 
 impl CfxOperationCollector {
@@ -152,11 +198,17 @@ impl CfxOperationCollector {
         })
     }
 
-    fn into_operations(mut self) -> Result<CfxOperations, CoreSpaceChangesError> {
+    fn into_operations(
+        mut self,
+        staking_accounts: impl IntoIterator<Item = Address>,
+    ) -> Result<CfxOperations, CoreSpaceChangesError> {
         for operation in self.core_space.finish()? {
             self.operations.push(CfxOperation::Basic(operation));
         }
-        Ok(CfxOperations::from_operations(self.operations))
+        Ok(CfxOperations::from_operations(
+            self.operations,
+            staking_accounts,
+        ))
     }
 
     fn validate_sponsorship_access_admin_context(

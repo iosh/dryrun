@@ -10,14 +10,17 @@ use crate::{
         ExecutionBlockContext, ExecutionTraceObserver, TransactionExecutionInput,
         build_conflux_state,
     },
-    state::{AnchoredVoteLists, ConfluxStateSource, MaskedSponsorWhitelistEntries},
+    state::ConfluxStateSource,
 };
 
 use super::{
     CoreSpaceChange, CoreSpaceCompleteTransaction, CoreSpaceExecutionError,
     CoreSpaceExecutionOutcome, CoreSpaceNativeCurrency, CoreSpaceSimulationError,
-    CoreSpaceStateAccessError, ResolvedStorageSponsorship, analysis::CoreSpaceChangeAnalysis,
-    changes::StatePhase, convert_executor_outcome, transaction::build_core_space_transaction_input,
+    CoreSpaceStateAccessError, ResolvedStorageSponsorship,
+    analysis::{CoreSpaceAnalysisData, CoreSpaceChangeAnalysis},
+    changes::StatePhase,
+    convert_executor_outcome,
+    transaction::build_core_space_transaction_input,
 };
 
 pub(super) struct CoreSpaceExecutionSession {
@@ -26,8 +29,7 @@ pub(super) struct CoreSpaceExecutionSession {
     chain_id: u32,
     network: Network,
     currency: CoreSpaceNativeCurrency,
-    masked_sponsor_whitelist_entries: MaskedSponsorWhitelistEntries,
-    anchored_vote_lists: AnchoredVoteLists,
+    analysis_data: CoreSpaceAnalysisData,
 }
 
 pub(super) struct CoreSpaceExecutionSessionResult {
@@ -41,8 +43,7 @@ impl CoreSpaceExecutionSession {
         state_source: ConfluxStateSource,
         runtime_handle: Handle,
     ) -> Result<Self, CoreSpaceExecutionError> {
-        let masked_sponsor_whitelist_entries = state_source.masked_sponsor_whitelist_entries();
-        let anchored_vote_lists = state_source.anchored_vote_lists();
+        let analysis_data = CoreSpaceAnalysisData::from_state_source(&state_source);
         let state = build_conflux_state(state_source, runtime_handle).map_err(|source| {
             CoreSpaceExecutionError::StateAccess(CoreSpaceStateAccessError::Initialization {
                 source,
@@ -55,8 +56,7 @@ impl CoreSpaceExecutionSession {
             chain_id: backend.chain_spec().core_space_chain_id(),
             network: backend.core_space_address_network(),
             currency: backend.chain_spec().core_space_native_currency().clone(),
-            masked_sponsor_whitelist_entries,
-            anchored_vote_lists,
+            analysis_data,
         })
     }
 
@@ -82,8 +82,7 @@ impl CoreSpaceExecutionSession {
             let mut analysis = CoreSpaceChangeAnalysis::from_execution(
                 &execution,
                 &self.machine,
-                &self.masked_sponsor_whitelist_entries,
-                &self.anchored_vote_lists,
+                self.analysis_data,
                 self.network,
                 &self.currency,
             )?;

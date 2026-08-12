@@ -1,25 +1,26 @@
 use crate::core_space::changes::ChangePosition;
+use cfx_executor::executive_observer::AddressPocket;
 use cfx_executor::machine::Machine;
 use cfx_types::{AddressSpaceUtil, Space};
 use cfx_vm_types::{CallType, Spec};
 
 use super::{
-    CommittedPoSCall, CommittedVoteLockCall,
-    codec::{PoSCall, decode_pos_call, decode_vote_lock_call},
+    CommittedPoSCall, CommittedStakingCall,
+    codec::{PoSCall, StakingCall, decode_pos_call, decode_staking_call},
 };
 use crate::{
     core_space::CoreSpaceChangesError,
     execution::{CommittedExecutionTrace, FrameAction, TraceEvent},
-    primitive::address_from_cfx,
+    primitive::{address_from_cfx, u256_from_cfx},
 };
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct StakingContractActivation {
+pub(crate) struct ActiveContracts {
     staking: bool,
     pos_register: bool,
 }
 
-impl StakingContractActivation {
+impl ActiveContracts {
     pub(crate) fn from_machine_and_spec(machine: &Machine, spec: &Spec) -> Self {
         let internal_contracts = machine.internal_contracts();
         let staking =
@@ -46,14 +47,14 @@ impl StakingContractActivation {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct CommittedStakingCalls {
-    vote_lock_calls: Vec<CommittedVoteLockCall>,
+pub(crate) struct CommittedCalls {
+    staking_calls: Vec<CommittedStakingCall>,
     pos_calls: Vec<CommittedPoSCall>,
 }
 
-impl CommittedStakingCalls {
-    pub(crate) fn vote_lock_calls(&self) -> &[CommittedVoteLockCall] {
-        &self.vote_lock_calls
+impl CommittedCalls {
+    pub(crate) fn staking_calls(&self) -> &[CommittedStakingCall] {
+        &self.staking_calls
     }
 
     pub(crate) fn pos_calls(&self) -> &[CommittedPoSCall] {
@@ -61,15 +62,15 @@ impl CommittedStakingCalls {
     }
 }
 
-pub(crate) fn collect_committed_staking_calls(
+pub(crate) fn collect_calls(
     trace: &CommittedExecutionTrace,
-    contract_activation: StakingContractActivation,
-) -> Result<CommittedStakingCalls, CoreSpaceChangesError> {
+    active_contracts: ActiveContracts,
+) -> Result<CommittedCalls, CoreSpaceChangesError> {
     let staking_contract_address =
         cfx_parameters::internal_contract_addresses::STORAGE_INTEREST_STAKING_CONTRACT_ADDRESS;
     let pos_register_contract_address =
         cfx_parameters::internal_contract_addresses::POS_REGISTER_CONTRACT_ADDRESS;
-    let mut committed_staking_calls = CommittedStakingCalls::default();
+    let mut calls = CommittedCalls::default();
 
     for event in trace.events() {
         let TraceEvent::FrameStart { position, frame_id } = event else {
@@ -90,7 +91,7 @@ pub(crate) fn collect_committed_staking_calls(
         };
         let space = frame.space;
 
-        let uses_canonical_plain_call = |expected_address| {
+        let is_canonical_plain_call = |expected_address| {
             space == Space::Native
                 && *call_type == CallType::Call
                 && *target == expected_address
@@ -98,27 +99,26 @@ pub(crate) fn collect_committed_staking_calls(
                 && transferred_value.is_zero()
         };
 
-        if contract_activation.staking_is_active()
+        if active_contracts.staking_is_active()
             && (*target == staking_contract_address || *code_address == staking_contract_address)
         {
-            if let Some(vote_lock) = decode_vote_lock_call(*calldata_len, calldata_prefix)? {
-                validate_committed_call(
-                    "voteLock",
-                    uses_canonical_plain_call(staking_contract_address),
+            if let Some(staking_call) = decode_staking_call(*calldata_len, calldata_prefix)? {
+                verify_canonical_plain_call(
+                    "staking",
+                    is_canonical_plain_call(staking_contract_address),
                 )?;
-                committed_staking_calls
-                    .vote_lock_calls
-                    .push(CommittedVoteLockCall {
-                        position: ChangePosition::new(*position, 0),
-                        account: address_from_cfx(*caller),
-                        amount: vote_lock.amount,
-                        unlock_block_number: vote_lock.unlock_block_number,
-                    });
+                calls.staking_calls.push(collect_staking_call(
+                    trace,
+                    *position,
+                    *frame_id,
+                    *caller,
+                    staking_call,
+                )?);
             }
             continue;
         }
 
-        if !contract_activation.pos_register_is_active()
+        if !active_contracts.pos_register_is_active()
             || (*target != pos_register_contract_address
                 && *code_address != pos_register_contract_address)
         {
@@ -127,9 +127,9 @@ pub(crate) fn collect_committed_staking_calls(
         let Some(pos_call) = decode_pos_call(*calldata_len, calldata_prefix)? else {
             continue;
         };
-        validate_committed_call(
+        verify_canonical_plain_call(
             "PoS",
-            uses_canonical_plain_call(pos_register_contract_address),
+            is_canonical_plain_call(pos_register_contract_address),
         )?;
         let position = ChangePosition::new(*position, 0);
         let account = address_from_cfx(*caller);
@@ -156,19 +156,145 @@ pub(crate) fn collect_committed_staking_calls(
                 requested_vote_count,
             },
         };
-        committed_staking_calls.pos_calls.push(committed_call);
+        calls.pos_calls.push(committed_call);
     }
 
-    Ok(committed_staking_calls)
+    Ok(calls)
 }
 
-fn validate_committed_call(
-    name: &str,
-    uses_canonical_plain_call: bool,
+fn collect_staking_call(
+    trace: &CommittedExecutionTrace,
+    position: usize,
+    frame_id: crate::execution::FrameId,
+    caller: cfx_types::Address,
+    call: StakingCall,
+) -> Result<CommittedStakingCall, CoreSpaceChangesError> {
+    let account = address_from_cfx(caller);
+    let frame_transfers: Vec<_> = trace.internal_transfers_in_scope(Some(frame_id)).collect();
+    let position = ChangePosition::new(position, 0);
+
+    match call {
+        StakingCall::Deposit { amount } => {
+            let [transfer] = frame_transfers.as_slice() else {
+                return Err(transfer_count_mismatch("deposit", 1, frame_transfers.len()));
+            };
+            let TraceEvent::InternalTransfer {
+                position: transfer_position,
+                space: Space::Native,
+                from: AddressPocket::Balance(from),
+                to: AddressPocket::StakingBalance(to),
+                value,
+                ..
+            } = transfer
+            else {
+                return Err(invalid_staking_transfer_shape("deposit"));
+            };
+            if from.space != Space::Native
+                || from.address != caller
+                || *to != caller
+                || u256_from_cfx(*value) != amount
+            {
+                return Err(invalid_staking_transfer_shape("deposit"));
+            }
+            Ok(CommittedStakingCall::Deposit {
+                position,
+                account,
+                amount,
+                transfer_position: *transfer_position,
+            })
+        }
+        StakingCall::Withdrawal { principal_amount } => {
+            let [principal_transfer, reward_transfer] = frame_transfers.as_slice() else {
+                return Err(transfer_count_mismatch(
+                    "withdrawal",
+                    2,
+                    frame_transfers.len(),
+                ));
+            };
+            let TraceEvent::InternalTransfer {
+                position: principal_transfer_position,
+                space: Space::Native,
+                from: AddressPocket::StakingBalance(from),
+                to: AddressPocket::Balance(to),
+                value: principal_value,
+                ..
+            } = principal_transfer
+            else {
+                return Err(invalid_staking_transfer_shape("withdrawal principal"));
+            };
+            let TraceEvent::InternalTransfer {
+                position: reward_transfer_position,
+                space: Space::Native,
+                from: AddressPocket::MintBurn,
+                to: AddressPocket::Balance(reward_recipient),
+                value: reward_value,
+                ..
+            } = reward_transfer
+            else {
+                return Err(invalid_staking_transfer_shape("withdrawal reward"));
+            };
+            if *from != caller
+                || to.space != Space::Native
+                || to.address != caller
+                || reward_recipient.space != Space::Native
+                || reward_recipient.address != caller
+                || u256_from_cfx(*principal_value) != principal_amount
+            {
+                return Err(invalid_staking_transfer_shape("withdrawal"));
+            }
+            Ok(CommittedStakingCall::Withdrawal {
+                position,
+                account,
+                principal_amount,
+                reward_amount: u256_from_cfx(*reward_value),
+                principal_transfer_position: *principal_transfer_position,
+                reward_transfer_position: *reward_transfer_position,
+            })
+        }
+        StakingCall::VoteLock {
+            required_locked_amount,
+            unlock_block_number,
+        } => {
+            if !frame_transfers.is_empty() {
+                return Err(transfer_count_mismatch(
+                    "voteLock",
+                    0,
+                    frame_transfers.len(),
+                ));
+            }
+            Ok(CommittedStakingCall::VoteLock {
+                position,
+                account,
+                required_locked_amount,
+                unlock_block_number,
+            })
+        }
+    }
+}
+
+fn transfer_count_mismatch(
+    operation: &str,
+    expected_transfer_count: usize,
+    actual_transfer_count: usize,
+) -> CoreSpaceChangesError {
+    CoreSpaceChangesError::inconsistent_execution(format!(
+        "Core Space staking {operation} expected {expected_transfer_count} internal transfers in its frame, got {actual_transfer_count}"
+    ))
+}
+
+fn invalid_staking_transfer_shape(operation: &str) -> CoreSpaceChangesError {
+    CoreSpaceChangesError::inconsistent_execution(format!(
+        "Core Space staking {operation} did not use the canonical caller, amount, and pocket movement"
+    ))
+}
+
+fn verify_canonical_plain_call(
+    contract_name: &str,
+    is_canonical_plain_call: bool,
 ) -> Result<(), CoreSpaceChangesError> {
-    if !uses_canonical_plain_call {
-        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
-            "Core Space {name} call did not use the canonical native plain-call form"
+    if !is_canonical_plain_call {
+        return Err(CoreSpaceChangesError::unsupported_operation(format!(
+            "Core Space {contract_name} call did not use the canonical native plain-call form"
         )));
     }
     Ok(())

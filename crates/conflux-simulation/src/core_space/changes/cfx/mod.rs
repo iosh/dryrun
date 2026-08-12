@@ -24,7 +24,7 @@ use crate::{
         PendingCrossSpaceAddress, PendingSponsorshipEligibilityTarget, SponsoredResource,
     },
     primitive::{address_from_cfx, address_to_cfx},
-    state::{MaskedSponsorWhitelistEntries, SponsorWhitelistStorageKey},
+    state::{MaskedWhitelistKeys, SponsorWhitelistStorageKey},
 };
 
 #[derive(Debug)]
@@ -41,7 +41,10 @@ pub(crate) struct CfxOperations {
 }
 
 impl CfxOperations {
-    fn from_operations(operations: Vec<CfxOperation>) -> Self {
+    fn from_operations(
+        operations: Vec<CfxOperation>,
+        staking_accounts: impl IntoIterator<Item = Address>,
+    ) -> Self {
         let mut balance_locations = BTreeSet::new();
         let mut sponsor_resources = BTreeSet::new();
         let mut sponsorship_access_rule_keys = BTreeSet::new();
@@ -49,6 +52,12 @@ impl CfxOperations {
         let mut storage_point_accounts = BTreeSet::new();
         let mut requires_storage_point_globals = false;
         let mut requires_total_espace_tokens = false;
+
+        balance_locations.extend(
+            staking_accounts
+                .into_iter()
+                .map(|account| CfxBalanceLocation::Staking { account }),
+        );
 
         for operation in &operations {
             match operation {
@@ -87,9 +96,6 @@ impl CfxOperations {
                 CfxOperation::Basic(BasicCfxOperation::NativeBurn { account, .. }) => {
                     balance_locations
                         .insert(CfxBalanceLocation::CoreSpaceAccount { account: *account });
-                }
-                CfxOperation::Basic(BasicCfxOperation::StakingBurn { account, .. }) => {
-                    balance_locations.insert(CfxBalanceLocation::Staking { account: *account });
                 }
                 CfxOperation::Sponsorship(SponsorshipOperation::Funding(funding)) => {
                     balance_locations.insert(CfxBalanceLocation::CoreSpaceAccount {
@@ -207,12 +213,6 @@ impl CfxOperations {
                     account: *account,
                     amount: *principal_amount,
                 }),
-                CfxOperation::Basic(BasicCfxOperation::StakingBurn {
-                    account, amount, ..
-                }) => Some(StakingBalanceEffect::Burn {
-                    account: *account,
-                    amount: *amount,
-                }),
                 _ => None,
             })
             .collect();
@@ -220,7 +220,7 @@ impl CfxOperations {
     }
     pub(crate) fn reject_masked_sponsorship_access_dependencies(
         &self,
-        masked_entries: &MaskedSponsorWhitelistEntries,
+        masked_entries: &MaskedWhitelistKeys,
     ) -> Result<(), CoreSpaceChangesError> {
         let masked_entries = masked_entries.snapshot().map_err(|error| {
             CoreSpaceChangesError::recorded_state_access(
@@ -257,7 +257,6 @@ pub(crate) struct StakingBalanceEffects {
 enum StakingBalanceEffect {
     Deposit { account: Address, amount: U256 },
     Withdrawal { account: Address, amount: U256 },
-    Burn { account: Address, amount: U256 },
 }
 
 impl StakingBalanceEffects {
@@ -278,9 +277,6 @@ impl StakingBalanceEffects {
                         *amount,
                         "withdrawal",
                     )?
-                }
-                StakingBalanceEffect::Burn { account, amount } => {
-                    debit_staking_balance_if_present(staking_balances, *account, *amount, "burn")?
                 }
             }
         }
@@ -422,22 +418,15 @@ enum BasicCfxOperation {
         amount: U256,
     },
     StakingDeposit {
-        position: ChangePosition,
         account: Address,
         amount: U256,
     },
     StakingWithdrawal {
-        position: ChangePosition,
         account: Address,
         principal_amount: U256,
         reward_amount: U256,
     },
     NativeBurn {
-        position: ChangePosition,
-        account: Address,
-        amount: U256,
-    },
-    StakingBurn {
         position: ChangePosition,
         account: Address,
         amount: U256,

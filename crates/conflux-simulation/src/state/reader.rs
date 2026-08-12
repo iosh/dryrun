@@ -25,17 +25,58 @@ use crate::state::{
     },
 };
 use cfx_types::{Address, H256, U256};
-use primitives::VoteStakeInfo;
+use primitives::{DepositInfo, VoteStakeInfo};
 
 type RawStateValue = Box<[u8]>;
 type StateRead = Option<RawStateValue>;
 
 #[derive(Clone, Default)]
-pub(crate) struct MaskedSponsorWhitelistEntries {
+pub(crate) struct RecordedDepositLists {
+    deposit_lists_by_account: Arc<SyncMutex<HashMap<Address, Vec<DepositInfo>>>>,
+}
+
+impl RecordedDepositLists {
+    fn record(&self, address: Address, deposit_list: Vec<DepositInfo>) -> StorageResult<()> {
+        let mut deposit_lists_by_account = self
+            .deposit_lists_by_account
+            .lock()
+            .map_err(|_| Self::lock_error())?;
+        if let Some(recorded) = deposit_lists_by_account.get(&address) {
+            if recorded != &deposit_list {
+                return Err(StorageError::Msg(format!(
+                    "the anchored Core Space deposit list changed across reads for {address:?}"
+                )));
+            }
+        } else {
+            deposit_lists_by_account.insert(address, deposit_list);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn for_account(&self, address: Address) -> StorageResult<Vec<DepositInfo>> {
+        self.deposit_lists_by_account
+            .lock()
+            .map_err(|_| Self::lock_error())?
+            .get(&address)
+            .cloned()
+            .ok_or_else(|| {
+                StorageError::Msg(format!(
+                    "no Core Space deposit list was captured during execution for {address:?}"
+                ))
+            })
+    }
+
+    fn lock_error() -> StorageError {
+        StorageError::Msg("failed to access request-local Core Space deposit-list state".to_owned())
+    }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct MaskedWhitelistKeys {
     entries: Arc<SyncMutex<HashSet<SponsorWhitelistStorageKey>>>,
 }
 
-impl MaskedSponsorWhitelistEntries {
+impl MaskedWhitelistKeys {
     fn record(&self, key: SponsorWhitelistStorageKey) -> StorageResult<()> {
         self.entries
             .lock()
@@ -60,17 +101,25 @@ impl MaskedSponsorWhitelistEntries {
 
 /// Vote lists fetched by this request's anchored StateDB reads.
 #[derive(Clone, Default)]
-pub(crate) struct AnchoredVoteLists {
+pub(crate) struct RecordedVoteLists {
     vote_lists_by_account: Arc<SyncMutex<HashMap<Address, Vec<VoteStakeInfo>>>>,
 }
 
-impl AnchoredVoteLists {
+impl RecordedVoteLists {
     fn record(&self, address: Address, vote_list: Vec<VoteStakeInfo>) -> StorageResult<()> {
         let mut vote_lists_by_account = self
             .vote_lists_by_account
             .lock()
             .map_err(|_| Self::lock_error())?;
-        vote_lists_by_account.entry(address).or_insert(vote_list);
+        if let Some(recorded) = vote_lists_by_account.get(&address) {
+            if recorded != &vote_list {
+                return Err(StorageError::Msg(format!(
+                    "the anchored Core Space vote list changed across reads for {address:?}"
+                )));
+            }
+        } else {
+            vote_lists_by_account.insert(address, vote_list);
+        }
         Ok(())
     }
 
@@ -82,7 +131,7 @@ impl AnchoredVoteLists {
             .cloned()
             .ok_or_else(|| {
                 StorageError::Msg(format!(
-                    "anchored cfx_getVoteList result was not read during execution for {address:?}"
+                    "no Core Space vote list was captured during execution for {address:?}"
                 ))
             })
     }
@@ -97,8 +146,9 @@ pub(crate) struct ConfluxStateSource {
     provider: ConfluxSimulationProvider,
     core_space_globals: CoreSpaceGlobals,
     espace_account_cache: AsyncMutex<HashMap<Address, Arc<EspaceAccountData>>>,
-    masked_sponsor_whitelist_entries: MaskedSponsorWhitelistEntries,
-    anchored_vote_lists: AnchoredVoteLists,
+    masked_whitelist_keys: MaskedWhitelistKeys,
+    deposit_lists: RecordedDepositLists,
+    vote_lists: RecordedVoteLists,
 }
 
 impl ConfluxStateSource {
@@ -119,8 +169,9 @@ impl ConfluxStateSource {
             provider,
             core_space_globals,
             espace_account_cache: AsyncMutex::new(HashMap::new()),
-            masked_sponsor_whitelist_entries: MaskedSponsorWhitelistEntries::default(),
-            anchored_vote_lists: AnchoredVoteLists::default(),
+            masked_whitelist_keys: MaskedWhitelistKeys::default(),
+            deposit_lists: RecordedDepositLists::default(),
+            vote_lists: RecordedVoteLists::default(),
         })
     }
 
@@ -128,12 +179,20 @@ impl ConfluxStateSource {
         self.state_anchor
     }
 
-    pub(crate) fn anchored_vote_lists(&self) -> AnchoredVoteLists {
-        self.anchored_vote_lists.clone()
+    pub(crate) fn vote_lists(&self) -> RecordedVoteLists {
+        self.vote_lists.clone()
     }
 
-    pub(crate) fn masked_sponsor_whitelist_entries(&self) -> MaskedSponsorWhitelistEntries {
-        self.masked_sponsor_whitelist_entries.clone()
+    pub(crate) fn deposit_lists(&self) -> RecordedDepositLists {
+        self.deposit_lists.clone()
+    }
+
+    pub(crate) fn accumulated_interest_rate(&self) -> U256 {
+        self.core_space_globals.accumulate_interest_rate
+    }
+
+    pub(crate) fn masked_whitelist_keys(&self) -> MaskedWhitelistKeys {
+        self.masked_whitelist_keys.clone()
     }
 
     pub(crate) async fn read(&self, item: &StateItem) -> StorageResult<StateRead> {
@@ -146,20 +205,22 @@ impl ConfluxStateSource {
     async fn read_core_space(&self, item: CoreSpaceStateItem) -> StorageResult<StateRead> {
         match item {
             CoreSpaceStateItem::Account { address } => self.fetch_core_space_account(address).await,
-            CoreSpaceStateItem::DepositList { address } => self
-                .provider
-                .cfx_get_deposit_list(address, self.core_space_epoch())
-                .await
-                .map_err(|error| self.provider_error("cfx_getDepositList", error))
-                .map(encode_core_space_deposit_list),
+            CoreSpaceStateItem::DepositList { address } => {
+                let deposit_list = self
+                    .provider
+                    .cfx_get_deposit_list(address, self.core_space_epoch())
+                    .await
+                    .map_err(|error| self.provider_error("cfx_getDepositList", error))?;
+                self.deposit_lists.record(address, deposit_list.clone())?;
+                Ok(encode_core_space_deposit_list(deposit_list))
+            }
             CoreSpaceStateItem::VoteList { address } => {
                 let vote_list = self
                     .provider
                     .cfx_get_vote_list(address, self.core_space_epoch())
                     .await
                     .map_err(|error| self.provider_error("cfx_getVoteList", error))?;
-                self.anchored_vote_lists
-                    .record(address, vote_list.clone())?;
+                self.vote_lists.record(address, vote_list.clone())?;
                 Ok(encode_core_space_vote_list(vote_list))
             }
             CoreSpaceStateItem::InterestRate => Ok(Some(encode_core_space_u256(
@@ -383,7 +444,7 @@ impl ConfluxStateSource {
 
         // The raw user key is only read after the all-whitelist key is zero.
         if is_all_whitelisted {
-            self.masked_sponsor_whitelist_entries.record(key)?;
+            self.masked_whitelist_keys.record(key)?;
             tracing::warn!(
                 contract_address = ?key.contract_address,
                 account_address = ?key.account_address,

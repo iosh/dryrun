@@ -254,22 +254,15 @@ export interface StakingDepositChange {
 export interface StakingWithdrawalChange {
   changeType: 'STAKING_WITHDRAWAL';
   account: string;
-  rawAmount: string;
+  principalRawAmount: string;
   rewardRawAmount: string;
-}
-
-export interface StakingBurnChange {
-  changeType: 'STAKING_BURN';
-  account: string;
-  rawAmount: string;
 }
 
 export interface StakingVoteLockChange {
   changeType: 'STAKING_VOTE_LOCK';
   account: string;
+  requiredLockedRawAmount: string;
   unlockBlockNumber: string;
-  requiredLockedRawAmountBefore: string;
-  requiredLockedRawAmountAfter: string;
 }
 
 export interface PosRegistrationChange {
@@ -373,7 +366,6 @@ export type CoreChange =
   | Erc1155TransferBatchChange
   | StakingDepositChange
   | StakingWithdrawalChange
-  | StakingBurnChange
   | StakingVoteLockChange
   | PosRegistrationChange
   | PosStakeIncreaseChange

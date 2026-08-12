@@ -12,9 +12,8 @@ use crate::core_space::CoreSpaceChangesError;
 
 pub(crate) use cfx::{CfxAnalysisInput, CfxStateValues};
 pub(crate) use staking::{
-    CommittedStakingCalls, PoSAnalysisInput, PoSStateReader, PoSStateValues,
-    StakingContractActivation, collect_committed_staking_calls, verify_pos_staking_changes,
-    verify_vote_lock_changes,
+    ActiveContracts, CommittedCalls, PoSAnalysisInput, PoSStateReader, PoSStateValues,
+    analyze_balance_changes, collect_calls, verify_pos_staking_changes, verify_vote_lock_changes,
 };
 pub(crate) use standards::{collect_standard_changes, load_standard_metadata};
 
@@ -41,22 +40,17 @@ pub enum CoreSpaceChange {
     Standard(StandardChange<CoreAddress>),
     StakingDeposit {
         account: CoreAddress,
-        raw_amount: U256,
+        amount: U256,
     },
     StakingWithdrawal {
         account: CoreAddress,
-        raw_amount: U256,
-        reward_raw_amount: U256,
-    },
-    StakingBurn {
-        account: CoreAddress,
-        raw_amount: U256,
+        principal_amount: U256,
+        reward_amount: U256,
     },
     StakingVoteLock {
         account: CoreAddress,
+        required_locked_amount: U256,
         unlock_block_number: u64,
-        required_locked_raw_amount_before: U256,
-        required_locked_raw_amount_after: U256,
     },
     PoSRegistration {
         account: CoreAddress,
@@ -180,22 +174,17 @@ pub(crate) enum PendingCoreSpaceChange {
     },
     StakingDeposit {
         account: Address,
-        raw_amount: U256,
+        amount: U256,
     },
     StakingWithdrawal {
         account: Address,
-        raw_amount: U256,
-        reward_raw_amount: U256,
-    },
-    StakingBurn {
-        account: Address,
-        raw_amount: U256,
+        principal_amount: U256,
+        reward_amount: U256,
     },
     StakingVoteLock {
         account: Address,
+        required_locked_amount: U256,
         unlock_block_number: u64,
-        required_locked_raw_amount_before: U256,
-        required_locked_raw_amount_after: U256,
     },
     PoSRegistration {
         account: Address,
@@ -358,39 +347,29 @@ fn resolve_change(
             raw_amount,
             currency: currency.clone(),
         },
-        PendingCoreSpaceChange::StakingDeposit {
-            account,
-            raw_amount,
-        } => CoreSpaceChange::StakingDeposit {
-            account: address(account)?,
-            raw_amount,
-        },
+        PendingCoreSpaceChange::StakingDeposit { account, amount } => {
+            CoreSpaceChange::StakingDeposit {
+                account: address(account)?,
+                amount,
+            }
+        }
         PendingCoreSpaceChange::StakingWithdrawal {
             account,
-            raw_amount,
-            reward_raw_amount,
+            principal_amount,
+            reward_amount,
         } => CoreSpaceChange::StakingWithdrawal {
             account: address(account)?,
-            raw_amount,
-            reward_raw_amount,
-        },
-        PendingCoreSpaceChange::StakingBurn {
-            account,
-            raw_amount,
-        } => CoreSpaceChange::StakingBurn {
-            account: address(account)?,
-            raw_amount,
+            principal_amount,
+            reward_amount,
         },
         PendingCoreSpaceChange::StakingVoteLock {
             account,
+            required_locked_amount,
             unlock_block_number,
-            required_locked_raw_amount_before,
-            required_locked_raw_amount_after,
         } => CoreSpaceChange::StakingVoteLock {
             account: address(account)?,
+            required_locked_amount,
             unlock_block_number,
-            required_locked_raw_amount_before,
-            required_locked_raw_amount_after,
         },
         PendingCoreSpaceChange::PoSRegistration {
             account,

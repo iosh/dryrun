@@ -154,24 +154,18 @@ export function toChangeItemViewModel(
       return {
         ...coreAmountChange(
           'Staking withdrawal',
-          change.rawAmount,
+          change.principalRawAmount,
           'amber',
         ),
         detail: `Reward ${formatNativeAmount(change.rewardRawAmount, 'CFX')}`,
       };
-    case 'STAKING_BURN':
-      return coreAmountChange(
-        'Staking burn',
-        change.rawAmount,
-        'red',
-      );
     case 'STAKING_VOTE_LOCK':
       return {
         detail: `Until block ${formatHexQuantity(change.unlockBlockNumber)}`,
         label: 'Vote lock',
         title: 'Required locked stake',
         tone: 'violet',
-        value: `${formatNativeAmount(change.requiredLockedRawAmountBefore, 'CFX')} to ${formatNativeAmount(change.requiredLockedRawAmountAfter, 'CFX')}`,
+        value: formatNativeAmount(change.requiredLockedRawAmount, 'CFX'),
       };
     case 'POS_REGISTRATION':
       return posChange(

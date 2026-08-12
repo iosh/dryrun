@@ -153,12 +153,11 @@ impl CoreSpaceOperationCollector {
 
     pub(super) fn collect_internal_transfer(
         &mut self,
-        trace: &CommittedExecutionTrace,
         event: &TraceEvent,
     ) -> Result<(Option<BasicCfxOperation>, Vec<usize>), CoreSpaceChangesError> {
         let TraceEvent::InternalTransfer {
             position,
-            frame_id,
+            frame_id: _,
             space,
             from,
             to,
@@ -200,13 +199,6 @@ impl CoreSpaceOperationCollector {
                 )),
                 vec![*position],
             ));
-        }
-
-        if matches!(
-            (from, to),
-            (AddressPocket::StakingBalance(_), AddressPocket::Balance(_))
-        ) {
-            return self.collect_staking_withdrawal(trace, event, *frame_id);
         }
 
         if amount.is_zero() {
@@ -282,19 +274,11 @@ impl CoreSpaceOperationCollector {
                     amount,
                 }
             }
-            (AddressPocket::Balance(account), AddressPocket::StakingBalance(staking_account))
-                if account.space == Space::Native && account.address == *staking_account =>
-            {
-                BasicCfxOperation::StakingDeposit {
-                    position: ChangePosition::new(*position, 0),
-                    account: address_from_cfx(account.address),
-                    amount,
-                }
-            }
-            (AddressPocket::Balance(account), AddressPocket::StakingBalance(staking_account)) => {
-                return Err(CoreSpaceChangesError::inconsistent_execution(format!(
-                    "Core Space staking deposit moved CFX between different accounts: {account:?} -> {staking_account:?}"
-                )));
+            (AddressPocket::Balance(_), AddressPocket::StakingBalance(_))
+            | (AddressPocket::StakingBalance(_), AddressPocket::Balance(_)) => {
+                return Err(CoreSpaceChangesError::inconsistent_execution(
+                    "Core Space staking pocket movement was not claimed by a canonical staking operation",
+                ));
             }
             (AddressPocket::Balance(account), AddressPocket::MintBurn)
                 if account.space == Space::Native =>
@@ -306,11 +290,9 @@ impl CoreSpaceOperationCollector {
                 }
             }
             (AddressPocket::StakingBalance(account), AddressPocket::MintBurn) => {
-                BasicCfxOperation::StakingBurn {
-                    position: ChangePosition::new(*position, 0),
-                    account: address_from_cfx(*account),
-                    amount,
-                }
+                return Err(CoreSpaceChangesError::unsupported_operation(format!(
+                    "Core Space staking burn for {account:?} cannot be linked to a verified account removal"
+                )));
             }
             (AddressPocket::MintBurn, AddressPocket::Balance(_)) => {
                 return Err(CoreSpaceChangesError::inconsistent_execution(
@@ -336,86 +318,13 @@ impl CoreSpaceOperationCollector {
             })
             .collect())
     }
-
-    fn collect_staking_withdrawal(
-        &mut self,
-        trace: &CommittedExecutionTrace,
-        event: &TraceEvent,
-        frame_id: Option<FrameId>,
-    ) -> Result<(Option<BasicCfxOperation>, Vec<usize>), CoreSpaceChangesError> {
-        let TraceEvent::InternalTransfer {
-            position,
-            space: withdrawal_space,
-            from: AddressPocket::StakingBalance(staking_account),
-            to: AddressPocket::Balance(withdrawal_destination),
-            value: principal_value,
-            ..
-        } = event
-        else {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
-                "Core Space operation collector received a non-withdrawal internal transfer",
-            ));
-        };
-        let principal_amount = u256_from_cfx(*principal_value);
-
-        if *withdrawal_space != Space::Native
-            || withdrawal_destination.space != Space::Native
-            || withdrawal_destination.address != *staking_account
-        {
-            return Err(CoreSpaceChangesError::inconsistent_execution(format!(
-                "Core Space staking withdrawal moved CFX between incompatible accounts: {staking_account:?} -> {withdrawal_destination:?}"
-            )));
-        }
-
-        let mut rewards = trace
-            .internal_transfers_in_scope(frame_id)
-            .filter_map(|candidate| {
-                let TraceEvent::InternalTransfer {
-                    position: reward_position,
-                    space: Space::Native,
-                    from: AddressPocket::MintBurn,
-                    to: AddressPocket::Balance(reward_recipient),
-                    value: reward_value,
-                    ..
-                } = candidate
-                else {
-                    return None;
-                };
-                (*reward_position > *position
-                    && reward_recipient.space == Space::Native
-                    && reward_recipient.address == *staking_account)
-                    .then_some((*reward_position, *reward_value))
-            });
-        let Some((reward_position, reward_value)) = rewards.next() else {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
-                "Core Space staking withdrawal is missing its issuance record",
-            ));
-        };
-        if rewards.next().is_some() {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
-                "Core Space staking withdrawal has ambiguous issuance records",
-            ));
-        }
-
-        let reward_amount = u256_from_cfx(reward_value);
-        let operation = (!principal_amount.is_zero() || !reward_amount.is_zero()).then(|| {
-            BasicCfxOperation::StakingWithdrawal {
-                position: ChangePosition::new(*position, 0),
-                account: address_from_cfx(*staking_account),
-                principal_amount,
-                reward_amount,
-            }
-        });
-
-        Ok((operation, vec![*position, reward_position]))
-    }
 }
 
 fn unsupported_internal_transfer(
     from: &AddressPocket,
     to: &AddressPocket,
 ) -> CoreSpaceChangesError {
-    CoreSpaceChangesError::inconsistent_execution(format!(
+    CoreSpaceChangesError::unsupported_operation(format!(
         "Core Space operation collector encountered unsupported {} ({}) -> {} ({}) pockets",
         from.pocket(),
         from.space(),

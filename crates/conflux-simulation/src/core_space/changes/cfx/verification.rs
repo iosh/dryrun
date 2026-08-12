@@ -37,6 +37,19 @@ pub(crate) struct CfxStateValues {
     storage_point_globals: Option<StoragePointGlobalValues>,
 }
 
+impl CfxStateValues {
+    pub(crate) fn staking_balance(&self, account: Address) -> Result<U256, CoreSpaceChangesError> {
+        self.balances
+            .get(&CfxBalanceLocation::Staking { account })
+            .copied()
+            .ok_or_else(|| {
+                CoreSpaceChangesError::internal_invariant(format!(
+                    "Core Space staking balance was not collected for {account}"
+                ))
+            })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StoragePointValues {
     unused: U256,
@@ -323,11 +336,7 @@ pub(crate) fn verify_cfx_changes(
                 })?;
                 replayed_state.credit_balance(*recipient, *amount)?;
             }
-            CfxOperation::Basic(BasicCfxOperation::StakingDeposit {
-                position,
-                account,
-                amount,
-            }) => {
+            CfxOperation::Basic(BasicCfxOperation::StakingDeposit { account, amount }) => {
                 replayed_state.debit_balance(
                     CfxBalanceLocation::CoreSpaceAccount { account: *account },
                     *amount,
@@ -342,16 +351,8 @@ pub(crate) fn verify_cfx_changes(
                             "Core Space total staking overflowed while replaying a deposit",
                         )
                     })?;
-                positioned_core_changes.push(PositionedCoreSpaceChange::new(
-                    *position,
-                    PendingCoreSpaceChange::StakingDeposit {
-                        account: *account,
-                        raw_amount: *amount,
-                    },
-                ));
             }
             CfxOperation::Basic(BasicCfxOperation::StakingWithdrawal {
-                position,
                 account,
                 principal_amount,
                 reward_amount,
@@ -388,14 +389,6 @@ pub(crate) fn verify_cfx_changes(
                             "Core Space total issued overflowed while replaying staking interest",
                         )
                     })?;
-                positioned_core_changes.push(PositionedCoreSpaceChange::new(
-                    *position,
-                    PendingCoreSpaceChange::StakingWithdrawal {
-                        account: *account,
-                        raw_amount: *principal_amount,
-                        reward_raw_amount: *reward_amount,
-                    },
-                ));
             }
             CfxOperation::Basic(BasicCfxOperation::NativeBurn {
                 position,
@@ -411,22 +404,6 @@ pub(crate) fn verify_cfx_changes(
                     *position,
                     PendingCoreSpaceChange::NativeBurn {
                         from: *account,
-                        raw_amount: *amount,
-                    },
-                ));
-            }
-            CfxOperation::Basic(BasicCfxOperation::StakingBurn {
-                position,
-                account,
-                amount,
-            }) => {
-                replayed_state
-                    .debit_balance(CfxBalanceLocation::Staking { account: *account }, *amount)?;
-                replayed_state.debit_total_issued(*amount, "a staking balance burn")?;
-                positioned_core_changes.push(PositionedCoreSpaceChange::new(
-                    *position,
-                    PendingCoreSpaceChange::StakingBurn {
-                        account: *account,
                         raw_amount: *amount,
                     },
                 ));

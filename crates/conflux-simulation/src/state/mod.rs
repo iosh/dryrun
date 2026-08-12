@@ -19,7 +19,7 @@ pub(crate) use self::{
         ConfluxSimulationProvider, CoreSpaceEstimateTransaction, CoreSpaceResourceEstimate,
         EspaceEstimateTransaction,
     },
-    reader::{AnchoredVoteLists, ConfluxStateSource, MaskedSponsorWhitelistEntries},
+    reader::{ConfluxStateSource, MaskedWhitelistKeys, RecordedDepositLists, RecordedVoteLists},
     rpc_types::{CoreSpaceRpcBlock, EspaceRpcBlock},
     storage::new_conflux_state,
 };

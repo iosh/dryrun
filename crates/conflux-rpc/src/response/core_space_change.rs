@@ -91,18 +91,13 @@ pub(super) enum Change {
     },
     StakingWithdrawal {
         account: RpcAddress,
-        raw_amount: U256,
+        principal_raw_amount: U256,
         reward_raw_amount: U256,
-    },
-    StakingBurn {
-        account: RpcAddress,
-        raw_amount: U256,
     },
     StakingVoteLock {
         account: RpcAddress,
+        required_locked_raw_amount: U256,
         unlock_block_number: U64,
-        required_locked_raw_amount_before: U256,
-        required_locked_raw_amount_after: U256,
     },
     PosRegistration {
         account: RpcAddress,
@@ -251,39 +246,27 @@ fn try_map_change(
             currency: currency.into(),
         },
         Source::Standard(change) => try_map_standard_change(change, network, field)?,
-        Source::StakingDeposit {
-            account,
-            raw_amount,
-        } => Change::StakingDeposit {
+        Source::StakingDeposit { account, amount } => Change::StakingDeposit {
             account: map_address(account, network, field, "account")?,
-            raw_amount: u256_to_wire(raw_amount),
+            raw_amount: u256_to_wire(amount),
         },
         Source::StakingWithdrawal {
             account,
-            raw_amount,
-            reward_raw_amount,
+            principal_amount,
+            reward_amount,
         } => Change::StakingWithdrawal {
             account: map_address(account, network, field, "account")?,
-            raw_amount: u256_to_wire(raw_amount),
-            reward_raw_amount: u256_to_wire(reward_raw_amount),
-        },
-        Source::StakingBurn {
-            account,
-            raw_amount,
-        } => Change::StakingBurn {
-            account: map_address(account, network, field, "account")?,
-            raw_amount: u256_to_wire(raw_amount),
+            principal_raw_amount: u256_to_wire(principal_amount),
+            reward_raw_amount: u256_to_wire(reward_amount),
         },
         Source::StakingVoteLock {
             account,
+            required_locked_amount,
             unlock_block_number,
-            required_locked_raw_amount_before,
-            required_locked_raw_amount_after,
         } => Change::StakingVoteLock {
             account: map_address(account, network, field, "account")?,
+            required_locked_raw_amount: u256_to_wire(required_locked_amount),
             unlock_block_number: unlock_block_number.into(),
-            required_locked_raw_amount_before: u256_to_wire(required_locked_raw_amount_before),
-            required_locked_raw_amount_after: u256_to_wire(required_locked_raw_amount_after),
         },
         Source::PoSRegistration {
             account,

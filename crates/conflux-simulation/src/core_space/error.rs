@@ -55,6 +55,10 @@ pub enum CoreSpaceChangesError {
     },
     #[error("Core Space execution is inconsistent with change analysis: {details}")]
     InconsistentExecution { details: String },
+    #[error("Core Space change analysis does not support this operation: {details}")]
+    UnsupportedOperation { details: String },
+    #[error("Core Space change analysis violated an internal invariant: {details}")]
+    InternalInvariant { details: String },
 }
 
 impl CoreSpaceChangesError {
@@ -77,6 +81,18 @@ impl CoreSpaceChangesError {
 
     pub(crate) fn inconsistent_execution(details: impl Into<String>) -> Self {
         Self::InconsistentExecution {
+            details: details.into(),
+        }
+    }
+
+    pub(crate) fn unsupported_operation(details: impl Into<String>) -> Self {
+        Self::UnsupportedOperation {
+            details: details.into(),
+        }
+    }
+
+    pub(crate) fn internal_invariant(details: impl Into<String>) -> Self {
+        Self::InternalInvariant {
             details: details.into(),
         }
     }

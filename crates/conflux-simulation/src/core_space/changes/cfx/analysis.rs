@@ -8,9 +8,9 @@ use super::{
 use crate::core_space::changes::StatePhase;
 use crate::{
     core_space::CoreSpaceChangesError,
-    core_space::changes::PositionedCoreSpaceChange,
+    core_space::changes::{PositionedCoreSpaceChange, staking::CommittedStakingCall},
     execution::{ConfluxExecutionOutcome, ConfluxTransactionExecution},
-    state::MaskedSponsorWhitelistEntries,
+    state::MaskedWhitelistKeys,
 };
 
 #[derive(Debug)]
@@ -26,7 +26,8 @@ impl CfxAnalysisInput {
     pub(crate) fn from_execution(
         execution: &ConfluxTransactionExecution,
         machine: &Machine,
-        masked_sponsor_whitelist_entries: &MaskedSponsorWhitelistEntries,
+        masked_whitelist_keys: &MaskedWhitelistKeys,
+        committed_staking_calls: &[CommittedStakingCall],
     ) -> Result<Self, CoreSpaceChangesError> {
         let ConfluxExecutionOutcome::Success(details) = &execution.outcome else {
             return Err(CoreSpaceChangesError::inconsistent_execution(
@@ -42,9 +43,9 @@ impl CfxAnalysisInput {
             &details.storage_released,
             machine,
             &execution.prepared.spec,
+            committed_staking_calls,
         )?;
-        operations
-            .reject_masked_sponsorship_access_dependencies(masked_sponsor_whitelist_entries)?;
+        operations.reject_masked_sponsorship_access_dependencies(masked_whitelist_keys)?;
         let staking_balance_effects = operations.staking_balance_effects();
 
         Ok(Self {

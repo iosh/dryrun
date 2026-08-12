@@ -229,7 +229,6 @@ export function getChangeAddresses(
       ];
     case 'STAKING_DEPOSIT':
     case 'STAKING_WITHDRAWAL':
-    case 'STAKING_BURN':
     case 'STAKING_VOTE_LOCK':
     case 'POS_REGISTRATION':
     case 'POS_STAKE_INCREASE':
