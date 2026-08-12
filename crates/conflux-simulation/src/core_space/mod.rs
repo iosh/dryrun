@@ -34,7 +34,7 @@ pub use contract_standards::{
 };
 pub use error::{
     CoreSpaceChangesError, CoreSpaceExecutionError, CoreSpaceResultIntegrationError,
-    CoreSpaceSimulationError, CoreSpaceStateAccessError, CoreSpaceStorageSponsorshipError,
+    CoreSpaceSimulationError, CoreSpaceStateAccessError,
 };
 pub use execution::{
     CoreSpaceExecution, CoreSpaceExecutionFailure, CoreSpaceExecutionOutcome, CoreSpaceLog,

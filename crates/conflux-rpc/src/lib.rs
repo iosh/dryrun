@@ -12,8 +12,8 @@ use simulation_tasks::SimulationTaskSet;
 
 use self::{
     error::{
-        core_space_response_mapping_error, invalid_params, map_core_space_simulation_error,
-        map_espace_simulation_error, map_simulation_task_error,
+        core_space_error_response, core_space_response_error, espace_error_response,
+        invalid_params, simulation_task_error_response,
     },
     request::{SimulateCoreSpaceTransactionRequest, SimulateEspaceTransactionRequest},
     response::{SimulateCoreSpaceTransactionResponse, SimulateEspaceTransactionResponse},
@@ -45,8 +45,8 @@ pub fn build_rpc_module(
                 let output = simulation_tasks
                     .run(move || async move { simulator.simulate(input).await })
                     .await
-                    .map_err(map_simulation_task_error)?
-                    .map_err(map_espace_simulation_error)?;
+                    .map_err(simulation_task_error_response)?
+                    .map_err(espace_error_response)?;
 
                 Ok::<_, ErrorObjectOwned>(SimulateEspaceTransactionResponse::from(output))
             }
@@ -69,11 +69,11 @@ pub fn build_rpc_module(
                     let output = simulation_tasks
                         .run(move || async move { simulator.simulate(input).await })
                         .await
-                        .map_err(map_simulation_task_error)?
-                        .map_err(map_core_space_simulation_error)?;
+                        .map_err(simulation_task_error_response)?
+                        .map_err(core_space_error_response)?;
 
                     SimulateCoreSpaceTransactionResponse::try_from_output(output, rpc_network)
-                        .map_err(|error| core_space_response_mapping_error(error.to_string()))
+                        .map_err(|error| core_space_response_error(error.to_string()))
                 }
             },
         )

@@ -6,10 +6,7 @@ use cfx_types::AddressSpaceUtil;
 
 use super::{NativeOperation, NativeOperations};
 use crate::{
-    espace::{
-        EspaceChange, EspaceChangesError, EspaceNativeChangeError, EspaceNativeCurrency,
-        EspaceStateAccessError,
-    },
+    espace::{EspaceChange, EspaceChangesError, EspaceNativeChangeError, EspaceNativeCurrency},
     primitive::{address_to_cfx, u256_from_cfx},
 };
 
@@ -28,7 +25,7 @@ pub(super) fn read_native_balances(
         .map(|&address| {
             let balance = state
                 .balance(&address_to_cfx(address).with_evm_space())
-                .map_err(|error| EspaceStateAccessError::Operation {
+                .map_err(|error| EspaceChangesError::StateRead {
                     operation,
                     source: error,
                 })?;

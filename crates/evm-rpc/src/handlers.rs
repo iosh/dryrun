@@ -48,8 +48,8 @@ impl RpcHandler {
             .simulation_tasks
             .run(move || async move { simulator.simulate(input).await })
             .await
-            .map_err(map_task_error)?
-            .map_err(map_simulation_error)?;
+            .map_err(simulation_task_error_response)?
+            .map_err(evm_error_response)?;
 
         Ok(output.into())
     }
@@ -68,7 +68,7 @@ impl DryrunRpcServer for RpcHandler {
     }
 }
 
-fn map_simulation_error(error: EvmSimulationError) -> ErrorObjectOwned {
+fn evm_error_response(error: EvmSimulationError) -> ErrorObjectOwned {
     match error {
         EvmSimulationError::Input(error) => {
             ValidationError::invalid_params(error.to_string()).into()
@@ -83,7 +83,7 @@ fn map_simulation_error(error: EvmSimulationError) -> ErrorObjectOwned {
     }
 }
 
-fn map_task_error(error: SimulationTaskError) -> ErrorObjectOwned {
+fn simulation_task_error_response(error: SimulationTaskError) -> ErrorObjectOwned {
     error!(error = ?error, "EVM simulation task failed");
     internal_error()
 }

@@ -108,23 +108,3 @@ pub enum ConfluxInitializationError {
         actual: ConfluxEndpointIdentity,
     },
 }
-
-#[derive(Debug, Error)]
-pub(crate) enum ConfluxSimulationError {
-    #[error("state access failed: {message}")]
-    StateAccess { message: String },
-
-    #[error("change analysis failed: {message}")]
-    Analysis { message: String },
-
-    #[error("simulation execution failed: {message}")]
-    ExecutionInternal { message: String },
-}
-
-impl ConfluxSimulationError {
-    pub(crate) fn analysis_failed(message: impl Into<String>) -> Self {
-        Self::Analysis {
-            message: message.into(),
-        }
-    }
-}

@@ -6,7 +6,7 @@ use primitives::VoteStakeList;
 
 use super::CommittedVoteLockCall;
 use crate::{
-    ConfluxSimulationError,
+    core_space::CoreSpaceChangesError,
     core_space::changes::{PendingCoreSpaceChange, PositionedCoreSpaceChange},
     primitive::{address_to_cfx, u256_from_cfx, u256_to_cfx},
     state::AnchoredVoteLists,
@@ -17,7 +17,7 @@ pub(crate) fn verify_vote_lock_changes(
     committed_vote_lock_calls: &[CommittedVoteLockCall],
     anchored_vote_lists: &AnchoredVoteLists,
     current_block_number: u64,
-) -> Result<Vec<PositionedCoreSpaceChange>, ConfluxSimulationError> {
+) -> Result<Vec<PositionedCoreSpaceChange>, CoreSpaceChangesError> {
     let mut vote_lists_by_account = BTreeMap::new();
     let mut positioned_changes = Vec::new();
 
@@ -33,10 +33,11 @@ pub(crate) fn verify_vote_lock_changes(
             Entry::Vacant(entry) => {
                 let vote_list = anchored_vote_lists
                     .for_account(address_to_cfx(*account))
-                    .map_err(|error| ConfluxSimulationError::StateAccess {
-                        message: format!(
-                            "failed to obtain execution-read anchored vote list for {account}: {error}"
-                        ),
+                    .map_err(|error| {
+                        CoreSpaceChangesError::recorded_state_access(
+                            format!("obtain execution-read anchored vote list for {account}"),
+                            error,
+                        )
                     })?;
                 let vote_list = VoteStakeList(vote_list);
                 verify_canonical_vote_list(&vote_list, *account)?;
@@ -87,21 +88,21 @@ fn verify_vote_list_after_execution(
     state: &State,
     vote_list: &VoteStakeList,
     account: Address,
-) -> Result<(), ConfluxSimulationError> {
+) -> Result<(), CoreSpaceChangesError> {
     verify_canonical_vote_list(vote_list, account)?;
     let cfx_account = address_to_cfx(account);
     let actual_length = state
         .vote_stake_list_length(&cfx_account)
         .map_err(|error| after_state_access(account, error))?;
     if actual_length != vote_list.len() {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
+        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
             "Core Space vote-list length mismatch for {account}: expected {}, got {actual_length}",
             vote_list.len()
         )));
     }
     for (index, vote_info) in vote_list.iter().enumerate() {
         let unlock_block_number = u64::try_from(vote_info.unlock_block_number).map_err(|_| {
-            ConfluxSimulationError::analysis_failed(format!(
+            CoreSpaceChangesError::inconsistent_execution(format!(
                 "Core Space vote-list unlock block number exceeds u64 for {account}"
             ))
         })?;
@@ -110,7 +111,7 @@ fn verify_vote_list_after_execution(
             .locked_staking_balance_at_block_number(&cfx_account, previous_block)
             .map_err(|error| after_state_access(account, error))?;
         if u256_from_cfx(before_unlock) != u256_from_cfx(vote_info.amount) {
-            return Err(ConfluxSimulationError::analysis_failed(format!(
+            return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                 "Core Space vote-list locked balance before boundary mismatched for {account}"
             )));
         }
@@ -121,7 +122,7 @@ fn verify_vote_list_after_execution(
             .get(index + 1)
             .map_or(U256::ZERO, |next| u256_from_cfx(next.amount));
         if u256_from_cfx(locked_at_unlock) != required_at_unlock {
-            return Err(ConfluxSimulationError::analysis_failed(format!(
+            return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                 "Core Space vote-list locked balance at boundary mismatched for {account}"
             )));
         }
@@ -132,26 +133,27 @@ fn verify_vote_list_after_execution(
 fn verify_canonical_vote_list(
     vote_list: &VoteStakeList,
     account: Address,
-) -> Result<(), ConfluxSimulationError> {
+) -> Result<(), CoreSpaceChangesError> {
     for (earlier, later) in vote_list.iter().zip(vote_list.iter().skip(1)) {
         if earlier.unlock_block_number >= later.unlock_block_number
             || earlier.amount <= later.amount
         {
-            return Err(ConfluxSimulationError::analysis_failed(format!(
+            return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                 "Core Space vote list is not canonical for {account}"
             )));
         }
     }
     if vote_list.iter().any(|vote_info| vote_info.amount.is_zero()) {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
+        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
             "Core Space vote list contains a zero lock amount for {account}"
         )));
     }
     Ok(())
 }
 
-fn after_state_access(account: Address, error: cfx_statedb::Error) -> ConfluxSimulationError {
-    ConfluxSimulationError::StateAccess {
-        message: format!("failed to read after Core Space vote-list state for {account}: {error}"),
-    }
+fn after_state_access(account: Address, error: cfx_statedb::Error) -> CoreSpaceChangesError {
+    CoreSpaceChangesError::state_read(
+        format!("read after Core Space vote-list state for {account}"),
+        error,
+    )
 }

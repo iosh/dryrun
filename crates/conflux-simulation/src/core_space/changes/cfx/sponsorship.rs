@@ -10,7 +10,7 @@ use super::{
     SponsorshipRefundOperation, StoragePointConversionOperation,
 };
 use crate::{
-    ConfluxSimulationError,
+    core_space::CoreSpaceChangesError,
     execution::{CommittedExecutionTrace, FrameAction, FrameId, TraceEvent},
     primitive::{address_from_cfx, address_to_cfx, u256_from_cfx},
 };
@@ -48,7 +48,7 @@ pub(super) fn collect_sponsorship_call(
     frame_id: FrameId,
     machine: &Machine,
     spec: &Spec,
-) -> Result<Option<(CollectedSponsorshipCall, Vec<usize>)>, ConfluxSimulationError> {
+) -> Result<Option<(CollectedSponsorshipCall, Vec<usize>)>, CoreSpaceChangesError> {
     let frame = trace.frame(frame_id);
     let FrameAction::Call {
         call_type,
@@ -84,13 +84,13 @@ pub(super) fn collect_sponsorship_call(
         || *target != sponsor_contract
         || *code_address != sponsor_contract
     {
-        return Err(ConfluxSimulationError::analysis_failed(
+        return Err(CoreSpaceChangesError::inconsistent_execution(
             "Core Space sponsorship call did not use the canonical active internal-contract form",
         ));
     }
 
     if decoded_call.must_not_transfer_value() && !transferred_value.is_zero() {
-        return Err(ConfluxSimulationError::analysis_failed(
+        return Err(CoreSpaceChangesError::inconsistent_execution(
             "Core Space sponsorship access-rule call transferred a nonzero value",
         ));
     }
@@ -137,7 +137,7 @@ pub(super) fn collect_sponsorship_call(
         contract_address,
     } = decoded_call
     else {
-        return Err(ConfluxSimulationError::analysis_failed(
+        return Err(CoreSpaceChangesError::inconsistent_execution(
             "Core Space sponsorship call classification was inconsistent",
         ));
     };
@@ -175,7 +175,7 @@ pub(super) fn collect_admin_change_attempt(
     frame_id: FrameId,
     machine: &Machine,
     spec: &Spec,
-) -> Result<Option<AdminChangeAttempt>, ConfluxSimulationError> {
+) -> Result<Option<AdminChangeAttempt>, CoreSpaceChangesError> {
     let frame = trace.frame(frame_id);
     let FrameAction::Call {
         call_type,
@@ -211,7 +211,7 @@ pub(super) fn collect_admin_change_attempt(
         || *code_address != admin_contract
         || !transferred_value.is_zero()
     {
-        return Err(ConfluxSimulationError::analysis_failed(
+        return Err(CoreSpaceChangesError::inconsistent_execution(
             "Core Space admin mutation call did not use the canonical active internal-contract form",
         ));
     }
@@ -220,7 +220,7 @@ pub(super) fn collect_admin_change_attempt(
 
 pub(super) fn collect_standalone_sponsorship_refund(
     event: &TraceEvent,
-) -> Result<Option<SponsorshipRefundOperation>, ConfluxSimulationError> {
+) -> Result<Option<SponsorshipRefundOperation>, CoreSpaceChangesError> {
     let TraceEvent::InternalTransfer {
         position,
         space,
@@ -242,7 +242,7 @@ pub(super) fn collect_standalone_sponsorship_refund(
         _ => return Ok(None),
     };
     if *space != Space::Native || recipient.space != Space::Native {
-        return Err(ConfluxSimulationError::analysis_failed(
+        return Err(CoreSpaceChangesError::inconsistent_execution(
             "Core Space standalone sponsorship refund used a non-native balance",
         ));
     }
@@ -260,7 +260,7 @@ pub(super) fn collect_standalone_sponsorship_refund(
 pub(super) fn collect_storage_point_conversion(
     trace: &CommittedExecutionTrace,
     event: &TraceEvent,
-) -> Result<Option<(StoragePointConversionOperation, Vec<usize>)>, ConfluxSimulationError> {
+) -> Result<Option<(StoragePointConversionOperation, Vec<usize>)>, CoreSpaceChangesError> {
     let Some((position, contract_address, _, _)) = conversion_transfer(event)? else {
         return Ok(None);
     };
@@ -280,7 +280,7 @@ pub(super) fn collect_storage_point_conversion(
             continue;
         }
         if amount.is_zero() {
-            return Err(ConfluxSimulationError::analysis_failed(
+            return Err(CoreSpaceChangesError::inconsistent_execution(
                 "Core Space storage-point conversion contained a zero transfer",
             ));
         }
@@ -295,7 +295,7 @@ pub(super) fn collect_storage_point_conversion(
                 from_storage_collateral = amount;
             }
             ConversionSource::SponsorPool | ConversionSource::StorageCollateral => {
-                return Err(ConfluxSimulationError::analysis_failed(
+                return Err(CoreSpaceChangesError::inconsistent_execution(
                     "Core Space storage-point conversion has ambiguous committed internal transfers",
                 ));
             }
@@ -304,7 +304,7 @@ pub(super) fn collect_storage_point_conversion(
     if let (Some(sponsor), Some(collateral)) = (sponsor_position, collateral_position)
         && sponsor > collateral
     {
-        return Err(ConfluxSimulationError::analysis_failed(
+        return Err(CoreSpaceChangesError::inconsistent_execution(
             "Core Space storage-point conversion reversed its canonical source order",
         ));
     }
@@ -332,7 +332,7 @@ struct SponsorshipFundingCallContext {
 fn collect_gas_sponsorship_call(
     transfers: &[FundingTransfer<'_>],
     call_context: SponsorshipFundingCallContext,
-) -> Result<SponsorshipFundingOperation, ConfluxSimulationError> {
+) -> Result<SponsorshipFundingOperation, CoreSpaceChangesError> {
     let first = required_transfer(transfers, 0, "gas sponsorship")?;
 
     let (pool_deposit_amount, refund) =
@@ -379,7 +379,7 @@ fn collect_gas_sponsorship_call(
 fn collect_storage_sponsorship_call(
     transfers: &[FundingTransfer<'_>],
     call_context: SponsorshipFundingCallContext,
-) -> Result<SponsorshipFundingOperation, ConfluxSimulationError> {
+) -> Result<SponsorshipFundingOperation, CoreSpaceChangesError> {
     let first = required_transfer(transfers, 0, "storage sponsorship")?;
 
     let (pool_deposit_amount, refund) = if let Some((old_sponsor, pool_refund_amount)) =
@@ -394,7 +394,7 @@ fn collect_storage_sponsorship_call(
         let transit_total = collateral_compensation
             .checked_add(pool_deposit_amount)
             .ok_or_else(|| {
-                ConfluxSimulationError::analysis_failed(
+                CoreSpaceChangesError::inconsistent_execution(
                     "Core Space storage sponsorship transit amount overflowed",
                 )
             })?;
@@ -404,7 +404,7 @@ fn collect_storage_sponsorship_call(
         let gross_refund_amount = pool_refund_amount
             .checked_add(collateral_compensation)
             .ok_or_else(|| {
-                ConfluxSimulationError::analysis_failed(
+                CoreSpaceChangesError::inconsistent_execution(
                     "Core Space storage sponsorship refund amount overflowed",
                 )
             })?;
@@ -451,9 +451,9 @@ fn required_transfer<'a>(
     transfers: &'a [FundingTransfer<'a>],
     index: usize,
     call_name: &str,
-) -> Result<FundingTransfer<'a>, ConfluxSimulationError> {
+) -> Result<FundingTransfer<'a>, CoreSpaceChangesError> {
     transfers.get(index).copied().ok_or_else(|| {
-        ConfluxSimulationError::analysis_failed(format!(
+        CoreSpaceChangesError::inconsistent_execution(format!(
             "Core Space {call_name} call is missing a committed internal transfer"
         ))
     })
@@ -463,9 +463,9 @@ fn require_transfer_count(
     transfers: &[FundingTransfer<'_>],
     expected: usize,
     call_name: &str,
-) -> Result<(), ConfluxSimulationError> {
+) -> Result<(), CoreSpaceChangesError> {
     if transfers.len() != expected {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
+        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
             "Core Space {call_name} call produced {} funding internal transfers, expected {expected}",
             transfers.len()
         )));
@@ -476,7 +476,7 @@ fn require_transfer_count(
 fn funding_transfers(
     trace: &CommittedExecutionTrace,
     frame_id: FrameId,
-) -> Result<Vec<FundingTransfer<'_>>, ConfluxSimulationError> {
+) -> Result<Vec<FundingTransfer<'_>>, CoreSpaceChangesError> {
     trace
         .internal_transfers_in_scope(Some(frame_id))
         .filter_map(|event| match conversion_transfer(event) {
@@ -487,7 +487,7 @@ fn funding_transfers(
         .collect()
 }
 
-fn funding_transfer(event: &TraceEvent) -> Result<FundingTransfer<'_>, ConfluxSimulationError> {
+fn funding_transfer(event: &TraceEvent) -> Result<FundingTransfer<'_>, CoreSpaceChangesError> {
     let TraceEvent::InternalTransfer {
         position,
         space,
@@ -500,7 +500,7 @@ fn funding_transfer(event: &TraceEvent) -> Result<FundingTransfer<'_>, ConfluxSi
         unreachable!("internal transfer scope only contains internal transfers");
     };
     if *space != Space::Native {
-        return Err(ConfluxSimulationError::analysis_failed(
+        return Err(CoreSpaceChangesError::inconsistent_execution(
             "Core Space sponsorship transit used a non-native internal transfer",
         ));
     }
@@ -515,7 +515,7 @@ fn funding_transfer(event: &TraceEvent) -> Result<FundingTransfer<'_>, ConfluxSi
 fn gas_pool_refund(
     transfer: FundingTransfer<'_>,
     call_context: SponsorshipFundingCallContext,
-) -> Result<Option<(Address, alloy_primitives::U256)>, ConfluxSimulationError> {
+) -> Result<Option<(Address, alloy_primitives::U256)>, CoreSpaceChangesError> {
     match (transfer.from, transfer.to) {
         (
             AddressPocket::SponsorBalanceForGas(contract_address),
@@ -535,7 +535,7 @@ fn gas_pool_refund(
 fn gas_pool_deposit(
     transfer: FundingTransfer<'_>,
     call_context: SponsorshipFundingCallContext,
-) -> Result<alloy_primitives::U256, ConfluxSimulationError> {
+) -> Result<alloy_primitives::U256, CoreSpaceChangesError> {
     match (transfer.from, transfer.to) {
         (AddressPocket::Balance(source), AddressPocket::SponsorBalanceForGas(contract_address))
             if source.space == Space::Native
@@ -551,7 +551,7 @@ fn gas_pool_deposit(
 fn storage_pool_refund(
     transfer: FundingTransfer<'_>,
     call_context: SponsorshipFundingCallContext,
-) -> Result<Option<(Address, alloy_primitives::U256)>, ConfluxSimulationError> {
+) -> Result<Option<(Address, alloy_primitives::U256)>, CoreSpaceChangesError> {
     match (transfer.from, transfer.to) {
         (
             AddressPocket::SponsorBalanceForStorage(contract_address),
@@ -572,7 +572,7 @@ fn storage_collateral_compensation(
     transfer: FundingTransfer<'_>,
     call_context: SponsorshipFundingCallContext,
     old_sponsor: Address,
-) -> Result<alloy_primitives::U256, ConfluxSimulationError> {
+) -> Result<alloy_primitives::U256, CoreSpaceChangesError> {
     match (transfer.from, transfer.to) {
         (AddressPocket::Balance(source), AddressPocket::Balance(recipient))
             if source.space == Space::Native
@@ -589,7 +589,7 @@ fn storage_collateral_compensation(
 fn storage_pool_deposit(
     transfer: FundingTransfer<'_>,
     call_context: SponsorshipFundingCallContext,
-) -> Result<alloy_primitives::U256, ConfluxSimulationError> {
+) -> Result<alloy_primitives::U256, CoreSpaceChangesError> {
     match (transfer.from, transfer.to) {
         (
             AddressPocket::Balance(source),
@@ -626,7 +626,7 @@ impl DecodedSponsorshipCall {
 fn decode_sponsorship_call(
     calldata_len: usize,
     calldata_prefix: &[u8],
-) -> Result<Option<DecodedSponsorshipCall>, ConfluxSimulationError> {
+) -> Result<Option<DecodedSponsorshipCall>, CoreSpaceChangesError> {
     let Some(selector) = call_selector(calldata_len, calldata_prefix) else {
         return Ok(None);
     };
@@ -702,7 +702,7 @@ fn decode_sponsorship_call(
 fn decode_admin_change_call(
     calldata_len: usize,
     calldata_prefix: &[u8],
-) -> Result<Option<AdminChangeAttempt>, ConfluxSimulationError> {
+) -> Result<Option<AdminChangeAttempt>, CoreSpaceChangesError> {
     let Some(selector) = call_selector(calldata_len, calldata_prefix) else {
         return Ok(None);
     };
@@ -738,9 +738,9 @@ fn complete_calldata<'a>(
     calldata_len: usize,
     calldata_prefix: &'a [u8],
     call_name: &str,
-) -> Result<&'a [u8], ConfluxSimulationError> {
+) -> Result<&'a [u8], CoreSpaceChangesError> {
     if calldata_prefix.len() != calldata_len {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
+        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
             "Core Space {call_name} calldata was not fully captured"
         )));
     }
@@ -750,14 +750,14 @@ fn complete_calldata<'a>(
 fn decode_canonical_call<C: SolCall>(
     calldata: &[u8],
     call_name: &str,
-) -> Result<C, ConfluxSimulationError> {
+) -> Result<C, CoreSpaceChangesError> {
     let call = C::abi_decode_validate(calldata).map_err(|error| {
-        ConfluxSimulationError::analysis_failed(format!(
+        CoreSpaceChangesError::inconsistent_execution(format!(
             "Core Space {call_name} call is not valid ABI data: {error}"
         ))
     })?;
     if call.abi_encode() != calldata {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
+        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
             "Core Space {call_name} call is not canonical ABI data"
         )));
     }
@@ -772,10 +772,8 @@ enum ConversionSource {
 
 fn conversion_transfer(
     event: &TraceEvent,
-) -> Result<
-    Option<(usize, Address, ConversionSource, alloy_primitives::U256)>,
-    ConfluxSimulationError,
-> {
+) -> Result<Option<(usize, Address, ConversionSource, alloy_primitives::U256)>, CoreSpaceChangesError>
+{
     let TraceEvent::InternalTransfer {
         position,
         space,
@@ -797,7 +795,7 @@ fn conversion_transfer(
         _ => return Ok(None),
     };
     if *space != Space::Native {
-        return Err(ConfluxSimulationError::analysis_failed(
+        return Err(CoreSpaceChangesError::inconsistent_execution(
             "Core Space storage-point conversion used a non-native transfer",
         ));
     }
@@ -809,8 +807,8 @@ fn conversion_transfer(
     )))
 }
 
-fn transit_mismatch(resource: &str) -> ConfluxSimulationError {
-    ConfluxSimulationError::analysis_failed(format!(
+fn transit_mismatch(resource: &str) -> CoreSpaceChangesError {
+    CoreSpaceChangesError::inconsistent_execution(format!(
         "Core Space {resource} sponsorship call had an inconsistent internal-transfer transit"
     ))
 }

@@ -9,7 +9,7 @@ use cfx_types::{Address as CfxAddress, AddressSpaceUtil, BigEndianHash, H256};
 
 use super::CommittedPoSCall;
 use crate::{
-    ConfluxSimulationError,
+    core_space::CoreSpaceChangesError,
     core_space::changes::StatePhase,
     primitive::{address_from_cfx, address_to_cfx, b256_from_cfx, b256_to_cfx, u256_from_cfx},
 };
@@ -70,7 +70,7 @@ impl PoSStateReader {
         committed_pos_calls: &[CommittedPoSCall],
         requirements: &PoSStateRequirements,
         phase: StatePhase,
-    ) -> Result<Option<PoSStateValues>, ConfluxSimulationError> {
+    ) -> Result<Option<PoSStateValues>, CoreSpaceChangesError> {
         if committed_pos_calls.is_empty() {
             self.before_state = None;
             return Ok(None);
@@ -84,9 +84,9 @@ impl PoSStateReader {
             }
             StatePhase::After => {
                 let Some(before) = self.before_state.as_ref() else {
-                    return Err(ConfluxSimulationError::ExecutionInternal {
-                        message: "Core Space PoS before state was not collected".into(),
-                    });
+                    return Err(CoreSpaceChangesError::inconsistent_execution(
+                        "Core Space PoS before state was not collected",
+                    ));
                 };
                 let requirements = requirements.including_identifiers_from(before);
                 Ok(Some(read_pos_state_values(
@@ -138,7 +138,7 @@ pub(crate) fn read_pos_state_values(
     state: &State,
     phase: StatePhase,
     requirements: &PoSStateRequirements,
-) -> Result<PoSStateValues, ConfluxSimulationError> {
+) -> Result<PoSStateValues, CoreSpaceChangesError> {
     let mut sender_pos_identifiers = BTreeMap::new();
     for account in &requirements.accounts {
         let value = read_pos_storage(
@@ -177,10 +177,11 @@ pub(crate) fn read_pos_state_values(
     for account in &requirements.accounts {
         let balance = state
             .staking_balance(&address_to_cfx(*account))
-            .map_err(|error| ConfluxSimulationError::StateAccess {
-                message: format!(
-                    "failed to read {phase} Core Space PoS staking balance for {account}: {error}"
-                ),
+            .map_err(|error| {
+                CoreSpaceChangesError::state_read(
+                    format!("read {phase} Core Space PoS staking balance for {account}"),
+                    error,
+                )
             })?;
         staking_balances.insert(*account, u256_from_cfx(balance));
     }
@@ -197,13 +198,13 @@ pub(crate) fn read_pos_state_values(
 pub(super) fn sender_pos_identifier(
     state: &PoSStateValues,
     account: Address,
-) -> Result<B256, ConfluxSimulationError> {
+) -> Result<B256, CoreSpaceChangesError> {
     state
         .sender_pos_identifiers
         .get(&account)
         .copied()
         .ok_or_else(|| {
-            ConfluxSimulationError::analysis_failed(format!(
+            CoreSpaceChangesError::inconsistent_execution(format!(
                 "Core Space PoS state values did not include sender identifier for {account}"
             ))
         })
@@ -212,13 +213,13 @@ pub(super) fn sender_pos_identifier(
 pub(super) fn pos_identifier_account(
     state: &PoSStateValues,
     pos_identifier: B256,
-) -> Result<Address, ConfluxSimulationError> {
+) -> Result<Address, CoreSpaceChangesError> {
     state
         .pos_identifier_accounts
         .get(&pos_identifier)
         .copied()
         .ok_or_else(|| {
-            ConfluxSimulationError::analysis_failed(format!(
+            CoreSpaceChangesError::inconsistent_execution(format!(
                 "Core Space PoS state values did not include identifier address for {pos_identifier}"
             ))
         })
@@ -227,13 +228,13 @@ pub(super) fn pos_identifier_account(
 pub(super) fn pos_status(
     state: &PoSStateValues,
     pos_identifier: B256,
-) -> Result<PoSStatus, ConfluxSimulationError> {
+) -> Result<PoSStatus, CoreSpaceChangesError> {
     state
         .pos_statuses
         .get(&pos_identifier)
         .copied()
         .ok_or_else(|| {
-            ConfluxSimulationError::analysis_failed(format!(
+            CoreSpaceChangesError::inconsistent_execution(format!(
                 "Core Space PoS state values did not include status for {pos_identifier}"
             ))
         })
@@ -243,9 +244,9 @@ pub(super) fn verify_pos_identifier_account_pair(
     state: &PoSStateValues,
     pos_identifier: B256,
     account: Address,
-) -> Result<(), ConfluxSimulationError> {
+) -> Result<(), CoreSpaceChangesError> {
     if pos_identifier_account(state, pos_identifier)? != account {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
+        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
             "Core Space PoS sender and identifier mappings disagree for {account}"
         )));
     }
@@ -257,36 +258,36 @@ fn read_pos_storage(
     key: Vec<u8>,
     phase: StatePhase,
     field: &str,
-) -> Result<cfx_types::U256, ConfluxSimulationError> {
+) -> Result<cfx_types::U256, CoreSpaceChangesError> {
     let pos_register_contract_address =
         cfx_parameters::internal_contract_addresses::POS_REGISTER_CONTRACT_ADDRESS
             .with_native_space();
     state
         .storage_at(&pos_register_contract_address, &key)
-        .map_err(|error| ConfluxSimulationError::StateAccess {
-            message: format!("failed to read {phase} Core Space PoS {field}: {error}"),
+        .map_err(|error| {
+            CoreSpaceChangesError::state_read(format!("read {phase} Core Space PoS {field}"), error)
         })
 }
 
-fn canonical_storage_address(value: cfx_types::U256) -> Result<Address, ConfluxSimulationError> {
+fn canonical_storage_address(value: cfx_types::U256) -> Result<Address, CoreSpaceChangesError> {
     let address_hash: H256 = BigEndianHash::from_uint(&value);
     if address_hash.as_bytes()[..12].iter().any(|byte| *byte != 0) {
-        return Err(ConfluxSimulationError::analysis_failed(
+        return Err(CoreSpaceChangesError::inconsistent_execution(
             "Core Space PoS identifier address storage has noncanonical high bytes",
         ));
     }
     Ok(address_from_cfx(CfxAddress::from(address_hash)))
 }
 
-fn canonical_pos_status(value: cfx_types::U256) -> Result<PoSStatus, ConfluxSimulationError> {
+fn canonical_pos_status(value: cfx_types::U256) -> Result<PoSStatus, CoreSpaceChangesError> {
     let limbs = value.0;
     if limbs[2] != 0 || limbs[3] != 0 {
-        return Err(ConfluxSimulationError::analysis_failed(
+        return Err(CoreSpaceChangesError::inconsistent_execution(
             "Core Space PoS status storage has noncanonical high limbs",
         ));
     }
     if limbs[1] > limbs[0] {
-        return Err(ConfluxSimulationError::analysis_failed(
+        return Err(CoreSpaceChangesError::inconsistent_execution(
             "Core Space PoS status has unlocked votes above registered votes",
         ));
     }

@@ -10,7 +10,7 @@ use cfx_vm_types::{CallType, Spec};
 
 use super::CrossSpaceTransferOperation;
 use crate::{
-    ConfluxSimulationError,
+    core_space::CoreSpaceChangesError,
     core_space::changes::PendingCrossSpaceAddress,
     execution::{CommittedExecutionTrace, FrameAction, FrameId, TraceEvent},
     primitive::{address_from_cfx, u256_from_cfx},
@@ -26,7 +26,7 @@ pub(super) fn collect_cross_space_call(
     frame_id: FrameId,
     machine: &Machine,
     spec: &Spec,
-) -> Result<Option<(CrossSpaceTransferOperation, Vec<usize>)>, ConfluxSimulationError> {
+) -> Result<Option<(CrossSpaceTransferOperation, Vec<usize>)>, CoreSpaceChangesError> {
     let frame = trace.frame(frame_id);
     let FrameAction::Call {
         call_type,
@@ -67,7 +67,7 @@ pub(super) fn collect_cross_space_call(
         || *target != cross_space_contract
         || *code_address != cross_space_contract
     {
-        return Err(ConfluxSimulationError::analysis_failed(
+        return Err(CoreSpaceChangesError::inconsistent_execution(
             "Core cross-space call did not use the canonical active internal-contract form",
         ));
     }
@@ -101,7 +101,7 @@ struct CrossSpaceCallContext<'a> {
 fn collect_transfer_to_espace(
     context: CrossSpaceCallContext<'_>,
     cross_space_contract: cfx_types::Address,
-) -> Result<Option<(CrossSpaceTransferOperation, Vec<usize>)>, ConfluxSimulationError> {
+) -> Result<Option<(CrossSpaceTransferOperation, Vec<usize>)>, CoreSpaceChangesError> {
     let amount = u256_from_cfx(context.transferred_value);
     if amount.is_zero() {
         return Ok(None);
@@ -132,20 +132,20 @@ fn collect_transfer_to_espace(
 
 fn collect_withdrawal_to_core_space(
     context: CrossSpaceCallContext<'_>,
-) -> Result<Option<(CrossSpaceTransferOperation, Vec<usize>)>, ConfluxSimulationError> {
+) -> Result<Option<(CrossSpaceTransferOperation, Vec<usize>)>, CoreSpaceChangesError> {
     if !context.transferred_value.is_zero() {
-        return Err(ConfluxSimulationError::analysis_failed(
+        return Err(CoreSpaceChangesError::inconsistent_execution(
             "Core cross-space withdrawal transferred call value",
         ));
     }
     if context.calldata_prefix.len() != context.calldata_len {
-        return Err(ConfluxSimulationError::analysis_failed(
+        return Err(CoreSpaceChangesError::inconsistent_execution(
             "Core cross-space withdrawal calldata was not fully captured",
         ));
     }
     let withdrawal =
         withdrawFromMappedCall::abi_decode_validate(context.calldata_prefix).map_err(|error| {
-            ConfluxSimulationError::analysis_failed(format!(
+            CoreSpaceChangesError::inconsistent_execution(format!(
                 "Core cross-space withdrawal call is not valid ABI data: {error}"
             ))
         })?;
@@ -190,19 +190,19 @@ fn unique_matching_transfer<'a>(
     context: &'a CrossSpaceCallContext<'_>,
     transfer_name: &str,
     matches_transfer: impl Fn(ScopedInternalTransfer<'_>) -> bool,
-) -> Result<ScopedInternalTransfer<'a>, ConfluxSimulationError> {
+) -> Result<ScopedInternalTransfer<'a>, CoreSpaceChangesError> {
     let mut matches = context
         .trace
         .internal_transfers_in_scope(Some(context.frame_id))
         .filter_map(scoped_internal_transfer)
         .filter(|transfer| matches_transfer(*transfer));
     let transfer = matches.next().ok_or_else(|| {
-        ConfluxSimulationError::analysis_failed(format!(
+        CoreSpaceChangesError::inconsistent_execution(format!(
             "Core cross-space {transfer_name} is missing its committed internal transfer"
         ))
     })?;
     if matches.next().is_some() {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
+        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
             "Core cross-space {transfer_name} has ambiguous committed internal transfers"
         )));
     }

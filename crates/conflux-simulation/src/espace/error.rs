@@ -1,6 +1,7 @@
 use alloy_primitives::{Address, U256};
 use cfx_statedb::Error as StateDbError;
 use cfx_storage::Error as StorageError;
+use conflux_provider::AddressError;
 use contract_standards::{MetadataCall, MissingMetadataOutcome};
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -85,10 +86,17 @@ pub enum EspaceResultIntegrationError {
     InvalidObservedFeeSettlement { details: String },
     #[error("successful eSpace contract creation did not report the expected address {address}")]
     MissingCreatedContract { address: Address },
-    #[error("failed to represent a committed Conflux log address: {details}")]
-    InvalidLogAddress { details: String },
+    #[error("failed to represent a committed Conflux log address: {source}")]
+    InvalidLogAddress {
+        #[source]
+        source: AddressError,
+    },
     #[error("the eSpace executor returned an invalid or unsupported result: {details}")]
     InvalidExecutorOutput { details: String },
+    #[error("executed eSpace transaction did not produce a committed execution trace")]
+    MissingExecutionTrace,
+    #[error("eSpace executor returned {field} value {value}, exceeding u64")]
+    GasValueOutOfRange { field: &'static str, value: U256 },
 }
 
 impl EspaceResultIntegrationError {
@@ -120,7 +128,8 @@ pub enum EspaceExecutionError {
 }
 
 #[derive(Debug, Error)]
-pub(crate) enum EspaceNativeChangeError {
+#[non_exhaustive]
+pub enum EspaceNativeChangeError {
     #[error("native balance for eSpace account {address} is unavailable")]
     BalanceMissing { address: Address },
     #[error(
@@ -158,12 +167,16 @@ pub(crate) enum EspaceNativeChangeError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum EspaceChangesError {
+    #[error("eSpace change analysis failed to read state during {operation}: {source}")]
+    StateRead {
+        operation: &'static str,
+        #[source]
+        source: StateDbError,
+    },
     #[error(transparent)]
-    StateAccess(#[from] EspaceStateAccessError),
-    #[error("invalid eSpace native-change evidence: {details}")]
-    InvalidNativeEvidence { details: String },
-    #[error("invalid eSpace execution evidence: {details}")]
-    InvalidExecutionEvidence { details: String },
+    Native(#[from] EspaceNativeChangeError),
+    #[error("eSpace execution is inconsistent with change analysis: {details}")]
+    InconsistentExecution { details: String },
     #[error("metadata probe {call:?} failed to access anchored state: {source}")]
     MetadataStateAccess {
         call: MetadataCall<Address>,
@@ -183,17 +196,9 @@ pub enum EspaceChangesError {
 }
 
 impl EspaceChangesError {
-    pub(crate) fn invalid_execution_evidence(details: impl Into<String>) -> Self {
-        Self::InvalidExecutionEvidence {
+    pub(crate) fn inconsistent_execution(details: impl Into<String>) -> Self {
+        Self::InconsistentExecution {
             details: details.into(),
-        }
-    }
-}
-
-impl From<EspaceNativeChangeError> for EspaceChangesError {
-    fn from(source: EspaceNativeChangeError) -> Self {
-        Self::InvalidNativeEvidence {
-            details: source.to_string(),
         }
     }
 }

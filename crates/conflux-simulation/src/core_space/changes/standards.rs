@@ -4,7 +4,7 @@ use cfx_types::Space;
 use contract_standards::{MetadataValues, decode_standard_log, metadata_calls};
 
 use crate::{
-    ConfluxSimulationError,
+    core_space::CoreSpaceChangesError,
     execution::{
         CommittedExecutionTrace, ConfluxExecutionOutput, PreparedTransactionExecution, TraceEvent,
     },
@@ -19,7 +19,7 @@ const MAX_METADATA_OUTPUT_BYTES: usize = 4 * 1024;
 
 pub(crate) fn collect_standard_changes(
     output: &ConfluxExecutionOutput,
-) -> Result<Vec<PositionedCoreSpaceChange>, ConfluxSimulationError> {
+) -> Result<Vec<PositionedCoreSpaceChange>, CoreSpaceChangesError> {
     verify_committed_logs(&output.trace, &output.logs)?;
     Ok(output
         .trace
@@ -57,7 +57,7 @@ pub(crate) fn load_standard_metadata(
     machine: &Machine,
     prepared_execution: &PreparedTransactionExecution,
     changes: &[PositionedCoreSpaceChange],
-) -> Result<MetadataValues<Address>, ConfluxSimulationError> {
+) -> Result<MetadataValues<Address>, CoreSpaceChangesError> {
     let decoded = changes
         .iter()
         .filter_map(PositionedCoreSpaceChange::decoded_standard_log);
@@ -94,7 +94,7 @@ pub(crate) fn load_standard_metadata(
 fn verify_committed_logs(
     trace: &CommittedExecutionTrace,
     committed_logs: &[primitives::LogEntry],
-) -> Result<(), ConfluxSimulationError> {
+) -> Result<(), CoreSpaceChangesError> {
     let trace_logs = trace.events().iter().filter_map(|event| {
         let TraceEvent::Log {
             frame_id,
@@ -110,7 +110,7 @@ fn verify_committed_logs(
     });
     let trace_log_count = trace_logs.clone().count();
     if trace_log_count != committed_logs.len() {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
+        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
             "Core Space trace contains {trace_log_count} committed logs, executor returned {}",
             committed_logs.len()
         )));
@@ -124,7 +124,7 @@ fn verify_committed_logs(
             || topics != &committed.topics
             || data.as_slice() != committed.data.as_slice()
         {
-            return Err(ConfluxSimulationError::analysis_failed(format!(
+            return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                 "Core Space trace log {index} does not match the committed executor log"
             )));
         }

@@ -8,14 +8,16 @@ use tokio::task::JoinError;
 use super::{
     CoreSpaceContextError, CoreSpaceTransactionCompletionError, CoreSpaceTransactionInputError,
 };
-use crate::{
-    ConfluxRpcError, ConfluxSimulationError,
-    execution::{ExecutionBlockContextError, TransactionExecutionError},
-};
+use crate::{ConfluxRpcError, execution::ExecutionBlockContextError};
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum CoreSpaceStateAccessError {
+    #[error("Core Space state provider request failed: {source}")]
+    Provider {
+        #[source]
+        source: ConfluxRpcError,
+    },
     #[error("failed to prepare anchored Core Space state: {source}")]
     Preparation {
         #[source]
@@ -36,45 +38,46 @@ pub enum CoreSpaceStateAccessError {
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum CoreSpaceStorageSponsorshipError {
-    #[error("failed to inspect Core Space contract {contract} for storage sponsorship: {source}")]
-    ContractCodeLookup {
-        contract: CoreAddress,
+pub enum CoreSpaceChangesError {
+    #[error("Core Space change analysis failed to read state during {operation}: {source}")]
+    StateRead {
+        operation: String,
         #[source]
-        source: ConfluxRpcError,
+        source: StateDbError,
     },
     #[error(
-        "failed to resolve storage sponsorship for sender {sender} and contract {contract}: {source}"
+        "Core Space change analysis failed to access state recorded during execution while attempting to {operation}: {source}"
     )]
-    EligibilityLookup {
-        sender: CoreAddress,
-        contract: CoreAddress,
+    RecordedStateAccess {
+        operation: String,
         #[source]
-        source: ConfluxRpcError,
+        source: StorageError,
     },
-}
-
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum CoreSpaceChangesError {
-    #[error("Core Space change analysis could not access anchored state: {details}")]
-    StateAccess { details: String },
-    #[error("Core Space execution facts were inconsistent: {details}")]
-    InvalidExecutionFacts { details: String },
-    #[error("Core Space change analysis failed: {details}")]
-    Analysis { details: String },
+    #[error("Core Space execution is inconsistent with change analysis: {details}")]
+    InconsistentExecution { details: String },
 }
 
 impl CoreSpaceChangesError {
-    pub(crate) fn from_internal(error: ConfluxSimulationError) -> Self {
-        match error {
-            ConfluxSimulationError::StateAccess { message } => {
-                Self::StateAccess { details: message }
-            }
-            ConfluxSimulationError::ExecutionInternal { message } => {
-                Self::InvalidExecutionFacts { details: message }
-            }
-            ConfluxSimulationError::Analysis { message } => Self::Analysis { details: message },
+    pub(crate) fn state_read(operation: impl Into<String>, source: StateDbError) -> Self {
+        Self::StateRead {
+            operation: operation.into(),
+            source,
+        }
+    }
+
+    pub(crate) fn recorded_state_access(
+        operation: impl Into<String>,
+        source: StorageError,
+    ) -> Self {
+        Self::RecordedStateAccess {
+            operation: operation.into(),
+            source,
+        }
+    }
+
+    pub(crate) fn inconsistent_execution(details: impl Into<String>) -> Self {
+        Self::InconsistentExecution {
+            details: details.into(),
         }
     }
 }
@@ -99,6 +102,10 @@ pub enum CoreSpaceResultIntegrationError {
     InvalidCoreAddress { details: String },
     #[error("the Core Space executor returned an invalid or unsupported result: {details}")]
     InvalidExecutorOutput { details: String },
+    #[error("executed Core Space transaction did not produce a committed execution trace")]
+    MissingExecutionTrace,
+    #[error("Core Space executor returned {field} value {value}, exceeding u64")]
+    GasValueOutOfRange { field: &'static str, value: U256 },
 }
 
 impl CoreSpaceResultIntegrationError {
@@ -112,32 +119,15 @@ impl CoreSpaceResultIntegrationError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum CoreSpaceExecutionError {
+    #[error(transparent)]
+    StateAccess(#[from] CoreSpaceStateAccessError),
+    #[error(transparent)]
+    ResultIntegration(#[from] CoreSpaceResultIntegrationError),
     #[error("failed to construct the Core Space execution context: {source}")]
     Context {
         #[source]
         source: ExecutionBlockContextError,
     },
-    #[error(transparent)]
-    StateAccess(#[from] CoreSpaceStateAccessError),
-    #[error(transparent)]
-    Integration(#[from] CoreSpaceResultIntegrationError),
-}
-
-impl From<TransactionExecutionError> for CoreSpaceExecutionError {
-    fn from(error: TransactionExecutionError) -> Self {
-        match error {
-            TransactionExecutionError::BlockContext(source) => Self::Context { source },
-            TransactionExecutionError::StateAccess(source) => {
-                Self::StateAccess(CoreSpaceStateAccessError::Operation {
-                    operation: "execute Core Space transaction",
-                    source,
-                })
-            }
-            error => Self::Integration(CoreSpaceResultIntegrationError::invalid_executor_output(
-                error.to_string(),
-            )),
-        }
-    }
 }
 
 #[derive(Debug, Error)]
@@ -149,8 +139,6 @@ pub enum CoreSpaceSimulationError {
     Context(#[from] CoreSpaceContextError),
     #[error(transparent)]
     Completion(#[from] CoreSpaceTransactionCompletionError),
-    #[error(transparent)]
-    StorageSponsorship(#[from] CoreSpaceStorageSponsorshipError),
     #[error(transparent)]
     Execution(#[from] CoreSpaceExecutionError),
     #[error(transparent)]

@@ -8,7 +8,7 @@ use super::{
     codec::{PoSCall, decode_pos_call, decode_vote_lock_call},
 };
 use crate::{
-    ConfluxSimulationError,
+    core_space::CoreSpaceChangesError,
     execution::{CommittedExecutionTrace, FrameAction, TraceEvent},
     primitive::address_from_cfx,
 };
@@ -64,7 +64,7 @@ impl CommittedStakingCalls {
 pub(crate) fn collect_committed_staking_calls(
     trace: &CommittedExecutionTrace,
     contract_activation: StakingContractActivation,
-) -> Result<CommittedStakingCalls, ConfluxSimulationError> {
+) -> Result<CommittedStakingCalls, CoreSpaceChangesError> {
     let staking_contract_address =
         cfx_parameters::internal_contract_addresses::STORAGE_INTEREST_STAKING_CONTRACT_ADDRESS;
     let pos_register_contract_address =
@@ -165,9 +165,9 @@ pub(crate) fn collect_committed_staking_calls(
 fn validate_committed_call(
     name: &str,
     uses_canonical_plain_call: bool,
-) -> Result<(), ConfluxSimulationError> {
+) -> Result<(), CoreSpaceChangesError> {
     if !uses_canonical_plain_call {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
+        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
             "Core Space {name} call did not use the canonical native plain-call form"
         )));
     }

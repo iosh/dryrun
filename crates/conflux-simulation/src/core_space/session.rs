@@ -40,7 +40,7 @@ impl CoreSpaceExecutionSession {
         backend: &ConfluxSimulationBackend,
         state_source: ConfluxStateSource,
         runtime_handle: Handle,
-    ) -> Result<Self, CoreSpaceSimulationError> {
+    ) -> Result<Self, CoreSpaceExecutionError> {
         let masked_sponsor_whitelist_entries = state_source.masked_sponsor_whitelist_entries();
         let anchored_vote_lists = state_source.anchored_vote_lists();
         let state = build_conflux_state(state_source, runtime_handle).map_err(|source| {
@@ -76,7 +76,7 @@ impl CoreSpaceExecutionSession {
         let state_before_execution = self.state.save();
         let execution = ConfluxTransactionExecutor::new(&mut self.state, &self.machine)
             .execute(execution_input, ExecutionTraceObserver::new(Space::Native))
-            .map_err(CoreSpaceExecutionError::from)?;
+            .map_err(classify_transaction_execution_error)?;
 
         let changes = if matches!(&execution.outcome, ConfluxExecutionOutcome::Success(_)) {
             let mut analysis = CoreSpaceChangeAnalysis::from_execution(
@@ -86,41 +86,34 @@ impl CoreSpaceExecutionSession {
                 &self.anchored_vote_lists,
                 self.network,
                 &self.currency,
-            )
-            .map_err(super::CoreSpaceChangesError::from_internal)?;
+            )?;
             let state_after_execution = self.state.save();
 
             self.state.restore(state_before_execution);
-            let before = analysis
-                .read_state(
-                    &mut self.state,
-                    &self.machine,
-                    &execution.prepared,
-                    StatePhase::Before,
-                )
-                .map_err(super::CoreSpaceChangesError::from_internal)?;
+            let before = analysis.read_state(
+                &mut self.state,
+                &self.machine,
+                &execution.prepared,
+                StatePhase::Before,
+            )?;
             self.state.restore(state_after_execution);
 
             let state_before_after_reads = self.state.save();
-            let after = analysis
-                .read_state(
-                    &mut self.state,
-                    &self.machine,
-                    &execution.prepared,
-                    StatePhase::After,
-                )
-                .map_err(super::CoreSpaceChangesError::from_internal)?;
+            let after = analysis.read_state(
+                &mut self.state,
+                &self.machine,
+                &execution.prepared,
+                StatePhase::After,
+            )?;
             self.state.restore(state_before_after_reads);
 
-            analysis
-                .analyze(
-                    &mut self.state,
-                    &self.machine,
-                    &execution.prepared,
-                    before,
-                    after,
-                )
-                .map_err(super::CoreSpaceChangesError::from_internal)?
+            analysis.analyze(
+                &mut self.state,
+                &self.machine,
+                &execution.prepared,
+                before,
+                after,
+            )?
         } else {
             Vec::new()
         };
@@ -134,5 +127,36 @@ impl CoreSpaceExecutionSession {
         )?;
 
         Ok(CoreSpaceExecutionSessionResult { outcome, changes })
+    }
+}
+
+fn classify_transaction_execution_error(
+    error: crate::execution::TransactionExecutionError,
+) -> CoreSpaceExecutionError {
+    use crate::execution::TransactionExecutionError;
+
+    match error {
+        TransactionExecutionError::BlockContext(source) => {
+            CoreSpaceExecutionError::Context { source }
+        }
+        TransactionExecutionError::StateAccess(source) => {
+            CoreSpaceExecutionError::StateAccess(CoreSpaceStateAccessError::Operation {
+                operation: "execute Core Space transaction",
+                source,
+            })
+        }
+        TransactionExecutionError::MissingExecutionTrace => {
+            CoreSpaceExecutionError::ResultIntegration(
+                super::CoreSpaceResultIntegrationError::MissingExecutionTrace,
+            )
+        }
+        TransactionExecutionError::GasValueOutOfRange { field, value } => {
+            CoreSpaceExecutionError::ResultIntegration(
+                super::CoreSpaceResultIntegrationError::GasValueOutOfRange {
+                    field,
+                    value: crate::primitive::u256_from_cfx(value),
+                },
+            )
+        }
     }
 }

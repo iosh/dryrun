@@ -20,10 +20,10 @@ pub(crate) use context::{ResolvedEspaceContext, resolve_espace_context};
 pub use contract_standards::{
     Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem, StandardChange,
 };
-pub(crate) use error::EspaceNativeChangeError;
 pub use error::{
-    EspaceChangesError, EspaceExecutionError, EspaceResultIntegrationError, EspaceSimulationError,
-    EspaceStateAccessError, EspaceTransactionCompletionError,
+    EspaceChangesError, EspaceExecutionError, EspaceNativeChangeError,
+    EspaceResultIntegrationError, EspaceSimulationError, EspaceStateAccessError,
+    EspaceTransactionCompletionError,
 };
 pub use execution::{
     EspaceExecutionFailure, EspaceExecutionOutcome, EspaceLog, EspaceLogAddress,

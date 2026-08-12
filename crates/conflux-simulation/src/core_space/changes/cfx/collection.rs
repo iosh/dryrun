@@ -16,7 +16,7 @@ use super::{
     },
 };
 use crate::{
-    ConfluxSimulationError,
+    core_space::CoreSpaceChangesError,
     execution::{CommittedExecutionTrace, FrameAction, TraceEvent},
     primitive::{address_from_cfx, u256_from_cfx},
 };
@@ -33,7 +33,7 @@ pub(crate) fn collect_cfx_operations(
     storage_released: &[StorageChange],
     machine: &Machine,
     spec: &Spec,
-) -> Result<CfxOperations, ConfluxSimulationError> {
+) -> Result<CfxOperations, CoreSpaceChangesError> {
     let mut collector = CfxOperationCollector::new(storage_released)?;
     let mut contracts_with_admin_change_attempts = BTreeSet::new();
     for event in trace.events() {
@@ -44,7 +44,7 @@ pub(crate) fn collect_cfx_operations(
             continue;
         };
         if attempt.is_destroy && !spec.cip131 {
-            return Err(ConfluxSimulationError::analysis_failed(
+            return Err(CoreSpaceChangesError::inconsistent_execution(
                 "pre-CIP-131 Core Space contract destruction may delete sponsorship access-rule entries that public RPC cannot enumerate",
             ));
         }
@@ -145,14 +145,14 @@ pub(crate) fn collect_cfx_operations(
 }
 
 impl CfxOperationCollector {
-    fn new(storage_released: &[StorageChange]) -> Result<Self, ConfluxSimulationError> {
+    fn new(storage_released: &[StorageChange]) -> Result<Self, CoreSpaceChangesError> {
         Ok(Self {
             operations: Vec::new(),
             core_space: CoreSpaceOperationCollector::new(storage_released)?,
         })
     }
 
-    fn into_operations(mut self) -> Result<CfxOperations, ConfluxSimulationError> {
+    fn into_operations(mut self) -> Result<CfxOperations, CoreSpaceChangesError> {
         for operation in self.core_space.finish()? {
             self.operations.push(CfxOperation::Basic(operation));
         }
@@ -163,7 +163,7 @@ impl CfxOperationCollector {
         &self,
         contracts_with_admin_change_attempts: &BTreeSet<Address>,
         contracts_created: &[AddressWithSpace],
-    ) -> Result<(), ConfluxSimulationError> {
+    ) -> Result<(), CoreSpaceChangesError> {
         let created_native_contracts: BTreeSet<_> = contracts_created
             .iter()
             .filter(|created| created.space == Space::Native)
@@ -181,7 +181,7 @@ impl CfxOperationCollector {
             if contracts_with_admin_change_attempts.contains(&update.contract_address)
                 || created_native_contracts.contains(&update.contract_address)
             {
-                return Err(ConfluxSimulationError::analysis_failed(format!(
+                return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                     "Core Space sponsorship access-rule admin was not stable during the transaction for contract {}",
                     update.contract_address
                 )));

@@ -213,7 +213,7 @@ pub(crate) async fn resolve_storage_sponsorship(
     provider: &ConfluxSimulationProvider,
     state_anchor: ConfluxStateAnchor,
     transaction: &CoreSpaceCompleteTransaction,
-) -> Result<ResolvedStorageSponsorship, super::CoreSpaceStorageSponsorshipError> {
+) -> Result<ResolvedStorageSponsorship, super::CoreSpaceExecutionError> {
     let Some(target) = transaction.to.as_ref() else {
         return Ok(ResolvedStorageSponsorship {
             storage_covered_by_sponsor: false,
@@ -224,12 +224,11 @@ pub(crate) async fn resolve_storage_sponsorship(
     let code = provider
         .cfx_get_code(target_cfx, state_anchor.core_space_pivot())
         .await
-        .map_err(
-            |source| super::CoreSpaceStorageSponsorshipError::ContractCodeLookup {
-                contract: *target,
-                source,
-            },
-        )?;
+        .map_err(|source| {
+            super::CoreSpaceExecutionError::StateAccess(
+                super::CoreSpaceStateAccessError::Provider { source },
+            )
+        })?;
     if code.is_empty() {
         return Ok(ResolvedStorageSponsorship {
             storage_covered_by_sponsor: false,
@@ -247,13 +246,11 @@ pub(crate) async fn resolve_storage_sponsorship(
             state_anchor.core_space_epoch(),
         )
         .await
-        .map_err(
-            |source| super::CoreSpaceStorageSponsorshipError::EligibilityLookup {
-                sender: transaction.from,
-                contract: *target,
-                source,
-            },
-        )?;
+        .map_err(|source| {
+            super::CoreSpaceExecutionError::StateAccess(
+                super::CoreSpaceStateAccessError::Provider { source },
+            )
+        })?;
 
     Ok(ResolvedStorageSponsorship {
         storage_covered_by_sponsor: !balance_check.will_pay_collateral,

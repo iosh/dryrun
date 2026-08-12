@@ -195,15 +195,13 @@ fn classify_executor_error(
         }
         .into(),
         TransactionExecutionError::MissingExecutionTrace => {
-            EspaceResultIntegrationError::invalid_executor_output(
-                "executed transaction did not produce a committed execution trace",
-            )
-            .into()
+            EspaceResultIntegrationError::MissingExecutionTrace.into()
         }
         TransactionExecutionError::GasValueOutOfRange { field, value } => {
-            EspaceResultIntegrationError::invalid_executor_output(format!(
-                "executor returned {field} value {value}, exceeding u64"
-            ))
+            EspaceResultIntegrationError::GasValueOutOfRange {
+                field,
+                value: crate::primitive::u256_from_cfx(value),
+            }
             .into()
         }
     }

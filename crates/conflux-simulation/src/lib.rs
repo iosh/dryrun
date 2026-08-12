@@ -9,7 +9,6 @@ mod standards;
 mod state;
 
 pub use backend::ConfluxSimulationBackend;
-pub(crate) use error::ConfluxSimulationError;
 pub use error::{
     ConfluxCoreStatusIdentityField, ConfluxEndpointIdentity, ConfluxInitializationError,
 };

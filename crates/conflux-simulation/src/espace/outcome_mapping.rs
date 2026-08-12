@@ -135,8 +135,8 @@ fn convert_committed_logs(
                     let bytes = *log.address.as_fixed_bytes();
                     let address =
                         conflux_provider::CoreAddress::from_bytes(bytes, core_space_network)
-                            .map_err(|error| EspaceResultIntegrationError::InvalidLogAddress {
-                                details: error.to_string(),
+                            .map_err(|source| EspaceResultIntegrationError::InvalidLogAddress {
+                                source,
                             })?;
                     EspaceLogAddress::CoreSpace(address)
                 }

@@ -14,7 +14,8 @@ use primitives::transaction::{
 };
 
 use crate::{
-    ConfluxSimulationError, execution::PreparedTransactionExecution, primitive::address_to_cfx,
+    core_space::CoreSpaceChangesError, execution::PreparedTransactionExecution,
+    primitive::address_to_cfx,
 };
 
 const STANDARD_READ_CALL_GAS_LIMIT: u64 = 100_000;
@@ -32,11 +33,11 @@ pub(crate) fn execute_standard_read_call(
     prepared_execution: &PreparedTransactionExecution,
     target_contract: Address,
     call_data: Bytes,
-) -> Result<StandardReadCallOutcome, ConfluxSimulationError> {
+) -> Result<StandardReadCallOutcome, CoreSpaceChangesError> {
     let getter_sender = prepared_execution.transaction.sender();
     let getter_space = prepared_execution.transaction.space();
     if getter_sender.space != getter_space {
-        return Err(ConfluxSimulationError::analysis_failed(
+        return Err(CoreSpaceChangesError::inconsistent_execution(
             "standard state getter transaction and sender use different spaces",
         ));
     }
@@ -47,16 +48,13 @@ pub(crate) fn execute_standard_read_call(
         .get(&getter_space)
         .copied()
         .ok_or_else(|| {
-            ConfluxSimulationError::analysis_failed(
+            CoreSpaceChangesError::inconsistent_execution(
                 "standard state getter execution environment is missing its chain id",
             )
         })?;
-    let sender_nonce =
-        state
-            .nonce(&getter_sender)
-            .map_err(|error| ConfluxSimulationError::StateAccess {
-                message: format!("failed to read standard state getter nonce: {error}"),
-            })?;
+    let sender_nonce = state.nonce(&getter_sender).map_err(|error| {
+        CoreSpaceChangesError::state_read("read standard metadata getter nonce", error)
+    })?;
     let getter_action = Action::Call(address_to_cfx(target_contract));
     let getter_transaction = match getter_space {
         Space::Ethereum => EthereumTransaction::Eip155(Eip155Transaction {
@@ -103,26 +101,25 @@ pub(crate) fn execute_standard_read_call(
         &prepared_execution.spec,
     )
     .transact(&getter_transaction, getter_options)
-    .map_err(|error| ConfluxSimulationError::StateAccess {
-        message: format!("state access failed during standard getter execution: {error}"),
+    .map_err(|error| {
+        CoreSpaceChangesError::state_read("execute standard metadata getter", error)
     })?;
-
-    if let ExecutionOutcome::ExecutionErrorBumpNonce(
-        ExecutionError::VmError(vm::Error::StateDbError(error)),
-        _,
-    ) = &getter_execution_outcome
-    {
-        // A state-db failure can escape while an upstream checkpoint is still
-        // open. Abort the whole simulation and drop State instead of restoring
-        // through State::restore's no-checkpoint assertion.
-        return Err(ConfluxSimulationError::StateAccess {
-            message: format!("state access failed during standard getter execution: {error:?}"),
-        });
-    }
 
     let read_call_outcome = match getter_execution_outcome {
         ExecutionOutcome::Finished(executed_read_call) => {
             StandardReadCallOutcome::Success(Bytes::from(executed_read_call.output))
+        }
+        ExecutionOutcome::ExecutionErrorBumpNonce(
+            ExecutionError::VmError(vm::Error::StateDbError(error)),
+            _,
+        ) => {
+            // A state-db failure can escape while an upstream checkpoint is still
+            // open. Abort the whole simulation and drop State instead of restoring
+            // through State::restore's no-checkpoint assertion.
+            return Err(CoreSpaceChangesError::state_read(
+                "execute standard metadata getter",
+                error.0,
+            ));
         }
         ExecutionOutcome::ExecutionErrorBumpNonce(
             ExecutionError::VmError(vm::Error::Reverted),

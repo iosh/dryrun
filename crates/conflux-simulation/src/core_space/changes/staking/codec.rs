@@ -3,7 +3,7 @@ use alloy_sol_types::{SolEvent, sol};
 use cfx_types::Space;
 use primitives::LogEntry;
 
-use crate::{ConfluxSimulationError, primitive::b256_from_cfx};
+use crate::{core_space::CoreSpaceChangesError, primitive::b256_from_cfx};
 
 sol! {
     event Register(bytes32 indexed pos_identifier, bytes verified_bls_pubkey, bytes vrf_pubkey);
@@ -52,7 +52,7 @@ pub(crate) enum PoSEvent {
 pub(super) fn decode_vote_lock_call(
     calldata_len: usize,
     calldata_prefix: &[u8],
-) -> Result<Option<VoteLockCall>, ConfluxSimulationError> {
+) -> Result<Option<VoteLockCall>, CoreSpaceChangesError> {
     if call_selector(calldata_len, calldata_prefix) != Some(VOTE_LOCK_SELECTOR) {
         return Ok(None);
     }
@@ -75,7 +75,7 @@ pub(super) fn decode_vote_lock_call(
 pub(super) fn decode_pos_call(
     calldata_len: usize,
     calldata_prefix: &[u8],
-) -> Result<Option<PoSCall>, ConfluxSimulationError> {
+) -> Result<Option<PoSCall>, CoreSpaceChangesError> {
     let Some(selector) = call_selector(calldata_len, calldata_prefix) else {
         return Ok(None);
     };
@@ -117,7 +117,7 @@ pub(super) fn decode_pos_call(
 pub(crate) fn decode_pos_staking_events(
     final_logs: &[LogEntry],
     pos_register_contract_active: bool,
-) -> Result<Vec<PoSEvent>, ConfluxSimulationError> {
+) -> Result<Vec<PoSEvent>, CoreSpaceChangesError> {
     if !pos_register_contract_active {
         return Ok(Vec::new());
     }
@@ -144,10 +144,10 @@ fn read_call_word(
     calldata_prefix: &[u8],
     offset: usize,
     field: &str,
-) -> Result<[u8; 32], ConfluxSimulationError> {
+) -> Result<[u8; 32], CoreSpaceChangesError> {
     let end = offset + 32;
     if calldata_len < end || calldata_prefix.len() < end {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
+        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
             "Core Space {field} was not fully captured in the calldata prefix"
         )));
     }
@@ -156,9 +156,9 @@ fn read_call_word(
     Ok(word)
 }
 
-fn decode_pos_event(log: &LogEntry) -> Result<PoSEvent, ConfluxSimulationError> {
+fn decode_pos_event(log: &LogEntry) -> Result<PoSEvent, CoreSpaceChangesError> {
     if log.topics.len() != 2 {
-        return Err(ConfluxSimulationError::analysis_failed(
+        return Err(CoreSpaceChangesError::inconsistent_execution(
             "Core Space PoS event did not have exactly two topics",
         ));
     }
@@ -169,7 +169,7 @@ fn decode_pos_event(log: &LogEntry) -> Result<PoSEvent, ConfluxSimulationError> 
         let event =
             Register::decode_raw_log_validate(log.topics.iter().copied().map(b256_from_cfx), data)
                 .map_err(|error| {
-                    ConfluxSimulationError::analysis_failed(format!(
+                    CoreSpaceChangesError::inconsistent_execution(format!(
                         "Core Space PoS Register event is not canonical ABI data: {error}"
                     ))
                 })?;
@@ -183,7 +183,7 @@ fn decode_pos_event(log: &LogEntry) -> Result<PoSEvent, ConfluxSimulationError> 
             data,
         )
         .map_err(|error| {
-            ConfluxSimulationError::analysis_failed(format!(
+            CoreSpaceChangesError::inconsistent_execution(format!(
                 "Core Space PoS IncreaseStake event is not canonical ABI data: {error}"
             ))
         })?;
@@ -196,7 +196,7 @@ fn decode_pos_event(log: &LogEntry) -> Result<PoSEvent, ConfluxSimulationError> 
         let event =
             Retire::decode_raw_log_validate(log.topics.iter().copied().map(b256_from_cfx), data)
                 .map_err(|error| {
-                    ConfluxSimulationError::analysis_failed(format!(
+                    CoreSpaceChangesError::inconsistent_execution(format!(
                         "Core Space PoS Retire event is not canonical ABI data: {error}"
                     ))
                 })?;
@@ -206,7 +206,7 @@ fn decode_pos_event(log: &LogEntry) -> Result<PoSEvent, ConfluxSimulationError> 
             requested_vote_count: event.requested_vote_count,
         })
     } else {
-        Err(ConfluxSimulationError::analysis_failed(
+        Err(CoreSpaceChangesError::inconsistent_execution(
             "Core Space PoS log had an unknown event signature",
         ))
     }
@@ -216,9 +216,9 @@ fn verify_encoded_event_data(
     data: &[u8],
     encoded_data: Vec<u8>,
     event_name: &str,
-) -> Result<(), ConfluxSimulationError> {
+) -> Result<(), CoreSpaceChangesError> {
     if encoded_data != data {
-        return Err(ConfluxSimulationError::analysis_failed(format!(
+        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
             "Core Space PoS {event_name} event has noncanonical or trailing ABI data"
         )));
     }

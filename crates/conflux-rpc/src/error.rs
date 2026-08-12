@@ -60,13 +60,13 @@ fn transaction_completion_failed(details: &'static str) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(TRANSACTION_COMPLETION_FAILED_CODE, details, None::<()>)
 }
 
-pub(super) fn core_space_response_mapping_error(details: impl Into<String>) -> ErrorObjectOwned {
+pub(super) fn core_space_response_error(details: impl Into<String>) -> ErrorObjectOwned {
     let details = details.into();
     error!(details, "Conflux Core Space response mapping failed");
     internal_error()
 }
 
-pub(super) fn map_core_space_simulation_error(error: CoreSpaceSimulationError) -> ErrorObjectOwned {
+pub(super) fn core_space_error_response(error: CoreSpaceSimulationError) -> ErrorObjectOwned {
     match error {
         CoreSpaceSimulationError::Input(error) => invalid_params(error.to_string()),
         CoreSpaceSimulationError::Context(
@@ -84,7 +84,7 @@ pub(super) fn map_core_space_simulation_error(error: CoreSpaceSimulationError) -
     }
 }
 
-pub(super) fn map_espace_simulation_error(error: EspaceSimulationError) -> ErrorObjectOwned {
+pub(super) fn espace_error_response(error: EspaceSimulationError) -> ErrorObjectOwned {
     match error {
         EspaceSimulationError::Input(error) => invalid_params(error.to_string()),
         EspaceSimulationError::Context(error @ EspaceContextError::EspaceBlockNotFound { .. }) => {
@@ -119,7 +119,7 @@ fn transaction_completion_message(error: &EspaceTransactionCompletionError) -> &
     }
 }
 
-pub(super) fn map_simulation_task_error(error: SimulationTaskError) -> ErrorObjectOwned {
+pub(super) fn simulation_task_error_response(error: SimulationTaskError) -> ErrorObjectOwned {
     error!(error = ?error, "Conflux simulation task failed");
     internal_error()
 }

@@ -8,7 +8,7 @@ use alloy_primitives::{Address, B256, U256};
 use conflux_provider::{CoreAddress, Network};
 use contract_standards::{DecodedStandardLog, MetadataValues, StandardChange};
 
-use crate::ConfluxSimulationError;
+use crate::core_space::CoreSpaceChangesError;
 
 pub(crate) use cfx::{CfxAnalysisInput, CfxStateValues};
 pub(crate) use staking::{
@@ -316,7 +316,7 @@ pub(crate) fn finish_core_space_changes(
     metadata: &MetadataValues<Address>,
     network: Network,
     currency: &CoreSpaceNativeCurrency,
-) -> Result<Vec<CoreSpaceChange>, ConfluxSimulationError> {
+) -> Result<Vec<CoreSpaceChange>, CoreSpaceChangesError> {
     positioned_changes.sort_by_key(|positioned| positioned.position);
     positioned_changes
         .into_iter()
@@ -324,7 +324,7 @@ pub(crate) fn finish_core_space_changes(
             PendingChange::CoreSpace(change) => resolve_change(change, network, currency),
             PendingChange::Standard(change) => {
                 let change = change.into_change(metadata).map_err(|_| {
-                    ConfluxSimulationError::analysis_failed(
+                    CoreSpaceChangesError::inconsistent_execution(
                         "a decoded Core Space standard change is missing metadata",
                     )
                 })?;
@@ -340,7 +340,7 @@ fn resolve_change(
     change: PendingCoreSpaceChange,
     network: Network,
     currency: &CoreSpaceNativeCurrency,
-) -> Result<CoreSpaceChange, ConfluxSimulationError> {
+) -> Result<CoreSpaceChange, CoreSpaceChangesError> {
     let address = |value| core_address(value, network);
     Ok(match change {
         PendingCoreSpaceChange::NativeTransfer {
@@ -492,7 +492,7 @@ fn resolve_change(
 fn resolve_sponsorship_configuration(
     configuration: PendingSponsorshipConfiguration,
     network: Network,
-) -> Result<SponsorshipConfiguration, ConfluxSimulationError> {
+) -> Result<SponsorshipConfiguration, CoreSpaceChangesError> {
     Ok(match configuration {
         PendingSponsorshipConfiguration::Gas {
             sponsor_before,
@@ -526,7 +526,7 @@ fn resolve_sponsorship_configuration(
 fn resolve_cross_space_address(
     address: PendingCrossSpaceAddress,
     network: Network,
-) -> Result<CrossSpaceAddress, ConfluxSimulationError> {
+) -> Result<CrossSpaceAddress, CoreSpaceChangesError> {
     Ok(match address {
         PendingCrossSpaceAddress::CoreSpace(address) => {
             CrossSpaceAddress::CoreSpace(core_address(address, network)?)
@@ -538,7 +538,7 @@ fn resolve_cross_space_address(
 fn resolve_standard_change(
     change: StandardChange<Address>,
     network: Network,
-) -> Result<StandardChange<CoreAddress>, ConfluxSimulationError> {
+) -> Result<StandardChange<CoreAddress>, CoreSpaceChangesError> {
     let address = |value| core_address(value, network);
     Ok(match change {
         StandardChange::Erc20Transfer {
@@ -635,10 +635,10 @@ fn resolve_standard_change(
     })
 }
 
-fn core_address(address: Address, network: Network) -> Result<CoreAddress, ConfluxSimulationError> {
+fn core_address(address: Address, network: Network) -> Result<CoreAddress, CoreSpaceChangesError> {
     CoreAddress::from_bytes(address.into_array(), network).map_err(|error| {
-        ConfluxSimulationError::ExecutionInternal {
-            message: format!("failed to represent a Core Space change address: {error}"),
-        }
+        CoreSpaceChangesError::inconsistent_execution(format!(
+            "failed to represent a Core Space change address: {error}"
+        ))
     })
 }

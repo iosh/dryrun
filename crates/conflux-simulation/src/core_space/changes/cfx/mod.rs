@@ -19,7 +19,7 @@ pub(crate) use collection::collect_cfx_operations;
 pub(crate) use verification::{CfxStateValues, read_cfx_state_values, verify_cfx_changes};
 
 use crate::{
-    ConfluxSimulationError,
+    core_space::CoreSpaceChangesError,
     core_space::changes::{
         PendingCrossSpaceAddress, PendingSponsorshipEligibilityTarget, SponsoredResource,
     },
@@ -221,13 +221,13 @@ impl CfxOperations {
     pub(crate) fn reject_masked_sponsorship_access_dependencies(
         &self,
         masked_entries: &MaskedSponsorWhitelistEntries,
-    ) -> Result<(), ConfluxSimulationError> {
-        let masked_entries =
-            masked_entries
-                .snapshot()
-                .map_err(|error| ConfluxSimulationError::StateAccess {
-                    message: error.to_string(),
-                })?;
+    ) -> Result<(), CoreSpaceChangesError> {
+        let masked_entries = masked_entries.snapshot().map_err(|error| {
+            CoreSpaceChangesError::recorded_state_access(
+                "snapshot request-local sponsor whitelist reads",
+                error,
+            )
+        })?;
         for key in &self.sponsorship_access_rule_keys {
             let PendingSponsorshipEligibilityTarget::Account(account_address) = key.account_scope
             else {
@@ -238,7 +238,7 @@ impl CfxOperations {
                 account_address: address_to_cfx(account_address),
             };
             if masked_entries.contains(&storage_key) {
-                return Err(ConfluxSimulationError::analysis_failed(format!(
+                return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                     "Core Space sponsorship access depends on a raw whitelist entry masked by the all-accounts rule for contract {} and account {account_address}",
                     key.contract_address
                 )));
@@ -265,7 +265,7 @@ impl StakingBalanceEffects {
     pub(crate) fn apply_to(
         &self,
         staking_balances: &mut BTreeMap<Address, U256>,
-    ) -> Result<(), ConfluxSimulationError> {
+    ) -> Result<(), CoreSpaceChangesError> {
         for effect in &self.effects {
             match effect {
                 StakingBalanceEffect::Deposit { account, amount } => {
@@ -305,12 +305,12 @@ fn credit_staking_balance_if_present(
     staking_balances: &mut BTreeMap<Address, U256>,
     account: Address,
     amount: U256,
-) -> Result<(), ConfluxSimulationError> {
+) -> Result<(), CoreSpaceChangesError> {
     let Some(balance) = staking_balances.get_mut(&account) else {
         return Ok(());
     };
     *balance = balance.checked_add(amount).ok_or_else(|| {
-        ConfluxSimulationError::analysis_failed(format!(
+        CoreSpaceChangesError::inconsistent_execution(format!(
             "Core Space staking balance overflowed while replaying a deposit for {account}"
         ))
     })?;
@@ -322,12 +322,12 @@ fn debit_staking_balance_if_present(
     account: Address,
     amount: U256,
     operation: &str,
-) -> Result<(), ConfluxSimulationError> {
+) -> Result<(), CoreSpaceChangesError> {
     let Some(balance) = staking_balances.get_mut(&account) else {
         return Ok(());
     };
     *balance = balance.checked_sub(amount).ok_or_else(|| {
-        ConfluxSimulationError::analysis_failed(format!(
+        CoreSpaceChangesError::inconsistent_execution(format!(
             "Core Space staking balance underflowed while replaying a {operation} for {account}"
         ))
     })?;
@@ -555,7 +555,7 @@ struct SponsorshipAccessRuleKey {
 pub(crate) fn determine_gas_fee_payer(
     transaction: &SignedTransaction,
     gas_paid_by_sponsor: bool,
-) -> Result<CfxBalanceLocation, ConfluxSimulationError> {
+) -> Result<CfxBalanceLocation, CoreSpaceChangesError> {
     if !gas_paid_by_sponsor {
         return Ok(CfxBalanceLocation::CoreSpaceAccount {
             account: address_from_cfx(transaction.sender().address),
@@ -566,7 +566,7 @@ pub(crate) fn determine_gas_fee_payer(
         Action::Call(contract_address) => Ok(CfxBalanceLocation::GasSponsor {
             contract_address: address_from_cfx(contract_address),
         }),
-        Action::Create => Err(ConfluxSimulationError::analysis_failed(
+        Action::Create => Err(CoreSpaceChangesError::inconsistent_execution(
             "Core Space contract creation unexpectedly reported sponsored gas",
         )),
     }

@@ -83,7 +83,7 @@ impl EspaceChangesAnalysis {
     ) -> Result<Self, EspaceChangesError> {
         verify_committed_logs(&output.trace, &output.logs)?;
         if !successful && !output.logs.is_empty() {
-            return Err(EspaceChangesError::invalid_execution_evidence(
+            return Err(EspaceChangesError::inconsistent_execution(
                 "failed execution returned committed receipt logs",
             ));
         }
@@ -214,7 +214,7 @@ fn verify_committed_logs(
     });
     let trace_log_count = trace_logs.clone().count();
     if trace_log_count != committed_logs.len() {
-        return Err(EspaceChangesError::invalid_execution_evidence(format!(
+        return Err(EspaceChangesError::inconsistent_execution(format!(
             "trace contains {trace_log_count} committed logs, executor returned {}",
             committed_logs.len()
         )));
@@ -228,7 +228,7 @@ fn verify_committed_logs(
             || topics != &committed.topics
             || data.as_slice() != committed.data.as_slice()
         {
-            return Err(EspaceChangesError::invalid_execution_evidence(format!(
+            return Err(EspaceChangesError::inconsistent_execution(format!(
                 "trace log {index} does not match the committed executor log"
             )));
         }

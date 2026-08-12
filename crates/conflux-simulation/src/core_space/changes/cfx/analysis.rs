@@ -7,7 +7,7 @@ use super::{
 };
 use crate::core_space::changes::StatePhase;
 use crate::{
-    ConfluxSimulationError,
+    core_space::CoreSpaceChangesError,
     core_space::changes::PositionedCoreSpaceChange,
     execution::{ConfluxExecutionOutcome, ConfluxTransactionExecution},
     state::MaskedSponsorWhitelistEntries,
@@ -27,11 +27,11 @@ impl CfxAnalysisInput {
         execution: &ConfluxTransactionExecution,
         machine: &Machine,
         masked_sponsor_whitelist_entries: &MaskedSponsorWhitelistEntries,
-    ) -> Result<Self, ConfluxSimulationError> {
+    ) -> Result<Self, CoreSpaceChangesError> {
         let ConfluxExecutionOutcome::Success(details) = &execution.outcome else {
-            return Err(ConfluxSimulationError::ExecutionInternal {
-                message: "successful execution is required for Core Space CFX analysis".into(),
-            });
+            return Err(CoreSpaceChangesError::inconsistent_execution(
+                "successful execution is required for Core Space CFX analysis",
+            ));
         };
 
         let expected_gas_fee_payer =
@@ -60,7 +60,7 @@ impl CfxAnalysisInput {
         &self,
         state: &State,
         phase: StatePhase,
-    ) -> Result<CfxStateValues, ConfluxSimulationError> {
+    ) -> Result<CfxStateValues, CoreSpaceChangesError> {
         read_cfx_state_values(state, phase, &self.operations)
     }
 
@@ -68,7 +68,7 @@ impl CfxAnalysisInput {
         &self,
         before_state: &CfxStateValues,
         after_state: &CfxStateValues,
-    ) -> Result<Vec<PositionedCoreSpaceChange>, ConfluxSimulationError> {
+    ) -> Result<Vec<PositionedCoreSpaceChange>, CoreSpaceChangesError> {
         verify_cfx_changes(
             &self.operations,
             before_state,

@@ -10,7 +10,7 @@ use primitives::receipt::StorageChange;
 
 use super::{BasicCfxOperation, CfxBalanceLocation, StorageCollateralReleaseOperation};
 use crate::{
-    ConfluxSimulationError,
+    core_space::CoreSpaceChangesError,
     execution::{CommittedExecutionTrace, FrameAction, FrameId, TraceEvent},
     primitive::{address_from_cfx, u256_from_cfx},
 };
@@ -21,13 +21,13 @@ pub(super) struct CoreSpaceOperationCollector {
 }
 
 impl CoreSpaceOperationCollector {
-    pub(super) fn new(storage_released: &[StorageChange]) -> Result<Self, ConfluxSimulationError> {
+    pub(super) fn new(storage_released: &[StorageChange]) -> Result<Self, CoreSpaceChangesError> {
         let drip_per_unit = u256_from_cfx(*DRIPS_PER_STORAGE_COLLATERAL_UNIT);
         let mut pending_storage_releases = BTreeMap::new();
 
         for release in storage_released {
             if !release.address.is_contract_address() {
-                return Err(ConfluxSimulationError::analysis_failed(format!(
+                return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                     "Core Space storage release for non-contract owner {:?} is not supported",
                     release.address
                 )));
@@ -35,13 +35,13 @@ impl CoreSpaceOperationCollector {
             let total_released_amount = U256::from(release.collaterals.as_u64())
                 .checked_mul(drip_per_unit)
                 .ok_or_else(|| {
-                    ConfluxSimulationError::analysis_failed(format!(
+                    CoreSpaceChangesError::inconsistent_execution(format!(
                         "Core Space storage release amount overflowed for contract {:?}",
                         release.address
                     ))
                 })?;
             if total_released_amount.is_zero() {
-                return Err(ConfluxSimulationError::analysis_failed(format!(
+                return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                     "Core Space execution reported a zero storage release for contract {:?}",
                     release.address
                 )));
@@ -50,7 +50,7 @@ impl CoreSpaceOperationCollector {
                 .insert(release.address, total_released_amount)
                 .is_some()
             {
-                return Err(ConfluxSimulationError::analysis_failed(format!(
+                return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                     "Core Space execution reported duplicate storage releases for contract {:?}",
                     release.address
                 )));
@@ -69,7 +69,7 @@ impl CoreSpaceOperationCollector {
         frame_id: FrameId,
         machine: &cfx_executor::machine::Machine,
         spec: &Spec,
-    ) -> Result<Option<BasicCfxOperation>, ConfluxSimulationError> {
+    ) -> Result<Option<BasicCfxOperation>, CoreSpaceChangesError> {
         let frame = trace.frame(frame_id);
         let FrameAction::Call {
             call_type,
@@ -80,7 +80,7 @@ impl CoreSpaceOperationCollector {
             ..
         } = &frame.action
         else {
-            return Err(ConfluxSimulationError::analysis_failed(
+            return Err(CoreSpaceChangesError::inconsistent_execution(
                 "Core Space operation collector received a non-call frame",
             ));
         };
@@ -91,7 +91,7 @@ impl CoreSpaceOperationCollector {
         }
         if frame.space == Space::Ethereum {
             if *call_type != CallType::Call {
-                return Err(ConfluxSimulationError::analysis_failed(format!(
+                return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                     "nonzero eSpace {call_type:?} value is not a balance transfer"
                 )));
             }
@@ -102,7 +102,7 @@ impl CoreSpaceOperationCollector {
             }));
         }
         if *call_type != CallType::Call {
-            return Err(ConfluxSimulationError::analysis_failed(format!(
+            return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                 "nonzero Core Space {call_type:?} value is not an ordinary CFX transfer"
             )));
         }
@@ -111,7 +111,7 @@ impl CoreSpaceOperationCollector {
             .contract(&code_address.with_native_space(), spec)
             .is_some()
         {
-            return Err(ConfluxSimulationError::analysis_failed(format!(
+            return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                 "Core Space internal-contract call value to {target:?} cannot be classified as an ordinary CFX transfer"
             )));
         }
@@ -155,7 +155,7 @@ impl CoreSpaceOperationCollector {
         &mut self,
         trace: &CommittedExecutionTrace,
         event: &TraceEvent,
-    ) -> Result<(Option<BasicCfxOperation>, Vec<usize>), ConfluxSimulationError> {
+    ) -> Result<(Option<BasicCfxOperation>, Vec<usize>), CoreSpaceChangesError> {
         let TraceEvent::InternalTransfer {
             position,
             frame_id,
@@ -165,7 +165,7 @@ impl CoreSpaceOperationCollector {
             value,
         } = event
         else {
-            return Err(ConfluxSimulationError::analysis_failed(
+            return Err(CoreSpaceChangesError::inconsistent_execution(
                 "Core Space operation collector received a non-movement operation",
             ));
         };
@@ -178,7 +178,7 @@ impl CoreSpaceOperationCollector {
         ) = (from, to)
         {
             if collateral_contract != sponsor_contract {
-                return Err(ConfluxSimulationError::analysis_failed(format!(
+                return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                     "Core Space storage release moved collateral between different contracts: {collateral_contract:?} -> {sponsor_contract:?}"
                 )));
             }
@@ -186,7 +186,7 @@ impl CoreSpaceOperationCollector {
                 .pending_storage_releases
                 .remove(collateral_contract)
                 .ok_or_else(|| {
-                    ConfluxSimulationError::analysis_failed(format!(
+                    CoreSpaceChangesError::inconsistent_execution(format!(
                         "Core Space storage release movement for contract {collateral_contract:?} had no matching execution record"
                     ))
                 })?;
@@ -292,7 +292,7 @@ impl CoreSpaceOperationCollector {
                 }
             }
             (AddressPocket::Balance(account), AddressPocket::StakingBalance(staking_account)) => {
-                return Err(ConfluxSimulationError::analysis_failed(format!(
+                return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                     "Core Space staking deposit moved CFX between different accounts: {account:?} -> {staking_account:?}"
                 )));
             }
@@ -313,7 +313,7 @@ impl CoreSpaceOperationCollector {
                 }
             }
             (AddressPocket::MintBurn, AddressPocket::Balance(_)) => {
-                return Err(ConfluxSimulationError::analysis_failed(
+                return Err(CoreSpaceChangesError::inconsistent_execution(
                     "Core Space issuance was not paired with a staking withdrawal",
                 ));
             }
@@ -323,7 +323,7 @@ impl CoreSpaceOperationCollector {
         Ok((Some(operation), vec![*position]))
     }
 
-    pub(super) fn finish(self) -> Result<Vec<BasicCfxOperation>, ConfluxSimulationError> {
+    pub(super) fn finish(self) -> Result<Vec<BasicCfxOperation>, CoreSpaceChangesError> {
         Ok(self
             .pending_storage_releases
             .into_iter()
@@ -342,7 +342,7 @@ impl CoreSpaceOperationCollector {
         trace: &CommittedExecutionTrace,
         event: &TraceEvent,
         frame_id: Option<FrameId>,
-    ) -> Result<(Option<BasicCfxOperation>, Vec<usize>), ConfluxSimulationError> {
+    ) -> Result<(Option<BasicCfxOperation>, Vec<usize>), CoreSpaceChangesError> {
         let TraceEvent::InternalTransfer {
             position,
             space: withdrawal_space,
@@ -352,7 +352,7 @@ impl CoreSpaceOperationCollector {
             ..
         } = event
         else {
-            return Err(ConfluxSimulationError::analysis_failed(
+            return Err(CoreSpaceChangesError::inconsistent_execution(
                 "Core Space operation collector received a non-withdrawal internal transfer",
             ));
         };
@@ -362,7 +362,7 @@ impl CoreSpaceOperationCollector {
             || withdrawal_destination.space != Space::Native
             || withdrawal_destination.address != *staking_account
         {
-            return Err(ConfluxSimulationError::analysis_failed(format!(
+            return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                 "Core Space staking withdrawal moved CFX between incompatible accounts: {staking_account:?} -> {withdrawal_destination:?}"
             )));
         }
@@ -387,12 +387,12 @@ impl CoreSpaceOperationCollector {
                     .then_some((*reward_position, *reward_value))
             });
         let Some((reward_position, reward_value)) = rewards.next() else {
-            return Err(ConfluxSimulationError::analysis_failed(
+            return Err(CoreSpaceChangesError::inconsistent_execution(
                 "Core Space staking withdrawal is missing its issuance record",
             ));
         };
         if rewards.next().is_some() {
-            return Err(ConfluxSimulationError::analysis_failed(
+            return Err(CoreSpaceChangesError::inconsistent_execution(
                 "Core Space staking withdrawal has ambiguous issuance records",
             ));
         }
@@ -414,8 +414,8 @@ impl CoreSpaceOperationCollector {
 fn unsupported_internal_transfer(
     from: &AddressPocket,
     to: &AddressPocket,
-) -> ConfluxSimulationError {
-    ConfluxSimulationError::analysis_failed(format!(
+) -> CoreSpaceChangesError {
+    CoreSpaceChangesError::inconsistent_execution(format!(
         "Core Space operation collector encountered unsupported {} ({}) -> {} ({}) pockets",
         from.pocket(),
         from.space(),

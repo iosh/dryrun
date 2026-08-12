@@ -2,7 +2,7 @@ use cfx_executor::{machine::Machine, state::State};
 use conflux_provider::Network;
 
 use crate::{
-    ConfluxSimulationError,
+    core_space::CoreSpaceChangesError,
     execution::{
         ConfluxExecutionOutcome, ConfluxTransactionExecution, PreparedTransactionExecution,
     },
@@ -29,11 +29,11 @@ impl CoreSpaceAnalysisInput {
         execution: &ConfluxTransactionExecution,
         machine: &Machine,
         masked_sponsor_whitelist_entries: &MaskedSponsorWhitelistEntries,
-    ) -> Result<Self, ConfluxSimulationError> {
+    ) -> Result<Self, CoreSpaceChangesError> {
         let ConfluxExecutionOutcome::Success(details) = &execution.outcome else {
-            return Err(ConfluxSimulationError::ExecutionInternal {
-                message: "successful execution is required for Core Space analysis".into(),
-            });
+            return Err(CoreSpaceChangesError::inconsistent_execution(
+                "successful execution is required for Core Space analysis",
+            ));
         };
 
         let cfx =
@@ -78,7 +78,7 @@ impl CoreSpaceStateReader {
         _prepared_execution: &PreparedTransactionExecution,
         analysis_input: &CoreSpaceAnalysisInput,
         phase: StatePhase,
-    ) -> Result<CoreSpaceStateValues, ConfluxSimulationError> {
+    ) -> Result<CoreSpaceStateValues, CoreSpaceChangesError> {
         let cfx = analysis_input.cfx.read_state(state, phase)?;
         let pos = self.pos_state_reader.read(
             state,
@@ -106,7 +106,7 @@ impl CoreSpaceChangeAnalysis {
         anchored_vote_lists: &AnchoredVoteLists,
         network: Network,
         currency: &CoreSpaceNativeCurrency,
-    ) -> Result<Self, ConfluxSimulationError> {
+    ) -> Result<Self, CoreSpaceChangesError> {
         Ok(Self {
             input: CoreSpaceAnalysisInput::from_execution(
                 execution,
@@ -126,7 +126,7 @@ impl CoreSpaceChangeAnalysis {
         machine: &Machine,
         prepared_execution: &PreparedTransactionExecution,
         phase: StatePhase,
-    ) -> Result<CoreSpaceStateValues, ConfluxSimulationError> {
+    ) -> Result<CoreSpaceStateValues, CoreSpaceChangesError> {
         self.state_reader
             .read(state, machine, prepared_execution, &self.input, phase)
     }
@@ -138,7 +138,7 @@ impl CoreSpaceChangeAnalysis {
         prepared_execution: &PreparedTransactionExecution,
         before: CoreSpaceStateValues,
         after: CoreSpaceStateValues,
-    ) -> Result<Vec<CoreSpaceChange>, ConfluxSimulationError> {
+    ) -> Result<Vec<CoreSpaceChange>, CoreSpaceChangesError> {
         let Self {
             input: analysis_input,
             anchored_vote_lists,
@@ -175,14 +175,14 @@ impl CoreSpaceChangeAnalysis {
             }
             (None, None) if analysis_input.pos.events().is_empty() => {}
             (None, None) => {
-                return Err(ConfluxSimulationError::analysis_failed(
+                return Err(CoreSpaceChangesError::inconsistent_execution(
                     "Core Space PoS final logs had no matching committed call",
                 ));
             }
             _ => {
-                return Err(ConfluxSimulationError::ExecutionInternal {
-                    message: "Core Space PoS before and after states were inconsistent".into(),
-                });
+                return Err(CoreSpaceChangesError::inconsistent_execution(
+                    "Core Space PoS before and after states were inconsistent",
+                ));
             }
         }
 
