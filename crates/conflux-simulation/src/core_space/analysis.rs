@@ -13,9 +13,9 @@ use crate::{
 use super::changes::{
     ActiveContracts, CfxAnalysisInput, CfxStateValues, CommittedCalls, CoreSpaceChange,
     CoreSpaceNativeCurrency, PoSAnalysisInput, PoSStateReader, PoSStateValues,
-    PositionedCoreSpaceChange, StatePhase, analyze_balance_changes, collect_calls,
-    collect_standard_changes, finish_core_space_changes, load_standard_metadata,
-    verify_pos_staking_changes, verify_vote_lock_changes,
+    PositionedCoreSpaceChange, StatePhase, analyze_balance_changes, analyze_pos_changes,
+    collect_calls, collect_standard_changes, finish_core_space_changes, load_standard_metadata,
+    verify_vote_lock_changes,
 };
 
 struct CoreSpaceAnalysisInput {
@@ -202,7 +202,7 @@ impl CoreSpaceChangeAnalysis {
 
         match (before_pos_state, after_pos_state) {
             (Some(before), Some(after)) => {
-                positioned_core_changes.extend(verify_pos_staking_changes(
+                positioned_core_changes.extend(analyze_pos_changes(
                     &analysis_input.pos,
                     &before,
                     &after,

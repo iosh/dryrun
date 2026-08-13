@@ -4,7 +4,7 @@ mod standards;
 
 use std::fmt;
 
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256, Bytes, U256};
 use conflux_provider::{CoreAddress, Network};
 use contract_standards::{DecodedStandardLog, MetadataValues, StandardChange};
 
@@ -13,7 +13,7 @@ use crate::core_space::CoreSpaceChangesError;
 pub(crate) use cfx::{CfxAnalysisInput, CfxStateValues};
 pub(crate) use staking::{
     ActiveContracts, CommittedCalls, PoSAnalysisInput, PoSStateReader, PoSStateValues,
-    analyze_balance_changes, collect_calls, verify_pos_staking_changes, verify_vote_lock_changes,
+    analyze_balance_changes, analyze_pos_changes, collect_calls, verify_vote_lock_changes,
 };
 pub(crate) use standards::{collect_standard_changes, load_standard_metadata};
 
@@ -54,19 +54,21 @@ pub enum CoreSpaceChange {
     },
     PoSRegistration {
         account: CoreAddress,
-        pos_identifier: B256,
-        newly_locked_vote_count: u64,
-        newly_locked_raw_amount: U256,
+        identifier: B256,
+        bls_public_key: Bytes,
+        vrf_public_key: Bytes,
+        initial_vote_count: u64,
+        locked_amount: U256,
     },
     PoSStakeIncrease {
         account: CoreAddress,
-        pos_identifier: B256,
-        newly_locked_vote_count: u64,
-        newly_locked_raw_amount: U256,
+        identifier: B256,
+        added_vote_count: u64,
+        added_locked_amount: U256,
     },
     PoSRetirementRequest {
         account: CoreAddress,
-        pos_identifier: B256,
+        identifier: B256,
         requested_vote_count: u64,
     },
     SponsorshipDeposit {
@@ -188,19 +190,21 @@ pub(crate) enum PendingCoreSpaceChange {
     },
     PoSRegistration {
         account: Address,
-        pos_identifier: B256,
-        newly_locked_vote_count: u64,
-        newly_locked_raw_amount: U256,
+        identifier: B256,
+        bls_public_key: Bytes,
+        vrf_public_key: Bytes,
+        initial_vote_count: u64,
+        locked_amount: U256,
     },
     PoSStakeIncrease {
         account: Address,
-        pos_identifier: B256,
-        newly_locked_vote_count: u64,
-        newly_locked_raw_amount: U256,
+        identifier: B256,
+        added_vote_count: u64,
+        added_locked_amount: U256,
     },
     PoSRetirementRequest {
         account: Address,
-        pos_identifier: B256,
+        identifier: B256,
         requested_vote_count: u64,
     },
     SponsorshipDeposit {
@@ -373,33 +377,37 @@ fn resolve_change(
         },
         PendingCoreSpaceChange::PoSRegistration {
             account,
-            pos_identifier,
-            newly_locked_vote_count,
-            newly_locked_raw_amount,
+            identifier,
+            bls_public_key,
+            vrf_public_key,
+            initial_vote_count,
+            locked_amount,
         } => CoreSpaceChange::PoSRegistration {
             account: address(account)?,
-            pos_identifier,
-            newly_locked_vote_count,
-            newly_locked_raw_amount,
+            identifier,
+            bls_public_key,
+            vrf_public_key,
+            initial_vote_count,
+            locked_amount,
         },
         PendingCoreSpaceChange::PoSStakeIncrease {
             account,
-            pos_identifier,
-            newly_locked_vote_count,
-            newly_locked_raw_amount,
+            identifier,
+            added_vote_count,
+            added_locked_amount,
         } => CoreSpaceChange::PoSStakeIncrease {
             account: address(account)?,
-            pos_identifier,
-            newly_locked_vote_count,
-            newly_locked_raw_amount,
+            identifier,
+            added_vote_count,
+            added_locked_amount,
         },
         PendingCoreSpaceChange::PoSRetirementRequest {
             account,
-            pos_identifier,
+            identifier,
             requested_vote_count,
         } => CoreSpaceChange::PoSRetirementRequest {
             account: address(account)?,
-            pos_identifier,
+            identifier,
             requested_vote_count,
         },
         PendingCoreSpaceChange::SponsorshipDeposit {

@@ -45,17 +45,17 @@ impl PoSStatus {
 
 #[derive(Debug, Clone)]
 pub(crate) struct PoSStateValues {
-    pub(super) sender_pos_identifiers: BTreeMap<Address, B256>,
-    pub(super) pos_identifier_accounts: BTreeMap<B256, Address>,
-    pub(super) pos_statuses: BTreeMap<B256, PoSStatus>,
-    pub(super) staking_balances: BTreeMap<Address, U256>,
+    pub(super) identifiers_by_account: BTreeMap<Address, B256>,
+    pub(super) accounts_by_identifier: BTreeMap<B256, Address>,
+    pub(super) statuses_by_identifier: BTreeMap<B256, PoSStatus>,
+    pub(super) staking_balances_by_account: BTreeMap<Address, U256>,
     pub(super) total_pos_staking: U256,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct PoSStateRequirements {
     accounts: BTreeSet<Address>,
-    pos_identifiers: BTreeSet<B256>,
+    identifiers: BTreeSet<B256>,
 }
 
 #[derive(Debug, Default)]
@@ -102,16 +102,16 @@ impl PoSStateReader {
 impl PoSStateRequirements {
     pub(crate) fn from_pos_calls(committed_pos_calls: &[CommittedPoSCall]) -> Self {
         let mut accounts = BTreeSet::new();
-        let mut pos_identifiers = BTreeSet::new();
+        let mut identifiers = BTreeSet::new();
         for committed_call in committed_pos_calls {
             match committed_call {
                 CommittedPoSCall::Registration {
                     account,
-                    pos_identifier,
+                    identifier,
                     ..
                 } => {
                     accounts.insert(*account);
-                    pos_identifiers.insert(*pos_identifier);
+                    identifiers.insert(*identifier);
                 }
                 CommittedPoSCall::StakeIncrease { account, .. }
                 | CommittedPoSCall::RetirementRequest { account, .. } => {
@@ -121,15 +121,15 @@ impl PoSStateRequirements {
         }
         Self {
             accounts,
-            pos_identifiers,
+            identifiers,
         }
     }
 
     pub(crate) fn including_identifiers_from(&self, state: &PoSStateValues) -> Self {
         let mut requirements = self.clone();
         requirements
-            .pos_identifiers
-            .extend(state.pos_identifier_accounts.keys().copied());
+            .identifiers
+            .extend(state.accounts_by_identifier.keys().copied());
         requirements
     }
 }
@@ -139,7 +139,7 @@ pub(crate) fn read_pos_state_values(
     phase: StatePhase,
     requirements: &PoSStateRequirements,
 ) -> Result<PoSStateValues, CoreSpaceChangesError> {
-    let mut sender_pos_identifiers = BTreeMap::new();
+    let mut identifiers_by_account = BTreeMap::new();
     for account in &requirements.accounts {
         let value = read_pos_storage(
             state,
@@ -147,33 +147,34 @@ pub(crate) fn read_pos_state_values(
             phase,
             "identifier",
         )?;
-        sender_pos_identifiers.insert(*account, b256_from_cfx(H256::from_uint(&value)));
+        identifiers_by_account.insert(*account, b256_from_cfx(H256::from_uint(&value)));
     }
 
-    let mut pos_identifiers = requirements.pos_identifiers.clone();
-    pos_identifiers.extend(
-        sender_pos_identifiers
+    let mut identifiers = requirements.identifiers.clone();
+    identifiers.extend(
+        identifiers_by_account
             .values()
             .copied()
-            .filter(|pos_identifier| !pos_identifier.is_zero()),
+            .filter(|identifier| !identifier.is_zero()),
     );
 
-    let mut pos_identifier_accounts = BTreeMap::new();
-    let mut pos_statuses = BTreeMap::new();
-    for pos_identifier in pos_identifiers {
-        let identifier = b256_to_cfx(pos_identifier);
+    let mut accounts_by_identifier = BTreeMap::new();
+    let mut statuses_by_identifier = BTreeMap::new();
+    for identifier in identifiers {
+        let storage_identifier = b256_to_cfx(identifier);
         let address_value = read_pos_storage(
             state,
-            address_entry(&identifier),
+            address_entry(&storage_identifier),
             phase,
             "identifier address",
         )?;
-        pos_identifier_accounts.insert(pos_identifier, canonical_storage_address(address_value)?);
-        let status_value = read_pos_storage(state, index_entry(&identifier), phase, "status")?;
-        pos_statuses.insert(pos_identifier, canonical_pos_status(status_value)?);
+        accounts_by_identifier.insert(identifier, canonical_storage_address(address_value)?);
+        let status_value =
+            read_pos_storage(state, index_entry(&storage_identifier), phase, "status")?;
+        statuses_by_identifier.insert(identifier, canonical_pos_status(status_value)?);
     }
 
-    let mut staking_balances = BTreeMap::new();
+    let mut staking_balances_by_account = BTreeMap::new();
     for account in &requirements.accounts {
         let balance = state
             .staking_balance(&address_to_cfx(*account))
@@ -183,24 +184,24 @@ pub(crate) fn read_pos_state_values(
                     error,
                 )
             })?;
-        staking_balances.insert(*account, u256_from_cfx(balance));
+        staking_balances_by_account.insert(*account, u256_from_cfx(balance));
     }
 
     Ok(PoSStateValues {
-        sender_pos_identifiers,
-        pos_identifier_accounts,
-        pos_statuses,
-        staking_balances,
+        identifiers_by_account,
+        accounts_by_identifier,
+        statuses_by_identifier,
+        staking_balances_by_account,
         total_pos_staking: u256_from_cfx(state.total_pos_staking_tokens()),
     })
 }
 
-pub(super) fn sender_pos_identifier(
+pub(super) fn identifier_for_account(
     state: &PoSStateValues,
     account: Address,
 ) -> Result<B256, CoreSpaceChangesError> {
     state
-        .sender_pos_identifiers
+        .identifiers_by_account
         .get(&account)
         .copied()
         .ok_or_else(|| {
@@ -210,42 +211,42 @@ pub(super) fn sender_pos_identifier(
         })
 }
 
-pub(super) fn pos_identifier_account(
+pub(super) fn account_for_identifier(
     state: &PoSStateValues,
-    pos_identifier: B256,
+    identifier: B256,
 ) -> Result<Address, CoreSpaceChangesError> {
     state
-        .pos_identifier_accounts
-        .get(&pos_identifier)
+        .accounts_by_identifier
+        .get(&identifier)
         .copied()
         .ok_or_else(|| {
             CoreSpaceChangesError::inconsistent_execution(format!(
-                "Core Space PoS state values did not include identifier address for {pos_identifier}"
+                "Core Space PoS state values did not include identifier address for {identifier}"
             ))
         })
 }
 
 pub(super) fn pos_status(
     state: &PoSStateValues,
-    pos_identifier: B256,
+    identifier: B256,
 ) -> Result<PoSStatus, CoreSpaceChangesError> {
     state
-        .pos_statuses
-        .get(&pos_identifier)
+        .statuses_by_identifier
+        .get(&identifier)
         .copied()
         .ok_or_else(|| {
             CoreSpaceChangesError::inconsistent_execution(format!(
-                "Core Space PoS state values did not include status for {pos_identifier}"
+                "Core Space PoS state values did not include status for {identifier}"
             ))
         })
 }
 
-pub(super) fn verify_pos_identifier_account_pair(
+pub(super) fn verify_mapping(
     state: &PoSStateValues,
-    pos_identifier: B256,
+    identifier: B256,
     account: Address,
 ) -> Result<(), CoreSpaceChangesError> {
-    if pos_identifier_account(state, pos_identifier)? != account {
+    if account_for_identifier(state, identifier)? != account {
         return Err(CoreSpaceChangesError::inconsistent_execution(format!(
             "Core Space PoS sender and identifier mappings disagree for {account}"
         )));

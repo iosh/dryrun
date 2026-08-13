@@ -1,6 +1,7 @@
 use alloy_primitives::Address;
 use cfx_addr::Network;
 use cfx_rpc_cfx_types::RpcAddress;
+use cfx_rpc_primitives::Bytes as CoreSpaceRpcBytes;
 use cfx_types::{H256, U64, U256};
 use conflux_simulation::core_space as simulation_core_space;
 use serde::Serialize;
@@ -101,19 +102,21 @@ pub(super) enum Change {
     },
     PosRegistration {
         account: RpcAddress,
-        pos_identifier: H256,
-        newly_locked_vote_count: U64,
-        newly_locked_raw_amount: U256,
+        identifier: H256,
+        bls_public_key: CoreSpaceRpcBytes,
+        vrf_public_key: CoreSpaceRpcBytes,
+        initial_vote_count: U64,
+        locked_raw_amount: U256,
     },
     PosStakeIncrease {
         account: RpcAddress,
-        pos_identifier: H256,
-        newly_locked_vote_count: U64,
-        newly_locked_raw_amount: U256,
+        identifier: H256,
+        added_vote_count: U64,
+        added_locked_raw_amount: U256,
     },
     PosRetirementRequest {
         account: RpcAddress,
-        pos_identifier: H256,
+        identifier: H256,
         requested_vote_count: U64,
     },
     SponsorshipDeposit {
@@ -270,33 +273,37 @@ fn try_map_change(
         },
         Source::PoSRegistration {
             account,
-            pos_identifier,
-            newly_locked_vote_count,
-            newly_locked_raw_amount,
+            identifier,
+            bls_public_key,
+            vrf_public_key,
+            initial_vote_count,
+            locked_amount,
         } => Change::PosRegistration {
             account: map_address(account, network, field, "account")?,
-            pos_identifier: b256_to_wire(pos_identifier),
-            newly_locked_vote_count: newly_locked_vote_count.into(),
-            newly_locked_raw_amount: u256_to_wire(newly_locked_raw_amount),
+            identifier: b256_to_wire(identifier),
+            bls_public_key: CoreSpaceRpcBytes::from(bls_public_key.to_vec()),
+            vrf_public_key: CoreSpaceRpcBytes::from(vrf_public_key.to_vec()),
+            initial_vote_count: initial_vote_count.into(),
+            locked_raw_amount: u256_to_wire(locked_amount),
         },
         Source::PoSStakeIncrease {
             account,
-            pos_identifier,
-            newly_locked_vote_count,
-            newly_locked_raw_amount,
+            identifier,
+            added_vote_count,
+            added_locked_amount,
         } => Change::PosStakeIncrease {
             account: map_address(account, network, field, "account")?,
-            pos_identifier: b256_to_wire(pos_identifier),
-            newly_locked_vote_count: newly_locked_vote_count.into(),
-            newly_locked_raw_amount: u256_to_wire(newly_locked_raw_amount),
+            identifier: b256_to_wire(identifier),
+            added_vote_count: added_vote_count.into(),
+            added_locked_raw_amount: u256_to_wire(added_locked_amount),
         },
         Source::PoSRetirementRequest {
             account,
-            pos_identifier,
+            identifier,
             requested_vote_count,
         } => Change::PosRetirementRequest {
             account: map_address(account, network, field, "account")?,
-            pos_identifier: b256_to_wire(pos_identifier),
+            identifier: b256_to_wire(identifier),
             requested_vote_count: requested_vote_count.into(),
         },
         Source::SponsorshipDeposit {

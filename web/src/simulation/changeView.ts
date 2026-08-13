@@ -2,6 +2,7 @@ import {
   formatHexQuantity,
   formatNativeAmount,
   formatRawAmount,
+  shortHex,
 } from '../lib/formatting.ts';
 import type { SimulationChange } from './types.ts';
 
@@ -168,23 +169,28 @@ export function toChangeItemViewModel(
         value: formatNativeAmount(change.requiredLockedRawAmount, 'CFX'),
       };
     case 'POS_REGISTRATION':
-      return posChange(
-        'PoS registration',
-        change.posIdentifier,
-        change.newlyLockedVoteCount,
-        change.newlyLockedRawAmount,
-      );
+      return {
+        ...posChange(
+          'PoS registration',
+          'Initial votes',
+          change.identifier,
+          change.initialVoteCount,
+          change.lockedRawAmount,
+        ),
+        detail: `Locked ${formatNativeAmount(change.lockedRawAmount, 'CFX')} | BLS ${shortHex(change.blsPublicKey, 12, 8)} | VRF ${shortHex(change.vrfPublicKey, 12, 8)}`,
+      };
     case 'POS_STAKE_INCREASE':
       return posChange(
         'PoS stake increase',
-        change.posIdentifier,
-        change.newlyLockedVoteCount,
-        change.newlyLockedRawAmount,
+        'Added votes',
+        change.identifier,
+        change.addedVoteCount,
+        change.addedLockedRawAmount,
       );
     case 'POS_RETIREMENT_REQUEST':
       return {
         detail: 'Retirement requested',
-        identifier: change.posIdentifier,
+        identifier: change.identifier,
         label: 'PoS retirement',
         title: 'Votes requested',
         tone: 'amber',
@@ -305,6 +311,7 @@ function coreAmountChange(
 
 function posChange(
   label: string,
+  title: string,
   identifier: string,
   voteCount: string,
   rawAmount: string,
@@ -313,7 +320,7 @@ function posChange(
     detail: `Locked ${formatNativeAmount(rawAmount, 'CFX')}`,
     identifier,
     label,
-    title: 'Newly locked votes',
+    title,
     tone: 'violet',
     value: formatHexQuantity(voteCount),
   };

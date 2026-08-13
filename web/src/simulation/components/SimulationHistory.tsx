@@ -5,7 +5,7 @@ import { cn } from '../../lib/cn.ts';
 import {
   formatTimestampLabel,
   formatJson,
-  shortAddress,
+  shortHex,
 } from '../../lib/formatting.ts';
 import { Button } from '../../ui/Button.tsx';
 import { CopyButton } from '../../ui/CopyButton.tsx';
@@ -209,7 +209,7 @@ function HistoryEntry({
           </span>
         </div>
         <p className="mt-2 truncate font-mono text-[11px] text-ink-600">
-          {transaction.to ? shortAddress(transaction.to) : 'Contract creation'}
+          {transaction.to ? shortHex(transaction.to) : 'Contract creation'}
         </p>
       </button>
 

@@ -6,7 +6,7 @@ mod verification;
 mod vote_lock;
 
 pub(crate) use collection::{ActiveContracts, CommittedCalls, collect_calls};
-pub(crate) use pos::{PoSAnalysisInput, verify_pos_staking_changes};
+pub(crate) use pos::{PoSAnalysisInput, analyze_pos_changes};
 pub(crate) use pos_state::{PoSStateReader, PoSStateValues};
 pub(crate) use verification::analyze_balance_changes;
 pub(crate) use vote_lock::verify_vote_lock_changes;
@@ -79,7 +79,7 @@ pub(crate) enum CommittedPoSCall {
     Registration {
         position: ChangePosition,
         account: Address,
-        pos_identifier: B256,
+        identifier: B256,
         vote_count: u64,
     },
     StakeIncrease {

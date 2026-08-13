@@ -1,4 +1,4 @@
-use alloy_primitives::{B256, U256};
+use alloy_primitives::{B256, Bytes, U256};
 use alloy_sol_types::{SolEvent, sol};
 use cfx_types::Space;
 use primitives::LogEntry;
@@ -6,9 +6,9 @@ use primitives::LogEntry;
 use crate::{core_space::CoreSpaceChangesError, primitive::b256_from_cfx};
 
 sol! {
-    event Register(bytes32 indexed pos_identifier, bytes verified_bls_pubkey, bytes vrf_pubkey);
-    event IncreaseStake(bytes32 indexed pos_identifier, uint64 vote_count);
-    event Retire(bytes32 indexed pos_identifier, uint64 requested_vote_count);
+    event Register(bytes32 indexed identifier, bytes verified_bls_pubkey, bytes vrf_pubkey);
+    event IncreaseStake(bytes32 indexed identifier, uint64 vote_count);
+    event Retire(bytes32 indexed identifier, uint64 requested_vote_count);
 }
 
 const VOTE_LOCK_SELECTOR: [u8; 4] = [0x44, 0xa5, 0x1d, 0x6d];
@@ -32,29 +32,24 @@ pub(super) enum StakingCall {
 }
 
 pub(super) enum PoSCall {
-    Registration {
-        pos_identifier: B256,
-        vote_count: u64,
-    },
-    StakeIncrease {
-        vote_count: u64,
-    },
-    RetirementRequest {
-        requested_vote_count: u64,
-    },
+    Registration { identifier: B256, vote_count: u64 },
+    StakeIncrease { vote_count: u64 },
+    RetirementRequest { requested_vote_count: u64 },
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum PoSEvent {
     Register {
-        pos_identifier: B256,
+        identifier: B256,
+        bls_public_key: Bytes,
+        vrf_public_key: Bytes,
     },
     IncreaseStake {
-        pos_identifier: B256,
+        identifier: B256,
         vote_count: u64,
     },
     Retire {
-        pos_identifier: B256,
+        identifier: B256,
         requested_vote_count: u64,
     },
 }
@@ -110,40 +105,35 @@ pub(super) fn decode_pos_call(
     };
     match selector {
         POS_REGISTER_SELECTOR => Ok(Some(PoSCall::Registration {
-            pos_identifier: B256::from(read_call_word(
+            identifier: B256::from(read_call_word(
                 calldata_len,
                 calldata_prefix,
                 4,
                 "PoS register identifier",
             )?),
-            vote_count: low_u64(read_call_word(
+            vote_count: read_call_u64(
                 calldata_len,
                 calldata_prefix,
                 36,
                 "PoS register vote count",
-            )?),
+            )?,
         })),
         POS_INCREASE_STAKE_SELECTOR => Ok(Some(PoSCall::StakeIncrease {
-            vote_count: low_u64(read_call_word(
-                calldata_len,
-                calldata_prefix,
-                4,
-                "PoS increase vote count",
-            )?),
+            vote_count: read_call_u64(calldata_len, calldata_prefix, 4, "PoS increase vote count")?,
         })),
         POS_RETIRE_SELECTOR => Ok(Some(PoSCall::RetirementRequest {
-            requested_vote_count: low_u64(read_call_word(
+            requested_vote_count: read_call_u64(
                 calldata_len,
                 calldata_prefix,
                 4,
                 "PoS retire vote count",
-            )?),
+            )?,
         })),
         _ => Ok(None),
     }
 }
 
-pub(crate) fn decode_pos_staking_events(
+pub(crate) fn decode_pos_events(
     final_logs: &[LogEntry],
     pos_register_contract_active: bool,
 ) -> Result<Vec<PoSEvent>, CoreSpaceChangesError> {
@@ -217,7 +207,9 @@ fn decode_pos_event(log: &LogEntry) -> Result<PoSEvent, CoreSpaceChangesError> {
                 })?;
         verify_encoded_event_data(data, event.encode_data(), "Register")?;
         Ok(PoSEvent::Register {
-            pos_identifier: event.pos_identifier,
+            identifier: event.identifier,
+            bls_public_key: event.verified_bls_pubkey,
+            vrf_public_key: event.vrf_pubkey,
         })
     } else if event_signature == IncreaseStake::SIGNATURE_HASH {
         let event = IncreaseStake::decode_raw_log_validate(
@@ -231,7 +223,7 @@ fn decode_pos_event(log: &LogEntry) -> Result<PoSEvent, CoreSpaceChangesError> {
         })?;
         verify_encoded_event_data(data, event.encode_data(), "IncreaseStake")?;
         Ok(PoSEvent::IncreaseStake {
-            pos_identifier: event.pos_identifier,
+            identifier: event.identifier,
             vote_count: event.vote_count,
         })
     } else if event_signature == Retire::SIGNATURE_HASH {
@@ -244,7 +236,7 @@ fn decode_pos_event(log: &LogEntry) -> Result<PoSEvent, CoreSpaceChangesError> {
                 })?;
         verify_encoded_event_data(data, event.encode_data(), "Retire")?;
         Ok(PoSEvent::Retire {
-            pos_identifier: event.pos_identifier,
+            identifier: event.identifier,
             requested_vote_count: event.requested_vote_count,
         })
     } else {
@@ -265,6 +257,23 @@ fn verify_encoded_event_data(
         )));
     }
     Ok(())
+}
+
+fn read_call_u64(
+    calldata_len: usize,
+    calldata_prefix: &[u8],
+    offset: usize,
+    field: &str,
+) -> Result<u64, CoreSpaceChangesError> {
+    let word = read_call_word(calldata_len, calldata_prefix, offset, field)?;
+    if word[..24].iter().any(|byte| *byte != 0) {
+        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
+            "Core Space {field} was not a canonical uint64"
+        )));
+    }
+    let mut bytes = [0_u8; 8];
+    bytes.copy_from_slice(&word[24..]);
+    Ok(u64::from_be_bytes(bytes))
 }
 
 fn low_u64(word: [u8; 32]) -> u64 {

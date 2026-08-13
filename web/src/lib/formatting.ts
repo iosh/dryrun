@@ -1,6 +1,6 @@
 import { formatUnits } from 'viem';
 
-export function shortAddress(
+export function shortHex(
   value: string,
   leading = 6,
   trailing = 4,

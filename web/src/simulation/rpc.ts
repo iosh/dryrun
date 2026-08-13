@@ -268,23 +268,25 @@ export interface StakingVoteLockChange {
 export interface PosRegistrationChange {
   changeType: 'POS_REGISTRATION';
   account: string;
-  posIdentifier: string;
-  newlyLockedVoteCount: string;
-  newlyLockedRawAmount: string;
+  identifier: string;
+  blsPublicKey: string;
+  vrfPublicKey: string;
+  initialVoteCount: string;
+  lockedRawAmount: string;
 }
 
 export interface PosStakeIncreaseChange {
   changeType: 'POS_STAKE_INCREASE';
   account: string;
-  posIdentifier: string;
-  newlyLockedVoteCount: string;
-  newlyLockedRawAmount: string;
+  identifier: string;
+  addedVoteCount: string;
+  addedLockedRawAmount: string;
 }
 
 export interface PosRetirementRequestChange {
   changeType: 'POS_RETIREMENT_REQUEST';
   account: string;
-  posIdentifier: string;
+  identifier: string;
   requestedVoteCount: string;
 }
 

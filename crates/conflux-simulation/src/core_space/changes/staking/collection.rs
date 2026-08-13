@@ -135,12 +135,12 @@ pub(crate) fn collect_calls(
         let account = address_from_cfx(*caller);
         let committed_call = match pos_call {
             PoSCall::Registration {
-                pos_identifier,
+                identifier,
                 vote_count,
             } => CommittedPoSCall::Registration {
                 position,
                 account,
-                pos_identifier,
+                identifier,
                 vote_count,
             },
             PoSCall::StakeIncrease { vote_count } => CommittedPoSCall::StakeIncrease {
