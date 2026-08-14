@@ -230,17 +230,25 @@ export function toChangeItemViewModel(
             }
           : {}),
       };
-    case 'SPONSORSHIP_ELIGIBILITY_RULE':
+    case 'CONTRACT_ADMIN_SET':
+      return {
+        detail: change.admin === null ? 'Admin cleared' : 'Admin set',
+        identifier: change.contractAddress,
+        label: 'Contract admin',
+        title: 'Admin control',
+        tone: 'violet',
+        ...(change.admin === null ? {} : { value: shortHex(change.admin) }),
+      };
+    case 'SPONSORSHIP_ACCESS_RULE_SET':
       return {
         detail:
-          change.appliesTo.type === 'ALL_ACCOUNTS'
-            ? 'Applies to all accounts'
-            : 'Applies to one account',
+          change.scope.type === 'ALL_ACCOUNTS'
+            ? 'All accounts'
+            : 'One account',
         identifier: change.contractAddress,
         label: 'Sponsor eligibility',
-        title: 'Eligibility rule',
+        title: change.enabled ? 'Enabled' : 'Disabled',
         tone: 'violet',
-        value: booleanTransition(change.enabledBefore, change.enabledAfter),
       };
     case 'STORAGE_POINT_CONVERSION':
       return {
@@ -303,11 +311,6 @@ function sponsorTransition(before: string | null, after: string | null) {
   if (before === after) return after ? 'Sponsor unchanged' : 'No sponsor';
   if (!after) return 'Sponsor removed';
   return before ? 'Sponsor changed' : 'Sponsor added';
-}
-
-function booleanTransition(before: boolean, after: boolean) {
-  if (before === after) return after ? 'Enabled' : 'Disabled';
-  return `${before ? 'Enabled' : 'Disabled'} to ${after ? 'Enabled' : 'Disabled'}`;
 }
 
 function coreAmountChange(

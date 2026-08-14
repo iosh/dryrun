@@ -21,7 +21,7 @@ pub(crate) use verification::{CfxStateValues, read_cfx_state_values, verify_cfx_
 use crate::{
     core_space::CoreSpaceChangesError,
     core_space::changes::{
-        PendingCrossSpaceAddress, PendingSponsorshipEligibilityTarget, SponsoredResource,
+        PendingCrossSpaceAddress, PendingSponsorshipAccessRuleScope, SponsoredResource,
     },
     primitive::{address_from_cfx, address_to_cfx},
     state::{MaskedWhitelistKeys, SponsorWhitelistStorageKey},
@@ -33,7 +33,7 @@ pub(crate) struct CfxOperations {
     sponsor_resources: Vec<SponsorResourceLocation>,
     contracts_requiring_gas_fee_upper_bound: Vec<Address>,
     sponsorship_access_rule_keys: Vec<SponsorshipAccessRuleKey>,
-    admin_managed_sponsorship_contracts: Vec<Address>,
+    contract_admins: Vec<Address>,
     storage_point_accounts: Vec<Address>,
     requires_storage_point_globals: bool,
     requires_total_espace_tokens: bool,
@@ -48,7 +48,7 @@ impl CfxOperations {
         let mut balance_locations = BTreeSet::new();
         let mut sponsor_resources = BTreeSet::new();
         let mut sponsorship_access_rule_keys = BTreeSet::new();
-        let mut admin_managed_sponsorship_contracts = BTreeSet::new();
+        let mut contract_admins = BTreeSet::new();
         let mut storage_point_accounts = BTreeSet::new();
         let mut requires_storage_point_globals = false;
         let mut requires_total_espace_tokens = false;
@@ -166,9 +166,13 @@ impl CfxOperations {
                 CfxOperation::Sponsorship(SponsorshipOperation::AccessRule(update)) => {
                     sponsorship_access_rule_keys.insert(update.key());
                     if update.caller_role == SponsorshipAccessCallerRole::ContractAdmin {
-                        admin_managed_sponsorship_contracts.insert(update.contract_address);
+                        contract_admins.insert(update.contract_address);
                     }
                 }
+                CfxOperation::Admin(AdminOperation::Set(update)) => {
+                    contract_admins.insert(update.contract_address);
+                }
+                CfxOperation::Admin(AdminOperation::Initialize { .. }) => {}
             }
         }
 
@@ -184,9 +188,7 @@ impl CfxOperations {
             sponsor_resources: sponsor_resources.into_iter().collect(),
             contracts_requiring_gas_fee_upper_bound,
             sponsorship_access_rule_keys: sponsorship_access_rule_keys.into_iter().collect(),
-            admin_managed_sponsorship_contracts: admin_managed_sponsorship_contracts
-                .into_iter()
-                .collect(),
+            contract_admins: contract_admins.into_iter().collect(),
             storage_point_accounts: storage_point_accounts.into_iter().collect(),
             requires_storage_point_globals,
             requires_total_espace_tokens,
@@ -229,7 +231,7 @@ impl CfxOperations {
             )
         })?;
         for key in &self.sponsorship_access_rule_keys {
-            let PendingSponsorshipEligibilityTarget::Account(account_address) = key.account_scope
+            let PendingSponsorshipAccessRuleScope::Account(account_address) = key.account_scope
             else {
                 continue;
             };
@@ -393,7 +395,26 @@ impl SponsoredResource {
 enum CfxOperation {
     Basic(BasicCfxOperation),
     CrossSpace(CrossSpaceTransferOperation),
+    Admin(AdminOperation),
     Sponsorship(SponsorshipOperation),
+}
+
+#[derive(Debug)]
+enum AdminOperation {
+    Initialize {
+        contract_address: Address,
+        admin: Address,
+    },
+    Set(ContractAdminSetOperation),
+}
+
+#[derive(Debug)]
+struct ContractAdminSetOperation {
+    position: ChangePosition,
+    caller: Address,
+    contract_address: Address,
+    new_admin: Address,
+    is_creation_frame: bool,
 }
 
 #[derive(Debug)]
@@ -522,7 +543,7 @@ struct SponsorshipAccessRuleUpdate {
     caller_role: SponsorshipAccessCallerRole,
     caller_address: Address,
     contract_address: Address,
-    account_scope: PendingSponsorshipEligibilityTarget,
+    account_scope: PendingSponsorshipAccessRuleScope,
     enabled_after: bool,
 }
 
@@ -538,7 +559,7 @@ impl SponsorshipAccessRuleUpdate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct SponsorshipAccessRuleKey {
     contract_address: Address,
-    account_scope: PendingSponsorshipEligibilityTarget,
+    account_scope: PendingSponsorshipAccessRuleScope,
 }
 
 pub(crate) fn determine_gas_fee_payer(

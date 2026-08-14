@@ -2,16 +2,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use alloy_primitives::Address;
 use cfx_executor::machine::Machine;
-use cfx_types::{AddressWithSpace, Space};
+use cfx_types::Space;
 use cfx_vm_types::Spec;
 use primitives::receipt::StorageChange;
 
 use super::{
-    BasicCfxOperation, CfxOperation, CfxOperations, SponsorshipOperation,
+    AdminOperation, BasicCfxOperation, CfxOperation, CfxOperations, SponsorshipOperation,
     basic::CoreSpaceOperationCollector,
     cross_space::collect_cross_space_call,
     sponsorship::{
-        CollectedSponsorshipCall, collect_admin_change_attempt, collect_sponsorship_call,
+        CollectedAdminCall, CollectedSponsorshipCall, collect_admin_call, collect_sponsorship_call,
         collect_standalone_sponsorship_refund, collect_storage_point_conversion,
     },
 };
@@ -30,29 +30,13 @@ struct CfxOperationCollector {
 
 pub(crate) fn collect_cfx_operations(
     trace: &CommittedExecutionTrace,
-    contracts_created: &[AddressWithSpace],
     storage_released: &[StorageChange],
     machine: &Machine,
     spec: &Spec,
+    transaction_sender: Address,
     committed_staking_calls: &[CommittedStakingCall],
 ) -> Result<CfxOperations, CoreSpaceChangesError> {
     let mut collector = CfxOperationCollector::new(storage_released)?;
-    let mut contracts_with_admin_change_attempts = BTreeSet::new();
-    for event in trace.events() {
-        let TraceEvent::FrameStart { frame_id, .. } = event else {
-            continue;
-        };
-        let Some(attempt) = collect_admin_change_attempt(trace, *frame_id, machine, spec)? else {
-            continue;
-        };
-        if attempt.is_destroy && !spec.cip131 {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
-                "pre-CIP-131 Core Space contract destruction may delete sponsorship access-rule entries that public RPC cannot enumerate",
-            ));
-        }
-        contracts_with_admin_change_attempts.insert(attempt.contract_address);
-    }
-
     let mut owned_transfer_positions = BTreeSet::new();
     let mut staking_ops = BTreeMap::new();
     for call in committed_staking_calls {
@@ -100,6 +84,24 @@ pub(crate) fn collect_cfx_operations(
                     continue;
                 }
                 let frame = trace.frame(*frame_id);
+                if let Some(admin_call) =
+                    collect_admin_call(trace, *position, *frame_id, machine, spec)?
+                {
+                    match admin_call {
+                        CollectedAdminCall::Set(operation) => collector
+                            .operations
+                            .push(CfxOperation::Admin(AdminOperation::Set(operation))),
+                        CollectedAdminCall::Destroy { contract_address } if !spec.cip131 => {
+                            return Err(CoreSpaceChangesError::inconsistent_execution(format!(
+                                "pre-CIP-131 destruction of Core Space contract {contract_address} may delete sponsorship access-rule entries that public RPC cannot enumerate"
+                            )));
+                        }
+                        CollectedAdminCall::Destroy {
+                            contract_address: _,
+                        } => {}
+                    }
+                    continue;
+                }
                 if let Some((operation, claimed_transfer_positions)) =
                     collect_cross_space_call(trace, *position, *frame_id, machine, spec)?
                 {
@@ -138,6 +140,14 @@ pub(crate) fn collect_cfx_operations(
                         created_address,
                         value,
                     } => {
+                        if frame.space == Space::Native {
+                            collector.operations.push(CfxOperation::Admin(
+                                AdminOperation::Initialize {
+                                    contract_address: address_from_cfx(*created_address),
+                                    admin: transaction_sender,
+                                },
+                            ));
+                        }
                         if let Some(operation) = collector.core_space.collect_create_value_transfer(
                             *position,
                             frame.space,
@@ -183,10 +193,6 @@ pub(crate) fn collect_cfx_operations(
         ));
     }
 
-    collector.validate_sponsorship_access_admin_context(
-        &contracts_with_admin_change_attempts,
-        contracts_created,
-    )?;
     collector.into_operations(committed_staking_calls.iter().map(|call| call.account()))
 }
 
@@ -209,36 +215,5 @@ impl CfxOperationCollector {
             self.operations,
             staking_accounts,
         ))
-    }
-
-    fn validate_sponsorship_access_admin_context(
-        &self,
-        contracts_with_admin_change_attempts: &BTreeSet<Address>,
-        contracts_created: &[AddressWithSpace],
-    ) -> Result<(), CoreSpaceChangesError> {
-        let created_native_contracts: BTreeSet<_> = contracts_created
-            .iter()
-            .filter(|created| created.space == Space::Native)
-            .map(|created| address_from_cfx(created.address))
-            .collect();
-
-        for operation in &self.operations {
-            let CfxOperation::Sponsorship(SponsorshipOperation::AccessRule(update)) = operation
-            else {
-                continue;
-            };
-            if update.caller_role != super::SponsorshipAccessCallerRole::ContractAdmin {
-                continue;
-            }
-            if contracts_with_admin_change_attempts.contains(&update.contract_address)
-                || created_native_contracts.contains(&update.contract_address)
-            {
-                return Err(CoreSpaceChangesError::inconsistent_execution(format!(
-                    "Core Space sponsorship access-rule admin was not stable during the transaction for contract {}",
-                    update.contract_address
-                )));
-            }
-        }
-        Ok(())
     }
 }

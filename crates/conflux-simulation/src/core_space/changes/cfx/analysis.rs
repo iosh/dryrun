@@ -39,10 +39,10 @@ impl CfxAnalysisInput {
             determine_gas_fee_payer(&execution.prepared.transaction, details.gas_sponsor_paid)?;
         let operations = collect_cfx_operations(
             &details.trace,
-            &details.contracts_created,
             &details.storage_released,
             machine,
             &execution.prepared.spec,
+            crate::primitive::address_from_cfx(execution.prepared.transaction.sender().address),
             committed_staking_calls,
         )?;
         operations.reject_masked_sponsorship_access_dependencies(masked_whitelist_keys)?;

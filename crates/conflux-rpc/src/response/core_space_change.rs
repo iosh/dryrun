@@ -141,11 +141,14 @@ pub(super) enum Change {
         #[serde(flatten)]
         configuration: SponsorshipConfiguration,
     },
-    SponsorshipEligibilityRule {
+    ContractAdminSet {
         contract_address: RpcAddress,
-        applies_to: SponsorshipEligibilityTarget,
-        enabled_before: bool,
-        enabled_after: bool,
+        admin: Option<RpcAddress>,
+    },
+    SponsorshipAccessRuleSet {
+        contract_address: RpcAddress,
+        scope: SponsorshipAccessRuleScope,
+        enabled: bool,
     },
     StoragePointConversion {
         contract_address: RpcAddress,
@@ -223,7 +226,7 @@ pub(super) enum SponsorshipConfiguration {
     rename_all = "SCREAMING_SNAKE_CASE",
     rename_all_fields = "camelCase"
 )]
-pub(super) enum SponsorshipEligibilityTarget {
+pub(super) enum SponsorshipAccessRuleScope {
     Account { address: RpcAddress },
     AllAccounts,
 }
@@ -374,16 +377,21 @@ fn try_map_change(
             contract_address: map_address(contract_address, network, field, "contractAddress")?,
             configuration: try_map_sponsorship_configuration(configuration, network, field)?,
         },
-        Source::SponsorshipEligibilityRule {
+        Source::ContractAdminSet {
             contract_address,
-            applies_to,
-            enabled_before,
-            enabled_after,
-        } => Change::SponsorshipEligibilityRule {
+            admin,
+        } => Change::ContractAdminSet {
             contract_address: map_address(contract_address, network, field, "contractAddress")?,
-            applies_to: try_map_eligibility_target(applies_to, network, field)?,
-            enabled_before,
-            enabled_after,
+            admin: try_map_optional_address(admin, network, field, "admin")?,
+        },
+        Source::SponsorshipAccessRuleSet {
+            contract_address,
+            scope,
+            enabled,
+        } => Change::SponsorshipAccessRuleSet {
+            contract_address: map_address(contract_address, network, field, "contractAddress")?,
+            scope: try_map_access_rule_scope(scope, network, field)?,
+            enabled,
         },
         Source::StoragePointConversion {
             contract_address,
@@ -589,19 +597,19 @@ fn try_map_sponsorship_configuration(
     })
 }
 
-fn try_map_eligibility_target(
-    target: simulation_core_space::SponsorshipEligibilityTarget,
+fn try_map_access_rule_scope(
+    scope: simulation_core_space::SponsorshipAccessRuleScope,
     network: Network,
     field: &str,
-) -> Result<SponsorshipEligibilityTarget, ResponseMappingError> {
-    Ok(match target {
-        simulation_core_space::SponsorshipEligibilityTarget::Account(address) => {
-            SponsorshipEligibilityTarget::Account {
-                address: map_address(address, network, field, "appliesTo.address")?,
+) -> Result<SponsorshipAccessRuleScope, ResponseMappingError> {
+    Ok(match scope {
+        simulation_core_space::SponsorshipAccessRuleScope::Account(address) => {
+            SponsorshipAccessRuleScope::Account {
+                address: map_address(address, network, field, "scope.address")?,
             }
         }
-        simulation_core_space::SponsorshipEligibilityTarget::AllAccounts => {
-            SponsorshipEligibilityTarget::AllAccounts
+        simulation_core_space::SponsorshipAccessRuleScope::AllAccounts => {
+            SponsorshipAccessRuleScope::AllAccounts
         }
     })
 }

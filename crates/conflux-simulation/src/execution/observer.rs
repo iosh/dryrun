@@ -348,7 +348,14 @@ fn actual_transfer_value(value: &ActionValue) -> U256 {
 fn calldata_bytes_to_capture(space: Space, target: Address, code_address: Address) -> usize {
     let sponsor_contract =
         cfx_parameters::internal_contract_addresses::SPONSOR_WHITELIST_CONTROL_CONTRACT_ADDRESS;
-    if space == Space::Native && (target == sponsor_contract || code_address == sponsor_contract) {
+    let admin_contract =
+        cfx_parameters::internal_contract_addresses::ADMIN_CONTROL_CONTRACT_ADDRESS;
+    if space == Space::Native
+        && (target == sponsor_contract
+            || code_address == sponsor_contract
+            || target == admin_contract
+            || code_address == admin_contract)
+    {
         usize::MAX
     } else {
         CALLDATA_PREFIX_LIMIT

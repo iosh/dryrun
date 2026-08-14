@@ -94,11 +94,14 @@ pub enum CoreSpaceChange {
         contract_address: CoreAddress,
         configuration: SponsorshipConfiguration,
     },
-    SponsorshipEligibilityRule {
+    ContractAdminSet {
         contract_address: CoreAddress,
-        applies_to: SponsorshipEligibilityTarget,
-        enabled_before: bool,
-        enabled_after: bool,
+        admin: Option<CoreAddress>,
+    },
+    SponsorshipAccessRuleSet {
+        contract_address: CoreAddress,
+        scope: SponsorshipAccessRuleScope,
+        enabled: bool,
     },
     StoragePointConversion {
         contract_address: CoreAddress,
@@ -160,7 +163,7 @@ pub enum SponsorshipConfiguration {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SponsorshipEligibilityTarget {
+pub enum SponsorshipAccessRuleScope {
     Account(CoreAddress),
     AllAccounts,
 }
@@ -257,11 +260,14 @@ pub(crate) enum PendingCoreSpaceChange {
         contract_address: Address,
         configuration: PendingSponsorshipConfiguration,
     },
-    SponsorshipEligibilityRule {
+    ContractAdminSet {
         contract_address: Address,
-        applies_to: PendingSponsorshipEligibilityTarget,
-        enabled_before: bool,
-        enabled_after: bool,
+        admin: Option<Address>,
+    },
+    SponsorshipAccessRuleSet {
+        contract_address: Address,
+        scope: PendingSponsorshipAccessRuleScope,
+        enabled: bool,
     },
     StoragePointConversion {
         contract_address: Address,
@@ -295,7 +301,7 @@ pub(crate) enum PendingSponsorshipConfiguration {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum PendingSponsorshipEligibilityTarget {
+pub(crate) enum PendingSponsorshipAccessRuleScope {
     Account(Address),
     AllAccounts,
 }
@@ -482,23 +488,28 @@ fn resolve_change(
             contract_address: address(contract_address)?,
             configuration: resolve_sponsorship_configuration(configuration, network)?,
         },
-        PendingCoreSpaceChange::SponsorshipEligibilityRule {
+        PendingCoreSpaceChange::ContractAdminSet {
             contract_address,
-            applies_to,
-            enabled_before,
-            enabled_after,
-        } => CoreSpaceChange::SponsorshipEligibilityRule {
+            admin,
+        } => CoreSpaceChange::ContractAdminSet {
             contract_address: address(contract_address)?,
-            applies_to: match applies_to {
-                PendingSponsorshipEligibilityTarget::Account(account) => {
-                    SponsorshipEligibilityTarget::Account(address(account)?)
+            admin: admin.map(address).transpose()?,
+        },
+        PendingCoreSpaceChange::SponsorshipAccessRuleSet {
+            contract_address,
+            scope,
+            enabled,
+        } => CoreSpaceChange::SponsorshipAccessRuleSet {
+            contract_address: address(contract_address)?,
+            scope: match scope {
+                PendingSponsorshipAccessRuleScope::Account(account) => {
+                    SponsorshipAccessRuleScope::Account(address(account)?)
                 }
-                PendingSponsorshipEligibilityTarget::AllAccounts => {
-                    SponsorshipEligibilityTarget::AllAccounts
+                PendingSponsorshipAccessRuleScope::AllAccounts => {
+                    SponsorshipAccessRuleScope::AllAccounts
                 }
             },
-            enabled_before,
-            enabled_after,
+            enabled,
         },
         PendingCoreSpaceChange::StoragePointConversion {
             contract_address,

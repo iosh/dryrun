@@ -252,10 +252,15 @@ export function getChangeAddresses(
           : null,
         { address: change.contractAddress, label: 'Contract' },
       ]);
-    case 'SPONSORSHIP_ELIGIBILITY_RULE':
+    case 'CONTRACT_ADMIN_SET':
       return compactAddresses([
-        change.appliesTo.type === 'ACCOUNT'
-          ? { address: change.appliesTo.address, label: 'Account' }
+        change.admin ? { address: change.admin, label: 'Admin' } : null,
+        { address: change.contractAddress, label: 'Contract' },
+      ]);
+    case 'SPONSORSHIP_ACCESS_RULE_SET':
+      return compactAddresses([
+        change.scope.type === 'ACCOUNT'
+          ? { address: change.scope.address, label: 'Account' }
           : null,
         { address: change.contractAddress, label: 'Contract' },
       ]);

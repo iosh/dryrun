@@ -5,9 +5,9 @@ use cfx_types::{Address, AddressSpaceUtil, Space};
 use cfx_vm_types::{CallType, Spec};
 
 use super::{
-    PendingSponsorshipEligibilityTarget, SponsoredResource, SponsorshipAccessCallerRole,
-    SponsorshipAccessRuleUpdate, SponsorshipFundingOperation, SponsorshipFundingTerms,
-    SponsorshipRefundOperation, StoragePointConversionOperation,
+    ContractAdminSetOperation, PendingSponsorshipAccessRuleScope, SponsoredResource,
+    SponsorshipAccessCallerRole, SponsorshipAccessRuleUpdate, SponsorshipFundingOperation,
+    SponsorshipFundingTerms, SponsorshipRefundOperation, StoragePointConversionOperation,
 };
 use crate::{
     core_space::CoreSpaceChangesError,
@@ -36,10 +36,11 @@ pub(super) enum CollectedSponsorshipCall {
     AccessRuleUpdates(Vec<SponsorshipAccessRuleUpdate>),
 }
 
-#[derive(Clone, Copy)]
-pub(super) struct AdminChangeAttempt {
-    pub(super) contract_address: alloy_primitives::Address,
-    pub(super) is_destroy: bool,
+pub(super) enum CollectedAdminCall {
+    Set(ContractAdminSetOperation),
+    Destroy {
+        contract_address: alloy_primitives::Address,
+    },
 }
 
 pub(super) fn collect_sponsorship_call(
@@ -118,9 +119,9 @@ pub(super) fn collect_sponsorship_call(
                     caller_address,
                     contract_address,
                     account_scope: if account_address.is_zero() {
-                        PendingSponsorshipEligibilityTarget::AllAccounts
+                        PendingSponsorshipAccessRuleScope::AllAccounts
                     } else {
-                        PendingSponsorshipEligibilityTarget::Account(account_address)
+                        PendingSponsorshipAccessRuleScope::Account(account_address)
                     },
                     enabled_after,
                 },
@@ -170,12 +171,13 @@ pub(super) fn collect_sponsorship_call(
     )))
 }
 
-pub(super) fn collect_admin_change_attempt(
+pub(super) fn collect_admin_call(
     trace: &CommittedExecutionTrace,
+    frame_position: usize,
     frame_id: FrameId,
     machine: &Machine,
     spec: &Spec,
-) -> Result<Option<AdminChangeAttempt>, CoreSpaceChangesError> {
+) -> Result<Option<CollectedAdminCall>, CoreSpaceChangesError> {
     let frame = trace.frame(frame_id);
     let FrameAction::Call {
         call_type,
@@ -184,7 +186,7 @@ pub(super) fn collect_admin_change_attempt(
         transferred_value,
         calldata_len,
         calldata_prefix,
-        ..
+        caller,
     } = &frame.action
     else {
         return Ok(None);
@@ -202,7 +204,7 @@ pub(super) fn collect_admin_change_attempt(
         return Ok(None);
     }
 
-    let Some(attempt) = decode_admin_change_call(*calldata_len, calldata_prefix)? else {
+    let Some(call) = decode_admin_call(*calldata_len, calldata_prefix)? else {
         return Ok(None);
     };
     if frame.space != Space::Native
@@ -215,7 +217,34 @@ pub(super) fn collect_admin_change_attempt(
             "Core Space admin mutation call did not use the canonical active internal-contract form",
         ));
     }
-    Ok(Some(attempt))
+    Ok(Some(match call {
+        DecodedAdminCall::Set {
+            contract_address,
+            new_admin,
+        } => {
+            let is_creation_frame = frame.parent_id.is_some_and(|parent_id| {
+                let parent = trace.frame(parent_id);
+                parent.space == Space::Native
+                    && matches!(
+                        parent.action,
+                        FrameAction::Create {
+                            created_address,
+                            ..
+                        } if address_from_cfx(created_address) == contract_address
+                    )
+            });
+            CollectedAdminCall::Set(ContractAdminSetOperation {
+                position: ChangePosition::new(frame_position, 0),
+                caller: address_from_cfx(*caller),
+                contract_address,
+                new_admin,
+                is_creation_frame,
+            })
+        }
+        DecodedAdminCall::Destroy { contract_address } => {
+            CollectedAdminCall::Destroy { contract_address }
+        }
+    }))
 }
 
 pub(super) fn collect_standalone_sponsorship_refund(
@@ -699,26 +728,35 @@ fn decode_sponsorship_call(
     }
 }
 
-fn decode_admin_change_call(
+enum DecodedAdminCall {
+    Set {
+        contract_address: alloy_primitives::Address,
+        new_admin: alloy_primitives::Address,
+    },
+    Destroy {
+        contract_address: alloy_primitives::Address,
+    },
+}
+
+fn decode_admin_call(
     calldata_len: usize,
     calldata_prefix: &[u8],
-) -> Result<Option<AdminChangeAttempt>, CoreSpaceChangesError> {
+) -> Result<Option<DecodedAdminCall>, CoreSpaceChangesError> {
     let Some(selector) = call_selector(calldata_len, calldata_prefix) else {
         return Ok(None);
     };
     if selector == IAdminControlCalls::setAdminCall::SELECTOR {
         let calldata = complete_calldata(calldata_len, calldata_prefix, "setAdmin")?;
         let call = decode_canonical_call::<IAdminControlCalls::setAdminCall>(calldata, "setAdmin")?;
-        Ok(Some(AdminChangeAttempt {
+        Ok(Some(DecodedAdminCall::Set {
             contract_address: call.contract_address,
-            is_destroy: false,
+            new_admin: call.new_admin_address,
         }))
     } else if selector == IAdminControlCalls::destroyCall::SELECTOR {
         let calldata = complete_calldata(calldata_len, calldata_prefix, "destroy")?;
         let call = decode_canonical_call::<IAdminControlCalls::destroyCall>(calldata, "destroy")?;
-        Ok(Some(AdminChangeAttempt {
+        Ok(Some(DecodedAdminCall::Destroy {
             contract_address: call.contract_address,
-            is_destroy: true,
         }))
     } else {
         Ok(None)

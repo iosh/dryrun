@@ -5,19 +5,18 @@ use cfx_executor::state::State;
 use cfx_types::{AddressSpaceUtil, address_util::AddressUtil};
 
 use super::{
-    BasicCfxOperation, CfxBalanceLocation, CfxOperation, CfxOperations,
-    CrossSpaceTransferOperation, SponsorResourceLocation, SponsorshipAccessCallerRole,
-    SponsorshipAccessRuleKey, SponsorshipAccessRuleUpdate, SponsorshipFundingOperation,
-    SponsorshipFundingTerms, SponsorshipOperation, SponsorshipRefundOperation,
-    StorageCollateralReleaseOperation, StoragePointConversionOperation,
+    AdminOperation, BasicCfxOperation, CfxBalanceLocation, CfxOperation, CfxOperations,
+    ContractAdminSetOperation, CrossSpaceTransferOperation, SponsorResourceLocation,
+    SponsorshipAccessCallerRole, SponsorshipAccessRuleKey, SponsorshipAccessRuleUpdate,
+    SponsorshipFundingOperation, SponsorshipFundingTerms, SponsorshipOperation,
+    SponsorshipRefundOperation, StorageCollateralReleaseOperation, StoragePointConversionOperation,
     cross_space_balance_location,
 };
 use crate::{
     core_space::CoreSpaceChangesError,
     core_space::changes::{
-        PendingCoreSpaceChange, PendingCrossSpaceAddress, PendingSponsorshipConfiguration,
-        PendingSponsorshipEligibilityTarget, PositionedCoreSpaceChange, SponsoredResource,
-        StatePhase,
+        PendingCoreSpaceChange, PendingCrossSpaceAddress, PendingSponsorshipAccessRuleScope,
+        PendingSponsorshipConfiguration, PositionedCoreSpaceChange, SponsoredResource, StatePhase,
     },
     primitive::{address_to_cfx, u256_from_cfx},
     state::SponsorWhitelistStorageKey,
@@ -29,7 +28,8 @@ pub(crate) struct CfxStateValues {
     sponsor_identities: BTreeMap<SponsorResourceLocation, Option<Address>>,
     gas_fee_upper_bounds: BTreeMap<Address, U256>,
     sponsorship_access_rules: BTreeMap<SponsorshipAccessRuleKey, bool>,
-    sponsorship_contract_admins: BTreeMap<Address, Address>,
+    contract_admins: BTreeMap<Address, Address>,
+    contract_exists: BTreeMap<Address, bool>,
     storage_points: BTreeMap<Address, Option<StoragePointValues>>,
     total_issued: U256,
     total_staking: U256,
@@ -158,20 +158,28 @@ pub(crate) fn read_cfx_state_values(
         gas_fee_upper_bounds.insert(contract_address, u256_from_cfx(gas_fee_upper_bound));
     }
 
-    let mut sponsorship_contract_admins = BTreeMap::new();
-    for &contract_address in &cfx_operations.admin_managed_sponsorship_contracts {
-        let admin = state
-            .admin(&address_to_cfx(contract_address))
+    let mut contract_admins = BTreeMap::new();
+    let mut contract_exists = BTreeMap::new();
+    for &contract_address in &cfx_operations.contract_admins {
+        let contract_address_with_space = address_to_cfx(contract_address).with_native_space();
+        let exists = state
+            .exists(&contract_address_with_space)
             .map_err(|error| {
                 CoreSpaceChangesError::state_read(
-                    format!(
-                        "read {phase} Core Space admin for sponsorship access rules on contract {contract_address}"
-                    ),
+                    format!("read {phase} Core Space existence for contract {contract_address}"),
                     error,
                 )
             })?;
-        sponsorship_contract_admins
-            .insert(contract_address, crate::primitive::address_from_cfx(admin));
+        let admin = state
+            .admin(&contract_address_with_space.address)
+            .map_err(|error| {
+                CoreSpaceChangesError::state_read(
+                    format!("read {phase} Core Space admin for contract {contract_address}"),
+                    error,
+                )
+            })?;
+        contract_admins.insert(contract_address, crate::primitive::address_from_cfx(admin));
+        contract_exists.insert(contract_address, exists);
     }
 
     let sponsor_contract =
@@ -179,10 +187,10 @@ pub(crate) fn read_cfx_state_values(
     let mut sponsorship_access_rules = BTreeMap::new();
     for &rule_key in &cfx_operations.sponsorship_access_rule_keys {
         let account_address = match rule_key.account_scope {
-            PendingSponsorshipEligibilityTarget::Account(account_address) => {
+            PendingSponsorshipAccessRuleScope::Account(account_address) => {
                 address_to_cfx(account_address)
             }
-            PendingSponsorshipEligibilityTarget::AllAccounts => cfx_types::Address::zero(),
+            PendingSponsorshipAccessRuleScope::AllAccounts => cfx_types::Address::zero(),
         };
         let storage_key = SponsorWhitelistStorageKey {
             contract_address: address_to_cfx(rule_key.contract_address),
@@ -251,7 +259,8 @@ pub(crate) fn read_cfx_state_values(
         sponsor_identities,
         gas_fee_upper_bounds,
         sponsorship_access_rules,
-        sponsorship_contract_admins,
+        contract_admins,
+        contract_exists,
         storage_points,
         total_issued: u256_from_cfx(state.total_issued_tokens()),
         total_staking: u256_from_cfx(state.total_staking_tokens()),
@@ -408,6 +417,15 @@ pub(crate) fn verify_cfx_changes(
                     },
                 ));
             }
+            CfxOperation::Admin(AdminOperation::Initialize {
+                contract_address,
+                admin,
+            }) => {
+                replayed_state.initialize_contract_admin(*contract_address, *admin);
+            }
+            CfxOperation::Admin(AdminOperation::Set(update)) => {
+                replayed_state.apply_contract_admin_set(update, &mut positioned_core_changes)?;
+            }
             CfxOperation::Sponsorship(SponsorshipOperation::Funding(funding)) => {
                 replayed_state.apply_sponsorship_funding(funding, &mut positioned_core_changes)?;
             }
@@ -447,6 +465,69 @@ pub(crate) fn verify_cfx_changes(
 }
 
 impl CfxStateValues {
+    fn initialize_contract_admin(&mut self, contract_address: Address, admin: Address) {
+        if let Some(current_admin) = self.contract_admins.get_mut(&contract_address) {
+            *current_admin = admin;
+        }
+        if let Some(exists) = self.contract_exists.get_mut(&contract_address) {
+            *exists = true;
+        }
+    }
+
+    fn apply_contract_admin_set(
+        &mut self,
+        update: &ContractAdminSetOperation,
+        positioned_changes: &mut Vec<PositionedCoreSpaceChange>,
+    ) -> Result<(), CoreSpaceChangesError> {
+        let contract_address = address_to_cfx(update.contract_address);
+        let new_admin = address_to_cfx(update.new_admin);
+        if !contract_address.is_contract_address()
+            || !(new_admin.is_user_account_address() || new_admin.is_null_address())
+        {
+            return Ok(());
+        }
+        let exists = self
+            .contract_exists
+            .get(&update.contract_address)
+            .copied()
+            .ok_or_else(|| {
+                CoreSpaceChangesError::inconsistent_execution(format!(
+                    "before Core Space contract existence is missing for {}",
+                    update.contract_address
+                ))
+            })?;
+        if !exists {
+            return Ok(());
+        }
+
+        let current_admin = self
+            .contract_admins
+            .get_mut(&update.contract_address)
+            .ok_or_else(|| {
+                CoreSpaceChangesError::inconsistent_execution(format!(
+                    "before Core Space admin is missing for contract {}",
+                    update.contract_address
+                ))
+            })?;
+        let creation_clear = update.is_creation_frame && update.new_admin.is_zero();
+        if *current_admin != update.caller && !creation_clear {
+            return Ok(());
+        }
+        if *current_admin == update.new_admin {
+            return Ok(());
+        }
+
+        *current_admin = update.new_admin;
+        positioned_changes.push(PositionedCoreSpaceChange::new(
+            update.position,
+            PendingCoreSpaceChange::ContractAdminSet {
+                contract_address: update.contract_address,
+                admin: (!update.new_admin.is_zero()).then_some(update.new_admin),
+            },
+        ));
+        Ok(())
+    }
+
     fn apply_cross_space_transfer(
         &mut self,
         transfer: &CrossSpaceTransferOperation,
@@ -718,22 +799,45 @@ impl CfxStateValues {
         update: &SponsorshipAccessRuleUpdate,
         positioned_changes: &mut Vec<PositionedCoreSpaceChange>,
     ) -> Result<(), CoreSpaceChangesError> {
-        if update.caller_role == SponsorshipAccessCallerRole::ContractAdmin {
-            if !address_to_cfx(update.contract_address).is_contract_address() {
-                return Ok(());
+        match update.caller_role {
+            SponsorshipAccessCallerRole::SponsoredContract => {
+                if !address_to_cfx(update.caller_address).is_contract_address() {
+                    return Err(CoreSpaceChangesError::inconsistent_execution(format!(
+                        "Core Space direct sponsorship access-rule caller {} was not a contract address",
+                        update.caller_address
+                    )));
+                }
             }
-            let admin = self
-                .sponsorship_contract_admins
-                .get(&update.contract_address)
-                .copied()
-                .ok_or_else(|| {
-                    CoreSpaceChangesError::inconsistent_execution(format!(
-                        "before Core Space sponsorship access-rule admin is missing for contract {}",
-                        update.contract_address
-                    ))
-                })?;
-            if admin != update.caller_address {
-                return Ok(());
+            SponsorshipAccessCallerRole::ContractAdmin => {
+                if !address_to_cfx(update.contract_address).is_contract_address() {
+                    return Ok(());
+                }
+                let exists = self
+                    .contract_exists
+                    .get(&update.contract_address)
+                    .copied()
+                    .ok_or_else(|| {
+                        CoreSpaceChangesError::inconsistent_execution(format!(
+                            "before Core Space contract existence is missing for sponsorship access rules on contract {}",
+                            update.contract_address
+                        ))
+                    })?;
+                if !exists {
+                    return Ok(());
+                }
+                let admin = self
+                    .contract_admins
+                    .get(&update.contract_address)
+                    .copied()
+                    .ok_or_else(|| {
+                        CoreSpaceChangesError::inconsistent_execution(format!(
+                            "before Core Space sponsorship access-rule admin is missing for contract {}",
+                            update.contract_address
+                        ))
+                    })?;
+                if admin != update.caller_address {
+                    return Ok(());
+                }
             }
         }
 
@@ -750,15 +854,13 @@ impl CfxStateValues {
         if *enabled_before == update.enabled_after {
             return Ok(());
         }
-        let previous = *enabled_before;
         *enabled_before = update.enabled_after;
         positioned_changes.push(PositionedCoreSpaceChange::new(
             update.position,
-            PendingCoreSpaceChange::SponsorshipEligibilityRule {
+            PendingCoreSpaceChange::SponsorshipAccessRuleSet {
                 contract_address: update.contract_address,
-                applies_to: update.account_scope,
-                enabled_before: previous,
-                enabled_after: update.enabled_after,
+                scope: update.account_scope,
+                enabled: update.enabled_after,
             },
         ));
         Ok(())
@@ -1186,18 +1288,34 @@ impl CfxStateValues {
             }
         }
 
-        for (contract_address, before_admin) in &self.sponsorship_contract_admins {
+        for (contract_address, replayed_admin) in &self.contract_admins {
             let after_admin = after_state
-                .sponsorship_contract_admins
+                .contract_admins
                 .get(contract_address)
                 .ok_or_else(|| {
                     CoreSpaceChangesError::inconsistent_execution(format!(
-                        "after Core Space sponsorship access-rule admin is missing for contract {contract_address}"
+                        "after Core Space admin is missing for contract {contract_address}"
                     ))
                 })?;
-            if before_admin != after_admin {
+            if replayed_admin != after_admin {
                 return Err(CoreSpaceChangesError::inconsistent_execution(format!(
-                    "Core Space sponsorship access-rule admin changed during analysis for contract {contract_address}"
+                    "Core Space admin mismatch for contract {contract_address}: replayed {replayed_admin}, after {after_admin}"
+                )));
+            }
+        }
+
+        for (contract_address, replayed_exists) in &self.contract_exists {
+            let after_exists = after_state
+                .contract_exists
+                .get(contract_address)
+                .ok_or_else(|| {
+                    CoreSpaceChangesError::inconsistent_execution(format!(
+                        "after Core Space contract existence is missing for {contract_address}"
+                    ))
+                })?;
+            if replayed_exists != after_exists {
+                return Err(CoreSpaceChangesError::inconsistent_execution(format!(
+                    "Core Space contract existence mismatch for {contract_address}: replayed {replayed_exists}, after {after_exists}"
                 )));
             }
         }

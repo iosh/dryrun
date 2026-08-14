@@ -351,16 +351,21 @@ export interface StorageSponsorshipConfigurationChange {
   sponsorAfter: string | null;
 }
 
-export type SponsorshipEligibilityTarget =
+export type SponsorshipAccessRuleScope =
   | { type: 'ACCOUNT'; address: string }
   | { type: 'ALL_ACCOUNTS' };
 
-export interface SponsorshipEligibilityRuleChange {
-  changeType: 'SPONSORSHIP_ELIGIBILITY_RULE';
+export interface ContractAdminSetChange {
+  changeType: 'CONTRACT_ADMIN_SET';
   contractAddress: string;
-  appliesTo: SponsorshipEligibilityTarget;
-  enabledBefore: boolean;
-  enabledAfter: boolean;
+  admin: string | null;
+}
+
+export interface SponsorshipAccessRuleSetChange {
+  changeType: 'SPONSORSHIP_ACCESS_RULE_SET';
+  contractAddress: string;
+  scope: SponsorshipAccessRuleScope;
+  enabled: boolean;
 }
 
 export interface StoragePointConversionChange {
@@ -402,7 +407,8 @@ export type CoreChange =
   | SponsorshipRefundChange
   | GasSponsorshipConfigurationChange
   | StorageSponsorshipConfigurationChange
-  | SponsorshipEligibilityRuleChange
+  | ContractAdminSetChange
+  | SponsorshipAccessRuleSetChange
   | StoragePointConversionChange
   | CrossSpaceTransferChange;
 
