@@ -119,6 +119,11 @@ pub(super) enum Change {
         identifier: H256,
         requested_vote_count: U64,
     },
+    GovernanceVoteCast {
+        voter: RpcAddress,
+        round: U64,
+        votes: Vec<GovernanceVote>,
+    },
     SponsorshipDeposit {
         sponsored_resource: SponsoredResource,
         sponsor: RpcAddress,
@@ -166,6 +171,31 @@ pub(super) struct NativeCurrency {
 pub(super) enum SponsoredResource {
     Gas,
     StorageCollateral,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct GovernanceVote {
+    parameter: GovernanceParameter,
+    allocation: VoteAllocation,
+    replaced_allocation: Option<VoteAllocation>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(super) enum GovernanceParameter {
+    PowBaseReward,
+    PosRewardInterestRate,
+    StoragePointProportion,
+    BaseFeeShareProportion,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct VoteAllocation {
+    unchanged: U256,
+    increase: U256,
+    decrease: U256,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -306,6 +336,15 @@ fn try_map_change(
             identifier: b256_to_wire(identifier),
             requested_vote_count: requested_vote_count.into(),
         },
+        Source::GovernanceVoteCast {
+            voter,
+            round,
+            votes,
+        } => Change::GovernanceVoteCast {
+            voter: map_address(voter, network, field, "voter")?,
+            round: round.into(),
+            votes: votes.into_iter().map(Into::into).collect(),
+        },
         Source::SponsorshipDeposit {
             sponsored_resource,
             sponsor,
@@ -363,6 +402,43 @@ fn try_map_change(
             raw_amount: u256_to_wire(raw_amount),
         },
     })
+}
+
+impl From<simulation_core_space::GovernanceVote> for GovernanceVote {
+    fn from(source: simulation_core_space::GovernanceVote) -> Self {
+        Self {
+            parameter: source.parameter.into(),
+            allocation: source.allocation.into(),
+            replaced_allocation: source.replaced_allocation.map(Into::into),
+        }
+    }
+}
+
+impl From<simulation_core_space::GovernanceParameter> for GovernanceParameter {
+    fn from(source: simulation_core_space::GovernanceParameter) -> Self {
+        match source {
+            simulation_core_space::GovernanceParameter::PowBaseReward => Self::PowBaseReward,
+            simulation_core_space::GovernanceParameter::PosRewardInterestRate => {
+                Self::PosRewardInterestRate
+            }
+            simulation_core_space::GovernanceParameter::StoragePointProportion => {
+                Self::StoragePointProportion
+            }
+            simulation_core_space::GovernanceParameter::BaseFeeShareProportion => {
+                Self::BaseFeeShareProportion
+            }
+        }
+    }
+}
+
+impl From<simulation_core_space::VoteAllocation> for VoteAllocation {
+    fn from(source: simulation_core_space::VoteAllocation) -> Self {
+        Self {
+            unchanged: u256_to_wire(source.unchanged),
+            increase: u256_to_wire(source.increase),
+            decrease: u256_to_wire(source.decrease),
+        }
+    }
 }
 
 fn try_map_standard_change(

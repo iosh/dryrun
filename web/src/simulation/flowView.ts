@@ -234,6 +234,8 @@ export function getChangeAddresses(
     case 'POS_STAKE_INCREASE':
     case 'POS_RETIREMENT_REQUEST':
       return [{ address: change.account, label: 'Account' }];
+    case 'GOVERNANCE_VOTE_CAST':
+      return [{ address: change.voter, label: 'Voter' }];
     case 'SPONSORSHIP_DEPOSIT':
     case 'SPONSORSHIP_REFUND':
       return [

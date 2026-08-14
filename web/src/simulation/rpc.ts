@@ -290,6 +290,31 @@ export interface PosRetirementRequestChange {
   requestedVoteCount: string;
 }
 
+export type GovernanceParameter =
+  | 'POW_BASE_REWARD'
+  | 'POS_REWARD_INTEREST_RATE'
+  | 'STORAGE_POINT_PROPORTION'
+  | 'BASE_FEE_SHARE_PROPORTION';
+
+export interface VoteAllocation {
+  unchanged: string;
+  increase: string;
+  decrease: string;
+}
+
+export interface GovernanceVote {
+  parameter: GovernanceParameter;
+  allocation: VoteAllocation;
+  replacedAllocation: VoteAllocation | null;
+}
+
+export interface GovernanceVoteCastChange {
+  changeType: 'GOVERNANCE_VOTE_CAST';
+  voter: string;
+  round: string;
+  votes: GovernanceVote[];
+}
+
 export type SponsoredResource = 'GAS' | 'STORAGE_COLLATERAL';
 
 export interface SponsorshipDepositChange {
@@ -372,6 +397,7 @@ export type CoreChange =
   | PosRegistrationChange
   | PosStakeIncreaseChange
   | PosRetirementRequestChange
+  | GovernanceVoteCastChange
   | SponsorshipDepositChange
   | SponsorshipRefundChange
   | GasSponsorshipConfigurationChange

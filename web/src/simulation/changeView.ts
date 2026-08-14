@@ -196,6 +196,20 @@ export function toChangeItemViewModel(
         tone: 'amber',
         value: formatHexQuantity(change.requestedVoteCount),
       };
+    case 'GOVERNANCE_VOTE_CAST': {
+      const replacements = change.votes.filter(
+        (vote) => vote.replacedAllocation !== null,
+      ).length;
+      return {
+        detail:
+          replacements === 0
+            ? `${change.votes.length} parameter votes`
+            : `${replacements} of ${change.votes.length} replaced`,
+        label: 'Governance vote',
+        title: `Round ${formatHexQuantity(change.round)}`,
+        tone: 'violet',
+      };
+    }
     case 'SPONSORSHIP_DEPOSIT':
       return sponsorshipAmountChange('Sponsor deposit', change);
     case 'SPONSORSHIP_REFUND':

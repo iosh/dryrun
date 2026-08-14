@@ -1,4 +1,5 @@
 mod cfx;
+mod governance;
 mod staking;
 mod standards;
 
@@ -11,6 +12,7 @@ use contract_standards::{DecodedStandardLog, MetadataValues, StandardChange};
 use crate::core_space::CoreSpaceChangesError;
 
 pub(crate) use cfx::{CfxAnalysisInput, CfxStateValues};
+pub(crate) use governance::{GovernanceAnalysisInput, analyze_governance_changes};
 pub(crate) use staking::{
     ActiveContracts, CommittedCalls, PoSAnalysisInput, PoSStateReader, PoSStateValues,
     analyze_balance_changes, analyze_pos_changes, collect_calls, verify_vote_lock_changes,
@@ -71,6 +73,11 @@ pub enum CoreSpaceChange {
         identifier: B256,
         requested_vote_count: u64,
     },
+    GovernanceVoteCast {
+        voter: CoreAddress,
+        round: u64,
+        votes: Vec<GovernanceVote>,
+    },
     SponsorshipDeposit {
         sponsored_resource: SponsoredResource,
         sponsor: CoreAddress,
@@ -102,6 +109,28 @@ pub enum CoreSpaceChange {
         to: CrossSpaceAddress,
         raw_amount: U256,
     },
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VoteAllocation {
+    pub unchanged: U256,
+    pub increase: U256,
+    pub decrease: U256,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GovernanceVote {
+    pub parameter: GovernanceParameter,
+    pub allocation: VoteAllocation,
+    pub replaced_allocation: Option<VoteAllocation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GovernanceParameter {
+    PowBaseReward,
+    PosRewardInterestRate,
+    StoragePointProportion,
+    BaseFeeShareProportion,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,6 +235,11 @@ pub(crate) enum PendingCoreSpaceChange {
         account: Address,
         identifier: B256,
         requested_vote_count: u64,
+    },
+    GovernanceVoteCast {
+        voter: Address,
+        round: u64,
+        votes: Vec<GovernanceVote>,
     },
     SponsorshipDeposit {
         sponsored_resource: SponsoredResource,
@@ -409,6 +443,15 @@ fn resolve_change(
             account: address(account)?,
             identifier,
             requested_vote_count,
+        },
+        PendingCoreSpaceChange::GovernanceVoteCast {
+            voter,
+            round,
+            votes,
+        } => CoreSpaceChange::GovernanceVoteCast {
+            voter: address(voter)?,
+            round,
+            votes,
         },
         PendingCoreSpaceChange::SponsorshipDeposit {
             sponsored_resource,

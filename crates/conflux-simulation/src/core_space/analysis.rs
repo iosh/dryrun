@@ -12,15 +12,16 @@ use crate::{
 
 use super::changes::{
     ActiveContracts, CfxAnalysisInput, CfxStateValues, CommittedCalls, CoreSpaceChange,
-    CoreSpaceNativeCurrency, PoSAnalysisInput, PoSStateReader, PoSStateValues,
-    PositionedCoreSpaceChange, StatePhase, analyze_balance_changes, analyze_pos_changes,
-    collect_calls, collect_standard_changes, finish_core_space_changes, load_standard_metadata,
-    verify_vote_lock_changes,
+    CoreSpaceNativeCurrency, GovernanceAnalysisInput, PoSAnalysisInput, PoSStateReader,
+    PoSStateValues, PositionedCoreSpaceChange, StatePhase, analyze_balance_changes,
+    analyze_governance_changes, analyze_pos_changes, collect_calls, collect_standard_changes,
+    finish_core_space_changes, load_standard_metadata, verify_vote_lock_changes,
 };
 
 struct CoreSpaceAnalysisInput {
     cfx: CfxAnalysisInput,
     calls: CommittedCalls,
+    governance: GovernanceAnalysisInput,
     pos: PoSAnalysisInput,
     standard_changes: Vec<PositionedCoreSpaceChange>,
 }
@@ -58,6 +59,7 @@ impl CoreSpaceAnalysisInput {
         let active_contracts =
             ActiveContracts::from_machine_and_spec(machine, &execution.prepared.spec);
         let calls = collect_calls(&details.trace, active_contracts)?;
+        let governance = GovernanceAnalysisInput::collect(&details.trace)?;
         let cfx = CfxAnalysisInput::from_execution(
             execution,
             machine,
@@ -74,6 +76,7 @@ impl CoreSpaceAnalysisInput {
         Ok(Self {
             cfx,
             calls,
+            governance,
             pos,
             standard_changes,
         })
@@ -199,6 +202,8 @@ impl CoreSpaceChangeAnalysis {
             prepared_execution.env.number,
             &before_cfx_state,
         )?);
+
+        positioned_core_changes.extend(analyze_governance_changes(&analysis_input.governance)?);
 
         match (before_pos_state, after_pos_state) {
             (Some(before), Some(after)) => {
