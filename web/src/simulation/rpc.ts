@@ -315,11 +315,25 @@ export interface GovernanceVoteCastChange {
   votes: GovernanceVote[];
 }
 
-export type SponsoredResource = 'GAS' | 'STORAGE_COLLATERAL';
+export interface SponsorshipReplacement {
+  previousSponsor: string;
+  poolRefundedRawAmount: string;
+}
+
+export interface GasSponsorshipFundingChange {
+  changeType: 'SPONSORSHIP_FUNDING';
+  sponsoredResource: 'GAS';
+  contractAddress: string;
+  sponsor: string;
+  contributedRawAmount: string;
+  poolCreditedRawAmount: string;
+  gasFeeUpperBoundRawAmount: string;
+  replacement: SponsorshipReplacement | null;
+}
 
 export interface SponsorshipDepositChange {
   changeType: 'SPONSORSHIP_DEPOSIT';
-  sponsoredResource: SponsoredResource;
+  sponsoredResource: 'STORAGE_COLLATERAL';
   sponsor: string;
   contractAddress: string;
   rawAmount: string;
@@ -327,20 +341,10 @@ export interface SponsorshipDepositChange {
 
 export interface SponsorshipRefundChange {
   changeType: 'SPONSORSHIP_REFUND';
-  sponsoredResource: SponsoredResource;
+  sponsoredResource: 'STORAGE_COLLATERAL';
   sponsor: string;
   contractAddress: string;
   rawAmount: string;
-}
-
-export interface GasSponsorshipConfigurationChange {
-  changeType: 'SPONSORSHIP_CONFIGURATION';
-  sponsoredResource: 'GAS';
-  contractAddress: string;
-  sponsorBefore: string | null;
-  sponsorAfter: string | null;
-  maxSponsoredGasFeeRawAmountBefore: string;
-  maxSponsoredGasFeeRawAmountAfter: string;
 }
 
 export interface StorageSponsorshipConfigurationChange {
@@ -403,9 +407,9 @@ export type CoreChange =
   | PosStakeIncreaseChange
   | PosRetirementRequestChange
   | GovernanceVoteCastChange
+  | GasSponsorshipFundingChange
   | SponsorshipDepositChange
   | SponsorshipRefundChange
-  | GasSponsorshipConfigurationChange
   | StorageSponsorshipConfigurationChange
   | ContractAdminSetChange
   | SponsorshipAccessRuleSetChange

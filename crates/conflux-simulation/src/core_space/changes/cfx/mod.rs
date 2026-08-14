@@ -20,9 +20,7 @@ pub(crate) use verification::{CfxStateValues, read_cfx_state_values, verify_cfx_
 
 use crate::{
     core_space::CoreSpaceChangesError,
-    core_space::changes::{
-        PendingCrossSpaceAddress, PendingSponsorshipAccessRuleScope, SponsoredResource,
-    },
+    core_space::changes::{PendingCrossSpaceAddress, PendingSponsorshipAccessRuleScope},
     primitive::{address_from_cfx, address_to_cfx},
     state::{MaskedWhitelistKeys, SponsorWhitelistStorageKey},
 };
@@ -380,6 +378,12 @@ impl fmt::Display for CfxBalanceLocation {
 struct SponsorResourceLocation {
     resource: SponsoredResource,
     contract_address: Address,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum SponsoredResource {
+    Gas,
+    StorageCollateral,
 }
 
 impl SponsoredResource {

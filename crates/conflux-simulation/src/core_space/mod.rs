@@ -21,8 +21,8 @@ pub(crate) use transaction::{ResolvedStorageSponsorship, resolve_storage_sponsor
 
 pub use changes::{
     CoreSpaceChange, CoreSpaceNativeCurrency, CrossSpaceAddress, GovernanceParameter,
-    GovernanceVote, SponsoredResource, SponsorshipAccessRuleScope, SponsorshipConfiguration,
-    VoteAllocation,
+    GovernanceVote, SponsoredResource, SponsorshipAccessRuleScope, SponsorshipFundingTerms,
+    SponsorshipReplacement, VoteAllocation,
 };
 pub use conflux_provider::CoreAddress;
 pub use context::{

@@ -236,6 +236,17 @@ export function getChangeAddresses(
       return [{ address: change.account, label: 'Account' }];
     case 'GOVERNANCE_VOTE_CAST':
       return [{ address: change.voter, label: 'Voter' }];
+    case 'SPONSORSHIP_FUNDING':
+      return compactAddresses([
+        { address: change.sponsor, label: 'Sponsor' },
+        change.replacement
+          ? {
+              address: change.replacement.previousSponsor,
+              label: 'Previous sponsor',
+            }
+          : null,
+        { address: change.contractAddress, label: 'Contract' },
+      ]);
     case 'SPONSORSHIP_DEPOSIT':
     case 'SPONSORSHIP_REFUND':
       return [

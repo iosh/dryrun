@@ -210,6 +210,19 @@ export function toChangeItemViewModel(
         tone: 'violet',
       };
     }
+    case 'SPONSORSHIP_FUNDING':
+      return {
+        detail: `${
+          change.replacement === null
+            ? 'Sponsor pool funded'
+            : `Replaced ${shortHex(change.replacement.previousSponsor)}`
+        } | Pool ${formatNativeAmount(change.poolCreditedRawAmount, 'CFX')} | Cap ${formatNativeAmount(change.gasFeeUpperBoundRawAmount, 'CFX')}`,
+        identifier: change.contractAddress,
+        label: 'Sponsor funding',
+        title: 'Gas sponsorship',
+        tone: 'violet',
+        value: formatNativeAmount(change.contributedRawAmount, 'CFX'),
+      };
     case 'SPONSORSHIP_DEPOSIT':
       return sponsorshipAmountChange('Sponsor deposit', change);
     case 'SPONSORSHIP_REFUND':
@@ -219,16 +232,8 @@ export function toChangeItemViewModel(
         detail: sponsorTransition(change.sponsorBefore, change.sponsorAfter),
         identifier: change.contractAddress,
         label: 'Sponsor configuration',
-        title:
-          change.sponsoredResource === 'GAS'
-            ? 'Gas sponsorship'
-            : 'Storage sponsorship',
+        title: 'Storage sponsorship',
         tone: 'violet',
-        ...('maxSponsoredGasFeeRawAmountAfter' in change
-          ? {
-              value: `${formatNativeAmount(change.maxSponsoredGasFeeRawAmountBefore, 'CFX')} to ${formatNativeAmount(change.maxSponsoredGasFeeRawAmountAfter, 'CFX')}`,
-            }
-          : {}),
       };
     case 'CONTRACT_ADMIN_SET':
       return {
@@ -351,10 +356,7 @@ function sponsorshipAmountChange(
   >,
 ): ChangeItemViewModel {
   return {
-    detail:
-      change.sponsoredResource === 'GAS'
-        ? 'Gas sponsorship'
-        : 'Storage sponsorship',
+    detail: 'Storage sponsorship',
     identifier: change.contractAddress,
     label,
     title: 'CFX',

@@ -7,16 +7,18 @@ use cfx_types::{AddressSpaceUtil, address_util::AddressUtil};
 use super::{
     AdminOperation, BasicCfxOperation, CfxBalanceLocation, CfxOperation, CfxOperations,
     ContractAdminSetOperation, CrossSpaceTransferOperation, SponsorResourceLocation,
-    SponsorshipAccessCallerRole, SponsorshipAccessRuleKey, SponsorshipAccessRuleUpdate,
-    SponsorshipFundingOperation, SponsorshipFundingTerms, SponsorshipOperation,
-    SponsorshipRefundOperation, StorageCollateralReleaseOperation, StoragePointConversionOperation,
-    cross_space_balance_location,
+    SponsoredResource, SponsorshipAccessCallerRole, SponsorshipAccessRuleKey,
+    SponsorshipAccessRuleUpdate, SponsorshipFundingOperation, SponsorshipFundingTerms,
+    SponsorshipOperation, SponsorshipRefundOperation, StorageCollateralReleaseOperation,
+    StoragePointConversionOperation, cross_space_balance_location,
 };
 use crate::{
     core_space::CoreSpaceChangesError,
     core_space::changes::{
         PendingCoreSpaceChange, PendingCrossSpaceAddress, PendingSponsorshipAccessRuleScope,
-        PendingSponsorshipConfiguration, PositionedCoreSpaceChange, SponsoredResource, StatePhase,
+        PendingSponsorshipReplacement, PositionedCoreSpaceChange,
+        SponsoredResource as PublicSponsoredResource,
+        SponsorshipFundingTerms as PublicSponsorshipFundingTerms, StatePhase,
     },
     primitive::{address_to_cfx, u256_from_cfx},
     state::SponsorWhitelistStorageKey,
@@ -651,11 +653,12 @@ impl CfxStateValues {
                 },
                 refund.gross_refund_amount,
             )?;
-            if !refund.gross_refund_amount.is_zero() {
+            if sponsored_resource == SponsoredResource::StorageCollateral
+                && !refund.gross_refund_amount.is_zero()
+            {
                 positioned_changes.push(PositionedCoreSpaceChange::new(
                     refund.position,
-                    PendingCoreSpaceChange::SponsorshipRefund {
-                        sponsored_resource: refund.resource,
+                    PendingCoreSpaceChange::StorageSponsorshipRefund {
                         sponsor: refund.sponsor,
                         contract_address: refund.contract_address,
                         raw_amount: refund.gross_refund_amount,
@@ -674,7 +677,8 @@ impl CfxStateValues {
             funding.pool_deposit_amount,
         )?;
         self.set_sponsor_identity(resource_location, new_sponsor)?;
-        let changed_configuration = match funding.funding_terms {
+        let mut effective_gas_fee_upper_bound = None;
+        let configuration_changed = match funding.funding_terms {
             SponsorshipFundingTerms::Gas {
                 gas_fee_upper_bound,
             } => {
@@ -686,41 +690,84 @@ impl CfxStateValues {
                     } else {
                         gas_fee_upper_bound
                     };
+                effective_gas_fee_upper_bound = Some(gas_fee_upper_bound_after);
                 self.set_gas_fee_upper_bound(funding.contract_address, gas_fee_upper_bound_after)?;
-                (current_sponsor != new_sponsor
-                    || gas_fee_upper_bound_before != gas_fee_upper_bound_after)
-                    .then_some(PendingSponsorshipConfiguration::Gas {
-                        sponsor_before: current_sponsor,
-                        sponsor_after: new_sponsor,
-                        max_sponsored_gas_fee_raw_amount_before: gas_fee_upper_bound_before,
-                        max_sponsored_gas_fee_raw_amount_after: gas_fee_upper_bound_after,
-                    })
+                current_sponsor != new_sponsor
+                    || gas_fee_upper_bound_before != gas_fee_upper_bound_after
             }
-            SponsorshipFundingTerms::StorageCollateral => (current_sponsor != new_sponsor)
-                .then_some(PendingSponsorshipConfiguration::StorageCollateral {
-                    sponsor_before: current_sponsor,
-                    sponsor_after: new_sponsor,
-                }),
+            SponsorshipFundingTerms::StorageCollateral => current_sponsor != new_sponsor,
         };
-        if let Some(configuration) = changed_configuration {
-            positioned_changes.push(PositionedCoreSpaceChange::new(
-                funding.position,
-                PendingCoreSpaceChange::SponsorshipConfiguration {
-                    contract_address: funding.contract_address,
-                    configuration,
-                },
-            ));
-        }
-        if !funding.gross_deposit_amount.is_zero() {
-            positioned_changes.push(PositionedCoreSpaceChange::new(
-                funding.position,
-                PendingCoreSpaceChange::SponsorshipDeposit {
-                    sponsored_resource,
-                    sponsor: funding.sponsor,
-                    contract_address: funding.contract_address,
-                    raw_amount: funding.gross_deposit_amount,
-                },
-            ));
+        match sponsored_resource {
+            SponsoredResource::Gas => {
+                let gas_fee_upper_bound = effective_gas_fee_upper_bound.ok_or_else(|| {
+                    CoreSpaceChangesError::internal_invariant(
+                        "gas sponsorship funding is missing its effective fee upper bound",
+                    )
+                })?;
+                let replacement = funding
+                    .refund
+                    .map(|refund| {
+                        let direct_compensation = refund
+                            .gross_refund_amount
+                            .checked_sub(refund.pool_refund_amount)
+                            .ok_or_else(|| {
+                                CoreSpaceChangesError::inconsistent_execution(
+                                    "Core Space gas sponsorship refund amount underflowed",
+                                )
+                            })?;
+                        if !direct_compensation.is_zero() {
+                            return Err(CoreSpaceChangesError::inconsistent_execution(
+                                "Core Space gas sponsorship replacement contained direct collateral compensation",
+                            ));
+                        }
+                        Ok(PendingSponsorshipReplacement::Gas {
+                            previous_sponsor: refund.sponsor,
+                            pool_refunded_amount: refund.pool_refund_amount,
+                        })
+                    })
+                    .transpose()?;
+                if !funding.gross_deposit_amount.is_zero()
+                    || configuration_changed
+                    || replacement.is_some()
+                {
+                    positioned_changes.push(PositionedCoreSpaceChange::new(
+                        funding.position,
+                        PendingCoreSpaceChange::SponsorshipFunding {
+                            resource: PublicSponsoredResource::Gas,
+                            contract_address: funding.contract_address,
+                            sponsor: funding.sponsor,
+                            contributed_amount: funding.gross_deposit_amount,
+                            pool_credited_amount: funding.pool_deposit_amount,
+                            terms: PublicSponsorshipFundingTerms::Gas {
+                                gas_fee_upper_bound,
+                            },
+                            replacement,
+                        },
+                    ));
+                }
+            }
+            SponsoredResource::StorageCollateral => {
+                if configuration_changed {
+                    positioned_changes.push(PositionedCoreSpaceChange::new(
+                        funding.position,
+                        PendingCoreSpaceChange::StorageSponsorshipConfiguration {
+                            contract_address: funding.contract_address,
+                            sponsor_before: current_sponsor,
+                            sponsor_after: new_sponsor,
+                        },
+                    ));
+                }
+                if !funding.gross_deposit_amount.is_zero() {
+                    positioned_changes.push(PositionedCoreSpaceChange::new(
+                        funding.position,
+                        PendingCoreSpaceChange::StorageSponsorshipDeposit {
+                            sponsor: funding.sponsor,
+                            contract_address: funding.contract_address,
+                            raw_amount: funding.gross_deposit_amount,
+                        },
+                    ));
+                }
+            }
         }
         Ok(())
     }
@@ -754,42 +801,30 @@ impl CfxStateValues {
             refund.gross_refund_amount,
         )?;
         self.set_sponsor_identity(resource_location, None)?;
-        let configuration = match refund.resource {
+        match refund.resource {
             SponsoredResource::Gas => {
-                let gas_fee_upper_bound_before =
-                    self.gas_fee_upper_bound(refund.contract_address)?;
                 self.set_gas_fee_upper_bound(refund.contract_address, U256::ZERO)?;
-                PendingSponsorshipConfiguration::Gas {
-                    sponsor_before: Some(refund.sponsor),
-                    sponsor_after: None,
-                    max_sponsored_gas_fee_raw_amount_before: gas_fee_upper_bound_before,
-                    max_sponsored_gas_fee_raw_amount_after: U256::ZERO,
-                }
             }
             SponsoredResource::StorageCollateral => {
-                PendingSponsorshipConfiguration::StorageCollateral {
-                    sponsor_before: Some(refund.sponsor),
-                    sponsor_after: None,
+                positioned_changes.push(PositionedCoreSpaceChange::new(
+                    refund.position,
+                    PendingCoreSpaceChange::StorageSponsorshipConfiguration {
+                        contract_address: refund.contract_address,
+                        sponsor_before: Some(refund.sponsor),
+                        sponsor_after: None,
+                    },
+                ));
+                if !refund.gross_refund_amount.is_zero() {
+                    positioned_changes.push(PositionedCoreSpaceChange::new(
+                        refund.position,
+                        PendingCoreSpaceChange::StorageSponsorshipRefund {
+                            sponsor: refund.sponsor,
+                            contract_address: refund.contract_address,
+                            raw_amount: refund.gross_refund_amount,
+                        },
+                    ));
                 }
             }
-        };
-        positioned_changes.push(PositionedCoreSpaceChange::new(
-            refund.position,
-            PendingCoreSpaceChange::SponsorshipConfiguration {
-                contract_address: refund.contract_address,
-                configuration,
-            },
-        ));
-        if !refund.gross_refund_amount.is_zero() {
-            positioned_changes.push(PositionedCoreSpaceChange::new(
-                refund.position,
-                PendingCoreSpaceChange::SponsorshipRefund {
-                    sponsored_resource: refund.resource,
-                    sponsor: refund.sponsor,
-                    contract_address: refund.contract_address,
-                    raw_amount: refund.gross_refund_amount,
-                },
-            ));
         }
         Ok(())
     }

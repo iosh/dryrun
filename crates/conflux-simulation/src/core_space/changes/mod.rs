@@ -78,21 +78,29 @@ pub enum CoreSpaceChange {
         round: u64,
         votes: Vec<GovernanceVote>,
     },
-    SponsorshipDeposit {
-        sponsored_resource: SponsoredResource,
+    SponsorshipFunding {
+        resource: SponsoredResource,
+        contract_address: CoreAddress,
+        sponsor: CoreAddress,
+        contributed_amount: U256,
+        pool_credited_amount: U256,
+        terms: SponsorshipFundingTerms,
+        replacement: Option<SponsorshipReplacement>,
+    },
+    StorageSponsorshipDeposit {
         sponsor: CoreAddress,
         contract_address: CoreAddress,
         raw_amount: U256,
     },
-    SponsorshipRefund {
-        sponsored_resource: SponsoredResource,
+    StorageSponsorshipRefund {
         sponsor: CoreAddress,
         contract_address: CoreAddress,
         raw_amount: U256,
     },
-    SponsorshipConfiguration {
+    StorageSponsorshipConfiguration {
         contract_address: CoreAddress,
-        configuration: SponsorshipConfiguration,
+        sponsor_before: Option<CoreAddress>,
+        sponsor_after: Option<CoreAddress>,
     },
     ContractAdminSet {
         contract_address: CoreAddress,
@@ -145,20 +153,18 @@ pub enum CrossSpaceAddress {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SponsoredResource {
     Gas,
-    StorageCollateral,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SponsorshipFundingTerms {
+    Gas { gas_fee_upper_bound: U256 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SponsorshipConfiguration {
+pub enum SponsorshipReplacement {
     Gas {
-        sponsor_before: Option<CoreAddress>,
-        sponsor_after: Option<CoreAddress>,
-        max_sponsored_gas_fee_raw_amount_before: U256,
-        max_sponsored_gas_fee_raw_amount_after: U256,
-    },
-    StorageCollateral {
-        sponsor_before: Option<CoreAddress>,
-        sponsor_after: Option<CoreAddress>,
+        previous_sponsor: CoreAddress,
+        pool_refunded_amount: U256,
     },
 }
 
@@ -244,21 +250,29 @@ pub(crate) enum PendingCoreSpaceChange {
         round: u64,
         votes: Vec<GovernanceVote>,
     },
-    SponsorshipDeposit {
-        sponsored_resource: SponsoredResource,
+    SponsorshipFunding {
+        resource: SponsoredResource,
+        contract_address: Address,
+        sponsor: Address,
+        contributed_amount: U256,
+        pool_credited_amount: U256,
+        terms: SponsorshipFundingTerms,
+        replacement: Option<PendingSponsorshipReplacement>,
+    },
+    StorageSponsorshipDeposit {
         sponsor: Address,
         contract_address: Address,
         raw_amount: U256,
     },
-    SponsorshipRefund {
-        sponsored_resource: SponsoredResource,
+    StorageSponsorshipRefund {
         sponsor: Address,
         contract_address: Address,
         raw_amount: U256,
     },
-    SponsorshipConfiguration {
+    StorageSponsorshipConfiguration {
         contract_address: Address,
-        configuration: PendingSponsorshipConfiguration,
+        sponsor_before: Option<Address>,
+        sponsor_after: Option<Address>,
     },
     ContractAdminSet {
         contract_address: Address,
@@ -286,17 +300,11 @@ pub(crate) enum PendingCrossSpaceAddress {
     Espace(Address),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum PendingSponsorshipConfiguration {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PendingSponsorshipReplacement {
     Gas {
-        sponsor_before: Option<Address>,
-        sponsor_after: Option<Address>,
-        max_sponsored_gas_fee_raw_amount_before: U256,
-        max_sponsored_gas_fee_raw_amount_after: U256,
-    },
-    StorageCollateral {
-        sponsor_before: Option<Address>,
-        sponsor_after: Option<Address>,
+        previous_sponsor: Address,
+        pool_refunded_amount: U256,
     },
 }
 
@@ -459,34 +467,61 @@ fn resolve_change(
             round,
             votes,
         },
-        PendingCoreSpaceChange::SponsorshipDeposit {
-            sponsored_resource,
+        PendingCoreSpaceChange::SponsorshipFunding {
+            resource,
+            contract_address,
+            sponsor,
+            contributed_amount,
+            pool_credited_amount,
+            terms,
+            replacement,
+        } => CoreSpaceChange::SponsorshipFunding {
+            resource,
+            contract_address: address(contract_address)?,
+            sponsor: address(sponsor)?,
+            contributed_amount,
+            pool_credited_amount,
+            terms,
+            replacement: replacement
+                .map(|replacement| {
+                    Ok(match replacement {
+                        PendingSponsorshipReplacement::Gas {
+                            previous_sponsor,
+                            pool_refunded_amount,
+                        } => SponsorshipReplacement::Gas {
+                            previous_sponsor: address(previous_sponsor)?,
+                            pool_refunded_amount,
+                        },
+                    })
+                })
+                .transpose()?,
+        },
+        PendingCoreSpaceChange::StorageSponsorshipDeposit {
             sponsor,
             contract_address,
             raw_amount,
-        } => CoreSpaceChange::SponsorshipDeposit {
-            sponsored_resource,
+        } => CoreSpaceChange::StorageSponsorshipDeposit {
             sponsor: address(sponsor)?,
             contract_address: address(contract_address)?,
             raw_amount,
         },
-        PendingCoreSpaceChange::SponsorshipRefund {
-            sponsored_resource,
+        PendingCoreSpaceChange::StorageSponsorshipRefund {
             sponsor,
             contract_address,
             raw_amount,
-        } => CoreSpaceChange::SponsorshipRefund {
-            sponsored_resource,
+        } => CoreSpaceChange::StorageSponsorshipRefund {
             sponsor: address(sponsor)?,
             contract_address: address(contract_address)?,
             raw_amount,
         },
-        PendingCoreSpaceChange::SponsorshipConfiguration {
+        PendingCoreSpaceChange::StorageSponsorshipConfiguration {
             contract_address,
-            configuration,
-        } => CoreSpaceChange::SponsorshipConfiguration {
+            sponsor_before,
+            sponsor_after,
+        } => CoreSpaceChange::StorageSponsorshipConfiguration {
             contract_address: address(contract_address)?,
-            configuration: resolve_sponsorship_configuration(configuration, network)?,
+            sponsor_before: sponsor_before.map(address).transpose()?,
+            sponsor_after: sponsor_after.map(address).transpose()?,
         },
         PendingCoreSpaceChange::ContractAdminSet {
             contract_address,
@@ -526,40 +561,6 @@ fn resolve_change(
             from: resolve_cross_space_address(from, network)?,
             to: resolve_cross_space_address(to, network)?,
             raw_amount,
-        },
-    })
-}
-
-fn resolve_sponsorship_configuration(
-    configuration: PendingSponsorshipConfiguration,
-    network: Network,
-) -> Result<SponsorshipConfiguration, CoreSpaceChangesError> {
-    Ok(match configuration {
-        PendingSponsorshipConfiguration::Gas {
-            sponsor_before,
-            sponsor_after,
-            max_sponsored_gas_fee_raw_amount_before,
-            max_sponsored_gas_fee_raw_amount_after,
-        } => SponsorshipConfiguration::Gas {
-            sponsor_before: sponsor_before
-                .map(|address| core_address(address, network))
-                .transpose()?,
-            sponsor_after: sponsor_after
-                .map(|address| core_address(address, network))
-                .transpose()?,
-            max_sponsored_gas_fee_raw_amount_before,
-            max_sponsored_gas_fee_raw_amount_after,
-        },
-        PendingSponsorshipConfiguration::StorageCollateral {
-            sponsor_before,
-            sponsor_after,
-        } => SponsorshipConfiguration::StorageCollateral {
-            sponsor_before: sponsor_before
-                .map(|address| core_address(address, network))
-                .transpose()?,
-            sponsor_after: sponsor_after
-                .map(|address| core_address(address, network))
-                .transpose()?,
         },
     })
 }
