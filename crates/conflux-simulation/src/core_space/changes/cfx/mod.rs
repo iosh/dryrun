@@ -20,7 +20,7 @@ pub(crate) use verification::{CfxStateValues, read_cfx_state_values, verify_cfx_
 
 use crate::{
     core_space::CoreSpaceChangesError,
-    core_space::changes::{PendingCrossSpaceAddress, PendingSponsorshipAccessRuleScope},
+    core_space::changes::PendingSponsorshipAccessRuleScope,
     primitive::{address_from_cfx, address_to_cfx},
     state::{MaskedWhitelistKeys, SponsorWhitelistStorageKey},
 };
@@ -75,8 +75,35 @@ impl CfxOperations {
                     balance_locations.insert(CfxBalanceLocation::EspaceAccount { account: *to });
                 }
                 CfxOperation::CrossSpace(transfer) => {
-                    balance_locations.insert(cross_space_balance_location(transfer.from));
-                    balance_locations.insert(cross_space_balance_location(transfer.to));
+                    match transfer {
+                        CrossSpaceTransferOperation::ToEspace {
+                            core_sender,
+                            mapped_sender,
+                            receiver,
+                            ..
+                        } => {
+                            balance_locations.insert(CfxBalanceLocation::CoreSpaceAccount {
+                                account: *core_sender,
+                            });
+                            balance_locations.insert(CfxBalanceLocation::EspaceAccount {
+                                account: *mapped_sender,
+                            });
+                            balance_locations
+                                .insert(CfxBalanceLocation::EspaceAccount { account: *receiver });
+                        }
+                        CrossSpaceTransferOperation::ToCoreSpace {
+                            mapped_sender,
+                            core_receiver,
+                            ..
+                        } => {
+                            balance_locations.insert(CfxBalanceLocation::EspaceAccount {
+                                account: *mapped_sender,
+                            });
+                            balance_locations.insert(CfxBalanceLocation::CoreSpaceAccount {
+                                account: *core_receiver,
+                            });
+                        }
+                    }
                     requires_total_espace_tokens = true;
                 }
                 CfxOperation::Basic(BasicCfxOperation::GasPrecharge { payer, .. }) => {
@@ -468,20 +495,20 @@ enum SponsorshipOperation {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct CrossSpaceTransferOperation {
-    position: ChangePosition,
-    from: PendingCrossSpaceAddress,
-    to: PendingCrossSpaceAddress,
-    amount: U256,
-}
-
-const fn cross_space_balance_location(address: PendingCrossSpaceAddress) -> CfxBalanceLocation {
-    match address {
-        PendingCrossSpaceAddress::CoreSpace(account) => {
-            CfxBalanceLocation::CoreSpaceAccount { account }
-        }
-        PendingCrossSpaceAddress::Espace(account) => CfxBalanceLocation::EspaceAccount { account },
-    }
+enum CrossSpaceTransferOperation {
+    ToEspace {
+        position: ChangePosition,
+        core_sender: Address,
+        mapped_sender: Address,
+        receiver: Address,
+        amount: U256,
+    },
+    ToCoreSpace {
+        position: ChangePosition,
+        mapped_sender: Address,
+        core_receiver: Address,
+        amount: U256,
+    },
 }
 
 #[derive(Debug)]

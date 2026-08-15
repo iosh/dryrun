@@ -147,7 +147,7 @@ pub(super) enum Change {
         from_sponsor_pool_raw_amount: U256,
         from_storage_collateral_raw_amount: U256,
     },
-    CrossSpaceTransfer {
+    CrossSpaceNativeTransfer {
         from: CrossSpaceAddress,
         to: CrossSpaceAddress,
         raw_amount: U256,
@@ -416,11 +416,11 @@ fn try_map_change(
             from_sponsor_pool_raw_amount: u256_to_wire(from_sponsor_pool_amount),
             from_storage_collateral_raw_amount: u256_to_wire(from_storage_collateral_amount),
         },
-        Source::CrossSpaceTransfer {
+        Source::CrossSpaceNativeTransfer {
             from,
             to,
             raw_amount,
-        } => Change::CrossSpaceTransfer {
+        } => Change::CrossSpaceNativeTransfer {
             from: try_map_cross_space_address(from, network, field, "from")?,
             to: try_map_cross_space_address(to, network, field, "to")?,
             raw_amount: u256_to_wire(raw_amount),

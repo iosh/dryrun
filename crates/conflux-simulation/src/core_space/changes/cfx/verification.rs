@@ -10,7 +10,7 @@ use super::{
     SponsoredResource, SponsorshipAccessCallerRole, SponsorshipAccessRuleKey,
     SponsorshipAccessRuleUpdate, SponsorshipFundingOperation, SponsorshipFundingTerms,
     SponsorshipOperation, SponsorshipRefundOperation, StorageCollateralReleaseOperation,
-    StoragePointConversionOperation, cross_space_balance_location,
+    StoragePointConversionOperation,
 };
 use crate::{
     core_space::CoreSpaceChangesError,
@@ -534,47 +534,99 @@ impl CfxStateValues {
         transfer: &CrossSpaceTransferOperation,
         positioned_changes: &mut Vec<PositionedCoreSpaceChange>,
     ) -> Result<(), CoreSpaceChangesError> {
-        self.debit_balance(cross_space_balance_location(transfer.from), transfer.amount)?;
-        self.credit_balance(cross_space_balance_location(transfer.to), transfer.amount)?;
-
-        let total_espace_tokens = self.total_espace_tokens.as_mut().ok_or_else(|| {
-            CoreSpaceChangesError::inconsistent_execution(
-                "before Core cross-space total eSpace tokens are missing",
-            )
-        })?;
-        match (transfer.from, transfer.to) {
-            (PendingCrossSpaceAddress::CoreSpace(_), PendingCrossSpaceAddress::Espace(_)) => {
-                *total_espace_tokens = total_espace_tokens
-                    .checked_add(transfer.amount)
-                    .ok_or_else(|| {
+        match *transfer {
+            CrossSpaceTransferOperation::ToEspace {
+                position,
+                core_sender,
+                mapped_sender,
+                receiver,
+                amount,
+            } => {
+                self.debit_balance(
+                    CfxBalanceLocation::CoreSpaceAccount {
+                        account: core_sender,
+                    },
+                    amount,
+                )?;
+                self.credit_balance(
+                    CfxBalanceLocation::EspaceAccount {
+                        account: mapped_sender,
+                    },
+                    amount,
+                )?;
+                self.debit_balance(
+                    CfxBalanceLocation::EspaceAccount {
+                        account: mapped_sender,
+                    },
+                    amount,
+                )?;
+                self.credit_balance(
+                    CfxBalanceLocation::EspaceAccount { account: receiver },
+                    amount,
+                )?;
+                let total_espace_tokens = self.total_espace_tokens.as_mut().ok_or_else(|| {
+                    CoreSpaceChangesError::inconsistent_execution(
+                        "before Core cross-space total eSpace tokens are missing",
+                    )
+                })?;
+                *total_espace_tokens =
+                    total_espace_tokens.checked_add(amount).ok_or_else(|| {
                         CoreSpaceChangesError::inconsistent_execution(
                             "Core total eSpace tokens overflowed during a cross-space transfer",
                         )
                     })?;
+                if !amount.is_zero() {
+                    positioned_changes.push(PositionedCoreSpaceChange::new(
+                        position,
+                        PendingCoreSpaceChange::CrossSpaceNativeTransfer {
+                            from: PendingCrossSpaceAddress::CoreSpace(core_sender),
+                            to: PendingCrossSpaceAddress::Espace(receiver),
+                            raw_amount: amount,
+                        },
+                    ));
+                }
             }
-            (PendingCrossSpaceAddress::Espace(_), PendingCrossSpaceAddress::CoreSpace(_)) => {
-                *total_espace_tokens = total_espace_tokens
-                    .checked_sub(transfer.amount)
-                    .ok_or_else(|| {
+            CrossSpaceTransferOperation::ToCoreSpace {
+                position,
+                mapped_sender,
+                core_receiver,
+                amount,
+            } => {
+                self.debit_balance(
+                    CfxBalanceLocation::EspaceAccount {
+                        account: mapped_sender,
+                    },
+                    amount,
+                )?;
+                self.credit_balance(
+                    CfxBalanceLocation::CoreSpaceAccount {
+                        account: core_receiver,
+                    },
+                    amount,
+                )?;
+                let total_espace_tokens = self.total_espace_tokens.as_mut().ok_or_else(|| {
+                    CoreSpaceChangesError::inconsistent_execution(
+                        "before Core cross-space total eSpace tokens are missing",
+                    )
+                })?;
+                *total_espace_tokens =
+                    total_espace_tokens.checked_sub(amount).ok_or_else(|| {
                         CoreSpaceChangesError::inconsistent_execution(
                             "Core total eSpace tokens underflowed during a cross-space withdrawal",
                         )
                     })?;
-            }
-            _ => {
-                return Err(CoreSpaceChangesError::inconsistent_execution(
-                    "Core cross-space transfer used two endpoints in the same space",
-                ));
+                if !amount.is_zero() {
+                    positioned_changes.push(PositionedCoreSpaceChange::new(
+                        position,
+                        PendingCoreSpaceChange::CrossSpaceNativeTransfer {
+                            from: PendingCrossSpaceAddress::Espace(mapped_sender),
+                            to: PendingCrossSpaceAddress::CoreSpace(core_receiver),
+                            raw_amount: amount,
+                        },
+                    ));
+                }
             }
         }
-        positioned_changes.push(PositionedCoreSpaceChange::new(
-            transfer.position,
-            PendingCoreSpaceChange::CrossSpaceTransfer {
-                from: transfer.from,
-                to: transfer.to,
-                raw_amount: transfer.amount,
-            },
-        ));
         Ok(())
     }
 

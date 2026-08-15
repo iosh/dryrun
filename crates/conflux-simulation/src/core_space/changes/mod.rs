@@ -101,7 +101,7 @@ pub enum CoreSpaceChange {
         from_sponsor_pool_amount: U256,
         from_storage_collateral_amount: U256,
     },
-    CrossSpaceTransfer {
+    CrossSpaceNativeTransfer {
         from: CrossSpaceAddress,
         to: CrossSpaceAddress,
         raw_amount: U256,
@@ -266,7 +266,7 @@ pub(crate) enum PendingCoreSpaceChange {
         from_sponsor_pool_amount: U256,
         from_storage_collateral_amount: U256,
     },
-    CrossSpaceTransfer {
+    CrossSpaceNativeTransfer {
         from: PendingCrossSpaceAddress,
         to: PendingCrossSpaceAddress,
         raw_amount: U256,
@@ -521,11 +521,11 @@ fn resolve_change(
             from_sponsor_pool_amount,
             from_storage_collateral_amount,
         },
-        PendingCoreSpaceChange::CrossSpaceTransfer {
+        PendingCoreSpaceChange::CrossSpaceNativeTransfer {
             from,
             to,
             raw_amount,
-        } => CoreSpaceChange::CrossSpaceTransfer {
+        } => CoreSpaceChange::CrossSpaceNativeTransfer {
             from: resolve_cross_space_address(from, network)?,
             to: resolve_cross_space_address(to, network)?,
             raw_amount,

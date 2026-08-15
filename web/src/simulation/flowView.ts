@@ -146,7 +146,7 @@ export function toAssetFlowItemViewModels(
           value: `${formatHexQuantity(item.rawAmount)} ${assetTitle}`,
         };
       });
-    case 'CROSS_SPACE_TRANSFER':
+    case 'CROSS_SPACE_NATIVE_TRANSFER':
       return [
         {
           assetKey: 'NATIVE:CFX',
@@ -261,7 +261,7 @@ export function getChangeAddresses(
       ]);
     case 'STORAGE_POINT_CONVERSION':
       return [{ address: change.contractAddress, label: 'Contract' }];
-    case 'CROSS_SPACE_TRANSFER':
+    case 'CROSS_SPACE_NATIVE_TRANSFER':
       return [
         {
           address: change.from.address,

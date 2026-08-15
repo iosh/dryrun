@@ -257,7 +257,7 @@ export function toChangeItemViewModel(
           'CFX',
         ),
       };
-    case 'CROSS_SPACE_TRANSFER':
+    case 'CROSS_SPACE_NATIVE_TRANSFER':
       return {
         label: 'Cross-space transfer',
         title: 'CFX',

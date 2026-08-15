@@ -376,8 +376,8 @@ export interface CrossSpaceEndpoint {
   address: string;
 }
 
-export interface CrossSpaceTransferChange {
-  changeType: 'CROSS_SPACE_TRANSFER';
+export interface CrossSpaceNativeTransferChange {
+  changeType: 'CROSS_SPACE_NATIVE_TRANSFER';
   from: CrossSpaceEndpoint;
   to: CrossSpaceEndpoint;
   rawAmount: string;
@@ -405,7 +405,7 @@ export type CoreChange =
   | ContractAdminSetChange
   | SponsorshipAccessRuleSetChange
   | StoragePointConversionChange
-  | CrossSpaceTransferChange;
+  | CrossSpaceNativeTransferChange;
 
 export type ExecutionStatus = 'SUCCESS' | 'FAILED' | 'NOT_EXECUTED';
 

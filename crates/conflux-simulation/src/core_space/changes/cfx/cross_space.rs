@@ -1,23 +1,42 @@
-use crate::core_space::changes::ChangePosition;
-use alloy_sol_types::{SolCall, sol};
-use cfx_executor::{
-    executive_observer::AddressPocket,
-    internal_contract::{is_call_create_sig, is_withdraw_sig},
-    machine::Machine,
-};
+use alloy_primitives::{Address, FixedBytes, U256};
+use alloy_sol_types::{SolCall, SolEvent, sol};
+use cfx_executor::{executive_observer::AddressPocket, machine::Machine};
 use cfx_types::{AddressSpaceUtil, Space, address_util::AddressUtil};
 use cfx_vm_types::{CallType, Spec};
 
 use super::CrossSpaceTransferOperation;
 use crate::{
-    core_space::CoreSpaceChangesError,
-    core_space::changes::PendingCrossSpaceAddress,
+    core_space::{CoreSpaceChangesError, changes::ChangePosition},
     execution::{CommittedExecutionTrace, FrameAction, FrameId, TraceEvent},
-    primitive::{address_from_cfx, u256_from_cfx},
+    primitive::{address_from_cfx, b256_from_cfx, u256_from_cfx},
 };
 
 sol! {
+    function createEVM(bytes init);
+    function transferEVM(bytes20 receiver);
+    function callEVM(bytes20 receiver, bytes data);
     function withdrawFromMapped(uint256 value);
+
+    event Call(
+        bytes20 indexed sender,
+        bytes20 indexed receiver,
+        uint256 value,
+        uint256 nonce,
+        bytes data
+    );
+    event Create(
+        bytes20 indexed sender,
+        bytes20 indexed receiver,
+        uint256 value,
+        uint256 nonce,
+        bytes data
+    );
+    event Withdraw(
+        bytes20 indexed sender,
+        address indexed receiver,
+        uint256 value,
+        uint256 nonce
+    );
 }
 
 pub(super) fn collect_cross_space_call(
@@ -57,9 +76,7 @@ pub(super) fn collect_cross_space_call(
     let Some(selector) = call_selector(*calldata_len, calldata_prefix) else {
         return Ok(None);
     };
-    let transfers_to_espace = is_call_create_sig(&selector);
-    let withdraws_to_core_space = is_withdraw_sig(&selector);
-    if !transfers_to_espace && !withdraws_to_core_space {
+    if !is_supported_selector(selector) {
         return Ok(None);
     }
     if frame.space != Space::Native
@@ -78,13 +95,11 @@ pub(super) fn collect_cross_space_call(
         frame_position,
         caller: *caller,
         transferred_value: *transferred_value,
-        calldata_len: *calldata_len,
-        calldata_prefix,
     };
-    if transfers_to_espace {
-        collect_transfer_to_espace(context, cross_space_contract)
+    if selector == withdrawFromMappedCall::SELECTOR {
+        collect_withdrawal_to_core_space(context, cross_space_contract)
     } else {
-        collect_withdrawal_to_core_space(context)
+        collect_transfer_to_espace(context, selector, cross_space_contract)
     }
 }
 
@@ -94,67 +109,67 @@ struct CrossSpaceCallContext<'a> {
     frame_position: usize,
     caller: cfx_types::Address,
     transferred_value: cfx_types::U256,
-    calldata_len: usize,
-    calldata_prefix: &'a [u8],
 }
 
 fn collect_transfer_to_espace(
     context: CrossSpaceCallContext<'_>,
+    selector: [u8; 4],
     cross_space_contract: cfx_types::Address,
 ) -> Result<Option<(CrossSpaceTransferOperation, Vec<usize>)>, CoreSpaceChangesError> {
     let amount = u256_from_cfx(context.transferred_value);
-    if amount.is_zero() {
-        return Ok(None);
-    }
-
-    let expected_mapped_account = context.caller.evm_map();
+    let mapped_account = context.caller.evm_map();
+    let mapped_sender = address_from_cfx(mapped_account.address);
     let transfer = unique_matching_transfer(&context, "transfer into eSpace", |transfer| {
         matches!(
             (transfer.from, transfer.to),
             (AddressPocket::Balance(from), AddressPocket::Balance(to))
                 if transfer.space == Space::Native
                     && *from == cross_space_contract.with_native_space()
-                    && *to == expected_mapped_account
+                    && *to == mapped_account
                     && transfer.value == context.transferred_value
         )
     })?;
 
+    let child = if selector == createEVMCall::SELECTOR {
+        let receiver =
+            matching_create_event(&context, cross_space_contract, mapped_sender, amount)?;
+        unique_matching_create_child(&context, mapped_account.address, receiver, amount)?
+    } else if selector == transferEVMCall::SELECTOR || selector == callEVMCall::SELECTOR {
+        let receiver = matching_call_event(&context, cross_space_contract, mapped_sender, amount)?;
+        unique_matching_call_child(&context, mapped_account.address, receiver, amount)?
+    } else {
+        return Err(CoreSpaceChangesError::internal_invariant(
+            "supported Core cross-space selector was not a transfer, call, create, or withdrawal",
+        ));
+    };
+
     Ok(Some((
-        CrossSpaceTransferOperation {
+        CrossSpaceTransferOperation::ToEspace {
             position: ChangePosition::new(context.frame_position, 0),
-            from: PendingCrossSpaceAddress::CoreSpace(address_from_cfx(context.caller)),
-            to: PendingCrossSpaceAddress::Espace(address_from_cfx(expected_mapped_account.address)),
+            core_sender: address_from_cfx(context.caller),
+            mapped_sender,
+            receiver: child.receiver,
             amount,
         },
-        vec![transfer.position],
+        vec![transfer.position, child.position],
     )))
 }
 
 fn collect_withdrawal_to_core_space(
     context: CrossSpaceCallContext<'_>,
+    cross_space_contract: cfx_types::Address,
 ) -> Result<Option<(CrossSpaceTransferOperation, Vec<usize>)>, CoreSpaceChangesError> {
     if !context.transferred_value.is_zero() {
         return Err(CoreSpaceChangesError::inconsistent_execution(
             "Core cross-space withdrawal transferred call value",
         ));
     }
-    if context.calldata_prefix.len() != context.calldata_len {
-        return Err(CoreSpaceChangesError::inconsistent_execution(
-            "Core cross-space withdrawal calldata was not fully captured",
-        ));
-    }
-    let withdrawal =
-        withdrawFromMappedCall::abi_decode_validate(context.calldata_prefix).map_err(|error| {
-            CoreSpaceChangesError::inconsistent_execution(format!(
-                "Core cross-space withdrawal call is not valid ABI data: {error}"
-            ))
-        })?;
-    let amount = withdrawal.value;
-    if amount.is_zero() {
-        return Ok(None);
-    }
 
     let mapped_account = context.caller.evm_map();
+    let mapped_sender = address_from_cfx(mapped_account.address);
+    let core_receiver = address_from_cfx(context.caller);
+    let amount =
+        matching_withdraw_event(&context, cross_space_contract, mapped_sender, core_receiver)?;
     let transfer = unique_matching_transfer(&context, "withdrawal into Core Space", |transfer| {
         matches!(
             (transfer.from, transfer.to),
@@ -167,14 +182,233 @@ fn collect_withdrawal_to_core_space(
     })?;
 
     Ok(Some((
-        CrossSpaceTransferOperation {
+        CrossSpaceTransferOperation::ToCoreSpace {
             position: ChangePosition::new(context.frame_position, 0),
-            from: PendingCrossSpaceAddress::Espace(address_from_cfx(mapped_account.address)),
-            to: PendingCrossSpaceAddress::CoreSpace(address_from_cfx(context.caller)),
+            mapped_sender,
+            core_receiver,
             amount,
         },
         vec![transfer.position],
     )))
+}
+
+#[derive(Clone, Copy)]
+struct MatchingChild {
+    position: usize,
+    receiver: Address,
+}
+
+fn unique_matching_call_child(
+    context: &CrossSpaceCallContext<'_>,
+    mapped_sender: cfx_types::Address,
+    receiver: Address,
+    amount: U256,
+) -> Result<MatchingChild, CoreSpaceChangesError> {
+    let children = context.trace.events().iter().filter_map(|event| {
+        let TraceEvent::FrameStart { position, frame_id } = event else {
+            return None;
+        };
+        let frame = context.trace.frame(*frame_id);
+        let FrameAction::Call {
+            caller,
+            target,
+            transferred_value,
+            ..
+        } = &frame.action
+        else {
+            return None;
+        };
+        (frame.parent_id == Some(context.frame_id)
+            && frame.space == Space::Ethereum
+            && *caller == mapped_sender
+            && address_from_cfx(*target) == receiver
+            && u256_from_cfx(*transferred_value) == amount)
+            .then_some(MatchingChild {
+                position: *position,
+                receiver,
+            })
+    });
+    unique_matching_child(children, "call")
+}
+
+fn unique_matching_create_child(
+    context: &CrossSpaceCallContext<'_>,
+    mapped_sender: cfx_types::Address,
+    receiver: Address,
+    amount: U256,
+) -> Result<MatchingChild, CoreSpaceChangesError> {
+    let children = context.trace.events().iter().filter_map(|event| {
+        let TraceEvent::FrameStart { position, frame_id } = event else {
+            return None;
+        };
+        let frame = context.trace.frame(*frame_id);
+        let FrameAction::Create {
+            creator,
+            created_address,
+            value,
+        } = &frame.action
+        else {
+            return None;
+        };
+        (frame.parent_id == Some(context.frame_id)
+            && frame.space == Space::Ethereum
+            && *creator == mapped_sender
+            && address_from_cfx(*created_address) == receiver
+            && u256_from_cfx(*value) == amount)
+            .then_some(MatchingChild {
+                position: *position,
+                receiver,
+            })
+    });
+    unique_matching_child(children, "create")
+}
+
+fn unique_matching_child(
+    mut children: impl Iterator<Item = MatchingChild>,
+    action: &str,
+) -> Result<MatchingChild, CoreSpaceChangesError> {
+    let child = children.next().ok_or_else(|| {
+        CoreSpaceChangesError::inconsistent_execution(format!(
+            "Core cross-space {action} is missing its matching committed direct eSpace child frame"
+        ))
+    })?;
+    if children.next().is_some() {
+        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
+            "Core cross-space {action} has ambiguous matching committed direct eSpace child frames"
+        )));
+    }
+    Ok(child)
+}
+
+#[derive(Clone, Copy)]
+struct ScopedLog<'a> {
+    topics: &'a [cfx_types::H256],
+    data: &'a [u8],
+}
+
+fn protocol_logs<'a>(
+    context: &'a CrossSpaceCallContext<'_>,
+    cross_space_contract: cfx_types::Address,
+) -> Vec<ScopedLog<'a>> {
+    context
+        .trace
+        .events()
+        .iter()
+        .filter_map(|event| {
+            let TraceEvent::Log {
+                frame_id,
+                address,
+                topics,
+                data,
+                ..
+            } = event
+            else {
+                return None;
+            };
+            (*frame_id == context.frame_id && *address == cross_space_contract)
+                .then_some(ScopedLog { topics, data })
+        })
+        .collect()
+}
+
+fn matching_call_event(
+    context: &CrossSpaceCallContext<'_>,
+    cross_space_contract: cfx_types::Address,
+    sender: Address,
+    value: U256,
+) -> Result<Address, CoreSpaceChangesError> {
+    let mut matching_receiver = None;
+    for log in protocol_logs(context, cross_space_contract) {
+        if log.topics.first().copied().map(b256_from_cfx) != Some(Call::SIGNATURE_HASH) {
+            continue;
+        }
+        let event =
+            Call::decode_raw_log_validate(log.topics.iter().copied().map(b256_from_cfx), log.data)
+                .map_err(|error| invalid_event_data("Call", error))?;
+        if address_from_bytes20(event.sender) == sender && event.value == value {
+            let receiver = address_from_bytes20(event.receiver);
+            if matching_receiver.replace(receiver).is_some() {
+                return Err(CoreSpaceChangesError::inconsistent_execution(
+                    "Core cross-space call has ambiguous matching committed Call events",
+                ));
+            }
+        }
+    }
+    matching_receiver.ok_or_else(|| {
+        CoreSpaceChangesError::inconsistent_execution(
+            "Core cross-space call is missing its matching committed Call event",
+        )
+    })
+}
+
+fn matching_create_event(
+    context: &CrossSpaceCallContext<'_>,
+    cross_space_contract: cfx_types::Address,
+    sender: Address,
+    value: U256,
+) -> Result<Address, CoreSpaceChangesError> {
+    let mut matching_receiver = None;
+    for log in protocol_logs(context, cross_space_contract) {
+        if log.topics.first().copied().map(b256_from_cfx) != Some(Create::SIGNATURE_HASH) {
+            continue;
+        }
+        let event = Create::decode_raw_log_validate(
+            log.topics.iter().copied().map(b256_from_cfx),
+            log.data,
+        )
+        .map_err(|error| invalid_event_data("Create", error))?;
+        if address_from_bytes20(event.sender) == sender && event.value == value {
+            let receiver = address_from_bytes20(event.receiver);
+            if matching_receiver.replace(receiver).is_some() {
+                return Err(CoreSpaceChangesError::inconsistent_execution(
+                    "Core cross-space create has ambiguous matching committed Create events",
+                ));
+            }
+        }
+    }
+    matching_receiver.ok_or_else(|| {
+        CoreSpaceChangesError::inconsistent_execution(
+            "Core cross-space create is missing its matching committed Create event",
+        )
+    })
+}
+
+fn matching_withdraw_event(
+    context: &CrossSpaceCallContext<'_>,
+    cross_space_contract: cfx_types::Address,
+    sender: Address,
+    receiver: Address,
+) -> Result<U256, CoreSpaceChangesError> {
+    let mut matching_value = None;
+    for log in protocol_logs(context, cross_space_contract) {
+        if log.topics.first().copied().map(b256_from_cfx) != Some(Withdraw::SIGNATURE_HASH) {
+            continue;
+        }
+        let event = Withdraw::decode_raw_log_validate(
+            log.topics.iter().copied().map(b256_from_cfx),
+            log.data,
+        )
+        .map_err(|error| invalid_event_data("Withdraw", error))?;
+        if address_from_bytes20(event.sender) == sender
+            && event.receiver == receiver
+            && matching_value.replace(event.value).is_some()
+        {
+            return Err(CoreSpaceChangesError::inconsistent_execution(
+                "Core cross-space withdrawal has ambiguous matching committed Withdraw events",
+            ));
+        }
+    }
+    matching_value.ok_or_else(|| {
+        CoreSpaceChangesError::inconsistent_execution(
+            "Core cross-space withdrawal is missing its matching committed Withdraw event",
+        )
+    })
+}
+
+fn invalid_event_data(name: &str, error: alloy_sol_types::Error) -> CoreSpaceChangesError {
+    CoreSpaceChangesError::inconsistent_execution(format!(
+        "Core cross-space {name} event is not valid ABI data: {error}"
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -230,6 +464,13 @@ fn scoped_internal_transfer(event: &TraceEvent) -> Option<ScopedInternalTransfer
     })
 }
 
+fn is_supported_selector(selector: [u8; 4]) -> bool {
+    selector == createEVMCall::SELECTOR
+        || selector == transferEVMCall::SELECTOR
+        || selector == callEVMCall::SELECTOR
+        || selector == withdrawFromMappedCall::SELECTOR
+}
+
 fn call_selector(calldata_len: usize, calldata_prefix: &[u8]) -> Option<[u8; 4]> {
     if calldata_len < 4 || calldata_prefix.len() < 4 {
         return None;
@@ -237,4 +478,8 @@ fn call_selector(calldata_len: usize, calldata_prefix: &[u8]) -> Option<[u8; 4]>
     let mut selector = [0_u8; 4];
     selector.copy_from_slice(&calldata_prefix[..4]);
     Some(selector)
+}
+
+fn address_from_bytes20(value: FixedBytes<20>) -> Address {
+    Address::from_slice(value.as_slice())
 }
