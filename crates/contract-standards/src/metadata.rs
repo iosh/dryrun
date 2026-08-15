@@ -3,17 +3,11 @@ use std::{
     hash::Hash,
 };
 
-use alloy_primitives::{Address, Bytes, FixedBytes};
+use alloy_primitives::{Address, Bytes};
 use alloy_sol_types::{SolCall, sol};
 use thiserror::Error;
 
-use crate::{
-    change::legacy::{Change, PositionedChange},
-    standard_decoder::{DecodedStandardEvent, DecodedStandardLog},
-    state_codec::SupportsInterfaceCall,
-};
-
-pub const ERC721_METADATA_INTERFACE_ID: [u8; 4] = [0x5b, 0x5e, 0x13, 0x9f];
+use crate::standard_decoder::{DecodedStandardEvent, DecodedStandardLog};
 
 sol! {
     contract IContractMetadata {
@@ -236,133 +230,26 @@ where
 #[error("metadata call has no recorded outcome")]
 pub struct MissingMetadataOutcome;
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct MetadataRequests {
-    erc20_contracts: Vec<Address>,
-    erc721_collections: Vec<Address>,
-}
-
-pub fn metadata_requests(changes: &[PositionedChange]) -> MetadataRequests {
-    let mut requests = MetadataRequests::default();
-    let mut seen_erc20 = HashSet::new();
-    let mut seen_erc721 = HashSet::new();
-
-    for positioned in changes {
-        match &positioned.change {
-            Change::Erc20Transfer {
-                contract_address, ..
-            }
-            | Change::Erc20Mint {
-                contract_address, ..
-            }
-            | Change::Erc20Burn {
-                contract_address, ..
-            }
-            | Change::Erc20Allowance {
-                contract_address, ..
-            } => {
-                if seen_erc20.insert(*contract_address) {
-                    requests.erc20_contracts.push(*contract_address);
-                }
-            }
-            Change::Erc721Transfer {
-                contract_address, ..
-            }
-            | Change::Erc721Mint {
-                contract_address, ..
-            }
-            | Change::Erc721Burn {
-                contract_address, ..
-            }
-            | Change::Erc721TokenApproval {
-                contract_address, ..
-            }
-            | Change::Erc721OperatorApproval {
-                contract_address, ..
-            } => {
-                if seen_erc721.insert(*contract_address) {
-                    requests.erc721_collections.push(*contract_address);
-                }
-            }
-            Change::Erc1155Transfer { .. }
-            | Change::Erc1155Mint { .. }
-            | Change::Erc1155Burn { .. }
-            | Change::Erc1155OperatorApproval { .. } => {}
-        }
-    }
-
-    requests
-}
-
-impl MetadataRequests {
-    pub fn erc20_contracts(&self) -> &[Address] {
-        &self.erc20_contracts
-    }
-
-    pub fn erc721_collections(&self) -> &[Address] {
-        &self.erc721_collections
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.erc20_contracts.is_empty() && self.erc721_collections.is_empty()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct StandardMetadata {
-    erc20: HashMap<Address, Erc20Metadata>,
-    erc721: HashMap<Address, Erc721CollectionMetadata>,
-}
-
-impl StandardMetadata {
-    pub fn new(
-        erc20: HashMap<Address, Erc20Metadata>,
-        erc721: HashMap<Address, Erc721CollectionMetadata>,
-    ) -> Self {
-        Self { erc20, erc721 }
-    }
-
-    pub fn erc20(&self, contract: &Address) -> Option<&Erc20Metadata> {
-        self.erc20.get(contract)
-    }
-
-    pub fn erc721(&self, collection: &Address) -> Option<&Erc721CollectionMetadata> {
-        self.erc721.get(collection)
-    }
-}
-
-pub fn name_call() -> Bytes {
+fn name_call() -> Bytes {
     IContractMetadata::nameCall {}.abi_encode().into()
 }
 
-pub fn decode_name(output: &[u8]) -> Option<String> {
+fn decode_name(output: &[u8]) -> Option<String> {
     IContractMetadata::nameCall::abi_decode_returns_validate(output).ok()
 }
 
-pub fn symbol_call() -> Bytes {
+fn symbol_call() -> Bytes {
     IContractMetadata::symbolCall {}.abi_encode().into()
 }
 
-pub fn decode_symbol(output: &[u8]) -> Option<String> {
+fn decode_symbol(output: &[u8]) -> Option<String> {
     IContractMetadata::symbolCall::abi_decode_returns_validate(output).ok()
 }
 
-pub fn decimals_call() -> Bytes {
+fn decimals_call() -> Bytes {
     IContractMetadata::decimalsCall {}.abi_encode().into()
 }
 
-pub fn decode_decimals(output: &[u8]) -> Option<u8> {
+fn decode_decimals(output: &[u8]) -> Option<u8> {
     IContractMetadata::decimalsCall::abi_decode_returns_validate(output).ok()
-}
-
-pub fn supports_interface_call(interface_id: [u8; 4]) -> Bytes {
-    SupportsInterfaceCall {
-        interfaceId: FixedBytes::from(interface_id),
-    }
-    .abi_encode()
-    .into()
-}
-
-pub fn decode_supports_interface(output: &[u8]) -> Option<bool> {
-    SupportsInterfaceCall::abi_decode_returns_validate(output).ok()
 }

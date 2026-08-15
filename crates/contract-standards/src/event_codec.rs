@@ -4,7 +4,7 @@ use alloy_primitives::{Address, B256, U256, keccak256};
 use alloy_sol_types::SolValue;
 use thiserror::Error;
 
-use crate::{Erc1155TransferItem, candidate::Record};
+use crate::Erc1155TransferItem;
 
 static TRANSFER_TOPIC0: LazyLock<B256> =
     LazyLock::new(|| keccak256("Transfer(address,address,uint256)"));
@@ -16,19 +16,6 @@ static TRANSFER_SINGLE_TOPIC0: LazyLock<B256> =
     LazyLock::new(|| keccak256("TransferSingle(address,address,address,uint256,uint256)"));
 static TRANSFER_BATCH_TOPIC0: LazyLock<B256> =
     LazyLock::new(|| keccak256("TransferBatch(address,address,address,uint256[],uint256[])"));
-pub(crate) fn decode_event(record: &Record) -> Result<Option<DecodedEvent>, EventCodecError> {
-    let Record::Log {
-        address,
-        topics,
-        data,
-        ..
-    } = record
-    else {
-        return Ok(None);
-    };
-
-    decode_log(*address, topics, data)
-}
 
 pub(crate) fn decode_log(
     contract_address: Address,
@@ -106,7 +93,7 @@ pub(crate) enum DecodedEvent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SupportedEvent {
+pub(crate) enum SupportedEvent {
     Transfer,
     Approval,
     ApprovalForAll,
@@ -128,7 +115,7 @@ impl fmt::Display for SupportedEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("malformed {event} event: {reason}")]
-pub struct EventCodecError {
+pub(crate) struct EventCodecError {
     event: SupportedEvent,
     reason: &'static str,
 }
