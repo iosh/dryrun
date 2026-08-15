@@ -7,7 +7,8 @@ use crate::{
     core_space::CoreSpaceChangesError,
     espace::{EspaceNativeCurrency, NestedEspaceEffects},
     execution::{
-        ConfluxExecutionOutcome, ConfluxTransactionExecution, PreparedTransactionExecution,
+        CommittedExecutionTrace, ConfluxExecutionOutcome, ConfluxTransactionExecution,
+        PreparedTransactionExecution, TraceEvent,
     },
     state::{ConfluxStateSource, MaskedWhitelistKeys, RecordedDepositLists, RecordedVoteLists},
 };
@@ -60,6 +61,8 @@ impl CoreSpaceAnalysisInput {
             ));
         };
 
+        verify_committed_logs(&details.trace, &details.logs)?;
+
         let active_contracts =
             ActiveContracts::from_machine_and_spec(machine, &execution.prepared.spec);
         let calls = collect_calls(&details.trace, active_contracts)?;
@@ -75,7 +78,7 @@ impl CoreSpaceAnalysisInput {
             &details.logs,
             active_contracts.pos_register_is_active(),
         )?;
-        let standard_changes = collect_standard_changes(details)?;
+        let standard_changes = collect_standard_changes(details);
         let nested_espace_effects = NestedEspaceEffects::from_trace(
             &details.trace,
             cfx.espace_root_frame_ids(),
@@ -93,6 +96,48 @@ impl CoreSpaceAnalysisInput {
     }
 }
 
+fn verify_committed_logs(
+    trace: &CommittedExecutionTrace,
+    committed_logs: &[primitives::LogEntry],
+) -> Result<(), CoreSpaceChangesError> {
+    let trace_logs = trace.events().iter().filter_map(|event| {
+        let TraceEvent::Log {
+            frame_id,
+            address,
+            topics,
+            data,
+            ..
+        } = event
+        else {
+            return None;
+        };
+        Some((trace.frame(*frame_id).space, address, topics, data))
+    });
+    let trace_log_count = trace_logs.clone().count();
+    if trace_log_count != committed_logs.len() {
+        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
+            "Core Space trace contains {trace_log_count} committed logs, executor returned {}",
+            committed_logs.len()
+        )));
+    }
+
+    for (index, ((space, address, topics, data), committed)) in
+        trace_logs.zip(committed_logs).enumerate()
+    {
+        if space != committed.space
+            || *address != committed.address
+            || topics != &committed.topics
+            || data.as_slice() != committed.data.as_slice()
+        {
+            return Err(CoreSpaceChangesError::inconsistent_execution(format!(
+                "Core Space trace log {index} does not match the committed executor log"
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Debug)]
 pub(super) struct CoreSpaceStateValues {
     cfx: CfxStateValues,
@@ -108,8 +153,6 @@ impl CoreSpaceStateReader {
     fn read(
         &mut self,
         state: &mut State,
-        _machine: &Machine,
-        _prepared_execution: &PreparedTransactionExecution,
         analysis_input: &CoreSpaceAnalysisInput,
         phase: StatePhase,
     ) -> Result<CoreSpaceStateValues, CoreSpaceChangesError> {
@@ -161,12 +204,9 @@ impl CoreSpaceChangeAnalysis {
     pub(super) fn read_state(
         &mut self,
         state: &mut State,
-        machine: &Machine,
-        prepared_execution: &PreparedTransactionExecution,
         phase: StatePhase,
     ) -> Result<CoreSpaceStateValues, CoreSpaceChangesError> {
-        self.state_reader
-            .read(state, machine, prepared_execution, &self.input, phase)
+        self.state_reader.read(state, &self.input, phase)
     }
 
     pub(super) fn analyze(

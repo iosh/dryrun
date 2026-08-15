@@ -9,9 +9,7 @@ use cfx_executor::{
 };
 use cfx_types::{Space, U256};
 use cfx_vm_types as vm;
-use primitives::transaction::{
-    Action, Eip155Transaction, EthereumTransaction, NativeTransaction, TypedNativeTransaction,
-};
+use primitives::transaction::{Action, NativeTransaction, TypedNativeTransaction};
 
 use crate::{
     core_space::CoreSpaceChangesError, execution::PreparedTransactionExecution,
@@ -21,13 +19,13 @@ use crate::{
 const STANDARD_READ_CALL_GAS_LIMIT: u64 = 100_000;
 
 #[derive(Debug)]
-pub(crate) enum StandardReadCallOutcome {
+pub(super) enum StandardReadCallOutcome {
     Success(Bytes),
     Revert,
     Halt,
 }
 
-pub(crate) fn execute_standard_read_call(
+pub(super) fn execute_standard_read_call(
     state: &mut State,
     machine: &Machine,
     prepared_execution: &PreparedTransactionExecution,
@@ -35,51 +33,31 @@ pub(crate) fn execute_standard_read_call(
     call_data: Bytes,
 ) -> Result<StandardReadCallOutcome, CoreSpaceChangesError> {
     let getter_sender = prepared_execution.transaction.sender();
-    let getter_space = prepared_execution.transaction.space();
-    if getter_sender.space != getter_space {
-        return Err(CoreSpaceChangesError::inconsistent_execution(
-            "standard state getter transaction and sender use different spaces",
-        ));
-    }
-
     let getter_chain_id = prepared_execution
         .env
         .chain_id
-        .get(&getter_space)
+        .get(&Space::Native)
         .copied()
         .ok_or_else(|| {
             CoreSpaceChangesError::inconsistent_execution(
-                "standard state getter execution environment is missing its chain id",
+                "Core Space standard metadata probe environment is missing its chain id",
             )
         })?;
     let sender_nonce = state.nonce(&getter_sender).map_err(|error| {
-        CoreSpaceChangesError::state_read("read standard metadata getter nonce", error)
+        CoreSpaceChangesError::state_read("read Core Space metadata probe nonce", error)
     })?;
-    let getter_action = Action::Call(address_to_cfx(target_contract));
-    let getter_transaction = match getter_space {
-        Space::Ethereum => EthereumTransaction::Eip155(Eip155Transaction {
-            nonce: sender_nonce,
-            gas_price: U256::zero(),
-            gas: U256::from(STANDARD_READ_CALL_GAS_LIMIT),
-            action: getter_action,
-            value: U256::zero(),
-            chain_id: Some(getter_chain_id),
-            data: call_data.to_vec(),
-        })
-        .fake_sign_rpc(getter_sender),
-        Space::Native => TypedNativeTransaction::Cip155(NativeTransaction {
-            nonce: sender_nonce,
-            gas_price: U256::zero(),
-            gas: U256::from(STANDARD_READ_CALL_GAS_LIMIT),
-            action: getter_action,
-            value: U256::zero(),
-            storage_limit: u64::MAX,
-            epoch_height: prepared_execution.env.epoch_height,
-            chain_id: getter_chain_id,
-            data: call_data.to_vec(),
-        })
-        .fake_sign_rpc(getter_sender),
-    };
+    let getter_transaction = TypedNativeTransaction::Cip155(NativeTransaction {
+        nonce: sender_nonce,
+        gas_price: U256::zero(),
+        gas: U256::from(STANDARD_READ_CALL_GAS_LIMIT),
+        action: Action::Call(address_to_cfx(target_contract)),
+        value: U256::zero(),
+        storage_limit: u64::MAX,
+        epoch_height: prepared_execution.env.epoch_height,
+        chain_id: getter_chain_id,
+        data: call_data.to_vec(),
+    })
+    .fake_sign_rpc(getter_sender);
 
     // Reading the nonce may populate State's cache. Saving commits that cache
     // and leaves the executive's required empty-cache entry condition intact.
@@ -102,7 +80,7 @@ pub(crate) fn execute_standard_read_call(
     )
     .transact(&getter_transaction, getter_options)
     .map_err(|error| {
-        CoreSpaceChangesError::state_read("execute standard metadata getter", error)
+        CoreSpaceChangesError::state_read("execute Core Space metadata probe", error)
     })?;
 
     let read_call_outcome = match getter_execution_outcome {
@@ -117,7 +95,7 @@ pub(crate) fn execute_standard_read_call(
             // open. Abort the whole simulation and drop State instead of restoring
             // through State::restore's no-checkpoint assertion.
             return Err(CoreSpaceChangesError::state_read(
-                "execute standard metadata getter",
+                "execute Core Space metadata probe",
                 error.0,
             ));
         }

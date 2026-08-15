@@ -96,21 +96,11 @@ impl CoreSpaceExecutionSession {
             let state_after_execution = self.state.save();
 
             self.state.restore(state_before_execution);
-            let before = analysis.read_state(
-                &mut self.state,
-                &self.machine,
-                &execution.prepared,
-                StatePhase::Before,
-            )?;
+            let before = analysis.read_state(&mut self.state, StatePhase::Before)?;
             self.state.restore(state_after_execution);
 
             let state_before_after_reads = self.state.save();
-            let after = analysis.read_state(
-                &mut self.state,
-                &self.machine,
-                &execution.prepared,
-                StatePhase::After,
-            )?;
+            let after = analysis.read_state(&mut self.state, StatePhase::After)?;
             self.state.restore(state_before_after_reads);
 
             analysis.analyze(

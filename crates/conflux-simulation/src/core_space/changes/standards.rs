@@ -1,3 +1,5 @@
+mod read_call;
+
 use std::collections::HashSet;
 
 use alloy_primitives::Address;
@@ -8,13 +10,11 @@ use contract_standards::{MetadataCall, MetadataValues, decode_standard_log, meta
 use crate::{
     core_space::CoreSpaceChangesError,
     espace::{MetadataReadError, ReadCallOutcome, execute_read_call},
-    execution::{
-        CommittedExecutionTrace, ConfluxExecutionOutput, PreparedTransactionExecution, TraceEvent,
-    },
+    execution::{ConfluxExecutionOutput, PreparedTransactionExecution, TraceEvent},
     primitive::{address_from_cfx, b256_from_cfx},
-    standards::{StandardReadCallOutcome, execute_standard_read_call},
 };
 
+use self::read_call::{StandardReadCallOutcome, execute_standard_read_call};
 use super::{ChangePosition, PositionedCoreSpaceChange};
 
 const MAX_METADATA_CALLS: usize = 64;
@@ -22,9 +22,8 @@ const MAX_METADATA_OUTPUT_BYTES: usize = 4 * 1024;
 
 pub(crate) fn collect_standard_changes(
     output: &ConfluxExecutionOutput,
-) -> Result<Vec<PositionedCoreSpaceChange>, CoreSpaceChangesError> {
-    verify_committed_logs(&output.trace, &output.logs)?;
-    Ok(output
+) -> Vec<PositionedCoreSpaceChange> {
+    output
         .trace
         .events()
         .iter()
@@ -52,7 +51,7 @@ pub(crate) fn collect_standard_changes(
                 PositionedCoreSpaceChange::standard(ChangePosition::new(*position, 0), change)
             })
         })
-        .collect())
+        .collect()
 }
 
 pub(crate) fn load_standard_metadata(
@@ -194,46 +193,4 @@ fn map_espace_metadata_error(error: MetadataReadError) -> CoreSpaceChangesError 
             ))
         }
     }
-}
-
-fn verify_committed_logs(
-    trace: &CommittedExecutionTrace,
-    committed_logs: &[primitives::LogEntry],
-) -> Result<(), CoreSpaceChangesError> {
-    let trace_logs = trace.events().iter().filter_map(|event| {
-        let TraceEvent::Log {
-            frame_id,
-            address,
-            topics,
-            data,
-            ..
-        } = event
-        else {
-            return None;
-        };
-        Some((trace.frame(*frame_id).space, address, topics, data))
-    });
-    let trace_log_count = trace_logs.clone().count();
-    if trace_log_count != committed_logs.len() {
-        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
-            "Core Space trace contains {trace_log_count} committed logs, executor returned {}",
-            committed_logs.len()
-        )));
-    }
-
-    for (index, ((space, address, topics, data), committed)) in
-        trace_logs.zip(committed_logs).enumerate()
-    {
-        if space != committed.space
-            || *address != committed.address
-            || topics != &committed.topics
-            || data.as_slice() != committed.data.as_slice()
-        {
-            return Err(CoreSpaceChangesError::inconsistent_execution(format!(
-                "Core Space trace log {index} does not match the committed executor log"
-            )));
-        }
-    }
-
-    Ok(())
 }

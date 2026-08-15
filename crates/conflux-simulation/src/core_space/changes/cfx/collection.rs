@@ -29,6 +29,20 @@ struct CfxOperationCollector {
     espace_root_frame_ids: Vec<crate::execution::FrameId>,
 }
 
+fn claim_internal_transfer_positions(
+    owned_positions: &mut BTreeSet<usize>,
+    positions: impl IntoIterator<Item = usize>,
+) -> Result<(), CoreSpaceChangesError> {
+    for position in positions {
+        if !owned_positions.insert(position) {
+            return Err(CoreSpaceChangesError::inconsistent_execution(format!(
+                "Core Space internal transfer at trace position {position} was claimed by multiple analyzers"
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn collect_cfx_operations(
     trace: &CommittedExecutionTrace,
     storage_released: &[StorageChange],
@@ -41,13 +55,10 @@ pub(crate) fn collect_cfx_operations(
     let mut owned_transfer_positions = BTreeSet::new();
     let mut staking_ops = BTreeMap::new();
     for call in committed_staking_calls {
-        for transfer_position in call.owned_transfer_positions() {
-            if !owned_transfer_positions.insert(transfer_position) {
-                return Err(CoreSpaceChangesError::inconsistent_execution(format!(
-                    "Core Space transfer at trace position {transfer_position} was owned by multiple staking operations"
-                )));
-            }
-        }
+        claim_internal_transfer_positions(
+            &mut owned_transfer_positions,
+            call.owned_transfer_positions(),
+        )?;
         let staking_balance_operation = match *call {
             CommittedStakingCall::Deposit {
                 account, amount, ..
@@ -152,7 +163,10 @@ pub(crate) fn collect_cfx_operations(
                     collector
                         .operations
                         .push(CfxOperation::CrossSpace(operation));
-                    owned_transfer_positions.extend(claimed_transfer_positions);
+                    claim_internal_transfer_positions(
+                        &mut owned_transfer_positions,
+                        claimed_transfer_positions,
+                    )?;
                     continue;
                 }
                 if let Some((collected_call, claimed_transfer_positions)) =
@@ -168,7 +182,10 @@ pub(crate) fn collect_cfx_operations(
                                 CfxOperation::Sponsorship(SponsorshipOperation::AccessRule(update))
                             })),
                     }
-                    owned_transfer_positions.extend(claimed_transfer_positions);
+                    claim_internal_transfer_positions(
+                        &mut owned_transfer_positions,
+                        claimed_transfer_positions,
+                    )?;
                     continue;
                 }
                 match &frame.action {
@@ -224,7 +241,10 @@ pub(crate) fn collect_cfx_operations(
                 if let Some(operation) = collected {
                     collector.operations.push(CfxOperation::Basic(operation));
                 }
-                owned_transfer_positions.extend(claimed_transfer_positions);
+                claim_internal_transfer_positions(
+                    &mut owned_transfer_positions,
+                    claimed_transfer_positions,
+                )?;
             }
             TraceEvent::InternalTransfer { .. } => {
                 if let Some((conversion, claimed_transfer_positions)) =
@@ -233,13 +253,20 @@ pub(crate) fn collect_cfx_operations(
                     collector.operations.push(CfxOperation::Sponsorship(
                         SponsorshipOperation::StoragePointConversion(conversion),
                     ));
-                    owned_transfer_positions.extend(claimed_transfer_positions);
+                    claim_internal_transfer_positions(
+                        &mut owned_transfer_positions,
+                        claimed_transfer_positions,
+                    )?;
                     continue;
                 }
                 if let Some(refund) = collect_standalone_sponsorship_refund(event)? {
                     collector.operations.push(CfxOperation::Sponsorship(
                         SponsorshipOperation::StandaloneRefund(refund),
                     ));
+                    claim_internal_transfer_positions(
+                        &mut owned_transfer_positions,
+                        [event.position()],
+                    )?;
                     continue;
                 }
                 let (collected, claimed_transfer_positions) =
@@ -247,7 +274,10 @@ pub(crate) fn collect_cfx_operations(
                 if let Some(operation) = collected {
                     collector.operations.push(CfxOperation::Basic(operation));
                 }
-                owned_transfer_positions.extend(claimed_transfer_positions);
+                claim_internal_transfer_positions(
+                    &mut owned_transfer_positions,
+                    claimed_transfer_positions,
+                )?;
             }
             TraceEvent::Log { frame_id, .. } => {
                 if trace.frame(*frame_id).space == Space::Ethereum
