@@ -1,8 +1,8 @@
 use std::{future::pending, io, num::NonZeroUsize, time::Duration};
 
-use jsonrpsee::server::ServerHandle;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use simulation_tasks::SimulationTaskSet;
+use tracing::info;
 use tracing_subscriber::fmt::format::FmtSpan;
 
 use crate::{
@@ -16,9 +16,35 @@ pub async fn run(config: AppConfig) -> io::Result<()> {
 
     let simulation_tasks = create_simulation_task_set(&config.simulation)?;
     let mut metrics_server = start_metrics_server_if_enabled(&config.metrics).await?;
-    let rpc_handle = rpc_server::start(&config, simulation_tasks).await?;
+    let rpc_handle = rpc_server::start(&config, simulation_tasks.clone()).await?;
 
-    wait_for_listener_stop(rpc_handle, &mut metrics_server).await
+    tokio::select! {
+        result = shutdown_signal() => result?,
+        _ = rpc_handle.clone().stopped() => {
+            return Err(io::Error::other("RPC server stopped unexpectedly"));
+        }
+        result = wait_for_metrics_server(&mut metrics_server) => {
+            result?;
+            return Err(io::Error::other("metrics server stopped unexpectedly"));
+        }
+    }
+
+    info!("shutdown signal received");
+
+    let _ = rpc_handle.stop();
+    if let Some(metrics_server) = metrics_server.as_mut() {
+        metrics_server.stop();
+    }
+    simulation_tasks.close();
+
+    rpc_handle.stopped().await;
+    if let Some(metrics_server) = metrics_server.as_mut() {
+        metrics_server.wait().await?;
+    }
+    simulation_tasks.drain().await;
+
+    info!("shutdown complete");
+    Ok(())
 }
 
 fn init_tracing(config: &TracingConfig) -> io::Result<()> {
@@ -87,23 +113,27 @@ async fn start_metrics_server_if_enabled(
     Ok(Some(metrics_server))
 }
 
-async fn wait_for_listener_stop(
-    rpc_handle: ServerHandle,
-    metrics_server: &mut Option<MetricsServer>,
-) -> io::Result<()> {
-    tokio::select! {
-        _ = rpc_handle.stopped() => Err(io::Error::other("RPC server stopped unexpectedly")),
-        result = wait_for_metrics_server(metrics_server) => match result {
-            Ok(()) => Err(io::Error::other("metrics server stopped unexpectedly")),
-            Err(error) => Err(error),
-        },
-    }
-}
-
 async fn wait_for_metrics_server(metrics_server: &mut Option<MetricsServer>) -> io::Result<()> {
     match metrics_server {
         Some(server) => server.wait().await,
         None => pending().await,
+    }
+}
+
+async fn shutdown_signal() -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c().await
     }
 }
 
