@@ -155,7 +155,7 @@ impl CoreSpaceExecution {
             simulation_core_space::CoreSpaceExecutionOutcome::Reverted {
                 result,
                 revert_data,
-                reason: _,
+                reason,
             } => {
                 let fields = ExecutedWireFields::from_simulation(&result);
                 (
@@ -170,7 +170,7 @@ impl CoreSpaceExecution {
                     Some(CoreSpaceExecutionFailure {
                         code: CoreSpaceExecutionFailureCode::Revert,
                         message: "execution reverted".to_string(),
-                        reason: None,
+                        reason: reason.map(|reason| reason.to_string()),
                     }),
                 )
             }
@@ -187,7 +187,7 @@ impl CoreSpaceExecution {
                     CoreSpaceRpcBytes::default(),
                     Some(CoreSpaceExecutionFailure {
                         code: wire_failure_code_for_execution_failure(&failure),
-                        message: wire_message_for_execution_failure(&failure),
+                        message: failure.to_string(),
                         reason: None,
                     }),
                 )
@@ -203,7 +203,7 @@ impl CoreSpaceExecution {
                 CoreSpaceRpcBytes::default(),
                 Some(CoreSpaceExecutionFailure {
                     code: wire_failure_code_for_rejection(&rejection),
-                    message: wire_message_for_rejection(&rejection),
+                    message: rejection.to_string(),
                     reason: None,
                 }),
             ),
@@ -315,139 +315,6 @@ fn wire_failure_code_for_execution_failure(
         | Failure::CreateContractStartingWithEf => CoreSpaceExecutionFailureCode::VmError,
         _ => CoreSpaceExecutionFailureCode::VmError,
     }
-}
-
-fn wire_message_for_rejection(
-    rejection: &simulation_core_space::CoreSpaceTransactionRejection,
-) -> String {
-    use simulation_core_space::CoreSpaceTransactionRejection as Rejection;
-
-    match rejection {
-        Rejection::InvalidChainId {
-            transaction_chain_id,
-            expected_chain_id,
-        } => format!(
-            "transaction chain id {transaction_chain_id} does not match simulation chain id {expected_chain_id}"
-        ),
-        Rejection::ZeroGasPrice => "transaction gas price must be greater than zero".to_string(),
-        Rejection::ZeroMaxFeePerGas => {
-            "transaction max fee per gas must be greater than zero".to_string()
-        }
-        Rejection::Cip2930NotActivated | Rejection::Cip1559NotActivated => {
-            "typed Core Space transactions are not active in the simulation context".to_string()
-        }
-        Rejection::InvalidRecipient { recipient } => format!(
-            "invalid Core Space recipient address: {:?}",
-            raw_core_address(*recipient)
-        ),
-        Rejection::SenderHasCode { sender } => format!(
-            "transaction sender has contract code: {:?}",
-            raw_core_address(*sender)
-        ),
-        Rejection::GasPriceBelowBaseFee {
-            gas_price,
-            base_fee_per_gas,
-        } => format!(
-            "transaction gas price {gas_price} is lower than required base fee {base_fee_per_gas}"
-        ),
-        _ => rejection.to_string(),
-    }
-}
-
-fn wire_message_for_execution_failure(
-    failure: &simulation_core_space::CoreSpaceExecutionFailure,
-) -> String {
-    use simulation_core_space::CoreSpaceExecutionFailure as Failure;
-
-    match failure {
-        Failure::InsufficientFunds {
-            required,
-            available,
-            actual_gas_cost,
-            maximum_storage_cost,
-        } => format!(
-            "sender balance {available} is lower than required cost {required}; actual gas cost is {actual_gas_cost}, maximum storage cost is {maximum_storage_cost}"
-        ),
-        Failure::OutOfGas => "execution ran out of gas".to_string(),
-        Failure::StorageBalanceInsufficient {
-            required,
-            available,
-        } => format!(
-            "storage collateral balance {available} is lower than required amount {required}"
-        ),
-        Failure::StorageLimitExceeded => {
-            "execution exceeded the transaction storage limit".to_string()
-        }
-        Failure::NonceOverflow { address } => {
-            format!(
-                "nonce overflow for address: {:?}",
-                raw_core_address(*address)
-            )
-        }
-        Failure::InvalidJump { destination } => {
-            format!("virtual machine execution failed: Bad jump destination {destination:x}")
-        }
-        Failure::InvalidInstruction { instruction } => {
-            format!("virtual machine execution failed: Bad instruction {instruction:x}")
-        }
-        Failure::StackUnderflow {
-            instruction,
-            wanted,
-            available,
-        } => format!(
-            "virtual machine execution failed: Stack underflow {instruction} {wanted}/{available}"
-        ),
-        Failure::StackOverflow {
-            instruction,
-            wanted,
-            limit,
-        } => {
-            format!("virtual machine execution failed: Out of stack {instruction} {wanted}/{limit}")
-        }
-        Failure::SubroutineStackUnderflow { wanted, available } => format!(
-            "virtual machine execution failed: Subroutine stack underflow {wanted}/{available}"
-        ),
-        Failure::SubroutineStackOverflow { wanted, limit } => {
-            format!("virtual machine execution failed: Out of subroutine stack {wanted}/{limit}")
-        }
-        Failure::InvalidSubroutineEntry => {
-            "virtual machine execution failed: Invalid Subroutine Entry via BEGINSUB".to_string()
-        }
-        Failure::BuiltInContract { details } => {
-            format!("virtual machine execution failed: Built-in failed: {details}")
-        }
-        Failure::InternalContract { details } => {
-            format!("virtual machine execution failed: InternalContract failed: {details}")
-        }
-        Failure::StateChangeDuringStaticCall => {
-            "virtual machine execution failed: Mutable call in static context".to_string()
-        }
-        Failure::CreateInitCodeSizeLimit => {
-            "virtual machine execution failed: Exceed create initcode size limit".to_string()
-        }
-        Failure::Wasm { details } => {
-            format!("virtual machine execution failed: Internal error: {details}")
-        }
-        Failure::ReturnDataOutOfBounds => {
-            "virtual machine execution failed: Out of bounds".to_string()
-        }
-        Failure::InvalidAddress { address } => format!(
-            "virtual machine execution failed: InvalidAddress: {}",
-            raw_core_address(*address)
-        ),
-        Failure::CreateCollision { address } => format!(
-            "virtual machine execution failed: Contract creation on an existing address: {}",
-            raw_core_address(*address)
-        ),
-        Failure::CreateContractStartingWithEf => {
-            "virtual machine execution failed: Create contract starting with EF".to_string()
-        }
-        _ => failure.to_string(),
-    }
-}
-
-fn raw_core_address(address: simulation_core_space::CoreAddress) -> Address {
-    Address::from_slice(&address.bytes())
 }
 
 pub(super) fn map_core_address(
