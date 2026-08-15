@@ -25,10 +25,7 @@ pub use changes::{
     SponsorshipReplacement, VoteAllocation,
 };
 pub use conflux_provider::CoreAddress;
-pub use context::{
-    CoreSpaceBlockContext, CoreSpaceBlockSelector, CoreSpaceContextError, CoreSpaceEpochRef,
-    CoreSpaceStateAnchor,
-};
+pub use context::{CoreSpaceBlockContext, CoreSpaceBlockSelector, CoreSpaceContextError};
 pub(crate) use context::{ResolvedCoreSpaceContext, resolve_core_space_context};
 pub use contract_standards::{
     Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem, StandardChange,

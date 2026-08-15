@@ -1,4 +1,0 @@
-[package]
-name = "simulation-execution"
-version = { workspace = true }
-edition = { workspace = true }

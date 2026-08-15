@@ -261,11 +261,3 @@ async fn load_consensus_context(
         finalized_epoch: Some(finalized_epoch),
     })
 }
-
-/// Legacy name retained for existing Rust consumers during the Core API migration.
-#[doc(hidden)]
-pub type CoreSpaceEpochRef = CoreSpaceBlockSelector;
-
-/// Legacy name retained for existing Rust consumers during the Core API migration.
-#[doc(hidden)]
-pub type CoreSpaceStateAnchor = CoreSpaceBlockContext;

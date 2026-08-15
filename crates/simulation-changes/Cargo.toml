@@ -1,8 +1,0 @@
-[package]
-name = "simulation-changes"
-version = { workspace = true }
-edition = { workspace = true }
-
-[dependencies]
-alloy-primitives = { workspace = true }
-contract-standards = { workspace = true }
