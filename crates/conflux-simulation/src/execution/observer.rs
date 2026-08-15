@@ -99,6 +99,18 @@ impl CommittedExecutionTrace {
             .expect("committed trace event references a committed frame")
     }
 
+    pub(crate) fn frame_is_within(&self, mut frame_id: FrameId, root_id: FrameId) -> bool {
+        loop {
+            if frame_id == root_id {
+                return true;
+            }
+            let Some(parent_id) = self.frame(frame_id).parent_id else {
+                return false;
+            };
+            frame_id = parent_id;
+        }
+    }
+
     pub(crate) fn internal_transfers_in_scope(
         &self,
         frame_id: Option<FrameId>,

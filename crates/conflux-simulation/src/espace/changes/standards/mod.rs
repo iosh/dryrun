@@ -5,11 +5,12 @@ use cfx_types::Space;
 use contract_standards::{DecodedStandardLog, decode_standard_log};
 
 use crate::{
-    execution::{CommittedExecutionTrace, TraceEvent},
+    execution::{CommittedExecutionTrace, FrameId, TraceEvent},
     primitive::{address_from_cfx, b256_from_cfx},
 };
 
 pub(super) use metadata::load_metadata;
+pub(crate) use read_call::{MetadataReadError, ReadCallOutcome, execute_read_call};
 
 #[derive(Debug)]
 pub(super) struct DecodedStandardOccurrence {
@@ -19,6 +20,13 @@ pub(super) struct DecodedStandardOccurrence {
 
 pub(super) fn decode_standard_occurrences(
     trace: &CommittedExecutionTrace,
+) -> Vec<DecodedStandardOccurrence> {
+    decode_standard_occurrences_in_scope(trace, |_| true)
+}
+
+pub(super) fn decode_standard_occurrences_in_scope(
+    trace: &CommittedExecutionTrace,
+    includes_frame: impl Fn(FrameId) -> bool,
 ) -> Vec<DecodedStandardOccurrence> {
     trace
         .events()
@@ -35,6 +43,9 @@ pub(super) fn decode_standard_occurrences(
                 return None;
             };
             if trace.frame(*frame_id).space != Space::Ethereum {
+                return None;
+            }
+            if !includes_frame(*frame_id) {
                 return None;
             }
             let address = address_from_cfx(*address);

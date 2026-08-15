@@ -96,6 +96,7 @@ impl CoreSpaceOperationCollector {
                 )));
             }
             return Ok(Some(BasicCfxOperation::EspaceBalanceTransfer {
+                position: ChangePosition::new(position, 0),
                 from: address_from_cfx(*caller),
                 to: address_from_cfx(*target),
                 amount,
@@ -137,6 +138,7 @@ impl CoreSpaceOperationCollector {
         }
         if space == Space::Ethereum {
             return Some(BasicCfxOperation::EspaceBalanceTransfer {
+                position: ChangePosition::new(position, 0),
                 from: address_from_cfx(from),
                 to: address_from_cfx(to),
                 amount,
@@ -212,8 +214,21 @@ impl CoreSpaceOperationCollector {
                 {
                     Ok((
                         Some(BasicCfxOperation::EspaceBalanceTransfer {
+                            position: ChangePosition::new(*position, 0),
                             from: address_from_cfx(from.address),
                             to: address_from_cfx(to.address),
+                            amount,
+                        }),
+                        vec![*position],
+                    ))
+                }
+                (AddressPocket::Balance(account), AddressPocket::MintBurn)
+                    if account.space == Space::Ethereum =>
+                {
+                    Ok((
+                        Some(BasicCfxOperation::EspaceNativeBurn {
+                            position: ChangePosition::new(*position, 0),
+                            account: address_from_cfx(account.address),
                             amount,
                         }),
                         vec![*position],

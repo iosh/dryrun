@@ -8,7 +8,9 @@ use serde::Serialize;
 
 use super::{
     b256_to_wire,
-    change::{Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem},
+    change::{
+        Change as EspaceChange, Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem,
+    },
     core_space::{ResponseMappingError, map_core_address},
     u256_to_wire,
 };
@@ -151,6 +153,9 @@ pub(super) enum Change {
         from: CrossSpaceAddress,
         to: CrossSpaceAddress,
         raw_amount: U256,
+    },
+    Espace {
+        change: EspaceChange,
     },
 }
 
@@ -424,6 +429,9 @@ fn try_map_change(
             from: try_map_cross_space_address(from, network, field, "from")?,
             to: try_map_cross_space_address(to, network, field, "to")?,
             raw_amount: u256_to_wire(raw_amount),
+        },
+        Source::Espace(change) => Change::Espace {
+            change: change.into(),
         },
     })
 }

@@ -5,6 +5,7 @@ use tokio::runtime::Handle;
 
 use crate::{
     ConfluxSimulationBackend,
+    espace::EspaceNativeCurrency,
     execution::{
         ConfluxExecutionOutcome, ConfluxTransactionExecutor, DryRunTransactionInput,
         ExecutionBlockContext, ExecutionTraceObserver, TransactionExecutionInput,
@@ -29,6 +30,8 @@ pub(super) struct CoreSpaceExecutionSession {
     chain_id: u32,
     network: Network,
     currency: CoreSpaceNativeCurrency,
+    espace_currency: EspaceNativeCurrency,
+    espace_wrapped_native_token: alloy_primitives::Address,
     analysis_data: CoreSpaceAnalysisData,
 }
 
@@ -56,6 +59,8 @@ impl CoreSpaceExecutionSession {
             chain_id: backend.chain_spec().core_space_chain_id(),
             network: backend.core_space_address_network(),
             currency: backend.chain_spec().core_space_native_currency().clone(),
+            espace_currency: backend.chain_spec().espace_native_currency().clone(),
+            espace_wrapped_native_token: backend.chain_spec().espace_wrapped_native_token(),
             analysis_data,
         })
     }
@@ -85,6 +90,8 @@ impl CoreSpaceExecutionSession {
                 self.analysis_data,
                 self.network,
                 &self.currency,
+                &self.espace_currency,
+                self.espace_wrapped_native_token,
             )?;
             let state_after_execution = self.state.save();
 

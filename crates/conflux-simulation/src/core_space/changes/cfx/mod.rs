@@ -10,7 +10,7 @@ use std::{
     fmt,
 };
 
-use crate::core_space::changes::ChangePosition;
+use crate::{core_space::changes::ChangePosition, execution::FrameId};
 use alloy_primitives::{Address, U256};
 use primitives::{Action, SignedTransaction};
 
@@ -35,6 +35,7 @@ pub(crate) struct CfxOperations {
     storage_point_accounts: Vec<Address>,
     requires_storage_point_globals: bool,
     requires_total_espace_tokens: bool,
+    espace_root_frame_ids: Vec<FrameId>,
     operations: Vec<CfxOperation>,
 }
 
@@ -50,6 +51,7 @@ impl CfxOperations {
         let mut storage_point_accounts = BTreeSet::new();
         let mut requires_storage_point_globals = false;
         let mut requires_total_espace_tokens = false;
+        let mut espace_root_frame_ids = Vec::new();
 
         balance_locations.extend(
             staking_accounts
@@ -74,14 +76,21 @@ impl CfxOperations {
                     balance_locations.insert(CfxBalanceLocation::EspaceAccount { account: *from });
                     balance_locations.insert(CfxBalanceLocation::EspaceAccount { account: *to });
                 }
+                CfxOperation::Basic(BasicCfxOperation::EspaceNativeBurn { account, .. }) => {
+                    balance_locations
+                        .insert(CfxBalanceLocation::EspaceAccount { account: *account });
+                    requires_total_espace_tokens = true;
+                }
                 CfxOperation::CrossSpace(transfer) => {
                     match transfer {
                         CrossSpaceTransferOperation::ToEspace {
+                            child_frame_id,
                             core_sender,
                             mapped_sender,
                             receiver,
                             ..
                         } => {
+                            espace_root_frame_ids.push(*child_frame_id);
                             balance_locations.insert(CfxBalanceLocation::CoreSpaceAccount {
                                 account: *core_sender,
                             });
@@ -217,8 +226,13 @@ impl CfxOperations {
             storage_point_accounts: storage_point_accounts.into_iter().collect(),
             requires_storage_point_globals,
             requires_total_espace_tokens,
+            espace_root_frame_ids,
             operations,
         }
+    }
+
+    pub(crate) fn espace_root_frame_ids(&self) -> &[FrameId] {
+        &self.espace_root_frame_ids
     }
 
     pub(crate) fn staking_balance_effects(&self) -> StakingBalanceEffects {
@@ -457,8 +471,14 @@ enum BasicCfxOperation {
         amount: U256,
     },
     EspaceBalanceTransfer {
+        position: ChangePosition,
         from: Address,
         to: Address,
+        amount: U256,
+    },
+    EspaceNativeBurn {
+        position: ChangePosition,
+        account: Address,
         amount: U256,
     },
     GasPrecharge {
@@ -498,6 +518,7 @@ enum SponsorshipOperation {
 enum CrossSpaceTransferOperation {
     ToEspace {
         position: ChangePosition,
+        child_frame_id: FrameId,
         core_sender: Address,
         mapped_sender: Address,
         receiver: Address,

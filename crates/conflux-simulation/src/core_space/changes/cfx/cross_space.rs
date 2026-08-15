@@ -146,6 +146,7 @@ fn collect_transfer_to_espace(
     Ok(Some((
         CrossSpaceTransferOperation::ToEspace {
             position: ChangePosition::new(context.frame_position, 0),
+            child_frame_id: child.frame_id,
             core_sender: address_from_cfx(context.caller),
             mapped_sender,
             receiver: child.receiver,
@@ -195,6 +196,7 @@ fn collect_withdrawal_to_core_space(
 #[derive(Clone, Copy)]
 struct MatchingChild {
     position: usize,
+    frame_id: FrameId,
     receiver: Address,
 }
 
@@ -225,6 +227,7 @@ fn unique_matching_call_child(
             && u256_from_cfx(*transferred_value) == amount)
             .then_some(MatchingChild {
                 position: *position,
+                frame_id: *frame_id,
                 receiver,
             })
     });
@@ -257,6 +260,7 @@ fn unique_matching_create_child(
             && u256_from_cfx(*value) == amount)
             .then_some(MatchingChild {
                 position: *position,
+                frame_id: *frame_id,
                 receiver,
             })
     });

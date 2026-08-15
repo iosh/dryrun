@@ -168,6 +168,13 @@ export function toAssetFlowItemViewModels(
           value: view.value ?? view.title,
         },
       ];
+    case 'ESPACE':
+      return toAssetFlowItemViewModels(change.change).map((flow) => ({
+        ...flow,
+        from: withAddressContext(flow.from, 'eSpace'),
+        label: view.label,
+        to: withAddressContext(flow.to, 'eSpace'),
+      }));
     default:
       return [];
   }
@@ -272,6 +279,11 @@ export function getChangeAddresses(
           label: `To / ${spaceLabel(change.to.space)}`,
         },
       ];
+    case 'ESPACE':
+      return getChangeAddresses(change.change).map((address) => ({
+        ...address,
+        label: `${address.label} / eSpace`,
+      }));
   }
 }
 
@@ -285,6 +297,15 @@ function addressEndpoint(
   context?: string,
 ): FlowEndpoint {
   return { address, context, kind: 'address', label };
+}
+
+function withAddressContext(
+  endpoint: FlowEndpoint,
+  context: string,
+): FlowEndpoint {
+  return endpoint.kind === 'address'
+    ? { ...endpoint, context: endpoint.context ?? context }
+    : endpoint;
 }
 
 function compactAddresses(

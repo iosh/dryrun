@@ -26,6 +26,7 @@ use crate::{
 struct CfxOperationCollector {
     operations: Vec<CfxOperation>,
     core_space: CoreSpaceOperationCollector,
+    espace_root_frame_ids: Vec<crate::execution::FrameId>,
 }
 
 pub(crate) fn collect_cfx_operations(
@@ -84,6 +85,44 @@ pub(crate) fn collect_cfx_operations(
                     continue;
                 }
                 let frame = trace.frame(*frame_id);
+                if frame.space == Space::Ethereum
+                    && !collector.includes_espace_frame(trace, *frame_id)
+                {
+                    return Err(CoreSpaceChangesError::inconsistent_execution(
+                        "committed eSpace frame was outside a verified Core cross-space child subtree",
+                    ));
+                }
+                if frame.space == Space::Ethereum {
+                    match &frame.action {
+                        FrameAction::Call { .. } => {
+                            if let Some(operation) =
+                                collector.core_space.collect_call_value_transfer(
+                                    trace, *position, *frame_id, machine, spec,
+                                )?
+                            {
+                                collector.operations.push(CfxOperation::Basic(operation));
+                            }
+                        }
+                        FrameAction::Create {
+                            creator,
+                            created_address,
+                            value,
+                        } => {
+                            if let Some(operation) =
+                                collector.core_space.collect_create_value_transfer(
+                                    *position,
+                                    frame.space,
+                                    *creator,
+                                    *created_address,
+                                    u256_from_cfx(*value),
+                                )
+                            {
+                                collector.operations.push(CfxOperation::Basic(operation));
+                            }
+                        }
+                    }
+                    continue;
+                }
                 if let Some(admin_call) =
                     collect_admin_call(trace, *position, *frame_id, machine, spec)?
                 {
@@ -105,6 +144,11 @@ pub(crate) fn collect_cfx_operations(
                 if let Some((operation, claimed_transfer_positions)) =
                     collect_cross_space_call(trace, *position, *frame_id, machine, spec)?
                 {
+                    if let super::CrossSpaceTransferOperation::ToEspace { child_frame_id, .. } =
+                        operation
+                    {
+                        collector.espace_root_frame_ids.push(child_frame_id);
+                    }
                     collector
                         .operations
                         .push(CfxOperation::CrossSpace(operation));
@@ -160,6 +204,28 @@ pub(crate) fn collect_cfx_operations(
                     }
                 }
             }
+            TraceEvent::InternalTransfer {
+                frame_id,
+                space: Space::Ethereum,
+                ..
+            } => {
+                let frame_id = frame_id.ok_or_else(|| {
+                    CoreSpaceChangesError::inconsistent_execution(
+                        "committed eSpace internal transfer had no owning frame",
+                    )
+                })?;
+                if !collector.includes_espace_frame(trace, frame_id) {
+                    return Err(CoreSpaceChangesError::inconsistent_execution(
+                        "committed eSpace internal transfer was outside a verified Core cross-space child subtree",
+                    ));
+                }
+                let (collected, claimed_transfer_positions) =
+                    collector.core_space.collect_internal_transfer(event)?;
+                if let Some(operation) = collected {
+                    collector.operations.push(CfxOperation::Basic(operation));
+                }
+                owned_transfer_positions.extend(claimed_transfer_positions);
+            }
             TraceEvent::InternalTransfer { .. } => {
                 if let Some((conversion, claimed_transfer_positions)) =
                     collect_storage_point_conversion(trace, event)?
@@ -183,7 +249,15 @@ pub(crate) fn collect_cfx_operations(
                 }
                 owned_transfer_positions.extend(claimed_transfer_positions);
             }
-            TraceEvent::Log { .. } => {}
+            TraceEvent::Log { frame_id, .. } => {
+                if trace.frame(*frame_id).space == Space::Ethereum
+                    && !collector.includes_espace_frame(trace, *frame_id)
+                {
+                    return Err(CoreSpaceChangesError::inconsistent_execution(
+                        "committed eSpace log was outside a verified Core cross-space child subtree",
+                    ));
+                }
+            }
         }
     }
 
@@ -201,7 +275,18 @@ impl CfxOperationCollector {
         Ok(Self {
             operations: Vec::new(),
             core_space: CoreSpaceOperationCollector::new(storage_released)?,
+            espace_root_frame_ids: Vec::new(),
         })
+    }
+
+    fn includes_espace_frame(
+        &self,
+        trace: &CommittedExecutionTrace,
+        frame_id: crate::execution::FrameId,
+    ) -> bool {
+        self.espace_root_frame_ids
+            .iter()
+            .any(|root_id| trace.frame_is_within(frame_id, *root_id))
     }
 
     fn into_operations(

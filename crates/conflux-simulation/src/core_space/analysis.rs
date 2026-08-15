@@ -1,9 +1,11 @@
+use alloy_primitives::Address;
 use cfx_executor::{machine::Machine, state::State};
-use cfx_types::U256;
+use cfx_types::{U256, address_util::AddressUtil};
 use conflux_provider::Network;
 
 use crate::{
     core_space::CoreSpaceChangesError,
+    espace::{EspaceNativeCurrency, NestedEspaceEffects},
     execution::{
         ConfluxExecutionOutcome, ConfluxTransactionExecution, PreparedTransactionExecution,
     },
@@ -11,9 +13,9 @@ use crate::{
 };
 
 use super::changes::{
-    ActiveContracts, CfxAnalysisInput, CfxStateValues, CommittedCalls, CoreSpaceChange,
-    CoreSpaceNativeCurrency, GovernanceAnalysisInput, PoSAnalysisInput, PoSStateReader,
-    PoSStateValues, PositionedCoreSpaceChange, StatePhase, analyze_balance_changes,
+    ActiveContracts, CfxAnalysisInput, CfxStateValues, ChangePosition, CommittedCalls,
+    CoreSpaceChange, CoreSpaceNativeCurrency, GovernanceAnalysisInput, PoSAnalysisInput,
+    PoSStateReader, PoSStateValues, PositionedCoreSpaceChange, StatePhase, analyze_balance_changes,
     analyze_governance_changes, analyze_pos_changes, collect_calls, collect_standard_changes,
     finish_core_space_changes, load_standard_metadata, verify_vote_lock_changes,
 };
@@ -24,6 +26,7 @@ struct CoreSpaceAnalysisInput {
     governance: GovernanceAnalysisInput,
     pos: PoSAnalysisInput,
     standard_changes: Vec<PositionedCoreSpaceChange>,
+    nested_espace_effects: NestedEspaceEffects,
 }
 
 pub(super) struct CoreSpaceAnalysisData {
@@ -49,6 +52,7 @@ impl CoreSpaceAnalysisInput {
         execution: &ConfluxTransactionExecution,
         machine: &Machine,
         masked_whitelist_keys: &MaskedWhitelistKeys,
+        wrapped_native_token: Address,
     ) -> Result<Self, CoreSpaceChangesError> {
         let ConfluxExecutionOutcome::Success(details) = &execution.outcome else {
             return Err(CoreSpaceChangesError::internal_invariant(
@@ -72,6 +76,11 @@ impl CoreSpaceAnalysisInput {
             active_contracts.pos_register_is_active(),
         )?;
         let standard_changes = collect_standard_changes(details)?;
+        let nested_espace_effects = NestedEspaceEffects::from_trace(
+            &details.trace,
+            cfx.espace_root_frame_ids(),
+            wrapped_native_token,
+        );
 
         Ok(Self {
             cfx,
@@ -79,6 +88,7 @@ impl CoreSpaceAnalysisInput {
             governance,
             pos,
             standard_changes,
+            nested_espace_effects,
         })
     }
 }
@@ -120,6 +130,7 @@ pub(super) struct CoreSpaceChangeAnalysis {
     data: CoreSpaceAnalysisData,
     network: Network,
     currency: CoreSpaceNativeCurrency,
+    espace_currency: EspaceNativeCurrency,
 }
 
 impl CoreSpaceChangeAnalysis {
@@ -129,17 +140,21 @@ impl CoreSpaceChangeAnalysis {
         data: CoreSpaceAnalysisData,
         network: Network,
         currency: &CoreSpaceNativeCurrency,
+        espace_currency: &EspaceNativeCurrency,
+        wrapped_native_token: Address,
     ) -> Result<Self, CoreSpaceChangesError> {
         Ok(Self {
             input: CoreSpaceAnalysisInput::from_execution(
                 execution,
                 machine,
                 &data.masked_whitelist_keys,
+                wrapped_native_token,
             )?,
             state_reader: CoreSpaceStateReader::default(),
             data,
             network,
             currency: currency.clone(),
+            espace_currency: espace_currency.clone(),
         })
     }
 
@@ -167,6 +182,7 @@ impl CoreSpaceChangeAnalysis {
             data,
             network,
             currency,
+            espace_currency,
             ..
         } = self;
         let CoreSpaceAnalysisData {
@@ -183,9 +199,10 @@ impl CoreSpaceChangeAnalysis {
             cfx: after_cfx_state,
             pos: after_pos_state,
         } = after;
-        let mut positioned_core_changes = analysis_input
-            .cfx
-            .verify(&before_cfx_state, &after_cfx_state)?;
+        let mut positioned_core_changes =
+            analysis_input
+                .cfx
+                .verify(&before_cfx_state, &after_cfx_state, &espace_currency)?;
         positioned_core_changes.extend(analyze_balance_changes(
             state,
             analysis_input.calls.staking_calls(),
@@ -229,12 +246,34 @@ impl CoreSpaceChangeAnalysis {
 
         positioned_core_changes.extend(analysis_input.standard_changes);
 
-        if positioned_core_changes.is_empty() {
+        if positioned_core_changes.is_empty() && analysis_input.nested_espace_effects.is_empty() {
             return Ok(Vec::new());
         }
 
-        let metadata =
-            load_standard_metadata(state, machine, prepared_execution, &positioned_core_changes)?;
-        finish_core_space_changes(positioned_core_changes, &metadata, network, &currency)
+        let nested_metadata_calls = analysis_input
+            .nested_espace_effects
+            .metadata_call_occurrences();
+        let mapped_sender = prepared_execution.transaction.sender().address.evm_map();
+        let metadata = load_standard_metadata(
+            state,
+            machine,
+            prepared_execution,
+            &positioned_core_changes,
+            nested_metadata_calls,
+            crate::primitive::address_from_cfx(mapped_sender.address),
+        )?;
+        let nested_changes = analysis_input
+            .nested_espace_effects
+            .into_changes(&metadata.espace)
+            .map_err(|_| {
+                CoreSpaceChangesError::inconsistent_execution(
+                    "a decoded nested eSpace standard change is missing metadata",
+                )
+            })?;
+        positioned_core_changes.extend(nested_changes.into_iter().map(|occurrence| {
+            let (position, change) = occurrence.into_parts();
+            PositionedCoreSpaceChange::espace(ChangePosition::new(position, 0), change)
+        }));
+        finish_core_space_changes(positioned_core_changes, &metadata.core, network, &currency)
     }
 }

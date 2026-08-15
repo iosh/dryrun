@@ -12,8 +12,11 @@ mod simulator;
 mod transaction;
 mod transaction_adapter;
 
-pub(crate) use changes::EspaceChangesAnalysis;
 pub use changes::{EspaceChange, EspaceNativeCurrency};
+pub(crate) use changes::{
+    EspaceChangesAnalysis, MetadataReadError, NestedEspaceEffects, ReadCallOutcome,
+    execute_read_call,
+};
 pub(crate) use completion::complete_transaction;
 pub use context::{EspaceBlockContext, EspaceBlockSelector, EspaceContextError};
 pub(crate) use context::{ResolvedEspaceContext, resolve_espace_context};

@@ -31,7 +31,7 @@ pub(crate) fn load_metadata(
             state,
             machine,
             prepared_execution,
-            transaction,
+            transaction.from,
             *call.contract_address(),
             call.call_data(),
             &call,

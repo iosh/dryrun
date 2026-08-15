@@ -14,10 +14,18 @@ use crate::execution::{
 
 use self::{
     native::{NativeAnalysis, NativeBalances},
-    standards::{DecodedStandardOccurrence, decode_standard_occurrences, load_metadata},
-    wrapped_native::{WrappedNativeOccurrence, decode_wrapped_native_occurrences},
+    standards::{
+        DecodedStandardOccurrence, decode_standard_occurrences,
+        decode_standard_occurrences_in_scope, load_metadata,
+    },
+    wrapped_native::{
+        WrappedNativeOccurrence, decode_wrapped_native_occurrences,
+        decode_wrapped_native_occurrences_in_scope,
+    },
 };
 use super::{EspaceChangesError, EspaceCompleteTransaction, EspaceNativeChangeError};
+
+pub(crate) use standards::{MetadataReadError, ReadCallOutcome, execute_read_call};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EspaceNativeCurrency {
@@ -63,6 +71,67 @@ pub(crate) struct ChangeOccurrence {
 impl ChangeOccurrence {
     pub(crate) const fn new(position: usize, change: EspaceChange) -> Self {
         Self { position, change }
+    }
+
+    pub(crate) fn into_parts(self) -> (usize, EspaceChange) {
+        (self.position, self.change)
+    }
+}
+
+pub(crate) struct NestedEspaceEffects {
+    standard_occurrences: Vec<DecodedStandardOccurrence>,
+    wrapped_native_occurrences: Vec<WrappedNativeOccurrence>,
+}
+
+impl NestedEspaceEffects {
+    pub(crate) fn from_trace(
+        trace: &CommittedExecutionTrace,
+        root_frame_ids: &[crate::execution::FrameId],
+        wrapped_native_token: Address,
+    ) -> Self {
+        let includes_frame = |frame_id| {
+            root_frame_ids
+                .iter()
+                .any(|root_id| trace.frame_is_within(frame_id, *root_id))
+        };
+        Self {
+            standard_occurrences: decode_standard_occurrences_in_scope(trace, includes_frame),
+            wrapped_native_occurrences: decode_wrapped_native_occurrences_in_scope(
+                trace,
+                wrapped_native_token,
+                includes_frame,
+            ),
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.standard_occurrences.is_empty() && self.wrapped_native_occurrences.is_empty()
+    }
+
+    pub(crate) fn metadata_call_occurrences(&self) -> Vec<(usize, MetadataCall<Address>)> {
+        collect_metadata_call_occurrences(
+            &self.standard_occurrences,
+            &self.wrapped_native_occurrences,
+        )
+    }
+
+    pub(crate) fn into_changes(
+        self,
+        metadata: &contract_standards::MetadataValues<Address>,
+    ) -> Result<Vec<ChangeOccurrence>, contract_standards::MissingMetadataOutcome> {
+        let mut changes = Vec::new();
+        for occurrence in self.wrapped_native_occurrences {
+            let change_metadata = metadata.erc20_metadata(&occurrence.contract_address())?;
+            changes.push(occurrence.into_change(change_metadata));
+        }
+        for occurrence in self.standard_occurrences {
+            let change = occurrence.decoded_log.into_change(metadata)?;
+            changes.push(ChangeOccurrence::new(
+                occurrence.position,
+                EspaceChange::Standard(change),
+            ));
+        }
+        Ok(changes)
     }
 }
 
@@ -168,6 +237,19 @@ fn collect_metadata_calls(
     standard_occurrences: &[DecodedStandardOccurrence],
     wrapped_native_occurrences: &[WrappedNativeOccurrence],
 ) -> Vec<MetadataCall<Address>> {
+    let calls = collect_metadata_call_occurrences(standard_occurrences, wrapped_native_occurrences);
+
+    let mut seen = HashSet::new();
+    calls
+        .into_iter()
+        .filter_map(|(_, call)| seen.insert(call.clone()).then_some(call))
+        .collect()
+}
+
+fn collect_metadata_call_occurrences(
+    standard_occurrences: &[DecodedStandardOccurrence],
+    wrapped_native_occurrences: &[WrappedNativeOccurrence],
+) -> Vec<(usize, MetadataCall<Address>)> {
     let mut calls = Vec::new();
 
     for occurrence in standard_occurrences {
@@ -188,11 +270,7 @@ fn collect_metadata_calls(
     }
 
     calls.sort_by_key(|(position, _)| *position);
-    let mut seen = HashSet::new();
     calls
-        .into_iter()
-        .filter_map(|(_, call)| seen.insert(call.clone()).then_some(call))
-        .collect()
 }
 
 fn verify_committed_logs(

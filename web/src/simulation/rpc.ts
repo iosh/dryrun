@@ -383,6 +383,11 @@ export interface CrossSpaceNativeTransferChange {
   rawAmount: string;
 }
 
+export interface NestedEspaceChange {
+  changeType: 'ESPACE';
+  change: EspaceChange;
+}
+
 export type CoreChange =
   | CoreNativeTransferChange
   | CoreNativeBurnChange
@@ -405,7 +410,8 @@ export type CoreChange =
   | ContractAdminSetChange
   | SponsorshipAccessRuleSetChange
   | StoragePointConversionChange
-  | CrossSpaceNativeTransferChange;
+  | CrossSpaceNativeTransferChange
+  | NestedEspaceChange;
 
 export type ExecutionStatus = 'SUCCESS' | 'FAILED' | 'NOT_EXECUTED';
 

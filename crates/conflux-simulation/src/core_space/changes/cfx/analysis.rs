@@ -9,6 +9,7 @@ use crate::core_space::changes::StatePhase;
 use crate::{
     core_space::CoreSpaceChangesError,
     core_space::changes::{PositionedCoreSpaceChange, staking::CommittedStakingCall},
+    espace::EspaceNativeCurrency,
     execution::{ConfluxExecutionOutcome, ConfluxTransactionExecution},
     state::MaskedWhitelistKeys,
 };
@@ -69,6 +70,7 @@ impl CfxAnalysisInput {
         &self,
         before_state: &CfxStateValues,
         after_state: &CfxStateValues,
+        espace_currency: &EspaceNativeCurrency,
     ) -> Result<Vec<PositionedCoreSpaceChange>, CoreSpaceChangesError> {
         verify_cfx_changes(
             &self.operations,
@@ -77,7 +79,12 @@ impl CfxAnalysisInput {
             self.expected_gas_fee_payer,
             self.execution_fee,
             self.burnt_fee,
+            espace_currency,
         )
+    }
+
+    pub(crate) fn espace_root_frame_ids(&self) -> &[crate::execution::FrameId] {
+        self.operations.espace_root_frame_ids()
     }
 
     pub(crate) fn staking_balance_effects(&self) -> &StakingBalanceEffects {

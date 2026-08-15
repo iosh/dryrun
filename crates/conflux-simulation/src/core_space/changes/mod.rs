@@ -9,7 +9,7 @@ use alloy_primitives::{Address, B256, Bytes, U256};
 use conflux_provider::{CoreAddress, Network};
 use contract_standards::{DecodedStandardLog, MetadataValues, StandardChange};
 
-use crate::core_space::CoreSpaceChangesError;
+use crate::{core_space::CoreSpaceChangesError, espace::EspaceChange};
 
 pub(crate) use cfx::{CfxAnalysisInput, CfxStateValues};
 pub(crate) use governance::{GovernanceAnalysisInput, analyze_governance_changes};
@@ -106,6 +106,7 @@ pub enum CoreSpaceChange {
         to: CrossSpaceAddress,
         raw_amount: U256,
     },
+    Espace(EspaceChange),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -302,6 +303,7 @@ pub(crate) enum PendingSponsorshipAccessRuleScope {
 enum PendingChange {
     CoreSpace(PendingCoreSpaceChange),
     Standard(DecodedStandardLog<Address>),
+    Espace(EspaceChange),
 }
 
 #[derive(Debug)]
@@ -328,10 +330,21 @@ impl PositionedCoreSpaceChange {
         }
     }
 
+    pub(crate) const fn espace(position: ChangePosition, change: EspaceChange) -> Self {
+        Self {
+            position,
+            change: PendingChange::Espace(change),
+        }
+    }
+
+    pub(crate) const fn position(&self) -> ChangePosition {
+        self.position
+    }
+
     fn decoded_standard_log(&self) -> Option<&DecodedStandardLog<Address>> {
         match &self.change {
             PendingChange::Standard(change) => Some(change),
-            PendingChange::CoreSpace(_) => None,
+            PendingChange::CoreSpace(_) | PendingChange::Espace(_) => None,
         }
     }
 }
@@ -357,6 +370,7 @@ pub(crate) fn finish_core_space_changes(
                     change, network,
                 )?))
             }
+            PendingChange::Espace(change) => Ok(CoreSpaceChange::Espace(change)),
         })
         .collect()
 }

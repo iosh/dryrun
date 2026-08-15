@@ -7,7 +7,7 @@ use cfx_types::Space;
 use contract_standards::Erc20Metadata;
 
 use crate::{
-    execution::{CommittedExecutionTrace, TraceEvent},
+    execution::{CommittedExecutionTrace, FrameId, TraceEvent},
     primitive::{address_from_cfx, b256_from_cfx},
 };
 
@@ -69,6 +69,14 @@ pub(super) fn decode_wrapped_native_occurrences(
     trace: &CommittedExecutionTrace,
     contract_address: Address,
 ) -> Vec<WrappedNativeOccurrence> {
+    decode_wrapped_native_occurrences_in_scope(trace, contract_address, |_| true)
+}
+
+pub(super) fn decode_wrapped_native_occurrences_in_scope(
+    trace: &CommittedExecutionTrace,
+    contract_address: Address,
+    includes_frame: impl Fn(FrameId) -> bool,
+) -> Vec<WrappedNativeOccurrence> {
     trace
         .events()
         .iter()
@@ -84,6 +92,9 @@ pub(super) fn decode_wrapped_native_occurrences(
                 return None;
             };
             if trace.frame(*frame_id).space != Space::Ethereum {
+                return None;
+            }
+            if !includes_frame(*frame_id) {
                 return None;
             }
             if address_from_cfx(*address) != contract_address

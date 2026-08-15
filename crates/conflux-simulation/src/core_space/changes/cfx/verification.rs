@@ -20,6 +20,7 @@ use crate::{
         SponsoredResource as PublicSponsoredResource,
         SponsorshipFundingTerms as PublicSponsorshipFundingTerms, StatePhase,
     },
+    espace::{EspaceChange, EspaceNativeCurrency},
     primitive::{address_to_cfx, u256_from_cfx},
     state::SponsorWhitelistStorageKey,
 };
@@ -278,6 +279,7 @@ pub(crate) fn verify_cfx_changes(
     expected_gas_fee_payer: CfxBalanceLocation,
     execution_fee: U256,
     burnt_fee: Option<U256>,
+    espace_currency: &EspaceNativeCurrency,
 ) -> Result<Vec<PositionedCoreSpaceChange>, CoreSpaceChangesError> {
     if let Some(burnt_fee) = burnt_fee
         && burnt_fee > execution_fee
@@ -317,13 +319,58 @@ pub(crate) fn verify_cfx_changes(
                     },
                 ));
             }
-            CfxOperation::Basic(BasicCfxOperation::EspaceBalanceTransfer { from, to, amount }) => {
+            CfxOperation::Basic(BasicCfxOperation::EspaceBalanceTransfer {
+                position,
+                from,
+                to,
+                amount,
+            }) => {
                 replayed_state.debit_balance(
                     CfxBalanceLocation::EspaceAccount { account: *from },
                     *amount,
                 )?;
                 replayed_state
                     .credit_balance(CfxBalanceLocation::EspaceAccount { account: *to }, *amount)?;
+                positioned_core_changes.push(PositionedCoreSpaceChange::espace(
+                    *position,
+                    EspaceChange::NativeTransfer {
+                        from: *from,
+                        to: *to,
+                        raw_amount: *amount,
+                        currency: espace_currency.clone(),
+                    },
+                ));
+            }
+            CfxOperation::Basic(BasicCfxOperation::EspaceNativeBurn {
+                position,
+                account,
+                amount,
+            }) => {
+                replayed_state.debit_balance(
+                    CfxBalanceLocation::EspaceAccount { account: *account },
+                    *amount,
+                )?;
+                replayed_state.debit_total_issued(*amount, "an eSpace selfdestruct burn")?;
+                let total_espace_tokens =
+                    replayed_state.total_espace_tokens.as_mut().ok_or_else(|| {
+                        CoreSpaceChangesError::inconsistent_execution(
+                            "before Core cross-space total eSpace tokens are missing for a selfdestruct burn",
+                        )
+                    })?;
+                *total_espace_tokens =
+                    total_espace_tokens.checked_sub(*amount).ok_or_else(|| {
+                        CoreSpaceChangesError::inconsistent_execution(
+                            "Core total eSpace tokens underflowed during a selfdestruct burn",
+                        )
+                    })?;
+                positioned_core_changes.push(PositionedCoreSpaceChange::espace(
+                    *position,
+                    EspaceChange::SelfDestructBurn {
+                        contract_address: *account,
+                        raw_amount: *amount,
+                        currency: espace_currency.clone(),
+                    },
+                ));
             }
             CfxOperation::CrossSpace(transfer) => {
                 replayed_state
@@ -537,6 +584,7 @@ impl CfxStateValues {
         match *transfer {
             CrossSpaceTransferOperation::ToEspace {
                 position,
+                child_frame_id: _,
                 core_sender,
                 mapped_sender,
                 receiver,

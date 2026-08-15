@@ -7,38 +7,61 @@ use cfx_executor::{
     machine::Machine,
     state::State,
 };
+use cfx_statedb::Error as StateDbError;
 use cfx_types::{AddressSpaceUtil, U256};
 use cfx_vm_types as vm;
 use contract_standards::MetadataCall;
 use primitives::transaction::{Action, Eip155Transaction, EthereumTransaction};
 
 use crate::{
-    espace::{EspaceChangesError, EspaceCompleteTransaction},
-    execution::PreparedTransactionExecution,
-    primitive::address_to_cfx,
+    espace::EspaceChangesError, execution::PreparedTransactionExecution, primitive::address_to_cfx,
 };
 
 const METADATA_CALL_GAS_LIMIT: u64 = 100_000;
 
-pub(super) enum ReadCallOutcome {
+pub(crate) enum ReadCallOutcome {
     Success(Bytes),
     Reverted,
     Failed,
 }
 
-pub(super) fn execute_read_call(
+pub(crate) enum MetadataReadError {
+    StateAccess {
+        call: MetadataCall<Address>,
+        source: StateDbError,
+    },
+    ProbeExecution {
+        call: MetadataCall<Address>,
+        details: String,
+    },
+}
+
+impl From<MetadataReadError> for EspaceChangesError {
+    fn from(error: MetadataReadError) -> Self {
+        match error {
+            MetadataReadError::StateAccess { call, source } => {
+                Self::MetadataStateAccess { call, source }
+            }
+            MetadataReadError::ProbeExecution { call, details } => {
+                Self::MetadataProbeExecution { call, details }
+            }
+        }
+    }
+}
+
+pub(crate) fn execute_read_call(
     state: &mut State,
     machine: &Machine,
     prepared_execution: &PreparedTransactionExecution,
-    transaction: &EspaceCompleteTransaction,
+    sender: Address,
     target: Address,
     data: Bytes,
     metadata_call: &MetadataCall<Address>,
-) -> Result<ReadCallOutcome, EspaceChangesError> {
-    let sender = address_to_cfx(transaction.from).with_evm_space();
+) -> Result<ReadCallOutcome, MetadataReadError> {
+    let sender = address_to_cfx(sender).with_evm_space();
     let nonce = state
         .nonce(&sender)
-        .map_err(|error| EspaceChangesError::MetadataStateAccess {
+        .map_err(|error| MetadataReadError::StateAccess {
             call: metadata_call.clone(),
             source: error,
         })?;
@@ -47,7 +70,7 @@ pub(super) fn execute_read_call(
         .chain_id
         .get(&cfx_types::Space::Ethereum)
         .copied()
-        .ok_or_else(|| EspaceChangesError::MetadataProbeExecution {
+        .ok_or_else(|| MetadataReadError::ProbeExecution {
             call: metadata_call.clone(),
             details: "execution environment is missing the eSpace chain id".to_owned(),
         })?;
@@ -82,7 +105,7 @@ pub(super) fn execute_read_call(
                 },
             },
         )
-        .map_err(|error| EspaceChangesError::MetadataStateAccess {
+        .map_err(|error| MetadataReadError::StateAccess {
             call: metadata_call.clone(),
             source: error,
         })?;
@@ -94,7 +117,7 @@ pub(super) fn execute_read_call(
             _,
         ) => {
             state.restore(snapshot);
-            return Err(EspaceChangesError::MetadataStateAccess {
+            return Err(MetadataReadError::StateAccess {
                 call: metadata_call.clone(),
                 source: error.0,
             });
