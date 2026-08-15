@@ -1,4 +1,4 @@
-use std::{future::Future, num::NonZeroUsize, sync::Arc};
+use std::{future::Future, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use thiserror::Error;
 use tokio::{sync::Semaphore, task::JoinError};
@@ -7,6 +7,7 @@ use tokio::{sync::Semaphore, task::JoinError};
 #[derive(Debug, Clone)]
 pub struct SimulationTaskSet {
     permits: Arc<Semaphore>,
+    response_timeout: Duration,
 }
 
 /// A failure produced by the task set rather than by a simulation attempt.
@@ -14,6 +15,9 @@ pub struct SimulationTaskSet {
 pub enum SimulationTaskError {
     #[error("simulation task set is closed")]
     Closed,
+
+    #[error("simulation response deadline exceeded")]
+    ResponseTimedOut,
 
     #[error("simulation task failed")]
     TaskFailed {
@@ -23,10 +27,11 @@ pub enum SimulationTaskError {
 }
 
 impl SimulationTaskSet {
-    /// Creates a task set with a fixed concurrency limit.
-    pub fn new(max_concurrent: NonZeroUsize) -> Self {
+    /// Creates a task set with a fixed concurrency limit and response deadline.
+    pub fn new(max_concurrent: NonZeroUsize, response_timeout: Duration) -> Self {
         Self {
             permits: Arc::new(Semaphore::new(max_concurrent.get())),
+            response_timeout,
         }
     }
 
@@ -43,18 +48,22 @@ impl SimulationTaskSet {
         Attempt: Future<Output = Output> + Send + 'static,
         Output: Send + 'static,
     {
-        let permit = self
-            .permits
-            .clone()
-            .acquire_owned()
-            .await
-            .map_err(|_| SimulationTaskError::Closed)?;
-        let task = tokio::spawn(async move {
-            let _permit = permit;
-            start_attempt().await
-        });
+        let permits = self.permits.clone();
 
-        task.await
-            .map_err(|source| SimulationTaskError::TaskFailed { source })
+        tokio::time::timeout(self.response_timeout, async move {
+            let permit = permits
+                .acquire_owned()
+                .await
+                .map_err(|_| SimulationTaskError::Closed)?;
+            let task = tokio::spawn(async move {
+                let _permit = permit;
+                start_attempt().await
+            });
+
+            task.await
+                .map_err(|source| SimulationTaskError::TaskFailed { source })
+        })
+        .await
+        .map_err(|_| SimulationTaskError::ResponseTimedOut)?
     }
 }

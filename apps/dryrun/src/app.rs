@@ -1,4 +1,4 @@
-use std::{future::pending, io, num::NonZeroUsize};
+use std::{future::pending, io, num::NonZeroUsize, time::Duration};
 
 use jsonrpsee::server::ServerHandle;
 use metrics_exporter_prometheus::PrometheusBuilder;
@@ -53,7 +53,10 @@ fn create_simulation_task_set(config: &SimulationConfig) -> io::Result<Simulatio
         configuration_error("simulation.max_concurrent must be greater than zero")
     })?;
 
-    Ok(SimulationTaskSet::new(max_concurrent))
+    Ok(SimulationTaskSet::new(
+        max_concurrent,
+        Duration::from_secs(config.response_timeout_seconds),
+    ))
 }
 
 async fn start_metrics_server_if_enabled(

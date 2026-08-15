@@ -25,6 +25,12 @@ pub struct ConfluxConfig {
 #[derive(Debug, Deserialize)]
 pub struct SimulationConfig {
     pub max_concurrent: usize,
+    #[serde(default = "default_response_timeout_seconds")]
+    pub response_timeout_seconds: u64,
+}
+
+fn default_response_timeout_seconds() -> u64 {
+    120
 }
 
 #[derive(Debug, Deserialize)]
