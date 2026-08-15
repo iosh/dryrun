@@ -4,6 +4,9 @@ use jsonrpsee::types::{
 };
 use thiserror::Error;
 
+const BLOCK_NOT_FOUND_CODE: i32 = -32001;
+const TRANSACTION_COMPLETION_FAILED_CODE: i32 = -32002;
+
 #[derive(Debug, Error)]
 pub enum ValidationError {
     #[error("{0}")]
@@ -38,4 +41,12 @@ impl From<ValidationError> for ErrorObjectOwned {
 
 pub(crate) fn internal_error() -> ErrorObjectOwned {
     ErrorObjectOwned::owned(INTERNAL_ERROR_CODE, "Internal error", None::<()>)
+}
+
+pub(crate) fn block_not_found(details: impl Into<String>) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(BLOCK_NOT_FOUND_CODE, details.into(), None::<()>)
+}
+
+pub(crate) fn transaction_completion_failed(details: &'static str) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(TRANSACTION_COMPLETION_FAILED_CODE, details, None::<()>)
 }

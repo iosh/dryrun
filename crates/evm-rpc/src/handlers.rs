@@ -1,11 +1,14 @@
-use evm_simulation::{EvmSimulationError, EvmSimulationRequest, EvmTransactionSimulator};
+use evm_simulation::{
+    EvmBlockResolutionError, EvmSimulationError, EvmSimulationRequest,
+    EvmTransactionCompletionError, EvmTransactionSimulator,
+};
 use jsonrpsee::core::{RpcResult, async_trait};
 use jsonrpsee::types::ErrorObjectOwned;
 use simulation_tasks::{SimulationTaskError, SimulationTaskSet};
-use tracing::{error, instrument};
+use tracing::{error, instrument, warn};
 
 use crate::{
-    errors::{ValidationError, internal_error},
+    errors::{ValidationError, block_not_found, internal_error, transaction_completion_failed},
     interface::{
         BlockRef, EvmSimulateTransactionRequest, EvmSimulateTransactionResponse,
         SimulateTransactionOptions, Transaction,
@@ -73,6 +76,13 @@ fn evm_error_response(error: EvmSimulationError) -> ErrorObjectOwned {
         EvmSimulationError::Input(error) => {
             ValidationError::invalid_params(error.to_string()).into()
         }
+        EvmSimulationError::BlockResolution(
+            error @ EvmBlockResolutionError::BlockNotFound { .. },
+        ) => block_not_found(error.to_string()),
+        EvmSimulationError::TransactionCompletion(error) => {
+            warn!(error = ?error, "EVM transaction completion failed");
+            transaction_completion_failed(transaction_completion_message(&error))
+        }
         EvmSimulationError::NotReady(error) => {
             ValidationError::not_supported(error.to_string()).into()
         }
@@ -80,6 +90,31 @@ fn evm_error_response(error: EvmSimulationError) -> ErrorObjectOwned {
             error!(error = ?error, "EVM simulation failed");
             internal_error()
         }
+    }
+}
+
+fn transaction_completion_message(error: &EvmTransactionCompletionError) -> &'static str {
+    match error {
+        EvmTransactionCompletionError::NonceLookup { .. } => {
+            "Unable to resolve the sender nonce; provide transaction.nonce explicitly"
+        }
+        EvmTransactionCompletionError::GasEstimation { .. } => {
+            "Unable to estimate transaction gas; provide transaction.gas explicitly"
+        }
+        EvmTransactionCompletionError::GasPriceSuggestion { .. } => {
+            "Unable to suggest a gas price; provide transaction.gasPrice explicitly"
+        }
+        EvmTransactionCompletionError::PriorityFeeSuggestion { .. } => {
+            "Unable to suggest a priority fee; provide transaction.maxPriorityFeePerGas explicitly"
+        }
+        EvmTransactionCompletionError::BlobBaseFeeLookup { .. } => {
+            "Unable to suggest a blob gas fee; provide transaction.maxFeePerBlobGas explicitly"
+        }
+        EvmTransactionCompletionError::MissingBaseFee { .. }
+        | EvmTransactionCompletionError::MaxFeePerGasOverflow => {
+            "Unable to derive a max fee per gas; provide transaction.maxFeePerGas explicitly"
+        }
+        _ => "Unable to complete the transaction",
     }
 }
 
