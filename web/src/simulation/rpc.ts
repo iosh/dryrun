@@ -315,44 +315,36 @@ export interface GovernanceVoteCastChange {
   votes: GovernanceVote[];
 }
 
-export interface SponsorshipReplacement {
+export interface GasSponsorshipReplacement {
   previousSponsor: string;
   poolRefundedRawAmount: string;
 }
 
-export interface GasSponsorshipFundingChange {
+export interface StorageCollateralSponsorshipReplacement {
+  previousSponsor: string;
+  poolRefundedRawAmount: string;
+  collateralCompensationRawAmount: string;
+}
+
+interface SponsorshipFundingChange {
   changeType: 'SPONSORSHIP_FUNDING';
-  sponsoredResource: 'GAS';
   contractAddress: string;
   sponsor: string;
   contributedRawAmount: string;
   poolCreditedRawAmount: string;
+}
+
+export interface GasSponsorshipFundingChange
+  extends SponsorshipFundingChange {
+  sponsoredResource: 'GAS';
   gasFeeUpperBoundRawAmount: string;
-  replacement: SponsorshipReplacement | null;
+  replacement: GasSponsorshipReplacement | null;
 }
 
-export interface SponsorshipDepositChange {
-  changeType: 'SPONSORSHIP_DEPOSIT';
+export interface StorageCollateralSponsorshipFundingChange
+  extends SponsorshipFundingChange {
   sponsoredResource: 'STORAGE_COLLATERAL';
-  sponsor: string;
-  contractAddress: string;
-  rawAmount: string;
-}
-
-export interface SponsorshipRefundChange {
-  changeType: 'SPONSORSHIP_REFUND';
-  sponsoredResource: 'STORAGE_COLLATERAL';
-  sponsor: string;
-  contractAddress: string;
-  rawAmount: string;
-}
-
-export interface StorageSponsorshipConfigurationChange {
-  changeType: 'SPONSORSHIP_CONFIGURATION';
-  sponsoredResource: 'STORAGE_COLLATERAL';
-  contractAddress: string;
-  sponsorBefore: string | null;
-  sponsorAfter: string | null;
+  replacement: StorageCollateralSponsorshipReplacement | null;
 }
 
 export type SponsorshipAccessRuleScope =
@@ -375,7 +367,8 @@ export interface SponsorshipAccessRuleSetChange {
 export interface StoragePointConversionChange {
   changeType: 'STORAGE_POINT_CONVERSION';
   contractAddress: string;
-  convertedCfxRawAmount: string;
+  fromSponsorPoolRawAmount: string;
+  fromStorageCollateralRawAmount: string;
 }
 
 export interface CrossSpaceEndpoint {
@@ -408,9 +401,7 @@ export type CoreChange =
   | PosRetirementRequestChange
   | GovernanceVoteCastChange
   | GasSponsorshipFundingChange
-  | SponsorshipDepositChange
-  | SponsorshipRefundChange
-  | StorageSponsorshipConfigurationChange
+  | StorageCollateralSponsorshipFundingChange
   | ContractAdminSetChange
   | SponsorshipAccessRuleSetChange
   | StoragePointConversionChange

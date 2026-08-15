@@ -512,7 +512,6 @@ impl SponsorshipFundingTerms {
 
 #[derive(Debug, Clone, Copy)]
 struct SponsorshipRefundOperation {
-    position: ChangePosition,
     resource: SponsoredResource,
     sponsor: Address,
     contract_address: Address,

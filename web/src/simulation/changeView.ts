@@ -212,28 +212,15 @@ export function toChangeItemViewModel(
     }
     case 'SPONSORSHIP_FUNDING':
       return {
-        detail: `${
-          change.replacement === null
-            ? 'Sponsor pool funded'
-            : `Replaced ${shortHex(change.replacement.previousSponsor)}`
-        } | Pool ${formatNativeAmount(change.poolCreditedRawAmount, 'CFX')} | Cap ${formatNativeAmount(change.gasFeeUpperBoundRawAmount, 'CFX')}`,
+        detail: sponsorshipFundingDetail(change),
         identifier: change.contractAddress,
         label: 'Sponsor funding',
-        title: 'Gas sponsorship',
+        title:
+          change.sponsoredResource === 'GAS'
+            ? 'Gas sponsorship'
+            : 'Storage sponsorship',
         tone: 'violet',
         value: formatNativeAmount(change.contributedRawAmount, 'CFX'),
-      };
-    case 'SPONSORSHIP_DEPOSIT':
-      return sponsorshipAmountChange('Sponsor deposit', change);
-    case 'SPONSORSHIP_REFUND':
-      return sponsorshipAmountChange('Sponsor refund', change);
-    case 'SPONSORSHIP_CONFIGURATION':
-      return {
-        detail: sponsorTransition(change.sponsorBefore, change.sponsorAfter),
-        identifier: change.contractAddress,
-        label: 'Sponsor configuration',
-        title: 'Storage sponsorship',
-        tone: 'violet',
       };
     case 'CONTRACT_ADMIN_SET':
       return {
@@ -257,12 +244,18 @@ export function toChangeItemViewModel(
       };
     case 'STORAGE_POINT_CONVERSION':
       return {
-        detail: 'Converted to storage points',
+        detail: `Pool ${formatNativeAmount(change.fromSponsorPoolRawAmount, 'CFX')} | Collateral ${formatNativeAmount(change.fromStorageCollateralRawAmount, 'CFX')}`,
         identifier: change.contractAddress,
         label: 'Storage points',
         title: 'CFX conversion',
         tone: 'blue',
-        value: formatNativeAmount(change.convertedCfxRawAmount, 'CFX'),
+        value: formatNativeAmount(
+          (
+            BigInt(change.fromSponsorPoolRawAmount) +
+            BigInt(change.fromStorageCollateralRawAmount)
+          ).toString(),
+          'CFX',
+        ),
       };
     case 'CROSS_SPACE_TRANSFER':
       return {
@@ -312,12 +305,6 @@ function formatFungibleAmount(
   return symbol ? `${amount} ${symbol}` : amount;
 }
 
-function sponsorTransition(before: string | null, after: string | null) {
-  if (before === after) return after ? 'Sponsor unchanged' : 'No sponsor';
-  if (!after) return 'Sponsor removed';
-  return before ? 'Sponsor changed' : 'Sponsor added';
-}
-
 function coreAmountChange(
   label: string,
   rawAmount: string,
@@ -348,19 +335,23 @@ function posChange(
   };
 }
 
-function sponsorshipAmountChange(
-  label: string,
-  change: Extract<
-    SimulationChange,
-    { changeType: 'SPONSORSHIP_DEPOSIT' | 'SPONSORSHIP_REFUND' }
-  >,
-): ChangeItemViewModel {
-  return {
-    detail: 'Storage sponsorship',
-    identifier: change.contractAddress,
-    label,
-    title: 'CFX',
-    tone: change.changeType === 'SPONSORSHIP_DEPOSIT' ? 'green' : 'amber',
-    value: formatNativeAmount(change.rawAmount, 'CFX'),
-  };
+function sponsorshipFundingDetail(
+  change: Extract<SimulationChange, { changeType: 'SPONSORSHIP_FUNDING' }>,
+) {
+  const details = [
+    change.replacement === null
+      ? 'Sponsor pool funded'
+      : `Replaced ${shortHex(change.replacement.previousSponsor)} | Refunded ${formatNativeAmount(change.replacement.poolRefundedRawAmount, 'CFX')}`,
+    `Pool ${formatNativeAmount(change.poolCreditedRawAmount, 'CFX')}`,
+  ];
+  if (change.sponsoredResource === 'GAS') {
+    details.push(
+      `Cap ${formatNativeAmount(change.gasFeeUpperBoundRawAmount, 'CFX')}`,
+    );
+  } else if (change.replacement !== null) {
+    details.push(
+      `Collateral compensation ${formatNativeAmount(change.replacement.collateralCompensationRawAmount, 'CFX')}`,
+    );
+  }
+  return details.join(' | ');
 }

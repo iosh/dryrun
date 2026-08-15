@@ -133,24 +133,6 @@ pub(super) enum Change {
         terms: SponsorshipFundingTerms,
         replacement: Option<SponsorshipReplacement>,
     },
-    SponsorshipDeposit {
-        sponsored_resource: SponsoredResource,
-        sponsor: RpcAddress,
-        contract_address: RpcAddress,
-        raw_amount: U256,
-    },
-    SponsorshipRefund {
-        sponsored_resource: SponsoredResource,
-        sponsor: RpcAddress,
-        contract_address: RpcAddress,
-        raw_amount: U256,
-    },
-    SponsorshipConfiguration {
-        sponsored_resource: SponsoredResource,
-        contract_address: RpcAddress,
-        sponsor_before: Option<RpcAddress>,
-        sponsor_after: Option<RpcAddress>,
-    },
     ContractAdminSet {
         contract_address: RpcAddress,
         admin: Option<RpcAddress>,
@@ -162,7 +144,8 @@ pub(super) enum Change {
     },
     StoragePointConversion {
         contract_address: RpcAddress,
-        converted_cfx_raw_amount: U256,
+        from_sponsor_pool_raw_amount: U256,
+        from_storage_collateral_raw_amount: U256,
     },
     CrossSpaceTransfer {
         from: CrossSpaceAddress,
@@ -179,13 +162,6 @@ pub(super) struct NativeCurrency {
     decimals: u8,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub(super) enum SponsoredResource {
-    Gas,
-    StorageCollateral,
-}
-
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(
     tag = "sponsoredResource",
@@ -196,13 +172,21 @@ pub(super) enum SponsorshipFundingTerms {
     Gas {
         gas_fee_upper_bound_raw_amount: U256,
     },
+    StorageCollateral,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct SponsorshipReplacement {
-    previous_sponsor: RpcAddress,
-    pool_refunded_raw_amount: U256,
+#[serde(untagged, rename_all_fields = "camelCase")]
+pub(super) enum SponsorshipReplacement {
+    Gas {
+        previous_sponsor: RpcAddress,
+        pool_refunded_raw_amount: U256,
+    },
+    StorageCollateral {
+        previous_sponsor: RpcAddress,
+        pool_refunded_raw_amount: U256,
+        collateral_compensation_raw_amount: U256,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -359,7 +343,7 @@ fn try_map_change(
             votes: votes.into_iter().map(Into::into).collect(),
         },
         Source::SponsorshipFunding {
-            resource,
+            resource: _,
             contract_address,
             sponsor,
             contributed_amount,
@@ -371,14 +355,14 @@ fn try_map_change(
             sponsor: map_address(sponsor, network, field, "sponsor")?,
             contributed_raw_amount: u256_to_wire(contributed_amount),
             pool_credited_raw_amount: u256_to_wire(pool_credited_amount),
-            terms: map_sponsorship_funding_terms(resource, terms),
+            terms: map_sponsorship_funding_terms(terms),
             replacement: replacement
                 .map(|replacement| {
                     Ok(match replacement {
                         simulation_core_space::SponsorshipReplacement::Gas {
                             previous_sponsor,
                             pool_refunded_amount,
-                        } => SponsorshipReplacement {
+                        } => SponsorshipReplacement::Gas {
                             previous_sponsor: map_address(
                                 previous_sponsor,
                                 network,
@@ -387,44 +371,25 @@ fn try_map_change(
                             )?,
                             pool_refunded_raw_amount: u256_to_wire(pool_refunded_amount),
                         },
+                        simulation_core_space::SponsorshipReplacement::StorageCollateral {
+                            previous_sponsor,
+                            pool_refunded_amount,
+                            collateral_compensation_amount,
+                        } => SponsorshipReplacement::StorageCollateral {
+                            previous_sponsor: map_address(
+                                previous_sponsor,
+                                network,
+                                field,
+                                "replacement.previousSponsor",
+                            )?,
+                            pool_refunded_raw_amount: u256_to_wire(pool_refunded_amount),
+                            collateral_compensation_raw_amount: u256_to_wire(
+                                collateral_compensation_amount,
+                            ),
+                        },
                     })
                 })
                 .transpose()?,
-        },
-        Source::StorageSponsorshipDeposit {
-            sponsor,
-            contract_address,
-            raw_amount,
-        } => Change::SponsorshipDeposit {
-            sponsored_resource: SponsoredResource::StorageCollateral,
-            sponsor: map_address(sponsor, network, field, "sponsor")?,
-            contract_address: map_address(contract_address, network, field, "contractAddress")?,
-            raw_amount: u256_to_wire(raw_amount),
-        },
-        Source::StorageSponsorshipRefund {
-            sponsor,
-            contract_address,
-            raw_amount,
-        } => Change::SponsorshipRefund {
-            sponsored_resource: SponsoredResource::StorageCollateral,
-            sponsor: map_address(sponsor, network, field, "sponsor")?,
-            contract_address: map_address(contract_address, network, field, "contractAddress")?,
-            raw_amount: u256_to_wire(raw_amount),
-        },
-        Source::StorageSponsorshipConfiguration {
-            contract_address,
-            sponsor_before,
-            sponsor_after,
-        } => Change::SponsorshipConfiguration {
-            sponsored_resource: SponsoredResource::StorageCollateral,
-            contract_address: map_address(contract_address, network, field, "contractAddress")?,
-            sponsor_before: try_map_optional_address(
-                sponsor_before,
-                network,
-                field,
-                "sponsorBefore",
-            )?,
-            sponsor_after: try_map_optional_address(sponsor_after, network, field, "sponsorAfter")?,
         },
         Source::ContractAdminSet {
             contract_address,
@@ -444,10 +409,12 @@ fn try_map_change(
         },
         Source::StoragePointConversion {
             contract_address,
-            converted_cfx_raw_amount,
+            from_sponsor_pool_amount,
+            from_storage_collateral_amount,
         } => Change::StoragePointConversion {
             contract_address: map_address(contract_address, network, field, "contractAddress")?,
-            converted_cfx_raw_amount: u256_to_wire(converted_cfx_raw_amount),
+            from_sponsor_pool_raw_amount: u256_to_wire(from_sponsor_pool_amount),
+            from_storage_collateral_raw_amount: u256_to_wire(from_storage_collateral_amount),
         },
         Source::CrossSpaceTransfer {
             from,
@@ -606,18 +573,17 @@ fn try_map_standard_change(
 }
 
 fn map_sponsorship_funding_terms(
-    resource: simulation_core_space::SponsoredResource,
     terms: simulation_core_space::SponsorshipFundingTerms,
 ) -> SponsorshipFundingTerms {
-    match (resource, terms) {
-        (
-            simulation_core_space::SponsoredResource::Gas,
-            simulation_core_space::SponsorshipFundingTerms::Gas {
-                gas_fee_upper_bound,
-            },
-        ) => SponsorshipFundingTerms::Gas {
+    match terms {
+        simulation_core_space::SponsorshipFundingTerms::Gas {
+            gas_fee_upper_bound,
+        } => SponsorshipFundingTerms::Gas {
             gas_fee_upper_bound_raw_amount: u256_to_wire(gas_fee_upper_bound),
         },
+        simulation_core_space::SponsorshipFundingTerms::StorageCollateral => {
+            SponsorshipFundingTerms::StorageCollateral
+        }
     }
 }
 
@@ -682,14 +648,6 @@ impl From<simulation_core_space::CoreSpaceNativeCurrency> for NativeCurrency {
             name: currency.name,
             symbol: currency.symbol,
             decimals: currency.decimals,
-        }
-    }
-}
-
-impl From<simulation_core_space::SponsoredResource> for SponsoredResource {
-    fn from(resource: simulation_core_space::SponsoredResource) -> Self {
-        match resource {
-            simulation_core_space::SponsoredResource::Gas => Self::Gas,
         }
     }
 }

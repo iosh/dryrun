@@ -251,7 +251,6 @@ pub(super) fn collect_standalone_sponsorship_refund(
     event: &TraceEvent,
 ) -> Result<Option<SponsorshipRefundOperation>, CoreSpaceChangesError> {
     let TraceEvent::InternalTransfer {
-        position,
         space,
         from,
         to: AddressPocket::Balance(recipient),
@@ -277,7 +276,6 @@ pub(super) fn collect_standalone_sponsorship_refund(
     }
     let amount = u256_from_cfx(*value);
     Ok(Some(SponsorshipRefundOperation {
-        position: ChangePosition::new(*position, 0),
         resource,
         sponsor: address_from_cfx(recipient.address),
         contract_address: address_from_cfx(contract_address),
@@ -375,7 +373,6 @@ fn collect_gas_sponsorship_call(
             (
                 pool_deposit_amount,
                 Some(SponsorshipRefundOperation {
-                    position: ChangePosition::new(first.position, 0),
                     resource: SponsoredResource::Gas,
                     sponsor: address_from_cfx(old_sponsor),
                     contract_address: address_from_cfx(call_context.contract_address),
@@ -440,7 +437,6 @@ fn collect_storage_sponsorship_call(
         (
             pool_deposit_amount,
             Some(SponsorshipRefundOperation {
-                position: ChangePosition::new(first.position, 0),
                 resource: SponsoredResource::StorageCollateral,
                 sponsor: address_from_cfx(old_sponsor),
                 contract_address: address_from_cfx(call_context.contract_address),

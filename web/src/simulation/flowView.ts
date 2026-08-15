@@ -247,22 +247,6 @@ export function getChangeAddresses(
           : null,
         { address: change.contractAddress, label: 'Contract' },
       ]);
-    case 'SPONSORSHIP_DEPOSIT':
-    case 'SPONSORSHIP_REFUND':
-      return [
-        { address: change.sponsor, label: 'Sponsor' },
-        { address: change.contractAddress, label: 'Contract' },
-      ];
-    case 'SPONSORSHIP_CONFIGURATION':
-      return compactAddresses([
-        change.sponsorBefore
-          ? { address: change.sponsorBefore, label: 'Sponsor before' }
-          : null,
-        change.sponsorAfter
-          ? { address: change.sponsorAfter, label: 'Sponsor after' }
-          : null,
-        { address: change.contractAddress, label: 'Contract' },
-      ]);
     case 'CONTRACT_ADMIN_SET':
       return compactAddresses([
         change.admin ? { address: change.admin, label: 'Admin' } : null,

@@ -87,21 +87,6 @@ pub enum CoreSpaceChange {
         terms: SponsorshipFundingTerms,
         replacement: Option<SponsorshipReplacement>,
     },
-    StorageSponsorshipDeposit {
-        sponsor: CoreAddress,
-        contract_address: CoreAddress,
-        raw_amount: U256,
-    },
-    StorageSponsorshipRefund {
-        sponsor: CoreAddress,
-        contract_address: CoreAddress,
-        raw_amount: U256,
-    },
-    StorageSponsorshipConfiguration {
-        contract_address: CoreAddress,
-        sponsor_before: Option<CoreAddress>,
-        sponsor_after: Option<CoreAddress>,
-    },
     ContractAdminSet {
         contract_address: CoreAddress,
         admin: Option<CoreAddress>,
@@ -113,7 +98,8 @@ pub enum CoreSpaceChange {
     },
     StoragePointConversion {
         contract_address: CoreAddress,
-        converted_cfx_raw_amount: U256,
+        from_sponsor_pool_amount: U256,
+        from_storage_collateral_amount: U256,
     },
     CrossSpaceTransfer {
         from: CrossSpaceAddress,
@@ -153,11 +139,13 @@ pub enum CrossSpaceAddress {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SponsoredResource {
     Gas,
+    StorageCollateral,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SponsorshipFundingTerms {
     Gas { gas_fee_upper_bound: U256 },
+    StorageCollateral,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +153,11 @@ pub enum SponsorshipReplacement {
     Gas {
         previous_sponsor: CoreAddress,
         pool_refunded_amount: U256,
+    },
+    StorageCollateral {
+        previous_sponsor: CoreAddress,
+        pool_refunded_amount: U256,
+        collateral_compensation_amount: U256,
     },
 }
 
@@ -259,21 +252,6 @@ pub(crate) enum PendingCoreSpaceChange {
         terms: SponsorshipFundingTerms,
         replacement: Option<PendingSponsorshipReplacement>,
     },
-    StorageSponsorshipDeposit {
-        sponsor: Address,
-        contract_address: Address,
-        raw_amount: U256,
-    },
-    StorageSponsorshipRefund {
-        sponsor: Address,
-        contract_address: Address,
-        raw_amount: U256,
-    },
-    StorageSponsorshipConfiguration {
-        contract_address: Address,
-        sponsor_before: Option<Address>,
-        sponsor_after: Option<Address>,
-    },
     ContractAdminSet {
         contract_address: Address,
         admin: Option<Address>,
@@ -285,7 +263,8 @@ pub(crate) enum PendingCoreSpaceChange {
     },
     StoragePointConversion {
         contract_address: Address,
-        converted_cfx_raw_amount: U256,
+        from_sponsor_pool_amount: U256,
+        from_storage_collateral_amount: U256,
     },
     CrossSpaceTransfer {
         from: PendingCrossSpaceAddress,
@@ -305,6 +284,11 @@ pub(crate) enum PendingSponsorshipReplacement {
     Gas {
         previous_sponsor: Address,
         pool_refunded_amount: U256,
+    },
+    StorageCollateral {
+        previous_sponsor: Address,
+        pool_refunded_amount: U256,
+        collateral_compensation_amount: U256,
     },
 }
 
@@ -492,36 +476,18 @@ fn resolve_change(
                             previous_sponsor: address(previous_sponsor)?,
                             pool_refunded_amount,
                         },
+                        PendingSponsorshipReplacement::StorageCollateral {
+                            previous_sponsor,
+                            pool_refunded_amount,
+                            collateral_compensation_amount,
+                        } => SponsorshipReplacement::StorageCollateral {
+                            previous_sponsor: address(previous_sponsor)?,
+                            pool_refunded_amount,
+                            collateral_compensation_amount,
+                        },
                     })
                 })
                 .transpose()?,
-        },
-        PendingCoreSpaceChange::StorageSponsorshipDeposit {
-            sponsor,
-            contract_address,
-            raw_amount,
-        } => CoreSpaceChange::StorageSponsorshipDeposit {
-            sponsor: address(sponsor)?,
-            contract_address: address(contract_address)?,
-            raw_amount,
-        },
-        PendingCoreSpaceChange::StorageSponsorshipRefund {
-            sponsor,
-            contract_address,
-            raw_amount,
-        } => CoreSpaceChange::StorageSponsorshipRefund {
-            sponsor: address(sponsor)?,
-            contract_address: address(contract_address)?,
-            raw_amount,
-        },
-        PendingCoreSpaceChange::StorageSponsorshipConfiguration {
-            contract_address,
-            sponsor_before,
-            sponsor_after,
-        } => CoreSpaceChange::StorageSponsorshipConfiguration {
-            contract_address: address(contract_address)?,
-            sponsor_before: sponsor_before.map(address).transpose()?,
-            sponsor_after: sponsor_after.map(address).transpose()?,
         },
         PendingCoreSpaceChange::ContractAdminSet {
             contract_address,
@@ -548,10 +514,12 @@ fn resolve_change(
         },
         PendingCoreSpaceChange::StoragePointConversion {
             contract_address,
-            converted_cfx_raw_amount,
+            from_sponsor_pool_amount,
+            from_storage_collateral_amount,
         } => CoreSpaceChange::StoragePointConversion {
             contract_address: address(contract_address)?,
-            converted_cfx_raw_amount,
+            from_sponsor_pool_amount,
+            from_storage_collateral_amount,
         },
         PendingCoreSpaceChange::CrossSpaceTransfer {
             from,
