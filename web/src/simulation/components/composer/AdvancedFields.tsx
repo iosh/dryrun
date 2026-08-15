@@ -34,15 +34,11 @@ export function AdvancedFields({
         const hasDynamicFee =
           values.maxFeePerGas.trim().length > 0 ||
           values.maxPriorityFeePerGas.trim().length > 0;
-        const hasAuthorization =
-          values.authorizationListJson.trim().length > 0 &&
-          values.authorizationListJson.trim() !== '[]';
         const gasPriceDisabled =
           values.txType === 'dynamic-fee' ||
-          values.txType === 'eip7702' ||
           (values.txType === 'auto' &&
             !hasGasPrice &&
-            (hasDynamicFee || hasAuthorization));
+            hasDynamicFee);
         const dynamicFeeDisabled =
           values.txType === 'legacy' ||
           values.txType === 'access-list' ||
@@ -111,7 +107,7 @@ export function AdvancedFields({
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2">
-                <TxTypeField environmentId={environmentId} form={form} />
+                <TxTypeField form={form} />
                 <TextInputField
                   disabled={gasPriceDisabled}
                   environmentId={environmentId}
@@ -181,22 +177,6 @@ export function AdvancedFields({
                 placeholder="[]"
                 rows={5}
               />
-
-              {environmentId === 'conflux-espace-mainnet' ? (
-                <TextAreaField
-                  disabled={
-                    values.txType !== 'auto' && values.txType !== 'eip7702'
-                  }
-                  environmentId={environmentId}
-                  form={form}
-                  label="Signed authorizations (JSON)"
-                  monospace
-                  name="authorizationListJson"
-                  optional
-                  placeholder="[]"
-                  rows={6}
-                />
-              ) : null}
             </div>
           </details>
         );

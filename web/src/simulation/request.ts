@@ -19,7 +19,6 @@ import type {
   HexTransactionRequest,
   ParsedFormResult,
   RpcAccessListItem,
-  RpcSignedAuthorization,
   SimulationFormValues,
   SimulationRequest,
   ContextMode,
@@ -30,14 +29,11 @@ const TX_TYPE_TO_HEX: Record<Exclude<TxTypeOption, 'auto'>, string> = {
   legacy: '0x0',
   'access-list': '0x1',
   'dynamic-fee': '0x2',
-  eip7702: '0x4',
 };
 
 const STORAGE_KEY_PATTERN = /^0x[0-9a-fA-F]{64}$/;
 const DATA_PATTERN = /^0x(?:[0-9a-fA-F]{2})*$/;
 const BLOCK_HASH_PATTERN = /^0x[0-9a-fA-F]{64}$/;
-const MAX_U64 = (1n << 64n) - 1n;
-const MAX_U256 = (1n << 256n) - 1n;
 
 interface ParseSuccess<T> {
   ok: true;
@@ -64,7 +60,6 @@ interface ParsedValues {
   maxFeePerGas?: string;
   maxPriorityFeePerGas?: string;
   accessList?: RpcAccessListItem[];
-  authorizationList?: RpcSignedAuthorization[];
   storageLimit?: string;
   epochHeight?: string;
 }
@@ -84,7 +79,6 @@ export function createInitialFormValues(): SimulationFormValues {
     maxFeePerGas: '',
     maxPriorityFeePerGas: '',
     accessListJson: '',
-    authorizationListJson: '',
     storageLimit: '',
     epochHeight: '',
   };
@@ -156,11 +150,6 @@ export function parseSimulationForm(
     'accessListJson',
     parseAccessList(environmentId, values.accessListJson),
   );
-  parsed.authorizationList = readParsed(
-    fieldIssues,
-    'authorizationListJson',
-    parseAuthorizationList(environmentId, values.authorizationListJson),
-  );
 
   if (environmentId === 'conflux-core-mainnet') {
     parsed.storageLimit = readParsed(
@@ -226,8 +215,6 @@ export function validateSimulationField(
         return parseFee(environmentId, value, 'Max priority fee per gas');
       case 'accessListJson':
         return parseAccessList(environmentId, value);
-      case 'authorizationListJson':
-        return parseAuthorizationList(environmentId, value);
       case 'storageLimit':
         return parseOptionalQuantity(value, 'Storage limit');
       case 'epochHeight':
@@ -249,8 +236,7 @@ export function countAdvancedValues(
 ): number {
   const dynamicFeeEnabled =
     values.txType === 'auto' ||
-    values.txType === 'dynamic-fee' ||
-    values.txType === 'eip7702';
+    values.txType === 'dynamic-fee';
   const accessListEnabled = values.txType !== 'legacy';
 
   return [
@@ -266,9 +252,6 @@ export function countAdvancedValues(
     dynamicFeeEnabled ? values.maxPriorityFeePerGas : '',
     accessListEnabled && values.accessListJson.trim() !== '[]'
       ? values.accessListJson
-      : '',
-    values.txType === 'eip7702' || values.txType === 'auto'
-      ? values.authorizationListJson
       : '',
     environmentId === 'conflux-core-mainnet' ? values.storageLimit : '',
     environmentId === 'conflux-core-mainnet' ? values.epochHeight : '',
@@ -296,9 +279,6 @@ function buildRequest(
     ...(parsed.maxFeePerGas ? { maxFeePerGas: parsed.maxFeePerGas } : {}),
     ...(parsed.maxPriorityFeePerGas
       ? { maxPriorityFeePerGas: parsed.maxPriorityFeePerGas }
-      : {}),
-    ...(parsed.authorizationList && parsed.authorizationList.length > 0
-      ? { authorizationList: parsed.authorizationList }
       : {}),
     ...(values.txType !== 'auto'
       ? { type: TX_TYPE_TO_HEX[values.txType] }
@@ -369,23 +349,6 @@ function validateRelationships(
     issues.push('Dynamic fee transactions cannot include a gas price.');
   }
 
-  if (effectiveTxType === 'eip7702') {
-    if (environmentId !== 'conflux-espace-mainnet') {
-      issues.push('EIP-7702 is only available here for Conflux eSpace.');
-    }
-    if (parsed.gasPrice) {
-      issues.push('EIP-7702 transactions cannot include a gas price.');
-    }
-    if (!parsed.to) {
-      issues.push('EIP-7702 transactions require a destination.');
-    }
-    if (!parsed.authorizationList || parsed.authorizationList.length === 0) {
-      issues.push('EIP-7702 transactions require a signed authorization.');
-    }
-  } else if (parsed.authorizationList && parsed.authorizationList.length > 0) {
-    issues.push('Authorization lists require the EIP-7702 transaction type.');
-  }
-
   if (
     effectiveTxType === 'legacy' &&
     parsed.accessList &&
@@ -415,9 +378,6 @@ function resolveEffectiveTxType(
   parsed: ParsedValues,
 ): EffectiveTxType {
   if (selectedType !== 'auto') return selectedType;
-  if (parsed.authorizationList && parsed.authorizationList.length > 0) {
-    return 'eip7702';
-  }
   if (parsed.maxFeePerGas || parsed.maxPriorityFeePerGas) {
     return 'dynamic-fee';
   }
@@ -614,95 +574,6 @@ function parseAccessList(
     return success(items);
   } catch {
     return failure('Access list must be valid JSON.');
-  }
-}
-
-function parseAuthorizationList(
-  environmentId: EnvironmentId,
-  value: string,
-): ParseResult<RpcSignedAuthorization[] | undefined> {
-  const trimmed = value.trim();
-  if (!trimmed || trimmed === '[]') return success(undefined);
-  if (environmentId !== 'conflux-espace-mainnet') {
-    return failure('Authorization lists are only available for Conflux eSpace.');
-  }
-
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    if (!Array.isArray(parsed)) {
-      return failure('Authorization list must be a JSON array.');
-    }
-
-    const authorizations: RpcSignedAuthorization[] = [];
-    for (const [index, item] of parsed.entries()) {
-      if (!item || typeof item !== 'object') {
-        return failure(`Authorization ${index + 1} must be an object.`);
-      }
-      const candidate = item as Record<string, unknown>;
-      const label = `Authorization ${index + 1}`;
-      const address = parseJsonAddress(candidate.address, `${label} address`);
-      if (!address.ok) return address;
-      const chainId = parseJsonQuantity(
-        candidate.chainId,
-        `${label} chainId`,
-        MAX_U256,
-      );
-      if (!chainId.ok) return chainId;
-      const nonce = parseJsonQuantity(candidate.nonce, `${label} nonce`, MAX_U64);
-      if (!nonce.ok) return nonce;
-      const yParity = parseJsonQuantity(
-        candidate.yParity ?? candidate.v,
-        `${label} yParity`,
-        1n,
-      );
-      if (!yParity.ok) return yParity;
-      const r = parseJsonQuantity(candidate.r, `${label} r`, MAX_U256);
-      if (!r.ok) return r;
-      const s = parseJsonQuantity(candidate.s, `${label} s`, MAX_U256);
-      if (!s.ok) return s;
-
-      authorizations.push({
-        chainId: chainId.value,
-        address: address.value,
-        nonce: nonce.value,
-        yParity: yParity.value,
-        r: r.value,
-        s: s.value,
-      });
-    }
-
-    return success(authorizations);
-  } catch {
-    return failure('Authorization list must be valid JSON.');
-  }
-}
-
-function parseJsonAddress(
-  value: unknown,
-  label: string,
-): ParseResult<string> {
-  if (typeof value !== 'string' || !isAddress(value)) {
-    return failure(`${label} must be a valid 0x address.`);
-  }
-  return success(getAddress(value));
-}
-
-function parseJsonQuantity(
-  value: unknown,
-  label: string,
-  max: bigint,
-): ParseResult<string> {
-  if (typeof value !== 'string') {
-    return failure(`${label} must be an integer string.`);
-  }
-  try {
-    const parsed = BigInt(value);
-    if (parsed < 0n || parsed > max) {
-      return failure(`${label} is outside its supported unsigned range.`);
-    }
-    return success(toHex(parsed));
-  } catch {
-    return failure(`${label} must be a valid integer string.`);
   }
 }
 

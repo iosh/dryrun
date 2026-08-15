@@ -10,8 +10,7 @@ export type TxTypeOption =
   | 'auto'
   | 'legacy'
   | 'access-list'
-  | 'dynamic-fee'
-  | 'eip7702';
+  | 'dynamic-fee';
 
 export type ContextMode =
   | 'latest'
@@ -34,7 +33,6 @@ export interface SimulationFormValues {
   maxFeePerGas: string;
   maxPriorityFeePerGas: string;
   accessListJson: string;
-  authorizationListJson: string;
   storageLimit: string;
   epochHeight: string;
 }
@@ -42,15 +40,6 @@ export interface SimulationFormValues {
 export interface RpcAccessListItem {
   address: string;
   storageKeys: string[];
-}
-
-export interface RpcSignedAuthorization {
-  chainId: string;
-  address: string;
-  nonce: string;
-  yParity: string;
-  r: string;
-  s: string;
 }
 
 export interface HexTransactionRequest {
@@ -66,7 +55,6 @@ export interface HexTransactionRequest {
   gasPrice?: string;
   maxFeePerGas?: string;
   maxPriorityFeePerGas?: string;
-  authorizationList?: RpcSignedAuthorization[];
 }
 
 export interface HexSimulationRequest {

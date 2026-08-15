@@ -54,7 +54,7 @@ export function TextInputField({
       validators={getSimulationFieldValidators(environmentId, name)}
     >
       {(field) => {
-        const issues = normalizeIssues(field.state.meta.errors);
+        const issues = collectIssueMessages(field.state.meta.errors);
         return (
           <LabeledField label={label} optional={optional}>
             <Input
@@ -109,7 +109,7 @@ export function TextAreaField({
       validators={getSimulationFieldValidators(environmentId, name)}
     >
       {(field) => {
-        const issues = normalizeIssues(field.state.meta.errors);
+        const issues = collectIssueMessages(field.state.meta.errors);
         return (
           <LabeledField label={label} optional={optional}>
             <Textarea
@@ -175,13 +175,7 @@ export function ContextModeField({
   );
 }
 
-export function TxTypeField({
-  environmentId,
-  form,
-}: Readonly<{
-  environmentId: EnvironmentId;
-  form: SimulationFormApi;
-}>) {
+export function TxTypeField({ form }: Readonly<{ form: SimulationFormApi }>) {
   return (
     <form.Field name="txType">
       {(field) => (
@@ -202,9 +196,6 @@ export function TxTypeField({
               <SelectItem value="legacy">Legacy</SelectItem>
               <SelectItem value="access-list">Access list</SelectItem>
               <SelectItem value="dynamic-fee">Dynamic fee</SelectItem>
-              {environmentId === 'conflux-espace-mainnet' ? (
-                <SelectItem value="eip7702">EIP-7702</SelectItem>
-              ) : null}
             </SelectContent>
           </Select>
         </LabeledField>
@@ -220,7 +211,6 @@ function clearIncompatibleTransactionFields(
   const clearField = (
     field:
       | 'accessListJson'
-      | 'authorizationListJson'
       | 'gasPrice'
       | 'maxFeePerGas'
       | 'maxPriorityFeePerGas',
@@ -231,18 +221,12 @@ function clearIncompatibleTransactionFields(
       clearField('accessListJson');
       clearField('maxFeePerGas');
       clearField('maxPriorityFeePerGas');
-      clearField('authorizationListJson');
       break;
     case 'access-list':
       clearField('maxFeePerGas');
       clearField('maxPriorityFeePerGas');
-      clearField('authorizationListJson');
       break;
     case 'dynamic-fee':
-      clearField('gasPrice');
-      clearField('authorizationListJson');
-      break;
-    case 'eip7702':
       clearField('gasPrice');
       break;
     case 'auto':
@@ -269,7 +253,7 @@ export function FormIssues({ form }: Readonly<{ form: SimulationFormApi }>) {
       })}
     >
       {({ errors, submissionAttempts }) => {
-        const issues = normalizeIssues(errors);
+        const issues = collectIssueMessages(errors);
         if (submissionAttempts === 0 || issues.length === 0) return null;
 
         return (
@@ -304,10 +288,10 @@ function FieldIssues({
   );
 }
 
-function normalizeIssues(errors: readonly unknown[]) {
+function collectIssueMessages(errors: readonly unknown[]) {
   return errors.flatMap((error): string[] => {
     if (typeof error === 'string') return [error];
-    if (Array.isArray(error)) return normalizeIssues(error);
+    if (Array.isArray(error)) return collectIssueMessages(error);
     return [];
   });
 }
