@@ -180,3 +180,52 @@ fn validate_eip7702_requirements(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use alloy::primitives::{Address, B256, U256};
+
+    use super::{
+        Authorization, SignedAuthorization, TransactionInputError, validate_eip4844_requirements,
+        validate_eip7702_requirements,
+    };
+
+    #[test]
+    fn enforces_eip4844_and_eip7702_protocol_requirements() {
+        let destination = Address::repeat_byte(1);
+        let blob_hash = B256::repeat_byte(2);
+        let authorization = signed_authorization();
+
+        assert_eq!(
+            validate_eip4844_requirements(None, &[blob_hash]),
+            Err(TransactionInputError::Eip4844CallDestinationRequired)
+        );
+        assert_eq!(
+            validate_eip4844_requirements(Some(destination), &[]),
+            Err(TransactionInputError::Eip4844BlobVersionedHashesRequired)
+        );
+        assert_eq!(
+            validate_eip7702_requirements(None, std::slice::from_ref(&authorization)),
+            Err(TransactionInputError::Eip7702CallDestinationRequired)
+        );
+        assert_eq!(
+            validate_eip7702_requirements(Some(destination), &[]),
+            Err(TransactionInputError::Eip7702AuthorizationListRequired)
+        );
+        assert!(validate_eip4844_requirements(Some(destination), &[blob_hash]).is_ok());
+        assert!(validate_eip7702_requirements(Some(destination), &[authorization]).is_ok());
+    }
+
+    fn signed_authorization() -> SignedAuthorization {
+        SignedAuthorization::new_unchecked(
+            Authorization {
+                chain_id: U256::from(1),
+                address: Address::repeat_byte(4),
+                nonce: 0,
+            },
+            0,
+            U256::from(1),
+            U256::from(2),
+        )
+    }
+}

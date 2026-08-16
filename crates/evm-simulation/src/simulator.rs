@@ -126,3 +126,57 @@ fn simulate_blocking(
         changes,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+
+    use alloy::{
+        network::Ethereum,
+        providers::{DynProvider, Provider, RootProvider},
+        rpc::client::RpcClient,
+        transports::mock::Asserter,
+    };
+
+    use super::EvmTransactionSimulator;
+    use crate::EvmInitializationError;
+
+    #[test]
+    fn returns_typed_initialization_errors() {
+        let mismatch_asserter = Asserter::new();
+        mismatch_asserter.push_success(&"0x5");
+        let mismatch = block_on(EvmTransactionSimulator::ethereum_mainnet(mock_provider(
+            mismatch_asserter,
+        )))
+        .expect_err("wrong chain id should reject initialization");
+        assert!(matches!(
+            mismatch,
+            EvmInitializationError::ChainIdMismatch {
+                expected: 1,
+                actual: 5,
+            }
+        ));
+
+        let failure_asserter = Asserter::new();
+        failure_asserter.push_failure_msg("provider unavailable");
+        let failure = block_on(EvmTransactionSimulator::ethereum_mainnet(mock_provider(
+            failure_asserter,
+        )))
+        .expect_err("provider failure should reject initialization");
+        assert!(matches!(
+            failure,
+            EvmInitializationError::ChainIdRequest { .. }
+        ));
+    }
+
+    fn mock_provider(asserter: Asserter) -> DynProvider<Ethereum> {
+        RootProvider::new(RpcClient::mocked(asserter)).erased()
+    }
+
+    fn block_on<T>(future: impl Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime should build")
+            .block_on(future)
+    }
+}
