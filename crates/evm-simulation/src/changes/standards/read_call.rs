@@ -89,3 +89,109 @@ fn build_read_call_tx(
         authorization_list: Vec::new(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloy::{
+        consensus::{Header, Sealed},
+        network::Ethereum,
+        primitives::{Address, B256, Bytes, U256},
+        providers::{DynProvider, Provider, RootProvider},
+        rpc::client::RpcClient,
+        transports::mock::Asserter,
+    };
+    use revm::{bytecode::Bytecode, state::AccountInfo};
+
+    use super::{ReadCallOutcome, execute_read_call, with_read_call_context};
+    use crate::{
+        CompleteTransaction, CompleteTransactionVariant, EthereumChainSpec, EvmExecutionObserver,
+        EvmTransactionExecution, EvmTransactionExecutor, create_database,
+    };
+
+    #[test]
+    fn metadata_probes_read_post_state_without_committing_their_writes() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("test runtime should build");
+        let caller = Address::repeat_byte(1);
+        let contract = Address::repeat_byte(2);
+        let beneficiary = Address::repeat_byte(3);
+        let block_hash = B256::repeat_byte(4);
+        let header = Header {
+            beneficiary,
+            number: 19_500_000,
+            gas_limit: 30_000_000,
+            timestamp: 1_720_000_000,
+            mix_hash: B256::repeat_byte(5),
+            base_fee_per_gas: Some(1),
+            excess_blob_gas: Some(0),
+            ..Default::default()
+        };
+        let block = Sealed::new_unchecked(header, block_hash);
+        let mut database = create_database(mock_provider(), runtime.handle().clone(), block_hash);
+        database.insert_account_info(
+            caller,
+            AccountInfo::default().with_balance(U256::from(1_000_000)),
+        );
+        database.insert_account_info(
+            contract,
+            AccountInfo::default()
+                .with_nonce(1)
+                .with_code(Bytecode::new_legacy(Bytes::from_static(&[
+                    0x60, 0x00, 0x54, 0x60, 0x01, 0x01, 0x80, 0x60, 0x00, 0x55, 0x60, 0x00, 0x52,
+                    0x60, 0x20, 0x60, 0x00, 0xf3,
+                ]))),
+        );
+        database
+            .insert_account_storage(contract, U256::ZERO, U256::ZERO)
+            .expect("cached test account should accept storage");
+        database.insert_account_info(beneficiary, AccountInfo::default());
+
+        let transaction = CompleteTransaction {
+            from: caller,
+            to: Some(contract),
+            nonce: 0,
+            gas_limit: 100_000,
+            value: U256::ZERO,
+            input: Bytes::new(),
+            chain_id: 1,
+            variant: CompleteTransactionVariant::Legacy { gas_price: 2 },
+        };
+        let executor = EvmTransactionExecutor::new(
+            database,
+            block,
+            &EthereumChainSpec::mainnet(),
+            EvmExecutionObserver::new(),
+        )
+        .expect("test block should produce a valid execution environment");
+        let EvmTransactionExecution::Executed(mut output) = executor
+            .execute(&transaction)
+            .expect("fixture execution should succeed")
+        else {
+            panic!("fixture transaction should execute");
+        };
+        assert!(output.is_success());
+        output
+            .apply_transition()
+            .expect("transaction transition should apply once");
+
+        let outcomes = with_read_call_context(output.evm_mut(), |evm| {
+            [
+                execute_read_call(evm, &transaction, 1, contract, Bytes::new()),
+                execute_read_call(evm, &transaction, 1, contract, Bytes::new()),
+            ]
+        });
+        for outcome in outcomes {
+            let ReadCallOutcome::Success(value) =
+                outcome.expect("metadata probe should execute successfully")
+            else {
+                panic!("metadata probe should return successfully");
+            };
+            assert_eq!(U256::from_be_slice(&value), U256::from(2));
+        }
+    }
+
+    fn mock_provider() -> DynProvider<Ethereum> {
+        RootProvider::new(RpcClient::mocked(Asserter::new())).erased()
+    }
+}

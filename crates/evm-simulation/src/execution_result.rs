@@ -235,3 +235,43 @@ impl EvmExecutionResult {
         &self.fee
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use revm::context_interface::result::ResultGas;
+
+    use super::EvmGas;
+    use crate::EvmResultIntegrationError;
+
+    #[test]
+    fn preserves_revm_gas_semantics_and_rejects_inconsistent_facts() {
+        for result_gas in [
+            ResultGas::new(100_000, 60_000, 12_000, 0, 21_000),
+            ResultGas::new(100_000, 60_000, 12_000, 55_000, 21_000),
+        ] {
+            let gas = EvmGas::new(
+                result_gas.limit(),
+                result_gas.limit(),
+                result_gas.intrinsic_gas(),
+                result_gas.spent(),
+                result_gas.inner_refunded(),
+                result_gas.floor_gas(),
+            )
+            .expect("valid Revm gas facts should integrate");
+
+            assert_eq!(gas.gas_used(), result_gas.used());
+        }
+
+        assert!(matches!(
+            EvmGas::new(90_000, 100_000, 21_000, 60_000, 12_000, 0),
+            Err(EvmResultIntegrationError::GasLimitMismatch {
+                transaction_gas_limit: 90_000,
+                result_gas_limit: 100_000,
+            })
+        ));
+        assert!(matches!(
+            EvmGas::new(100_000, 100_000, 21_000, 30_000, 31_000, 0),
+            Err(EvmResultIntegrationError::InvalidGasAccounting { .. })
+        ));
+    }
+}

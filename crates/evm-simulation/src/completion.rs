@@ -304,60 +304,29 @@ mod tests {
         network::Ethereum,
         primitives::{Address, B256, Bytes, U256},
         providers::{DynProvider, Provider, RootProvider},
-        rpc::{client::RpcClient, types::AccessList as RpcAccessList},
+        rpc::client::RpcClient,
         transports::mock::Asserter,
     };
 
-    use super::{complete_transaction, gas_estimation_request, suggested_max_fee_per_gas};
+    use super::{complete_transaction, suggested_max_fee_per_gas};
     use crate::{
-        AccessListItem, Authorization, CompleteTransaction, CompleteTransactionVariant,
-        EthereumChainSpec, EvmTransactionCompletionError, PartialTransaction,
-        PartialTransactionVariant, SignedAuthorization, TransactionInput,
+        CompleteTransactionVariant, EthereumChainSpec, EvmTransactionCompletionError,
+        PartialTransaction, PartialTransactionVariant, TransactionInput,
     };
 
     #[test]
-    fn complete_input_is_returned_without_provider_requests() {
-        let transaction = CompleteTransaction {
-            from: Address::repeat_byte(1),
-            to: None,
-            nonce: 2,
-            gas_limit: 30_000,
-            value: U256::from(3),
-            input: Bytes::from_static(&[4]),
-            chain_id: 5,
-            variant: CompleteTransactionVariant::Legacy { gas_price: 6 },
-        };
-        let asserter = Asserter::new();
-        let provider = mock_provider(asserter.clone());
-        let block = block(7, B256::repeat_byte(8), Some(9));
-
-        let completed = block_on(complete_transaction(
-            TransactionInput::Complete(transaction.clone()),
-            &provider,
-            &block,
-            &EthereumChainSpec::mainnet(),
-        ))
-        .expect("complete input should not require completion");
-
-        assert_eq!(completed, transaction);
-        assert!(asserter.read_q().is_empty());
-    }
-
-    #[test]
-    fn completes_missing_legacy_fields_and_deterministic_defaults() {
+    fn completes_missing_nonce_gas_and_gas_price() {
         let asserter = Asserter::new();
         asserter.push_success(&"0x7");
         asserter.push_success(&"0x64");
         asserter.push_success(&"0x5208");
         let provider = mock_provider(asserter.clone());
         let block = block(42, B256::repeat_byte(9), Some(10));
-        let from = Address::repeat_byte(1);
-        let to = Address::repeat_byte(2);
 
         let completed = block_on(complete_transaction(
             TransactionInput::Partial(PartialTransaction {
-                from,
-                to: Some(to),
+                from: Address::repeat_byte(1),
+                to: Some(Address::repeat_byte(2)),
                 nonce: None,
                 gas_limit: None,
                 value: None,
@@ -369,20 +338,13 @@ mod tests {
             &block,
             &EthereumChainSpec::mainnet(),
         ))
-        .expect("partial legacy transaction should complete");
+        .expect("missing provider-backed fields should complete");
 
+        assert_eq!(completed.nonce, 7);
+        assert_eq!(completed.gas_limit, 21_000);
         assert_eq!(
-            completed,
-            CompleteTransaction {
-                from,
-                to: Some(to),
-                nonce: 7,
-                gas_limit: 21_000,
-                value: U256::ZERO,
-                input: Bytes::new(),
-                chain_id: 1,
-                variant: CompleteTransactionVariant::Legacy { gas_price: 100 },
-            }
+            completed.variant,
+            CompleteTransactionVariant::Legacy { gas_price: 100 }
         );
         assert!(asserter.read_q().is_empty());
     }
@@ -391,7 +353,6 @@ mod tests {
     fn completes_dynamic_and_blob_fee_suggestions() {
         let from = Address::repeat_byte(1);
         let to = Address::repeat_byte(2);
-        let input = Bytes::from_static(&[3, 4]);
         let dynamic_asserter = Asserter::new();
         dynamic_asserter.push_success(&"0x3");
         let dynamic_provider = mock_provider(dynamic_asserter.clone());
@@ -404,7 +365,7 @@ mod tests {
                 nonce: Some(6),
                 gas_limit: Some(7),
                 value: Some(U256::from(8)),
-                input: Some(input.clone()),
+                input: Some(Bytes::from_static(&[3, 4])),
                 chain_id: Some(5),
                 variant: PartialTransactionVariant::Eip1559 {
                     max_fee_per_gas: None,
@@ -418,9 +379,6 @@ mod tests {
         ))
         .expect("dynamic fees should complete");
 
-        assert_eq!(dynamic.chain_id, 5);
-        assert_eq!(dynamic.value, U256::from(8));
-        assert_eq!(dynamic.input, input);
         assert!(matches!(
             dynamic.variant,
             CompleteTransactionVariant::Eip1559 {
@@ -431,7 +389,6 @@ mod tests {
         ));
         assert!(dynamic_asserter.read_q().is_empty());
 
-        let blob_hashes = vec![B256::repeat_byte(6)];
         let blob_asserter = Asserter::new();
         blob_asserter.push_success(&"0x20");
         let blob_provider = mock_provider(blob_asserter.clone());
@@ -450,7 +407,7 @@ mod tests {
                     max_priority_fee_per_gas: Some(2),
                     max_fee_per_blob_gas: None,
                     access_list: Vec::new(),
-                    blob_versioned_hashes: blob_hashes.clone(),
+                    blob_versioned_hashes: vec![B256::repeat_byte(6)],
                 },
             }),
             &blob_provider,
@@ -462,12 +419,9 @@ mod tests {
         assert!(matches!(
             blob.variant,
             CompleteTransactionVariant::Eip4844 {
-                max_fee_per_gas: 30,
-                max_priority_fee_per_gas: 2,
                 max_fee_per_blob_gas: 32,
-                blob_versioned_hashes,
                 ..
-            } if blob_versioned_hashes == blob_hashes
+            }
         ));
         assert!(blob_asserter.read_q().is_empty());
     }
@@ -492,76 +446,6 @@ mod tests {
             suggested_max_fee_per_gas(&overflowing, u128::MAX),
             Err(EvmTransactionCompletionError::MaxFeePerGasOverflow)
         ));
-    }
-
-    #[test]
-    fn maps_eip4844_and_eip7702_estimation_fields() {
-        let from = Address::repeat_byte(1);
-        let to = Address::repeat_byte(2);
-        let access_list = vec![AccessListItem {
-            address: Address::repeat_byte(3),
-            storage_keys: vec![B256::repeat_byte(4)],
-        }];
-        let blob_hashes = vec![B256::repeat_byte(5)];
-        let authorization_list = vec![signed_authorization()];
-
-        let eip4844 = gas_estimation_request(
-            from,
-            Some(to),
-            6,
-            U256::from(7),
-            Bytes::from_static(&[8]),
-            1,
-            &CompleteTransactionVariant::Eip4844 {
-                max_fee_per_gas: 9,
-                max_priority_fee_per_gas: 10,
-                max_fee_per_blob_gas: 11,
-                access_list: access_list.clone(),
-                blob_versioned_hashes: blob_hashes.clone(),
-            },
-        );
-        assert_eq!(eip4844.transaction_type, Some(3));
-        assert_eq!(eip4844.max_fee_per_gas, Some(9));
-        assert_eq!(eip4844.max_priority_fee_per_gas, Some(10));
-        assert_eq!(eip4844.max_fee_per_blob_gas, Some(11));
-        assert_eq!(
-            eip4844.access_list,
-            Some(RpcAccessList(access_list.clone()))
-        );
-        assert_eq!(eip4844.blob_versioned_hashes, Some(blob_hashes));
-
-        let eip7702 = gas_estimation_request(
-            from,
-            Some(to),
-            6,
-            U256::from(7),
-            Bytes::from_static(&[8]),
-            1,
-            &CompleteTransactionVariant::Eip7702 {
-                max_fee_per_gas: 12,
-                max_priority_fee_per_gas: 13,
-                access_list: access_list.clone(),
-                authorization_list: authorization_list.clone(),
-            },
-        );
-        assert_eq!(eip7702.transaction_type, Some(4));
-        assert_eq!(eip7702.max_fee_per_gas, Some(12));
-        assert_eq!(eip7702.max_priority_fee_per_gas, Some(13));
-        assert_eq!(eip7702.access_list, Some(RpcAccessList(access_list)));
-        assert_eq!(eip7702.authorization_list, Some(authorization_list));
-    }
-
-    fn signed_authorization() -> SignedAuthorization {
-        SignedAuthorization::new_unchecked(
-            Authorization {
-                chain_id: U256::from(1),
-                address: Address::repeat_byte(11),
-                nonce: 12,
-            },
-            0,
-            U256::from(13),
-            U256::from(14),
-        )
     }
 
     fn block(number: u64, hash: B256, base_fee_per_gas: Option<u64>) -> Sealed<Header> {

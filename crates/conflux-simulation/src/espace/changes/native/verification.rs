@@ -150,3 +150,59 @@ fn increase_balance(
         })?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use alloy_primitives::{Address, U256};
+
+    use super::verify_native_changes;
+    use crate::espace::{EspaceNativeChangeError, EspaceNativeCurrency};
+
+    use super::super::{NativeOperation, NativeOperations};
+
+    #[test]
+    fn rejects_native_balance_mismatch_and_business_effects_on_failure() {
+        let sender = Address::repeat_byte(1);
+        let recipient = Address::repeat_byte(2);
+        let operations = NativeOperations::from_operations(vec![
+            NativeOperation::AccountTransfer {
+                position: 1,
+                from: sender,
+                to: recipient,
+                amount: U256::from(10),
+            },
+            NativeOperation::GasPrecharge {
+                payer: sender,
+                amount: U256::from(30),
+            },
+            NativeOperation::GasRefund {
+                recipient: sender,
+                amount: U256::from(7),
+            },
+        ]);
+        let before = BTreeMap::from([(sender, U256::from(100)), (recipient, U256::ZERO)]);
+        let after = BTreeMap::from([(sender, U256::from(67)), (recipient, U256::from(10))]);
+        let currency = EspaceNativeCurrency {
+            name: "Conflux".to_owned(),
+            symbol: "CFX".to_owned(),
+            decimals: 18,
+        };
+
+        verify_native_changes(&operations, &before, &after, true, &currency)
+            .expect("complete replay should reconcile");
+
+        let mut mismatched = after.clone();
+        mismatched.insert(recipient, U256::from(11));
+        assert!(matches!(
+            verify_native_changes(&operations, &before, &mismatched, true, &currency),
+            Err(EspaceNativeChangeError::BalanceMismatch { address, .. })
+                if address == recipient
+        ));
+        assert!(matches!(
+            verify_native_changes(&operations, &before, &after, false, &currency),
+            Err(EspaceNativeChangeError::BusinessEffectOnFailedExecution)
+        ));
+    }
+}

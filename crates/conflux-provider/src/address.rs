@@ -108,15 +108,13 @@ impl CoreAddress {
     pub const fn network(self) -> Network {
         self.network
     }
-
-    pub fn to_cip37(self) -> String {
-        encode(self.bytes, self.network).expect("CoreAddress always contains a valid network")
-    }
 }
 
 impl fmt::Display for CoreAddress {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.to_cip37())
+        let encoded =
+            encode(self.bytes, self.network).expect("CoreAddress always contains a valid network");
+        formatter.write_str(&encoded)
     }
 }
 
@@ -133,7 +131,7 @@ impl Serialize for CoreAddress {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&self.to_cip37())
+        serializer.collect_str(self)
     }
 }
 
@@ -388,4 +386,42 @@ fn convert_bits(
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AddressError, CoreAddress, Network};
+
+    const CONTRACT_BYTES: [u8; 20] = [
+        0x85, 0xd8, 0x02, 0x45, 0xdc, 0x02, 0xf5, 0xa8, 0x95, 0x89, 0xe1, 0xf1, 0x9c, 0x5c, 0x71,
+        0x8e, 0x40, 0x5b, 0x56, 0xcd,
+    ];
+    const MAINNET_ADDRESS: &str = "cfx:acc7uawf5ubtnmezvhu9dhc6sghea0403y2dgpyfjp";
+    const TESTNET_ADDRESS: &str = "cfxtest:acc7uawf5ubtnmezvhu9dhc6sghea0403ywjz6wtpg";
+
+    #[test]
+    fn matches_official_cip37_vectors() {
+        let mainnet = CoreAddress::from_bytes(CONTRACT_BYTES, Network::Main)
+            .expect("mainnet is a valid Core address network");
+        let testnet = CoreAddress::from_bytes(CONTRACT_BYTES, Network::Test)
+            .expect("testnet is a valid Core address network");
+
+        assert_eq!(mainnet.to_string(), MAINNET_ADDRESS);
+        assert_eq!(testnet.to_string(), TESTNET_ADDRESS);
+        assert_eq!(CoreAddress::parse(MAINNET_ADDRESS), Ok(mainnet));
+        assert_eq!(CoreAddress::parse(TESTNET_ADDRESS), Ok(testnet));
+    }
+
+    #[test]
+    fn validates_explicit_address_type() {
+        CoreAddress::parse("cfx:type.contract:acc7uawf5ubtnmezvhu9dhc6sghea0403y2dgpyfjp")
+            .expect("matching address type should decode");
+        assert!(matches!(
+            CoreAddress::parse("cfx:type.user:acc7uawf5ubtnmezvhu9dhc6sghea0403y2dgpyfjp"),
+            Err(AddressError::AddressTypeMismatch {
+                expected: "user",
+                actual: "contract",
+            })
+        ));
+    }
 }

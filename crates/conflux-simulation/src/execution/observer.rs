@@ -453,3 +453,83 @@ impl OpcodeTracer for ExecutionTraceObserver {
 
 impl SetAuthTracer for ExecutionTraceObserver {}
 impl StorageTracer for ExecutionTraceObserver {}
+
+#[cfg(test)]
+mod tests {
+    use cfx_executor::executive_observer::AddressPocket;
+    use cfx_types::{Address, AddressSpaceUtil, H256, Space, U256};
+
+    use super::{ExecutionTraceJournal, FrameAction, FrameId, FrameType, TraceEvent, TraceFrame};
+
+    #[test]
+    fn rolls_back_failed_frames_and_transaction_checkpoints_without_reusing_positions() {
+        let mut journal = ExecutionTraceJournal::new(Space::Ethereum);
+        journal.enter_frame(create_frame(None, 1, 2), FrameType::Create);
+        journal.record_log(Address::repeat_byte(2), &[H256::repeat_byte(3)], &[4]);
+        journal.enter_frame(create_frame(Some(FrameId(0)), 2, 5), FrameType::Create);
+        journal.record_log(Address::repeat_byte(5), &[H256::repeat_byte(6)], &[7]);
+        journal.exit_frame(FrameType::Create, false);
+        journal.record_internal_transfer(
+            AddressPocket::GasPayment,
+            AddressPocket::Balance(Address::repeat_byte(1).with_evm_space()),
+            U256::from(8),
+        );
+        journal.exit_frame(FrameType::Create, true);
+
+        let trace = journal
+            .into_committed_trace()
+            .expect("valid frame sequence should produce a committed trace");
+        assert!(trace.frames_by_id[1].is_none());
+        assert_eq!(
+            trace
+                .events()
+                .iter()
+                .map(TraceEvent::position)
+                .collect::<Vec<_>>(),
+            [0, 1, 4]
+        );
+        assert!(trace.events().iter().all(|event| {
+            event
+                .frame_id()
+                .is_none_or(|frame_id| frame_id == FrameId(0))
+        }));
+
+        let mut transaction = ExecutionTraceJournal::new(Space::Ethereum);
+        transaction.checkpoint();
+        transaction.record_internal_transfer(
+            AddressPocket::Balance(Address::repeat_byte(1).with_evm_space()),
+            AddressPocket::GasPayment,
+            U256::from(9),
+        );
+        transaction.revert_checkpoint();
+        transaction.record_internal_transfer(
+            AddressPocket::GasPayment,
+            AddressPocket::Balance(Address::repeat_byte(1).with_evm_space()),
+            U256::from(10),
+        );
+
+        let trace = transaction
+            .into_committed_trace()
+            .expect("reverted checkpoint should leave a valid journal");
+        assert!(matches!(
+            trace.events(),
+            [TraceEvent::InternalTransfer {
+                position: 1,
+                value,
+                ..
+            }] if *value == U256::from(10)
+        ));
+    }
+
+    fn create_frame(parent_id: Option<FrameId>, creator: u8, created: u8) -> TraceFrame {
+        TraceFrame {
+            parent_id,
+            space: Space::Ethereum,
+            action: FrameAction::Create {
+                creator: Address::repeat_byte(creator),
+                created_address: Address::repeat_byte(created),
+                value: U256::zero(),
+            },
+        }
+    }
+}

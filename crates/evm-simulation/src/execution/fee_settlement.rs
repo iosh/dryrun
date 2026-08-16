@@ -54,3 +54,28 @@ impl EvmFeeSettlement {
         self.fee.beneficiary_reward()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use alloy::primitives::U256;
+
+    use super::EvmFeeSettlement;
+    use crate::{EvmBlobGasFee, EvmGas};
+
+    #[test]
+    fn settles_execution_and_blob_fees_without_rewarding_blob_gas() {
+        let gas =
+            EvmGas::new(100, 100, 21, 70, 10, 0).expect("test gas accounting should be valid");
+        let settlement = EvmFeeSettlement::new(&gas, 100, 7, 5, Some(EvmBlobGasFee::new(3, 11)))
+            .expect("fee settlement should be valid");
+
+        let caller_charge = settlement.caller_precharge() - settlement.caller_refund();
+        let beneficiary_reward = settlement.beneficiary_reward();
+        let fee = settlement.into_fee();
+
+        assert_eq!(caller_charge, U256::from(453));
+        assert_eq!(fee.total_charged_amount(), caller_charge);
+        assert_eq!(fee.total_burnt_amount(), U256::from(333));
+        assert_eq!(beneficiary_reward, U256::from(120));
+    }
+}

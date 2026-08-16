@@ -214,3 +214,89 @@ pub(crate) fn build_executor_transaction(
 
     Ok(ExecutorEspaceTransactionInput { tx, sender })
 }
+
+#[cfg(test)]
+mod tests {
+    use alloy_primitives::{Address, Bytes, U256};
+
+    use super::classify_transaction_rejection;
+    use crate::{
+        chain_spec::ConfluxChainSpec,
+        espace::{
+            EspaceCompleteTransaction, EspaceCompleteTransactionVariant, EspaceTransactionRejection,
+        },
+    };
+
+    const CIP645_HEIGHT: u64 = 129_680_000;
+    const EIP3860_MAX_INITCODE_SIZE: usize = 49_152;
+
+    #[test]
+    fn applies_the_priority_fee_cap_at_its_protocol_activation() {
+        let chain_spec = ConfluxChainSpec::mainnet();
+        let transaction =
+            dynamic_fee_transaction(Some(Address::repeat_byte(2)), Bytes::new(), U256::from(3));
+
+        let before_activation =
+            chain_spec.espace_transaction_validation_rules(250_000_000, CIP645_HEIGHT - 1);
+        assert_eq!(
+            classify_transaction_rejection(&transaction, 1030, before_activation),
+            None
+        );
+
+        let active = chain_spec.espace_transaction_validation_rules(250_000_000, CIP645_HEIGHT);
+        assert!(matches!(
+            classify_transaction_rejection(&transaction, 1030, active),
+            Some(EspaceTransactionRejection::PriorityFeeGreaterThanMaxFee {
+                max_priority_fee_per_gas,
+                max_fee_per_gas,
+            }) if max_priority_fee_per_gas == U256::from(3) && max_fee_per_gas == U256::from(2)
+        ));
+    }
+
+    #[test]
+    fn enforces_the_activated_initcode_size_boundary() {
+        let rules = ConfluxChainSpec::mainnet()
+            .espace_transaction_validation_rules(250_000_000, CIP645_HEIGHT);
+        assert_eq!(rules.max_initcode_size, EIP3860_MAX_INITCODE_SIZE);
+        let mut transaction = dynamic_fee_transaction(
+            None,
+            Bytes::from(vec![0_u8; EIP3860_MAX_INITCODE_SIZE]),
+            U256::from(1),
+        );
+        transaction.gas_limit = 10_000_000;
+
+        assert_eq!(
+            classify_transaction_rejection(&transaction, 1030, rules),
+            None
+        );
+
+        transaction.input = Bytes::from(vec![0_u8; EIP3860_MAX_INITCODE_SIZE + 1]);
+        assert!(matches!(
+            classify_transaction_rejection(&transaction, 1030, rules),
+            Some(EspaceTransactionRejection::CreateInitCodeSizeLimit { size, limit })
+                if size == EIP3860_MAX_INITCODE_SIZE + 1
+                    && limit == EIP3860_MAX_INITCODE_SIZE
+        ));
+    }
+
+    fn dynamic_fee_transaction(
+        to: Option<Address>,
+        input: Bytes,
+        max_priority_fee_per_gas: U256,
+    ) -> EspaceCompleteTransaction {
+        EspaceCompleteTransaction {
+            from: Address::repeat_byte(1),
+            to,
+            nonce: 0,
+            gas_limit: 1_000_000,
+            value: U256::ZERO,
+            input,
+            chain_id: 1030,
+            variant: EspaceCompleteTransactionVariant::Eip1559 {
+                max_fee_per_gas: U256::from(2),
+                max_priority_fee_per_gas,
+                access_list: Vec::new(),
+            },
+        }
+    }
+}

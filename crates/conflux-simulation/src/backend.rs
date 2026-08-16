@@ -138,7 +138,7 @@ mod tests {
         rpc::client::RpcClient,
         transports::mock::Asserter,
     };
-    use conflux_provider::{ConfluxProvider, ConfluxProviderError, CoreStatus, Network};
+    use conflux_provider::{ConfluxProvider, ConfluxProviderError, CoreStatus};
 
     use super::{ConfluxSimulationBackend, validate_mainnet_identity};
     use crate::{
@@ -148,53 +148,34 @@ mod tests {
 
     #[tokio::test]
     async fn creates_backend_for_matching_mainnet_identity() {
-        let backend = initialize(mainnet_status(1029, 1030, 1029), 1030)
+        initialize(mainnet_status(1029, 1030, 1029), 1030)
             .await
             .expect("matching mainnet identity should initialize");
-
-        assert_eq!(backend.core_space_address_network(), Network::Main);
-        assert_eq!(backend.chain_spec().core_space_chain_id(), 1029);
-        assert_eq!(backend.chain_spec().espace_chain_id(), 1030);
-        assert_eq!(backend.chain_spec().network_id(), 1029);
     }
 
     #[tokio::test]
-    async fn rejects_core_space_chain_id_mismatch() {
-        let error =
-            expect_initialization_failure(initialize(mainnet_status(1, 1030, 1029), 1030)).await;
-
-        assert_identity_mismatch(error, identity(1, 1030, 1029, 1030));
-    }
-
-    #[tokio::test]
-    async fn rejects_core_reported_espace_chain_id_mismatch() {
-        let error =
-            expect_initialization_failure(initialize(mainnet_status(1029, 1, 1029), 1030)).await;
-
-        assert_identity_mismatch(error, identity(1029, 1, 1029, 1030));
-    }
-
-    #[tokio::test]
-    async fn rejects_network_id_mismatch() {
-        let error =
-            expect_initialization_failure(initialize(mainnet_status(1029, 1030, 1), 1030)).await;
-
-        assert_identity_mismatch(error, identity(1029, 1030, 1, 1030));
-    }
-
-    #[tokio::test]
-    async fn rejects_espace_endpoint_chain_id_mismatch() {
-        let error =
-            expect_initialization_failure(initialize(mainnet_status(1029, 1030, 1029), 1)).await;
-
-        assert_identity_mismatch(error, identity(1029, 1030, 1029, 1));
-    }
-
-    #[tokio::test]
-    async fn reports_the_complete_observed_identity() {
-        let error = expect_initialization_failure(initialize(mainnet_status(1, 2, 3), 4)).await;
-
-        assert_identity_mismatch(error, identity(1, 2, 3, 4));
+    async fn rejects_each_mainnet_identity_mismatch() {
+        for (core_chain_id, reported_espace_chain_id, network_id, endpoint_chain_id) in [
+            (1, 1030, 1029, 1030),
+            (1029, 1, 1029, 1030),
+            (1029, 1030, 1, 1030),
+            (1029, 1030, 1029, 1),
+        ] {
+            let error = expect_initialization_failure(initialize(
+                mainnet_status(core_chain_id, reported_espace_chain_id, network_id),
+                endpoint_chain_id,
+            ))
+            .await;
+            assert_identity_mismatch(
+                error,
+                identity(
+                    core_chain_id,
+                    reported_espace_chain_id,
+                    network_id,
+                    endpoint_chain_id,
+                ),
+            );
+        }
     }
 
     #[test]

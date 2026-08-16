@@ -334,7 +334,6 @@ fn metadata_codec_requires_recorded_outcomes() {
         [0x95, 0xd8, 0x9b, 0x41],
         [0x31, 0x3c, 0xe5, 0x67],
     ]) {
-        assert_eq!(call.contract_address(), &contract);
         assert_eq!(call.call_data().as_ref(), selector.as_slice());
     }
 

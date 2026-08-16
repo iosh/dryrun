@@ -213,3 +213,65 @@ fn observed_call(inputs: &CallInputs) -> Option<EvmExecutionObservation> {
 fn is_success(result: &InstructionResult) -> bool {
     result.is_ok()
 }
+
+#[cfg(test)]
+mod tests {
+    use alloy::primitives::{Address, U256};
+
+    use super::{EvmExecutionObservation, ObservationJournal, ObservationJournalEntry};
+
+    #[test]
+    fn reverting_parent_discards_its_nested_observations() {
+        let retained = observed_call(1, 2, 3);
+        let mut journal = ObservationJournal::default();
+        journal.record_observation(retained.clone());
+        journal.push_call_frame(Some(observed_call(4, 5, 6)));
+        journal.push_call_frame(Some(observed_call(7, 8, 9)));
+        journal.record_observation(observed_call(10, 11, 12));
+        journal.pop_frame(true, None);
+        journal.pop_frame(false, None);
+
+        assert_eq!(
+            journal.entries,
+            vec![ObservationJournalEntry::Committed(retained)]
+        );
+    }
+
+    #[test]
+    fn create_transfer_is_committed_only_with_a_successful_address() {
+        let from = Address::repeat_byte(1);
+        let created_address = Address::repeat_byte(2);
+        let amount = U256::from(3);
+        let nested_call = observed_call(4, 5, 6);
+
+        let mut successful = ObservationJournal::default();
+        successful.push_create_frame(from, amount);
+        successful.record_observation(nested_call.clone());
+        successful.pop_frame(true, Some(created_address));
+        assert_eq!(
+            successful.entries,
+            vec![
+                ObservationJournalEntry::Committed(EvmExecutionObservation::CreateTransfer {
+                    from,
+                    to: created_address,
+                    amount,
+                },),
+                ObservationJournalEntry::Committed(nested_call.clone()),
+            ]
+        );
+
+        let mut failed = ObservationJournal::default();
+        failed.push_create_frame(from, amount);
+        failed.record_observation(nested_call);
+        failed.pop_frame(false, None);
+        assert!(failed.entries.is_empty());
+    }
+
+    fn observed_call(caller: u8, target: u8, value: u64) -> EvmExecutionObservation {
+        EvmExecutionObservation::Call {
+            caller: Address::repeat_byte(caller),
+            target: Address::repeat_byte(target),
+            value: U256::from(value),
+        }
+    }
+}
