@@ -53,7 +53,7 @@ pub(crate) fn convert_executor_outcome(
     prepared: &PreparedTransactionExecution,
     transaction: &CoreSpaceCompleteTransaction,
     state: &State,
-    storage_sponsorship: ResolvedStorageSponsorship,
+    storage_sponsorship: Option<ResolvedStorageSponsorship>,
 ) -> Result<CoreSpaceExecutionOutcome, CoreSpaceExecutionError> {
     let network = transaction.from.network();
     match outcome {
@@ -63,7 +63,7 @@ pub(crate) fn convert_executor_outcome(
                 output.storage_sponsor_paid,
                 StorageCoverageOutcome::Success,
                 &prepared.spec,
-            );
+            )?;
             let result =
                 build_execution_result(&output, transaction.gas_limit, storage_covered_by_sponsor)?;
             let logs = convert_committed_logs(&output, network)?;
@@ -86,7 +86,7 @@ pub(crate) fn convert_executor_outcome(
                 details.storage_sponsor_paid,
                 storage_coverage_outcome,
                 &prepared.spec,
-            );
+            )?;
             let result = build_execution_result(
                 &details,
                 transaction.gas_limit,
@@ -421,11 +421,11 @@ enum StorageCoverageOutcome {
 }
 
 fn storage_covered_by_sponsor_for_outcome(
-    resolved: ResolvedStorageSponsorship,
+    resolved: Option<ResolvedStorageSponsorship>,
     executor_reported: bool,
     outcome: StorageCoverageOutcome,
     spec: &cfx_vm_types::Spec,
-) -> bool {
+) -> Result<bool, CoreSpaceResultIntegrationError> {
     let use_prepared_value = match outcome {
         StorageCoverageOutcome::Success | StorageCoverageOutcome::Reverted => spec.cip78a,
         StorageCoverageOutcome::FullyChargedFailure => spec.cip78b,
@@ -433,8 +433,14 @@ fn storage_covered_by_sponsor_for_outcome(
     // EstimateSender cannot report post-CIP-78 storage sponsorship. Reconstruct
     // normal receipt semantics from the same anchored state in those branches.
     if use_prepared_value {
-        resolved.storage_covered_by_sponsor()
+        resolved
+            .map(ResolvedStorageSponsorship::storage_covered_by_sponsor)
+            .ok_or_else(|| {
+                CoreSpaceResultIntegrationError::invalid_executor_output(
+                    "CIP-78 storage sponsorship was not resolved",
+                )
+            })
     } else {
-        executor_reported
+        Ok(executor_reported)
     }
 }

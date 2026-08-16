@@ -69,7 +69,7 @@ impl CoreSpaceExecutionSession {
         mut self,
         transaction: &CoreSpaceCompleteTransaction,
         block_context: ExecutionBlockContext,
-        storage_sponsorship: ResolvedStorageSponsorship,
+        storage_sponsorship: Option<ResolvedStorageSponsorship>,
     ) -> Result<CoreSpaceExecutionSessionResult, CoreSpaceSimulationError> {
         let execution_input = TransactionExecutionInput {
             block_context,

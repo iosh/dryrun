@@ -68,12 +68,23 @@ impl CoreSpaceTransactionSimulator {
             ));
         }
 
-        let storage_sponsorship = resolve_storage_sponsorship(
-            self.backend.provider(),
-            context.state_anchor,
-            &transaction,
-        )
-        .await?;
+        let execution_spec = self
+            .backend
+            .chain_spec()
+            .common_params()
+            .spec(execution_block_number, execution_epoch_height);
+        let storage_sponsorship = if execution_spec.cip78a || execution_spec.cip78b {
+            Some(
+                resolve_storage_sponsorship(
+                    self.backend.provider(),
+                    context.state_anchor,
+                    &transaction,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
         let state_source =
             ConfluxStateSource::prepare(context.state_anchor, self.backend.provider().clone())
                 .await
@@ -108,7 +119,7 @@ fn simulate_blocking(
     chain_id: u32,
     context: super::ResolvedCoreSpaceContext,
     transaction: CoreSpaceCompleteTransaction,
-    storage_sponsorship: super::ResolvedStorageSponsorship,
+    storage_sponsorship: Option<super::ResolvedStorageSponsorship>,
     state_source: ConfluxStateSource,
 ) -> Result<CoreSpaceSimulation, CoreSpaceSimulationError> {
     let session = CoreSpaceExecutionSession::new(&backend, state_source, runtime_handle)?;
