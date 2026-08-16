@@ -141,14 +141,7 @@ pub(crate) fn collect_cfx_operations(
                         CollectedAdminCall::Set(operation) => collector
                             .operations
                             .push(CfxOperation::Admin(AdminOperation::Set(operation))),
-                        CollectedAdminCall::Destroy { contract_address } if !spec.cip131 => {
-                            return Err(CoreSpaceChangesError::inconsistent_execution(format!(
-                                "pre-CIP-131 destruction of Core Space contract {contract_address} may delete sponsorship access-rule entries that public RPC cannot enumerate"
-                            )));
-                        }
-                        CollectedAdminCall::Destroy {
-                            contract_address: _,
-                        } => {}
+                        CollectedAdminCall::Destroy => {}
                     }
                     continue;
                 }
@@ -206,6 +199,7 @@ pub(crate) fn collect_cfx_operations(
                                 AdminOperation::Initialize {
                                     contract_address: address_from_cfx(*created_address),
                                     admin: transaction_sender,
+                                    initializes_storage_points: spec.cip107,
                                 },
                             ));
                         }

@@ -304,11 +304,6 @@ impl CoreSpaceOperationCollector {
                     amount,
                 }
             }
-            (AddressPocket::StakingBalance(account), AddressPocket::MintBurn) => {
-                return Err(CoreSpaceChangesError::unsupported_operation(format!(
-                    "Core Space staking burn for {account:?} cannot be linked to a verified account removal"
-                )));
-            }
             (AddressPocket::MintBurn, AddressPocket::Balance(_)) => {
                 return Err(CoreSpaceChangesError::inconsistent_execution(
                     "Core Space issuance was not paired with a staking withdrawal",

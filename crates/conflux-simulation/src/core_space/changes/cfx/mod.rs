@@ -449,6 +449,7 @@ enum AdminOperation {
     Initialize {
         contract_address: Address,
         admin: Address,
+        initializes_storage_points: bool,
     },
     Set(ContractAdminSetOperation),
 }

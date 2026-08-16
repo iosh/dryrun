@@ -469,8 +469,13 @@ pub(crate) fn verify_cfx_changes(
             CfxOperation::Admin(AdminOperation::Initialize {
                 contract_address,
                 admin,
+                initializes_storage_points,
             }) => {
-                replayed_state.initialize_contract_admin(*contract_address, *admin);
+                replayed_state.initialize_contract(
+                    *contract_address,
+                    *admin,
+                    *initializes_storage_points,
+                );
             }
             CfxOperation::Admin(AdminOperation::Set(update)) => {
                 replayed_state.apply_contract_admin_set(update, &mut positioned_core_changes)?;
@@ -513,12 +518,25 @@ pub(crate) fn verify_cfx_changes(
 }
 
 impl CfxStateValues {
-    fn initialize_contract_admin(&mut self, contract_address: Address, admin: Address) {
+    fn initialize_contract(
+        &mut self,
+        contract_address: Address,
+        admin: Address,
+        initializes_storage_points: bool,
+    ) {
         if let Some(current_admin) = self.contract_admins.get_mut(&contract_address) {
             *current_admin = admin;
         }
         if let Some(exists) = self.contract_exists.get_mut(&contract_address) {
             *exists = true;
+        }
+        if initializes_storage_points
+            && let Some(storage_points) = self.storage_points.get_mut(&contract_address)
+        {
+            *storage_points = Some(StoragePointValues {
+                unused: U256::ZERO,
+                used: U256::ZERO,
+            });
         }
     }
 

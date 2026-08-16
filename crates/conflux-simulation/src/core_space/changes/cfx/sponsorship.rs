@@ -38,9 +38,7 @@ pub(super) enum CollectedSponsorshipCall {
 
 pub(super) enum CollectedAdminCall {
     Set(ContractAdminSetOperation),
-    Destroy {
-        contract_address: alloy_primitives::Address,
-    },
+    Destroy,
 }
 
 pub(super) fn collect_sponsorship_call(
@@ -241,9 +239,7 @@ pub(super) fn collect_admin_call(
                 is_creation_frame,
             })
         }
-        DecodedAdminCall::Destroy { contract_address } => {
-            CollectedAdminCall::Destroy { contract_address }
-        }
+        DecodedAdminCall::Destroy => CollectedAdminCall::Destroy,
     }))
 }
 
@@ -729,9 +725,7 @@ enum DecodedAdminCall {
         contract_address: alloy_primitives::Address,
         new_admin: alloy_primitives::Address,
     },
-    Destroy {
-        contract_address: alloy_primitives::Address,
-    },
+    Destroy,
 }
 
 fn decode_admin_call(
@@ -750,10 +744,8 @@ fn decode_admin_call(
         }))
     } else if selector == IAdminControlCalls::destroyCall::SELECTOR {
         let calldata = complete_calldata(calldata_len, calldata_prefix, "destroy")?;
-        let call = decode_canonical_call::<IAdminControlCalls::destroyCall>(calldata, "destroy")?;
-        Ok(Some(DecodedAdminCall::Destroy {
-            contract_address: call.contract_address,
-        }))
+        decode_canonical_call::<IAdminControlCalls::destroyCall>(calldata, "destroy")?;
+        Ok(Some(DecodedAdminCall::Destroy))
     } else {
         Ok(None)
     }
