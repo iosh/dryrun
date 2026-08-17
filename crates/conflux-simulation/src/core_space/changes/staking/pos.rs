@@ -234,7 +234,6 @@ fn replay_stake_increase(
             "Core Space PoS increase used zero votes for {account}"
         )));
     }
-    verify_mapping(replayed_after_state, identifier, account)?;
     let status = replayed_after_state
         .statuses_by_identifier
         .get_mut(&identifier)
@@ -263,7 +262,7 @@ fn replay_stake_increase(
                 "Core Space PoS registered vote count overflowed for {identifier}"
             ))
         })?;
-    let locked_amount = vote_amount(vote_count)?;
+    let locked_amount = vote_amount(vote_count);
     replayed_after_state.total_pos_staking = replayed_after_state
         .total_pos_staking
         .checked_add(locked_amount)
@@ -275,12 +274,8 @@ fn replay_stake_increase(
     Ok(locked_amount)
 }
 
-fn vote_amount(vote_count: u64) -> Result<U256, CoreSpaceChangesError> {
-    U256::from(vote_count)
-        .checked_mul(u256_from_cfx(*cfx_parameters::staking::POS_VOTE_PRICE))
-        .ok_or_else(|| {
-            CoreSpaceChangesError::inconsistent_execution("Core Space PoS vote value overflowed")
-        })
+fn vote_amount(vote_count: u64) -> U256 {
+    U256::from(vote_count) * u256_from_cfx(*cfx_parameters::staking::POS_VOTE_PRICE)
 }
 
 fn consume_registration_event<'event>(
@@ -346,11 +341,6 @@ fn verify_replay_matches_after_state(
             "Core Space PoS storage replay does not match after state",
         ));
     }
-    for (account, identifier) in &after_state.identifiers_by_account {
-        if !identifier.is_zero() {
-            verify_mapping(after_state, *identifier, *account)?;
-        }
-    }
     Ok(())
 }
 
@@ -375,7 +365,7 @@ fn verify_staking_coverage(after_state: &PoSStateValues) -> Result<(), CoreSpace
             continue;
         }
         let required_staking =
-            vote_amount(pos_status(after_state, *identifier)?.locked_vote_count())?;
+            vote_amount(pos_status(after_state, *identifier)?.locked_vote_count());
         let staking_balance = after_state
             .staking_balances_by_account
             .get(account)

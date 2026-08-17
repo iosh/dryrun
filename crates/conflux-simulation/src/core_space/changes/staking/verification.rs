@@ -40,6 +40,7 @@ pub(crate) fn analyze_balance_changes(
                     account,
                     deposit_lists,
                     before_cfx_state,
+                    cip97,
                 )?;
                 replay.deposit(
                     amount,
@@ -72,6 +73,7 @@ pub(crate) fn analyze_balance_changes(
                     account,
                     deposit_lists,
                     before_cfx_state,
+                    cip97,
                 )?;
                 let replayed_reward =
                     replay.withdraw(principal_amount, accumulated_interest_rate, cip97)?;
@@ -94,7 +96,12 @@ pub(crate) fn analyze_balance_changes(
     }
 
     for (account, replay) in &replays_by_account {
-        verify_deposit_list_consistency(&replay.deposit_list, replay.staking_balance, *account)?;
+        verify_deposit_list_consistency(
+            &replay.deposit_list,
+            replay.staking_balance,
+            *account,
+            cip97,
+        )?;
         let post_state_length = post_state
             .deposit_list_length(&address_to_cfx(*account))
             .map_err(|error| {
@@ -119,6 +126,7 @@ fn replay_for_account<'a>(
     account: Address,
     deposit_lists: &RecordedDepositLists,
     before_cfx_state: &CfxStateValues,
+    cip97: bool,
 ) -> Result<&'a mut StakingAccountReplay, CoreSpaceChangesError> {
     match replays_by_account.entry(account) {
         Entry::Occupied(entry) => Ok(entry.into_mut()),
@@ -133,7 +141,7 @@ fn replay_for_account<'a>(
                         )
                     })?;
             let staking_balance = before_cfx_state.staking_balance(account)?;
-            verify_deposit_list_consistency(&deposit_list, staking_balance, account)?;
+            verify_deposit_list_consistency(&deposit_list, staking_balance, account, cip97)?;
             Ok(entry.insert(StakingAccountReplay {
                 account,
                 staking_balance,
@@ -258,6 +266,7 @@ fn verify_deposit_list_consistency(
     deposit_list: &[DepositInfo],
     staking_balance: U256,
     account: Address,
+    cip97: bool,
 ) -> Result<(), CoreSpaceChangesError> {
     if deposit_list
         .iter()
@@ -267,7 +276,7 @@ fn verify_deposit_list_consistency(
             "Core Space deposit list contains a zero interest rate for {account}"
         )));
     }
-    if !deposit_list.is_empty() {
+    if !deposit_list.is_empty() || !cip97 {
         let listed_staking_balance = deposit_list
             .iter()
             .try_fold(U256::ZERO, |total, deposit| {
