@@ -62,6 +62,6 @@ fn allocation(values: [alloy_primitives::U256; 3]) -> VoteAllocation {
 
 fn event_decode_error(name: &str, error: alloy_sol_types::Error) -> CoreSpaceChangesError {
     CoreSpaceChangesError::inconsistent_execution(format!(
-        "Core Space governance {name} event is not canonical ABI data: {error}"
+        "Core Space governance {name} event has invalid ABI data: {error}"
     ))
 }

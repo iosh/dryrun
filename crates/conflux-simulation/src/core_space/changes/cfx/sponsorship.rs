@@ -7,7 +7,8 @@ use cfx_vm_types::{CallType, Spec};
 use super::{
     ContractAdminSetOperation, PendingSponsorshipAccessRuleScope, SponsoredResource,
     SponsorshipAccessCallerRole, SponsorshipAccessRuleUpdate, SponsorshipFundingOperation,
-    SponsorshipFundingTerms, SponsorshipRefundOperation, StoragePointConversionOperation,
+    SponsorshipFundingTerms, SponsorshipRefundOperation, SponsorshipReplacementOperation,
+    StoragePointConversionOperation,
 };
 use crate::{
     core_space::CoreSpaceChangesError,
@@ -95,50 +96,46 @@ pub(super) fn collect_sponsorship_call(
     }
 
     let caller_address = address_from_cfx(*caller);
-    if let DecodedSponsorshipCall::AccessRuleUpdates {
-        caller_role,
-        contract_address,
-        account_addresses,
-        enabled_after,
-    } = decoded_call
-    {
-        let contract_address = if caller_role == SponsorshipAccessCallerRole::SponsoredContract {
-            caller_address
-        } else {
-            contract_address
-        };
-        let updates = account_addresses
-            .into_iter()
-            .enumerate()
-            .map(
-                |(item_index, account_address)| SponsorshipAccessRuleUpdate {
-                    position: ChangePosition::new(frame_position, item_index),
-                    caller_role,
-                    caller_address,
-                    contract_address,
-                    account_scope: if account_address.is_zero() {
-                        PendingSponsorshipAccessRuleScope::AllAccounts
-                    } else {
-                        PendingSponsorshipAccessRuleScope::Account(account_address)
+    let (funding_terms, contract_address) = match decoded_call {
+        DecodedSponsorshipCall::AccessRuleUpdates {
+            caller_role,
+            contract_address,
+            account_addresses,
+            enabled_after,
+        } => {
+            let contract_address = if caller_role == SponsorshipAccessCallerRole::SponsoredContract
+            {
+                caller_address
+            } else {
+                contract_address
+            };
+            let updates = account_addresses
+                .into_iter()
+                .enumerate()
+                .map(
+                    |(item_index, account_address)| SponsorshipAccessRuleUpdate {
+                        position: ChangePosition::new(frame_position, item_index),
+                        caller_role,
+                        caller_address,
+                        contract_address,
+                        account_scope: if account_address.is_zero() {
+                            PendingSponsorshipAccessRuleScope::AllAccounts
+                        } else {
+                            PendingSponsorshipAccessRuleScope::Account(account_address)
+                        },
+                        enabled_after,
                     },
-                    enabled_after,
-                },
-            )
-            .collect();
-        return Ok(Some((
-            CollectedSponsorshipCall::AccessRuleUpdates(updates),
-            Vec::new(),
-        )));
-    }
-
-    let DecodedSponsorshipCall::Funding {
-        funding_terms,
-        contract_address,
-    } = decoded_call
-    else {
-        return Err(CoreSpaceChangesError::inconsistent_execution(
-            "Core Space sponsorship call classification was inconsistent",
-        ));
+                )
+                .collect();
+            return Ok(Some((
+                CollectedSponsorshipCall::AccessRuleUpdates(updates),
+                Vec::new(),
+            )));
+        }
+        DecodedSponsorshipCall::Funding {
+            funding_terms,
+            contract_address,
+        } => (funding_terms, contract_address),
     };
 
     let call_context = SponsorshipFundingCallContext {
@@ -275,8 +272,7 @@ pub(super) fn collect_standalone_sponsorship_refund(
         resource,
         sponsor: address_from_cfx(recipient.address),
         contract_address: address_from_cfx(contract_address),
-        gross_refund_amount: amount,
-        pool_refund_amount: amount,
+        refund_amount: amount,
     }))
 }
 
@@ -358,7 +354,7 @@ fn collect_gas_sponsorship_call(
 ) -> Result<SponsorshipFundingOperation, CoreSpaceChangesError> {
     let first = required_transfer(transfers, 0, "gas sponsorship")?;
 
-    let (pool_deposit_amount, refund) =
+    let (pool_deposit_amount, replacement) =
         if let Some((old_sponsor, pool_refund_amount)) = gas_pool_refund(first, call_context)? {
             let deposit = required_transfer(transfers, 1, "gas sponsorship")?;
             require_transfer_count(transfers, 2, "gas sponsorship")?;
@@ -368,12 +364,10 @@ fn collect_gas_sponsorship_call(
             }
             (
                 pool_deposit_amount,
-                Some(SponsorshipRefundOperation {
-                    resource: SponsoredResource::Gas,
-                    sponsor: address_from_cfx(old_sponsor),
-                    contract_address: address_from_cfx(call_context.contract_address),
-                    gross_refund_amount: pool_refund_amount,
+                Some(SponsorshipReplacementOperation {
+                    previous_sponsor: address_from_cfx(old_sponsor),
                     pool_refund_amount,
+                    collateral_compensation_amount: alloy_primitives::U256::ZERO,
                 }),
             )
         } else {
@@ -394,7 +388,7 @@ fn collect_gas_sponsorship_call(
         contract_address: address_from_cfx(call_context.contract_address),
         gross_deposit_amount: call_context.gross_deposit_amount,
         pool_deposit_amount,
-        refund,
+        replacement,
     })
 }
 
@@ -404,7 +398,7 @@ fn collect_storage_sponsorship_call(
 ) -> Result<SponsorshipFundingOperation, CoreSpaceChangesError> {
     let first = required_transfer(transfers, 0, "storage sponsorship")?;
 
-    let (pool_deposit_amount, refund) = if let Some((old_sponsor, pool_refund_amount)) =
+    let (pool_deposit_amount, replacement) = if let Some((old_sponsor, pool_refund_amount)) =
         storage_pool_refund(first, call_context)?
     {
         let compensation = required_transfer(transfers, 1, "storage sponsorship")?;
@@ -423,21 +417,12 @@ fn collect_storage_sponsorship_call(
         if transit_total != call_context.gross_deposit_amount {
             return Err(transit_mismatch("storage"));
         }
-        let gross_refund_amount = pool_refund_amount
-            .checked_add(collateral_compensation)
-            .ok_or_else(|| {
-                CoreSpaceChangesError::inconsistent_execution(
-                    "Core Space storage sponsorship refund amount overflowed",
-                )
-            })?;
         (
             pool_deposit_amount,
-            Some(SponsorshipRefundOperation {
-                resource: SponsoredResource::StorageCollateral,
-                sponsor: address_from_cfx(old_sponsor),
-                contract_address: address_from_cfx(call_context.contract_address),
-                gross_refund_amount,
+            Some(SponsorshipReplacementOperation {
+                previous_sponsor: address_from_cfx(old_sponsor),
                 pool_refund_amount,
+                collateral_compensation_amount: collateral_compensation,
             }),
         )
     } else {
@@ -456,7 +441,7 @@ fn collect_storage_sponsorship_call(
         contract_address: address_from_cfx(call_context.contract_address),
         gross_deposit_amount: call_context.gross_deposit_amount,
         pool_deposit_amount,
-        refund,
+        replacement,
     })
 }
 
@@ -654,7 +639,7 @@ fn decode_sponsorship_call(
     let calldata = complete_calldata(calldata_len, calldata_prefix, "sponsorship")?;
 
     if selector == ISponsorWhitelistControlCalls::setSponsorForGasCall::SELECTOR {
-        let call = decode_canonical_call::<ISponsorWhitelistControlCalls::setSponsorForGasCall>(
+        let call = decode_call::<ISponsorWhitelistControlCalls::setSponsorForGasCall>(
             calldata,
             "setSponsorForGas",
         )?;
@@ -665,15 +650,16 @@ fn decode_sponsorship_call(
             contract_address: call.contract_address,
         }))
     } else if selector == ISponsorWhitelistControlCalls::setSponsorForCollateralCall::SELECTOR {
-        let call = decode_canonical_call::<
-            ISponsorWhitelistControlCalls::setSponsorForCollateralCall,
-        >(calldata, "setSponsorForCollateral")?;
+        let call = decode_call::<ISponsorWhitelistControlCalls::setSponsorForCollateralCall>(
+            calldata,
+            "setSponsorForCollateral",
+        )?;
         Ok(Some(DecodedSponsorshipCall::Funding {
             funding_terms: SponsorshipFundingTerms::StorageCollateral,
             contract_address: call.contract_address,
         }))
     } else if selector == ISponsorWhitelistControlCalls::addPrivilegeCall::SELECTOR {
-        let call = decode_canonical_call::<ISponsorWhitelistControlCalls::addPrivilegeCall>(
+        let call = decode_call::<ISponsorWhitelistControlCalls::addPrivilegeCall>(
             calldata,
             "addPrivilege",
         )?;
@@ -684,7 +670,7 @@ fn decode_sponsorship_call(
             enabled_after: true,
         }))
     } else if selector == ISponsorWhitelistControlCalls::removePrivilegeCall::SELECTOR {
-        let call = decode_canonical_call::<ISponsorWhitelistControlCalls::removePrivilegeCall>(
+        let call = decode_call::<ISponsorWhitelistControlCalls::removePrivilegeCall>(
             calldata,
             "removePrivilege",
         )?;
@@ -695,7 +681,7 @@ fn decode_sponsorship_call(
             enabled_after: false,
         }))
     } else if selector == ISponsorWhitelistControlCalls::addPrivilegeByAdminCall::SELECTOR {
-        let call = decode_canonical_call::<ISponsorWhitelistControlCalls::addPrivilegeByAdminCall>(
+        let call = decode_call::<ISponsorWhitelistControlCalls::addPrivilegeByAdminCall>(
             calldata,
             "addPrivilegeByAdmin",
         )?;
@@ -706,9 +692,10 @@ fn decode_sponsorship_call(
             enabled_after: true,
         }))
     } else if selector == ISponsorWhitelistControlCalls::removePrivilegeByAdminCall::SELECTOR {
-        let call = decode_canonical_call::<
-            ISponsorWhitelistControlCalls::removePrivilegeByAdminCall,
-        >(calldata, "removePrivilegeByAdmin")?;
+        let call = decode_call::<ISponsorWhitelistControlCalls::removePrivilegeByAdminCall>(
+            calldata,
+            "removePrivilegeByAdmin",
+        )?;
         Ok(Some(DecodedSponsorshipCall::AccessRuleUpdates {
             caller_role: SponsorshipAccessCallerRole::ContractAdmin,
             contract_address: call.contract_address,
@@ -737,14 +724,14 @@ fn decode_admin_call(
     };
     if selector == IAdminControlCalls::setAdminCall::SELECTOR {
         let calldata = complete_calldata(calldata_len, calldata_prefix, "setAdmin")?;
-        let call = decode_canonical_call::<IAdminControlCalls::setAdminCall>(calldata, "setAdmin")?;
+        let call = decode_call::<IAdminControlCalls::setAdminCall>(calldata, "setAdmin")?;
         Ok(Some(DecodedAdminCall::Set {
             contract_address: call.contract_address,
             new_admin: call.new_admin_address,
         }))
     } else if selector == IAdminControlCalls::destroyCall::SELECTOR {
         let calldata = complete_calldata(calldata_len, calldata_prefix, "destroy")?;
-        decode_canonical_call::<IAdminControlCalls::destroyCall>(calldata, "destroy")?;
+        decode_call::<IAdminControlCalls::destroyCall>(calldata, "destroy")?;
         Ok(Some(DecodedAdminCall::Destroy))
     } else {
         Ok(None)
@@ -773,21 +760,12 @@ fn complete_calldata<'a>(
     Ok(calldata_prefix)
 }
 
-fn decode_canonical_call<C: SolCall>(
-    calldata: &[u8],
-    call_name: &str,
-) -> Result<C, CoreSpaceChangesError> {
-    let call = C::abi_decode_validate(calldata).map_err(|error| {
+fn decode_call<C: SolCall>(calldata: &[u8], call_name: &str) -> Result<C, CoreSpaceChangesError> {
+    C::abi_decode(calldata).map_err(|error| {
         CoreSpaceChangesError::inconsistent_execution(format!(
-            "Core Space {call_name} call is not valid ABI data: {error}"
+            "Core Space {call_name} committed calldata could not be decoded: {error}"
         ))
-    })?;
-    if call.abi_encode() != calldata {
-        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
-            "Core Space {call_name} call is not canonical ABI data"
-        )));
-    }
-    Ok(call)
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

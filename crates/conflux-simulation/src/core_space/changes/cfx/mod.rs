@@ -142,9 +142,9 @@ impl CfxOperations {
                         resource: sponsored_resource,
                         contract_address: funding.contract_address,
                     });
-                    if let Some(refund) = funding.refund {
+                    if let Some(replacement) = funding.replacement {
                         balance_locations.insert(CfxBalanceLocation::CoreSpaceAccount {
-                            account: refund.sponsor,
+                            account: replacement.previous_sponsor,
                         });
                     }
                     if sponsored_resource == SponsoredResource::StorageCollateral {
@@ -541,7 +541,7 @@ struct SponsorshipFundingOperation {
     contract_address: Address,
     gross_deposit_amount: U256,
     pool_deposit_amount: U256,
-    refund: Option<SponsorshipRefundOperation>,
+    replacement: Option<SponsorshipReplacementOperation>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -560,12 +560,18 @@ impl SponsorshipFundingTerms {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct SponsorshipReplacementOperation {
+    previous_sponsor: Address,
+    pool_refund_amount: U256,
+    collateral_compensation_amount: U256,
+}
+
+#[derive(Debug, Clone, Copy)]
 struct SponsorshipRefundOperation {
     resource: SponsoredResource,
     sponsor: Address,
     contract_address: Address,
-    gross_refund_amount: U256,
-    pool_refund_amount: U256,
+    refund_amount: U256,
 }
 
 #[derive(Debug)]

@@ -213,16 +213,7 @@ pub(crate) fn read_cfx_state_values(
                     error,
                 )
             })?;
-        let enabled = match raw_value {
-            value if value.is_zero() => false,
-            value if value == cfx_types::U256::one() => true,
-            value => {
-                return Err(CoreSpaceChangesError::inconsistent_execution(format!(
-                    "{phase} Core Space sponsorship access rule for contract {} had non-boolean raw value {value}",
-                    rule_key.contract_address
-                )));
-            }
-        };
+        let enabled = !raw_value.is_zero();
         sponsorship_access_rules.insert(rule_key, enabled);
     }
 
@@ -721,11 +712,9 @@ impl CfxStateValues {
         )?;
 
         let current_sponsor = self.sponsor_identity(resource_location)?;
-        let replacement = if let Some(refund) = funding.refund {
-            if refund.resource != sponsored_resource
-                || refund.contract_address != funding.contract_address
-                || current_sponsor != Some(refund.sponsor)
-                || Some(refund.sponsor) == new_sponsor
+        let replacement = if let Some(replacement) = funding.replacement {
+            if current_sponsor != Some(replacement.previous_sponsor)
+                || Some(replacement.previous_sponsor) == new_sponsor
             {
                 return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                     "Core Space {:?} sponsorship replacement identity did not match its refund",
@@ -735,55 +724,53 @@ impl CfxStateValues {
             let pool_location = sponsored_resource.pool_location(funding.contract_address);
             self.verify_exact_balance(
                 pool_location,
-                refund.pool_refund_amount,
+                replacement.pool_refund_amount,
                 "replacement refund",
             )?;
-            let direct_compensation = refund
-                .gross_refund_amount
-                .checked_sub(refund.pool_refund_amount)
-                .ok_or_else(|| {
-                    CoreSpaceChangesError::inconsistent_execution(
-                        "Core Space sponsorship gross refund was smaller than its pool refund",
-                    )
-                })?;
-            match sponsored_resource {
-                SponsoredResource::Gas if !direct_compensation.is_zero() => {
-                    return Err(CoreSpaceChangesError::inconsistent_execution(
-                        "Core Space gas sponsorship replacement contained direct collateral compensation",
-                    ));
-                }
+            let (gross_refund_amount, public_replacement) = match sponsored_resource {
+                SponsoredResource::Gas => (
+                    replacement.pool_refund_amount,
+                    PendingSponsorshipReplacement::Gas {
+                        previous_sponsor: replacement.previous_sponsor,
+                        pool_refunded_amount: replacement.pool_refund_amount,
+                    },
+                ),
                 SponsoredResource::StorageCollateral => {
                     self.verify_exact_balance(
                         CfxBalanceLocation::StorageCollateral {
                             contract_address: funding.contract_address,
                         },
-                        direct_compensation,
+                        replacement.collateral_compensation_amount,
                         "replacement collateral compensation",
                     )?;
+                    let gross_refund_amount = replacement
+                        .pool_refund_amount
+                        .checked_add(replacement.collateral_compensation_amount)
+                        .ok_or_else(|| {
+                            CoreSpaceChangesError::inconsistent_execution(
+                                "Core Space storage sponsorship refund amount overflowed",
+                            )
+                        })?;
+                    (
+                        gross_refund_amount,
+                        PendingSponsorshipReplacement::StorageCollateral {
+                            previous_sponsor: replacement.previous_sponsor,
+                            pool_refunded_amount: replacement.pool_refund_amount,
+                            collateral_compensation_amount: replacement
+                                .collateral_compensation_amount,
+                        },
+                    )
                 }
-                SponsoredResource::Gas => {}
-            }
-            self.debit_balance(pool_location, refund.pool_refund_amount)?;
+            };
+            self.debit_balance(pool_location, replacement.pool_refund_amount)?;
             self.credit_balance(
                 CfxBalanceLocation::CoreSpaceAccount {
-                    account: refund.sponsor,
+                    account: replacement.previous_sponsor,
                 },
-                refund.gross_refund_amount,
+                gross_refund_amount,
             )?;
 
-            Some(match sponsored_resource {
-                SponsoredResource::Gas => PendingSponsorshipReplacement::Gas {
-                    previous_sponsor: refund.sponsor,
-                    pool_refunded_amount: refund.pool_refund_amount,
-                },
-                SponsoredResource::StorageCollateral => {
-                    PendingSponsorshipReplacement::StorageCollateral {
-                        previous_sponsor: refund.sponsor,
-                        pool_refunded_amount: refund.pool_refund_amount,
-                        collateral_compensation_amount: direct_compensation,
-                    }
-                }
-            })
+            Some(public_replacement)
         } else if current_sponsor.is_some() && current_sponsor != new_sponsor {
             return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                 "Core Space {:?} sponsorship identity changed without a refund transit",
@@ -826,8 +813,7 @@ impl CfxStateValues {
                 current_sponsor != new_sponsor,
             ),
         };
-        if !funding.gross_deposit_amount.is_zero() || configuration_changed || replacement.is_some()
-        {
+        if !funding.gross_deposit_amount.is_zero() || configuration_changed {
             positioned_changes.push(PositionedCoreSpaceChange::new(
                 funding.position,
                 PendingCoreSpaceChange::SponsorshipFunding {
@@ -848,11 +834,6 @@ impl CfxStateValues {
         &mut self,
         refund: &SponsorshipRefundOperation,
     ) -> Result<(), CoreSpaceChangesError> {
-        if refund.gross_refund_amount != refund.pool_refund_amount {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
-                "Core Space standalone sponsorship refund included a non-pool amount",
-            ));
-        }
         let resource_location = SponsorResourceLocation {
             resource: refund.resource,
             contract_address: refund.contract_address,
@@ -864,17 +845,13 @@ impl CfxStateValues {
             )));
         }
         let pool_location = refund.resource.pool_location(refund.contract_address);
-        self.verify_exact_balance(
-            pool_location,
-            refund.pool_refund_amount,
-            "standalone refund",
-        )?;
-        self.debit_balance(pool_location, refund.pool_refund_amount)?;
+        self.verify_exact_balance(pool_location, refund.refund_amount, "standalone refund")?;
+        self.debit_balance(pool_location, refund.refund_amount)?;
         self.credit_balance(
             CfxBalanceLocation::CoreSpaceAccount {
                 account: refund.sponsor,
             },
-            refund.gross_refund_amount,
+            refund.refund_amount,
         )?;
         self.set_sponsor_identity(resource_location, None)?;
         // A refund transfer alone does not prove a public sponsorship termination.
@@ -972,11 +949,6 @@ impl CfxStateValues {
                     "Core Space storage-point conversion amount overflowed",
                 )
             })?;
-        if converted_amount.is_zero() {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
-                "Core Space storage-point conversion had a zero amount",
-            ));
-        }
 
         self.debit_balance(
             CfxBalanceLocation::StorageSponsor {
@@ -1086,24 +1058,12 @@ impl CfxStateValues {
                 ))
             })?;
         let refundable_amount = token_collateral.min(release.total_released_amount);
-        let burnt_amount = release
-            .total_released_amount
-            .checked_sub(refundable_amount)
-            .ok_or_else(|| {
-                CoreSpaceChangesError::inconsistent_execution(
-                    "Core Space storage release refundable amount exceeded its total",
-                )
-            })?;
+        let burnt_amount = release.total_released_amount - refundable_amount;
 
         let storage_point_refund = match self.storage_points.get_mut(&release.contract_address) {
             Some(Some(points)) => {
                 let refund = points.used.min(refundable_amount);
-                points.used = points.used.checked_sub(refund).ok_or_else(|| {
-                    CoreSpaceChangesError::inconsistent_execution(format!(
-                        "Core Space used storage points underflowed for contract {}",
-                        release.contract_address
-                    ))
-                })?;
+                points.used -= refund;
                 points.unused = points.unused.checked_add(refund).ok_or_else(|| {
                     CoreSpaceChangesError::inconsistent_execution(format!(
                         "Core Space unused storage points overflowed for contract {}",
@@ -1121,14 +1081,7 @@ impl CfxStateValues {
             }
         };
 
-        let expected_non_point_amount = release
-            .total_released_amount
-            .checked_sub(storage_point_refund)
-            .ok_or_else(|| {
-                CoreSpaceChangesError::inconsistent_execution(
-                    "Core Space storage-point refund exceeded its total release",
-                )
-            })?;
+        let expected_non_point_amount = release.total_released_amount - storage_point_refund;
         if release.observed_non_point_amount != expected_non_point_amount {
             return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                 "Core Space storage release movement mismatch for contract {}: observed {}, expected {}",
@@ -1138,13 +1091,7 @@ impl CfxStateValues {
             )));
         }
 
-        let token_refund = refundable_amount
-            .checked_sub(storage_point_refund)
-            .ok_or_else(|| {
-                CoreSpaceChangesError::inconsistent_execution(
-                    "Core Space storage-point refund exceeded refundable token collateral",
-                )
-            })?;
+        let token_refund = refundable_amount - storage_point_refund;
         self.debit_balance(collateral_location, token_refund)?;
         self.credit_balance(
             CfxBalanceLocation::StorageSponsor {
@@ -1154,14 +1101,6 @@ impl CfxStateValues {
         )?;
         self.debit_total_issued(burnt_amount, "a storage collateral release")?;
 
-        let total_storage_debit = release
-            .total_released_amount
-            .checked_sub(storage_point_refund)
-            .ok_or_else(|| {
-                CoreSpaceChangesError::inconsistent_execution(
-                    "Core Space storage-point refund exceeded total storage release",
-                )
-            })?;
         let globals = self.storage_point_globals.as_mut().ok_or_else(|| {
             CoreSpaceChangesError::inconsistent_execution(
                 "before Core Space storage-point globals are missing for a storage release",
@@ -1169,7 +1108,7 @@ impl CfxStateValues {
         })?;
         globals.total_storage = globals
             .total_storage
-            .checked_sub(total_storage_debit)
+            .checked_sub(expected_non_point_amount)
             .ok_or_else(|| {
                 CoreSpaceChangesError::inconsistent_execution(
                     "Core Space total storage underflowed during a storage release",
