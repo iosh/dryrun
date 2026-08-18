@@ -32,14 +32,7 @@ impl CoreSpaceOperationCollector {
                     release.address
                 )));
             }
-            let total_released_amount = U256::from(release.collaterals.as_u64())
-                .checked_mul(drip_per_unit)
-                .ok_or_else(|| {
-                    CoreSpaceChangesError::inconsistent_execution(format!(
-                        "Core Space storage release amount overflowed for contract {:?}",
-                        release.address
-                    ))
-                })?;
+            let total_released_amount = U256::from(release.collaterals.as_u64()) * drip_per_unit;
             if total_released_amount.is_zero() {
                 return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                     "Core Space execution reported a zero storage release for contract {:?}",
@@ -159,7 +152,7 @@ impl CoreSpaceOperationCollector {
     ) -> Result<(Option<BasicCfxOperation>, Vec<usize>), CoreSpaceChangesError> {
         let TraceEvent::InternalTransfer {
             position,
-            frame_id: _,
+            frame_id,
             space,
             from,
             to,
@@ -207,109 +200,110 @@ impl CoreSpaceOperationCollector {
             return Ok((None, vec![*position]));
         }
 
-        if *space == Space::Ethereum {
-            return match (from, to) {
-                (AddressPocket::Balance(from), AddressPocket::Balance(to))
-                    if from.space == Space::Ethereum && to.space == Space::Ethereum =>
-                {
-                    Ok((
-                        Some(BasicCfxOperation::EspaceBalanceTransfer {
-                            position: ChangePosition::new(*position, 0),
-                            from: address_from_cfx(from.address),
-                            to: address_from_cfx(to.address),
-                            amount,
-                        }),
-                        vec![*position],
-                    ))
-                }
-                (AddressPocket::Balance(account), AddressPocket::MintBurn)
-                    if account.space == Space::Ethereum =>
-                {
-                    Ok((
-                        Some(BasicCfxOperation::EspaceNativeBurn {
-                            position: ChangePosition::new(*position, 0),
-                            account: address_from_cfx(account.address),
-                            amount,
-                        }),
-                        vec![*position],
-                    ))
-                }
-                _ => Err(unsupported_internal_transfer(from, to)),
-            };
-        }
-
-        if *space != Space::Native {
-            return Err(unsupported_internal_transfer(from, to));
-        }
-
-        let operation = match (from, to) {
-            (AddressPocket::Balance(from), AddressPocket::Balance(to))
-                if from.space == Space::Native && to.space == Space::Native =>
-            {
-                BasicCfxOperation::CoreSpaceBalanceTransfer {
+        if let (AddressPocket::Balance(account), AddressPocket::MintBurn) = (from, to)
+            && account.space == Space::Ethereum
+            && (*space == Space::Ethereum || frame_id.is_none())
+        {
+            return Ok((
+                Some(BasicCfxOperation::EspaceNativeBurn {
                     position: ChangePosition::new(*position, 0),
-                    from: address_from_cfx(from.address),
-                    to: address_from_cfx(to.address),
+                    account: address_from_cfx(account.address),
                     amount,
-                }
+                }),
+                vec![*position],
+            ));
+        }
+
+        let operation = match *space {
+            Space::Ethereum => {
+                return match (from, to) {
+                    (AddressPocket::Balance(from), AddressPocket::Balance(to))
+                        if from.space == Space::Ethereum && to.space == Space::Ethereum =>
+                    {
+                        Ok((
+                            Some(BasicCfxOperation::EspaceBalanceTransfer {
+                                position: ChangePosition::new(*position, 0),
+                                from: address_from_cfx(from.address),
+                                to: address_from_cfx(to.address),
+                                amount,
+                            }),
+                            vec![*position],
+                        ))
+                    }
+                    _ => Err(unsupported_internal_transfer(from, to)),
+                };
             }
-            (AddressPocket::Balance(payer), AddressPocket::GasPayment)
-                if payer.space == Space::Native =>
-            {
-                BasicCfxOperation::GasPrecharge {
-                    payer: CfxBalanceLocation::CoreSpaceAccount {
-                        account: address_from_cfx(payer.address),
-                    },
-                    amount,
+            Space::Native => match (from, to) {
+                (AddressPocket::Balance(from), AddressPocket::Balance(to))
+                    if from.space == Space::Native && to.space == Space::Native =>
+                {
+                    BasicCfxOperation::CoreSpaceBalanceTransfer {
+                        position: ChangePosition::new(*position, 0),
+                        from: address_from_cfx(from.address),
+                        to: address_from_cfx(to.address),
+                        amount,
+                    }
                 }
-            }
-            (AddressPocket::SponsorBalanceForGas(contract_address), AddressPocket::GasPayment) => {
-                BasicCfxOperation::GasPrecharge {
+                (AddressPocket::Balance(payer), AddressPocket::GasPayment)
+                    if payer.space == Space::Native =>
+                {
+                    BasicCfxOperation::GasPrecharge {
+                        payer: CfxBalanceLocation::CoreSpaceAccount {
+                            account: address_from_cfx(payer.address),
+                        },
+                        amount,
+                    }
+                }
+                (
+                    AddressPocket::SponsorBalanceForGas(contract_address),
+                    AddressPocket::GasPayment,
+                ) => BasicCfxOperation::GasPrecharge {
                     payer: CfxBalanceLocation::GasSponsor {
                         contract_address: address_from_cfx(*contract_address),
                     },
                     amount,
+                },
+                (AddressPocket::GasPayment, AddressPocket::Balance(recipient))
+                    if recipient.space == Space::Native =>
+                {
+                    BasicCfxOperation::GasRefund {
+                        recipient: CfxBalanceLocation::CoreSpaceAccount {
+                            account: address_from_cfx(recipient.address),
+                        },
+                        amount,
+                    }
                 }
-            }
-            (AddressPocket::GasPayment, AddressPocket::Balance(recipient))
-                if recipient.space == Space::Native =>
-            {
-                BasicCfxOperation::GasRefund {
-                    recipient: CfxBalanceLocation::CoreSpaceAccount {
-                        account: address_from_cfx(recipient.address),
-                    },
-                    amount,
-                }
-            }
-            (AddressPocket::GasPayment, AddressPocket::SponsorBalanceForGas(contract_address)) => {
-                BasicCfxOperation::GasRefund {
+                (
+                    AddressPocket::GasPayment,
+                    AddressPocket::SponsorBalanceForGas(contract_address),
+                ) => BasicCfxOperation::GasRefund {
                     recipient: CfxBalanceLocation::GasSponsor {
                         contract_address: address_from_cfx(*contract_address),
                     },
                     amount,
+                },
+                (AddressPocket::Balance(_), AddressPocket::StakingBalance(_))
+                | (AddressPocket::StakingBalance(_), AddressPocket::Balance(_)) => {
+                    return Err(CoreSpaceChangesError::inconsistent_execution(
+                        "Core Space staking pocket movement was not claimed by a canonical staking operation",
+                    ));
                 }
-            }
-            (AddressPocket::Balance(_), AddressPocket::StakingBalance(_))
-            | (AddressPocket::StakingBalance(_), AddressPocket::Balance(_)) => {
-                return Err(CoreSpaceChangesError::inconsistent_execution(
-                    "Core Space staking pocket movement was not claimed by a canonical staking operation",
-                ));
-            }
-            (AddressPocket::Balance(account), AddressPocket::MintBurn)
-                if account.space == Space::Native =>
-            {
-                BasicCfxOperation::NativeBurn {
-                    position: ChangePosition::new(*position, 0),
-                    account: address_from_cfx(account.address),
-                    amount,
+                (AddressPocket::Balance(account), AddressPocket::MintBurn)
+                    if account.space == Space::Native =>
+                {
+                    BasicCfxOperation::NativeBurn {
+                        position: ChangePosition::new(*position, 0),
+                        account: address_from_cfx(account.address),
+                        amount,
+                    }
                 }
-            }
-            (AddressPocket::MintBurn, AddressPocket::Balance(_)) => {
-                return Err(CoreSpaceChangesError::inconsistent_execution(
-                    "Core Space issuance was not paired with a staking withdrawal",
-                ));
-            }
-            _ => return Err(unsupported_internal_transfer(from, to)),
+                (AddressPocket::MintBurn, AddressPocket::Balance(_)) => {
+                    return Err(CoreSpaceChangesError::inconsistent_execution(
+                        "Core Space issuance was not paired with a staking withdrawal",
+                    ));
+                }
+                _ => return Err(unsupported_internal_transfer(from, to)),
+            },
         };
 
         Ok((Some(operation), vec![*position]))

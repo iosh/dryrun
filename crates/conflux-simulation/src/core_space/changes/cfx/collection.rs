@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use alloy_primitives::Address;
-use cfx_executor::machine::Machine;
+use cfx_executor::{executive_observer::AddressPocket, machine::Machine};
 use cfx_types::Space;
 use cfx_vm_types::Spec;
 use primitives::receipt::StorageChange;
@@ -29,14 +29,14 @@ struct CfxOperationCollector {
     espace_root_frame_ids: Vec<crate::execution::FrameId>,
 }
 
-fn claim_internal_transfer_positions(
-    owned_positions: &mut BTreeSet<usize>,
+fn claim_trace_positions(
+    claimed_positions: &mut BTreeSet<usize>,
     positions: impl IntoIterator<Item = usize>,
 ) -> Result<(), CoreSpaceChangesError> {
     for position in positions {
-        if !owned_positions.insert(position) {
+        if !claimed_positions.insert(position) {
             return Err(CoreSpaceChangesError::inconsistent_execution(format!(
-                "Core Space internal transfer at trace position {position} was claimed by multiple analyzers"
+                "Core Space trace position {position} was claimed by multiple analyzers"
             )));
         }
     }
@@ -52,13 +52,10 @@ pub(crate) fn collect_cfx_operations(
     committed_staking_calls: &[CommittedStakingCall],
 ) -> Result<CfxOperations, CoreSpaceChangesError> {
     let mut collector = CfxOperationCollector::new(storage_released)?;
-    let mut owned_transfer_positions = BTreeSet::new();
+    let mut claimed_positions = BTreeSet::new();
     let mut staking_ops = BTreeMap::new();
     for call in committed_staking_calls {
-        claim_internal_transfer_positions(
-            &mut owned_transfer_positions,
-            call.owned_transfer_positions(),
-        )?;
+        claim_trace_positions(&mut claimed_positions, call.owned_transfer_positions())?;
         let staking_balance_operation = match *call {
             CommittedStakingCall::Deposit {
                 account, amount, ..
@@ -86,7 +83,7 @@ pub(crate) fn collect_cfx_operations(
         }
     }
     for event in trace.events() {
-        if owned_transfer_positions.contains(&event.position()) {
+        if claimed_positions.contains(&event.position()) {
             continue;
         }
         match event {
@@ -156,10 +153,7 @@ pub(crate) fn collect_cfx_operations(
                     collector
                         .operations
                         .push(CfxOperation::CrossSpace(operation));
-                    claim_internal_transfer_positions(
-                        &mut owned_transfer_positions,
-                        claimed_transfer_positions,
-                    )?;
+                    claim_trace_positions(&mut claimed_positions, claimed_transfer_positions)?;
                     continue;
                 }
                 if let Some((collected_call, claimed_transfer_positions)) =
@@ -175,10 +169,7 @@ pub(crate) fn collect_cfx_operations(
                                 CfxOperation::Sponsorship(SponsorshipOperation::AccessRule(update))
                             })),
                     }
-                    claim_internal_transfer_positions(
-                        &mut owned_transfer_positions,
-                        claimed_transfer_positions,
-                    )?;
+                    claim_trace_positions(&mut claimed_positions, claimed_transfer_positions)?;
                     continue;
                 }
                 match &frame.action {
@@ -216,29 +207,34 @@ pub(crate) fn collect_cfx_operations(
                 }
             }
             TraceEvent::InternalTransfer {
-                frame_id,
-                space: Space::Ethereum,
-                ..
-            } => {
-                let frame_id = frame_id.ok_or_else(|| {
-                    CoreSpaceChangesError::inconsistent_execution(
-                        "committed eSpace internal transfer had no owning frame",
-                    )
-                })?;
-                if !collector.includes_espace_frame(trace, frame_id) {
-                    return Err(CoreSpaceChangesError::inconsistent_execution(
-                        "committed eSpace internal transfer was outside a verified Core cross-space child subtree",
-                    ));
+                frame_id, space, ..
+            } if *space == Space::Ethereum || is_espace_finalization_burn(event) => {
+                match *frame_id {
+                    Some(frame_id) if !collector.includes_espace_frame(trace, frame_id) => {
+                        return Err(CoreSpaceChangesError::inconsistent_execution(
+                            "committed eSpace internal transfer was outside a verified Core cross-space child subtree",
+                        ));
+                    }
+                    Some(_) => {}
+                    None if is_espace_finalization_burn(event) => {
+                        if collector.espace_root_frame_ids.is_empty() {
+                            return Err(CoreSpaceChangesError::inconsistent_execution(
+                                "committed eSpace selfdestruct burn had no verified Core cross-space child subtree",
+                            ));
+                        }
+                    }
+                    None => {
+                        return Err(CoreSpaceChangesError::inconsistent_execution(
+                            "committed eSpace internal transfer had no owning frame",
+                        ));
+                    }
                 }
                 let (collected, claimed_transfer_positions) =
                     collector.core_space.collect_internal_transfer(event)?;
                 if let Some(operation) = collected {
                     collector.operations.push(CfxOperation::Basic(operation));
                 }
-                claim_internal_transfer_positions(
-                    &mut owned_transfer_positions,
-                    claimed_transfer_positions,
-                )?;
+                claim_trace_positions(&mut claimed_positions, claimed_transfer_positions)?;
             }
             TraceEvent::InternalTransfer { .. } => {
                 if let Some((conversion, claimed_transfer_positions)) =
@@ -247,20 +243,14 @@ pub(crate) fn collect_cfx_operations(
                     collector.operations.push(CfxOperation::Sponsorship(
                         SponsorshipOperation::StoragePointConversion(conversion),
                     ));
-                    claim_internal_transfer_positions(
-                        &mut owned_transfer_positions,
-                        claimed_transfer_positions,
-                    )?;
+                    claim_trace_positions(&mut claimed_positions, claimed_transfer_positions)?;
                     continue;
                 }
                 if let Some(refund) = collect_standalone_sponsorship_refund(event)? {
                     collector.operations.push(CfxOperation::Sponsorship(
                         SponsorshipOperation::StandaloneRefund(refund),
                     ));
-                    claim_internal_transfer_positions(
-                        &mut owned_transfer_positions,
-                        [event.position()],
-                    )?;
+                    claim_trace_positions(&mut claimed_positions, [event.position()])?;
                     continue;
                 }
                 let (collected, claimed_transfer_positions) =
@@ -268,10 +258,7 @@ pub(crate) fn collect_cfx_operations(
                 if let Some(operation) = collected {
                     collector.operations.push(CfxOperation::Basic(operation));
                 }
-                claim_internal_transfer_positions(
-                    &mut owned_transfer_positions,
-                    claimed_transfer_positions,
-                )?;
+                claim_trace_positions(&mut claimed_positions, claimed_transfer_positions)?;
             }
             TraceEvent::Log { frame_id, .. } => {
                 if trace.frame(*frame_id).space == Space::Ethereum
@@ -292,6 +279,19 @@ pub(crate) fn collect_cfx_operations(
     }
 
     collector.into_operations(committed_staking_calls.iter().map(|call| call.account()))
+}
+
+fn is_espace_finalization_burn(event: &TraceEvent) -> bool {
+    matches!(
+        event,
+        TraceEvent::InternalTransfer {
+            frame_id: None,
+            space: Space::Native,
+            from: AddressPocket::Balance(account),
+            to: AddressPocket::MintBurn,
+            ..
+        } if account.space == Space::Ethereum
+    )
 }
 
 impl CfxOperationCollector {

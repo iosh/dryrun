@@ -307,7 +307,7 @@ impl CoreSpaceChangeAnalysis {
             .into_changes(&metadata.espace)
             .map_err(|_| {
                 CoreSpaceChangesError::inconsistent_execution(
-                    "a decoded nested eSpace standard change is missing metadata",
+                    "a decoded nested eSpace change is missing metadata",
                 )
             })?;
         positioned_core_changes.extend(nested_changes.into_iter().map(|occurrence| {

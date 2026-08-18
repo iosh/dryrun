@@ -76,9 +76,14 @@ pub(super) fn collect_cross_space_call(
     let Some(selector) = call_selector(*calldata_len, calldata_prefix) else {
         return Ok(None);
     };
-    if !is_supported_selector(selector) {
-        return Ok(None);
-    }
+    let call_kind = match selector {
+        selector if selector == withdrawFromMappedCall::SELECTOR => CrossSpaceCallKind::Withdrawal,
+        selector if selector == createEVMCall::SELECTOR => CrossSpaceCallKind::Create,
+        selector if selector == transferEVMCall::SELECTOR || selector == callEVMCall::SELECTOR => {
+            CrossSpaceCallKind::Call
+        }
+        _ => return Ok(None),
+    };
     if frame.space != Space::Native
         || *call_type != CallType::Call
         || *target != cross_space_contract
@@ -96,11 +101,24 @@ pub(super) fn collect_cross_space_call(
         caller: *caller,
         transferred_value: *transferred_value,
     };
-    if selector == withdrawFromMappedCall::SELECTOR {
-        collect_withdrawal_to_core_space(context, cross_space_contract)
-    } else {
-        collect_transfer_to_espace(context, selector, cross_space_contract)
+    match call_kind {
+        CrossSpaceCallKind::Withdrawal => {
+            collect_withdrawal_to_core_space(context, cross_space_contract)
+        }
+        CrossSpaceCallKind::Create => {
+            collect_transfer_to_espace(context, EspaceTransferKind::Create, cross_space_contract)
+        }
+        CrossSpaceCallKind::Call => {
+            collect_transfer_to_espace(context, EspaceTransferKind::Call, cross_space_contract)
+        }
     }
+}
+
+#[derive(Clone, Copy)]
+enum CrossSpaceCallKind {
+    Create,
+    Call,
+    Withdrawal,
 }
 
 struct CrossSpaceCallContext<'a> {
@@ -113,7 +131,7 @@ struct CrossSpaceCallContext<'a> {
 
 fn collect_transfer_to_espace(
     context: CrossSpaceCallContext<'_>,
-    selector: [u8; 4],
+    transfer_kind: EspaceTransferKind,
     cross_space_contract: cfx_types::Address,
 ) -> Result<Option<(CrossSpaceTransferOperation, Vec<usize>)>, CoreSpaceChangesError> {
     let amount = u256_from_cfx(context.transferred_value);
@@ -130,17 +148,17 @@ fn collect_transfer_to_espace(
         )
     })?;
 
-    let child = if selector == createEVMCall::SELECTOR {
-        let receiver =
-            matching_create_event(&context, cross_space_contract, mapped_sender, amount)?;
-        unique_matching_create_child(&context, mapped_account.address, receiver, amount)?
-    } else if selector == transferEVMCall::SELECTOR || selector == callEVMCall::SELECTOR {
-        let receiver = matching_call_event(&context, cross_space_contract, mapped_sender, amount)?;
-        unique_matching_call_child(&context, mapped_account.address, receiver, amount)?
-    } else {
-        return Err(CoreSpaceChangesError::internal_invariant(
-            "supported Core cross-space selector was not a transfer, call, create, or withdrawal",
-        ));
+    let child = match transfer_kind {
+        EspaceTransferKind::Create => {
+            let receiver =
+                matching_create_event(&context, cross_space_contract, mapped_sender, amount)?;
+            unique_matching_create_child(&context, mapped_account.address, receiver, amount)?
+        }
+        EspaceTransferKind::Call => {
+            let receiver =
+                matching_call_event(&context, cross_space_contract, mapped_sender, amount)?;
+            unique_matching_call_child(&context, mapped_account.address, receiver, amount)?
+        }
     };
 
     Ok(Some((
@@ -156,16 +174,16 @@ fn collect_transfer_to_espace(
     )))
 }
 
+#[derive(Clone, Copy)]
+enum EspaceTransferKind {
+    Create,
+    Call,
+}
+
 fn collect_withdrawal_to_core_space(
     context: CrossSpaceCallContext<'_>,
     cross_space_contract: cfx_types::Address,
 ) -> Result<Option<(CrossSpaceTransferOperation, Vec<usize>)>, CoreSpaceChangesError> {
-    if !context.transferred_value.is_zero() {
-        return Err(CoreSpaceChangesError::inconsistent_execution(
-            "Core cross-space withdrawal transferred call value",
-        ));
-    }
-
     let mapped_account = context.caller.evm_map();
     let mapped_sender = address_from_cfx(mapped_account.address);
     let core_receiver = address_from_cfx(context.caller);
@@ -466,13 +484,6 @@ fn scoped_internal_transfer(event: &TraceEvent) -> Option<ScopedInternalTransfer
         to,
         value: *value,
     })
-}
-
-fn is_supported_selector(selector: [u8; 4]) -> bool {
-    selector == createEVMCall::SELECTOR
-        || selector == transferEVMCall::SELECTOR
-        || selector == callEVMCall::SELECTOR
-        || selector == withdrawFromMappedCall::SELECTOR
 }
 
 fn call_selector(calldata_len: usize, calldata_prefix: &[u8]) -> Option<[u8; 4]> {
