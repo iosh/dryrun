@@ -116,7 +116,9 @@ pub(crate) fn execute_read_call(
             ExecutionError::VmError(vm::Error::StateDbError(error)),
             _,
         ) => {
-            state.restore(snapshot);
+            // A state-db failure can escape while an upstream checkpoint is
+            // still open. Abort the simulation and drop State instead of
+            // restoring through State::restore's no-checkpoint assertion.
             return Err(MetadataReadError::StateAccess {
                 call: metadata_call.clone(),
                 source: error.0,

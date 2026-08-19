@@ -356,6 +356,14 @@ pub(crate) fn finish_core_space_changes(
     currency: &CoreSpaceNativeCurrency,
 ) -> Result<Vec<CoreSpaceChange>, CoreSpaceChangesError> {
     positioned_changes.sort_by_key(|positioned| positioned.position);
+    for adjacent in positioned_changes.windows(2) {
+        if adjacent[0].position == adjacent[1].position {
+            let ChangePosition { index, item_index } = adjacent[0].position;
+            return Err(CoreSpaceChangesError::inconsistent_execution(format!(
+                "Core Space change position {index}:{item_index} was produced by multiple analyzers"
+            )));
+        }
+    }
     positioned_changes
         .into_iter()
         .map(|positioned| match positioned.change {

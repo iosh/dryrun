@@ -9,7 +9,6 @@ alloy-primitives = { workspace = true }
 alloy-sol-types = { workspace = true }
 conflux-provider = { workspace = true }
 contract-standards = { workspace = true }
-cfx-bytes = { workspace = true }
 cfx-types = { workspace = true }
 primitives = { workspace = true }
 cfx-storage = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
@@ -22,13 +21,11 @@ cfx-executor = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry
 cfx-vm-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 
 cfx-rpc-cfx-types = { workspace = true }
-cfx-rpc-primitives = { workspace = true }
 
 cfx-rpc-eth-types = { workspace = true }
 keccak-hash = "0.5"
 rlp = "0.4"
 serde = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 typemap = { package = "typemap-ors", version = "1.0" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
