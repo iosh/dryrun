@@ -2,7 +2,7 @@ use std::{future::pending, io, num::NonZeroUsize, time::Duration};
 
 use metrics_exporter_prometheus::PrometheusBuilder;
 use simulation_tasks::SimulationTaskSet;
-use tracing::info;
+use tracing::{error, info};
 use tracing_subscriber::fmt::format::FmtSpan;
 
 use crate::{
@@ -16,20 +16,32 @@ pub async fn run(config: AppConfig) -> io::Result<()> {
 
     let simulation_tasks = create_simulation_task_set(&config.simulation)?;
     let mut metrics_server = start_metrics_server_if_enabled(&config.metrics).await?;
-    let rpc_handle = rpc_server::start(&config, simulation_tasks.clone()).await?;
+    let rpc_handle = match rpc_server::start(&config, simulation_tasks.clone()).await {
+        Ok(handle) => handle,
+        Err(error) => {
+            stop_metrics_server_after_startup_failure(&mut metrics_server).await;
+            return Err(error);
+        }
+    };
 
-    tokio::select! {
-        result = shutdown_signal() => result?,
-        _ = rpc_handle.clone().stopped() => {
-            return Err(io::Error::other("RPC server stopped unexpectedly"));
-        }
-        result = wait_for_metrics_server(&mut metrics_server) => {
-            result?;
-            return Err(io::Error::other("metrics server stopped unexpectedly"));
-        }
+    let (run_result, metrics_waited) = tokio::select! {
+        result = shutdown_signal() => (result, false),
+        _ = rpc_handle.clone().stopped() => (
+            Err(io::Error::other("RPC server stopped unexpectedly")),
+            false,
+        ),
+        result = wait_for_metrics_server(&mut metrics_server) => (
+            Err(match result {
+                Ok(()) => io::Error::other("metrics server stopped unexpectedly"),
+                Err(error) => error,
+            }),
+            true,
+        ),
+    };
+
+    if run_result.is_ok() {
+        info!("shutdown signal received");
     }
-
-    info!("shutdown signal received");
 
     let _ = rpc_handle.stop();
     if let Some(metrics_server) = metrics_server.as_mut() {
@@ -37,14 +49,42 @@ pub async fn run(config: AppConfig) -> io::Result<()> {
     }
     simulation_tasks.close();
 
-    rpc_handle.stopped().await;
-    if let Some(metrics_server) = metrics_server.as_mut() {
-        metrics_server.wait().await?;
-    }
+    rpc_handle.clone().stopped().await;
+    let cleanup_result = if metrics_waited {
+        Ok(())
+    } else {
+        match metrics_server.as_mut() {
+            Some(metrics_server) => metrics_server.wait().await,
+            None => Ok(()),
+        }
+    };
     simulation_tasks.drain().await;
 
+    if let Err(cleanup_error) = cleanup_result {
+        if run_result.is_err() {
+            error!(
+                error = ?cleanup_error,
+                "shutdown cleanup failed after the primary runtime error"
+            );
+        } else {
+            return Err(cleanup_error);
+        }
+    }
+
+    run_result?;
     info!("shutdown complete");
     Ok(())
+}
+
+async fn stop_metrics_server_after_startup_failure(metrics_server: &mut Option<MetricsServer>) {
+    let Some(metrics_server) = metrics_server.as_mut() else {
+        return;
+    };
+
+    metrics_server.stop();
+    if let Err(error) = metrics_server.wait().await {
+        error!(error = ?error, "metrics server cleanup failed after RPC startup failure");
+    }
 }
 
 fn init_tracing(config: &TracingConfig) -> io::Result<()> {

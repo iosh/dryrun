@@ -302,19 +302,18 @@ fn map_access_list(items: Option<Vec<RpcAccessListItem>>) -> Vec<AccessListItem>
 fn map_signed_authorization(
     authorization: RpcSignedAuthorization,
 ) -> Result<SignedAuthorization, ValidationError> {
-    let y_parity = authorization.y_parity.as_u64();
-    if y_parity > 1 {
-        return Err(ValidationError::invalid_params(
-            "`transaction.authorizationList[].yParity` must be `0x0` or `0x1`",
-        ));
-    }
+    let y_parity = u8::try_from(authorization.y_parity.as_u64()).map_err(|_| {
+        ValidationError::invalid_params(
+            "`transaction.authorizationList[].yParity` must fit into an unsigned 8-bit integer",
+        )
+    })?;
     Ok(SignedAuthorization::new_unchecked(
         Authorization {
             chain_id: cfx_u256_to_alloy(authorization.chain_id),
             address: cfx_address_to_alloy(authorization.address),
             nonce: authorization.nonce.as_u64(),
         },
-        y_parity as u8,
+        y_parity,
         cfx_u256_to_alloy(authorization.r),
         cfx_u256_to_alloy(authorization.s),
     ))

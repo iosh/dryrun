@@ -3,6 +3,7 @@ use std::{future::Future, num::NonZeroUsize, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::{sync::Semaphore, task::JoinError};
 use tokio_util::task::TaskTracker;
+use tracing::error;
 
 /// A bounded set of owned simulation attempts.
 #[derive(Debug, Clone)]
@@ -75,13 +76,23 @@ impl SimulationTaskSet {
             let task = tokio::spawn(async move {
                 let _task_token = task_token;
                 let _permit = permit;
-                start_attempt().await
+                match tokio::spawn(async move { start_attempt().await }).await {
+                    Ok(output) => Ok(output),
+                    Err(source) => {
+                        if source.is_panic() {
+                            error!(error = ?source, "admitted simulation task panicked");
+                        } else {
+                            error!(error = ?source, "admitted simulation task was cancelled");
+                        }
+                        Err(SimulationTaskError::TaskFailed { source })
+                    }
+                }
             });
 
             task.await
                 .map_err(|source| SimulationTaskError::TaskFailed { source })
         })
         .await
-        .map_err(|_| SimulationTaskError::ResponseTimedOut)?
+        .map_err(|_| SimulationTaskError::ResponseTimedOut)??
     }
 }
