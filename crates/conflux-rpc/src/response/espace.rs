@@ -59,6 +59,7 @@ enum ExecutionFailureCode {
     ChainIdMismatch,
     ZeroGasPrice,
     PriorityFeeExceedsMaxFee,
+    TransactionTypeNotActivated,
     NonceTooLow,
     NonceTooHigh,
     FeeBelowBaseFee,
@@ -215,10 +216,10 @@ fn rejection_failure_code(rejection: &EspaceTransactionRejection) -> ExecutionFa
         EspaceTransactionRejection::LegacyTransactionNotActivated
         | EspaceTransactionRejection::Eip2930NotActivated
         | EspaceTransactionRejection::Eip1559NotActivated
-        | EspaceTransactionRejection::Eip7702NotActivated
-        | EspaceTransactionRejection::CreateInitCodeSizeLimit { .. } => {
-            ExecutionFailureCode::VmError
+        | EspaceTransactionRejection::Eip7702NotActivated => {
+            ExecutionFailureCode::TransactionTypeNotActivated
         }
+        EspaceTransactionRejection::CreateInitCodeSizeLimit { .. } => ExecutionFailureCode::VmError,
         _ => ExecutionFailureCode::VmError,
     }
 }
