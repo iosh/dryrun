@@ -34,8 +34,6 @@ fn map_block_ref(block: rpc::BlockRef) -> Result<EvmBlockSelector, ValidationErr
             "finalized" => Ok(EvmBlockSelector::Finalized),
             value => Ok(EvmBlockSelector::Number(parse_u64_param(value, "block")?)),
         },
-        rpc::BlockRef::Hash(_) => Err(ValidationError::not_supported(
-            "`block.blockHash` is not supported yet",
-        )),
+        rpc::BlockRef::Hash(reference) => Ok(EvmBlockSelector::Hash(reference.block_hash)),
     }
 }

@@ -4,20 +4,20 @@ use alloy::primitives::{Address, U256};
 use revm::state::EvmState;
 
 use crate::{
-    EvmChange, EvmExecutionObservation, EvmNativeChangeError, NativeCurrency,
-    changes::ChangeOccurrence, execution::EvmFeeSettlement,
+    EvmChange, EvmExecutionEvent, EvmNativeChangeError, NativeCurrency, changes::ChangeOccurrence,
+    execution::EvmFeeSettlement,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeCandidate {
     Transfer {
-        observation_index: usize,
+        event_index: usize,
         from: Address,
         to: Address,
         amount: U256,
     },
     SelfDestructBurn {
-        observation_index: usize,
+        event_index: usize,
         contract: Address,
         amount: U256,
     },
@@ -25,13 +25,13 @@ enum NativeCandidate {
 
 pub(super) fn analyze_native_changes(
     state: &EvmState,
-    observations: &[EvmExecutionObservation],
+    events: &[EvmExecutionEvent],
     caller: Address,
     beneficiary: Address,
     fee_settlement: &EvmFeeSettlement,
     currency: &NativeCurrency,
 ) -> Result<Vec<ChangeOccurrence>, EvmNativeChangeError> {
-    let candidates = collect_native_candidates(state, observations)?;
+    let candidates = collect_native_candidates(state, events)?;
 
     check_native_balances(
         state,
@@ -45,32 +45,32 @@ pub(super) fn analyze_native_changes(
 
 fn collect_native_candidates(
     state: &EvmState,
-    observations: &[EvmExecutionObservation],
+    events: &[EvmExecutionEvent],
 ) -> Result<Vec<NativeCandidate>, EvmNativeChangeError> {
     let mut candidates = Vec::new();
 
-    for (observation_index, observation) in observations.iter().enumerate() {
-        let candidate = match observation {
-            EvmExecutionObservation::Call {
+    for (event_index, event) in events.iter().enumerate() {
+        let candidate = match event {
+            EvmExecutionEvent::Call {
                 caller,
                 target,
                 value,
             } if !value.is_zero() => Some(NativeCandidate::Transfer {
-                observation_index,
+                event_index,
                 from: *caller,
                 to: *target,
                 amount: *value,
             }),
-            EvmExecutionObservation::CreateTransfer { from, to, amount } if !amount.is_zero() => {
+            EvmExecutionEvent::CreateTransfer { from, to, amount } if !amount.is_zero() => {
                 Some(NativeCandidate::Transfer {
-                    observation_index,
+                    event_index,
                     from: *from,
                     to: *to,
                     amount: *amount,
                 })
             }
-            EvmExecutionObservation::SelfDestruct { amount, .. } if amount.is_zero() => None,
-            EvmExecutionObservation::SelfDestruct {
+            EvmExecutionEvent::SelfDestruct { amount, .. } if amount.is_zero() => None,
+            EvmExecutionEvent::SelfDestruct {
                 contract,
                 target,
                 amount,
@@ -82,24 +82,24 @@ fn collect_native_candidates(
                 account
                     .is_selfdestructed()
                     .then_some(NativeCandidate::SelfDestructBurn {
-                        observation_index,
+                        event_index,
                         contract: *contract,
                         amount: *amount,
                     })
             }
-            EvmExecutionObservation::SelfDestruct {
+            EvmExecutionEvent::SelfDestruct {
                 contract,
                 target,
                 amount,
             } => Some(NativeCandidate::Transfer {
-                observation_index,
+                event_index,
                 from: *contract,
                 to: *target,
                 amount: *amount,
             }),
-            EvmExecutionObservation::Call { .. }
-            | EvmExecutionObservation::CreateTransfer { .. }
-            | EvmExecutionObservation::Log { .. } => None,
+            EvmExecutionEvent::Call { .. }
+            | EvmExecutionEvent::CreateTransfer { .. }
+            | EvmExecutionEvent::Log { .. } => None,
         };
 
         if let Some(candidate) = candidate {
@@ -129,7 +129,7 @@ fn check_native_balances(
     for candidate in candidates {
         match candidate {
             NativeCandidate::Transfer {
-                observation_index,
+                event_index,
                 from,
                 to,
                 amount,
@@ -137,7 +137,7 @@ fn check_native_balances(
                 decrease_balance(&mut balances, *from, *amount)?;
                 increase_balance(&mut balances, *to, *amount)?;
                 changes.push(ChangeOccurrence::new(
-                    *observation_index,
+                    *event_index,
                     EvmChange::NativeTransfer {
                         from: *from,
                         to: *to,
@@ -147,13 +147,13 @@ fn check_native_balances(
                 ));
             }
             NativeCandidate::SelfDestructBurn {
-                observation_index,
+                event_index,
                 contract,
                 amount,
             } => {
                 decrease_balance(&mut balances, *contract, *amount)?;
                 changes.push(ChangeOccurrence::new(
-                    *observation_index,
+                    *event_index,
                     EvmChange::SelfDestructBurn {
                         contract_address: *contract,
                         raw_amount: *amount,

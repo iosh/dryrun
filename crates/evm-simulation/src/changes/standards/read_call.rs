@@ -57,7 +57,7 @@ pub(super) fn execute_read_call(
 
     // A probe must not leave instrumentation behind even if a future Revm
     // execution path invokes the configured inspector.
-    let _ = evm.inspector.take_observations();
+    let _ = evm.inspector.take_events();
 
     Ok(match result?.result {
         ExecutionResult::Success { output, .. } => ReadCallOutcome::Success(output.into_data()),
@@ -105,7 +105,7 @@ mod tests {
     use super::{ReadCallOutcome, execute_read_call, with_read_call_context};
     use crate::{
         CompleteTransaction, CompleteTransactionVariant, EthereumChainSpec, EvmExecutionObserver,
-        EvmTransactionExecution, EvmTransactionExecutor, create_database,
+        EvmTransactionExecutionResult, EvmTransactionExecutor, create_database,
     };
 
     #[test]
@@ -164,22 +164,22 @@ mod tests {
             EvmExecutionObserver::new(),
         )
         .expect("test block should produce a valid execution environment");
-        let EvmTransactionExecution::Executed(mut output) = executor
+        let EvmTransactionExecutionResult::Executed(output) = executor
             .execute(&transaction)
             .expect("fixture execution should succeed")
         else {
             panic!("fixture transaction should execute");
         };
+        let mut output = output.commit().expect("fixture transaction should commit");
         assert!(output.is_success());
-        output
-            .apply_transition()
-            .expect("transaction transition should apply once");
 
-        let outcomes = with_read_call_context(output.evm_mut(), |evm| {
-            [
-                execute_read_call(evm, &transaction, 1, contract, Bytes::new()),
-                execute_read_call(evm, &transaction, 1, contract, Bytes::new()),
-            ]
+        let outcomes = output.with_post_state_vm(|evm| {
+            with_read_call_context(evm, |evm| {
+                [
+                    execute_read_call(evm, &transaction, 1, contract, Bytes::new()),
+                    execute_read_call(evm, &transaction, 1, contract, Bytes::new()),
+                ]
+            })
         });
         for outcome in outcomes {
             let ReadCallOutcome::Success(value) =

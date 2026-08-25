@@ -8,7 +8,7 @@ use revm::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum EvmExecutionObservation {
+pub(crate) enum EvmExecutionEvent {
     Call {
         caller: Address,
         target: Address,
@@ -32,8 +32,8 @@ pub(crate) enum EvmExecutionObservation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ObservationJournalEntry {
-    Committed(EvmExecutionObservation),
+enum EventJournalEntry {
+    Committed(EvmExecutionEvent),
     // CREATE transfers need a placeholder because the created address is only
     // known when the frame finishes.
     PendingCreateTransfer { from: Address, amount: U256 },
@@ -46,13 +46,13 @@ struct FrameCheckpoint {
 }
 
 #[derive(Debug, Default)]
-struct ObservationJournal {
+struct EventJournal {
     checkpoints: Vec<FrameCheckpoint>,
-    entries: Vec<ObservationJournalEntry>,
+    entries: Vec<EventJournalEntry>,
 }
 
-impl ObservationJournal {
-    fn push_call_frame(&mut self, call: Option<EvmExecutionObservation>) {
+impl EventJournal {
+    fn push_call_frame(&mut self, call: Option<EvmExecutionEvent>) {
         let checkpoint = self.entries.len();
         self.checkpoints.push(FrameCheckpoint {
             checkpoint,
@@ -60,7 +60,7 @@ impl ObservationJournal {
         });
 
         if let Some(call) = call {
-            self.entries.push(ObservationJournalEntry::Committed(call));
+            self.entries.push(EventJournalEntry::Committed(call));
         }
     }
 
@@ -71,7 +71,7 @@ impl ObservationJournal {
         } else {
             let index = self.entries.len();
             self.entries
-                .push(ObservationJournalEntry::PendingCreateTransfer { from, amount });
+                .push(EventJournalEntry::PendingCreateTransfer { from, amount });
             Some(index)
         };
 
@@ -86,7 +86,7 @@ impl ObservationJournal {
             return;
         };
 
-        // Reverting a frame also discards every observation produced by its
+        // Reverting a frame also discards every event produced by its
         // descendants because they all live past the same checkpoint.
         if !success {
             self.entries.truncate(frame.checkpoint);
@@ -100,26 +100,23 @@ impl ObservationJournal {
             return;
         };
 
-        let ObservationJournalEntry::PendingCreateTransfer { from, amount } = &self.entries[index]
-        else {
+        let EventJournalEntry::PendingCreateTransfer { from, amount } = &self.entries[index] else {
             return;
         };
 
-        self.entries[index] =
-            ObservationJournalEntry::Committed(EvmExecutionObservation::CreateTransfer {
-                from: *from,
-                to,
-                amount: *amount,
-            });
+        self.entries[index] = EventJournalEntry::Committed(EvmExecutionEvent::CreateTransfer {
+            from: *from,
+            to,
+            amount: *amount,
+        });
     }
 
-    fn record_observation(&mut self, observation: EvmExecutionObservation) {
-        self.entries
-            .push(ObservationJournalEntry::Committed(observation));
+    fn record_event(&mut self, event: EvmExecutionEvent) {
+        self.entries.push(EventJournalEntry::Committed(event));
     }
 
     fn record_log_parts(&mut self, address: Address, topics: &[B256], data: &Bytes) {
-        self.record_observation(EvmExecutionObservation::Log {
+        self.record_event(EvmExecutionEvent::Log {
             address,
             topics: topics.to_vec(),
             data: data.clone(),
@@ -129,7 +126,7 @@ impl ObservationJournal {
 
 #[derive(Debug, Default)]
 pub(crate) struct EvmExecutionObserver {
-    journal: ObservationJournal,
+    journal: EventJournal,
 }
 
 impl EvmExecutionObserver {
@@ -137,12 +134,12 @@ impl EvmExecutionObserver {
         Self::default()
     }
 
-    pub(crate) fn take_observations(&mut self) -> Vec<EvmExecutionObservation> {
+    pub(crate) fn take_events(&mut self) -> Vec<EvmExecutionEvent> {
         std::mem::take(&mut self.journal.entries)
             .into_iter()
             .filter_map(|entry| match entry {
-                ObservationJournalEntry::Committed(observation) => Some(observation),
-                ObservationJournalEntry::PendingCreateTransfer { .. } => None,
+                EventJournalEntry::Committed(event) => Some(event),
+                EventJournalEntry::PendingCreateTransfer { .. } => None,
             })
             .collect()
     }
@@ -189,21 +186,20 @@ where
             return;
         }
 
-        self.journal
-            .record_observation(EvmExecutionObservation::SelfDestruct {
-                contract,
-                target,
-                amount: value,
-            });
+        self.journal.record_event(EvmExecutionEvent::SelfDestruct {
+            contract,
+            target,
+            amount: value,
+        });
     }
 }
 
-fn observed_call(inputs: &CallInputs) -> Option<EvmExecutionObservation> {
+fn observed_call(inputs: &CallInputs) -> Option<EvmExecutionEvent> {
     if !inputs.scheme.is_call() {
         return None;
     }
 
-    Some(EvmExecutionObservation::Call {
+    Some(EvmExecutionEvent::Call {
         caller: inputs.caller,
         target: inputs.target_address,
         value: inputs.transfer_value().unwrap_or_default(),
@@ -218,22 +214,22 @@ fn is_success(result: &InstructionResult) -> bool {
 mod tests {
     use alloy::primitives::{Address, U256};
 
-    use super::{EvmExecutionObservation, ObservationJournal, ObservationJournalEntry};
+    use super::{EventJournal, EventJournalEntry, EvmExecutionEvent};
 
     #[test]
-    fn reverting_parent_discards_its_nested_observations() {
+    fn reverting_parent_discards_its_nested_events() {
         let retained = observed_call(1, 2, 3);
-        let mut journal = ObservationJournal::default();
-        journal.record_observation(retained.clone());
+        let mut journal = EventJournal::default();
+        journal.record_event(retained.clone());
         journal.push_call_frame(Some(observed_call(4, 5, 6)));
         journal.push_call_frame(Some(observed_call(7, 8, 9)));
-        journal.record_observation(observed_call(10, 11, 12));
+        journal.record_event(observed_call(10, 11, 12));
         journal.pop_frame(true, None);
         journal.pop_frame(false, None);
 
         assert_eq!(
             journal.entries,
-            vec![ObservationJournalEntry::Committed(retained)]
+            vec![EventJournalEntry::Committed(retained)]
         );
     }
 
@@ -244,31 +240,31 @@ mod tests {
         let amount = U256::from(3);
         let nested_call = observed_call(4, 5, 6);
 
-        let mut successful = ObservationJournal::default();
+        let mut successful = EventJournal::default();
         successful.push_create_frame(from, amount);
-        successful.record_observation(nested_call.clone());
+        successful.record_event(nested_call.clone());
         successful.pop_frame(true, Some(created_address));
         assert_eq!(
             successful.entries,
             vec![
-                ObservationJournalEntry::Committed(EvmExecutionObservation::CreateTransfer {
+                EventJournalEntry::Committed(EvmExecutionEvent::CreateTransfer {
                     from,
                     to: created_address,
                     amount,
                 },),
-                ObservationJournalEntry::Committed(nested_call.clone()),
+                EventJournalEntry::Committed(nested_call.clone()),
             ]
         );
 
-        let mut failed = ObservationJournal::default();
+        let mut failed = EventJournal::default();
         failed.push_create_frame(from, amount);
-        failed.record_observation(nested_call);
+        failed.record_event(nested_call);
         failed.pop_frame(false, None);
         assert!(failed.entries.is_empty());
     }
 
-    fn observed_call(caller: u8, target: u8, value: u64) -> EvmExecutionObservation {
-        EvmExecutionObservation::Call {
+    fn observed_call(caller: u8, target: u8, value: u64) -> EvmExecutionEvent {
+        EvmExecutionEvent::Call {
             caller: Address::repeat_byte(caller),
             target: Address::repeat_byte(target),
             value: U256::from(value),

@@ -8,8 +8,8 @@ use alloy::primitives::{Address, Log, U256};
 use contract_standards::{Erc20Metadata, MetadataCall, StandardChange, metadata_calls};
 
 use crate::{
-    CompleteTransaction, EthereumChainSpec, EvmChangesError, EvmExecutionObservation,
-    EvmExecutionObserver, EvmSimulationError, execution::ExecutedTransaction,
+    CompleteTransaction, EthereumChainSpec, EvmChangesError, EvmExecutionEvent, EvmSimulationError,
+    execution::EvmTransactionExecution,
 };
 
 use self::{
@@ -55,31 +55,31 @@ pub enum EvmChange {
 
 #[derive(Debug)]
 struct ChangeOccurrence {
-    observation_index: usize,
+    event_index: usize,
     change: EvmChange,
 }
 
 impl ChangeOccurrence {
-    const fn new(observation_index: usize, change: EvmChange) -> Self {
+    const fn new(event_index: usize, change: EvmChange) -> Self {
         Self {
-            observation_index,
+            event_index,
             change,
         }
     }
 }
 
 pub(crate) fn analyze_changes(
-    output: &mut ExecutedTransaction<EvmExecutionObserver>,
+    output: &mut EvmTransactionExecution,
     transaction: &CompleteTransaction,
     chain_spec: &EthereumChainSpec,
 ) -> Result<Vec<EvmChange>, EvmSimulationError> {
-    let observations = output.take_observations();
-    verify_committed_logs(&observations, output.committed_logs())?;
+    let events = output.events().to_vec();
+    verify_committed_logs(&events, output.committed_logs())?;
 
     let currency = chain_spec.native_currency();
     let mut changes = analyze_native_changes(
-        output.transition()?,
-        &observations,
+        output.transition(),
+        &events,
         output.caller(),
         output.beneficiary(),
         output.fee_settlement(),
@@ -89,14 +89,13 @@ pub(crate) fn analyze_changes(
 
     let wrapped_native_occurrences = chain_spec
         .wrapped_native_token_address()
-        .map(|address| decode_wrapped_native_occurrences(&observations, address))
+        .map(|address| decode_wrapped_native_occurrences(&events, address))
         .unwrap_or_default();
-    let standard_occurrences = decode_standard_occurrences(&observations);
+    let standard_occurrences = decode_standard_occurrences(&events);
     let calls = collect_metadata_calls(&standard_occurrences, &wrapped_native_occurrences);
 
-    output.apply_transition()?;
-
-    let metadata = load_metadata(output.evm_mut(), transaction, chain_spec.chain_id(), calls)?;
+    let metadata = output
+        .with_post_state_vm(|evm| load_metadata(evm, transaction, chain_spec.chain_id(), calls))?;
     for occurrence in wrapped_native_occurrences {
         let change_metadata = metadata
             .erc20_metadata(&occurrence.contract_address())
@@ -109,12 +108,12 @@ pub(crate) fn analyze_changes(
             .into_change(&metadata)
             .map_err(EvmChangesError::from)?;
         changes.push(ChangeOccurrence::new(
-            occurrence.observation_index,
+            occurrence.event_index,
             EvmChange::Standard(change),
         ));
     }
 
-    changes.sort_by_key(|occurrence| occurrence.observation_index);
+    changes.sort_by_key(|occurrence| occurrence.event_index);
     Ok(changes
         .into_iter()
         .map(|occurrence| occurrence.change)
@@ -131,23 +130,20 @@ fn collect_metadata_calls(
         calls.extend(
             metadata_calls(std::iter::once(&occurrence.decoded_log))
                 .into_iter()
-                .map(|call| (occurrence.observation_index, call)),
+                .map(|call| (occurrence.event_index, call)),
         );
     }
     for occurrence in wrapped_native_occurrences {
-        let observation_index = occurrence.observation_index();
+        let event_index = occurrence.event_index();
         let contract_address = occurrence.contract_address();
         calls.extend([
-            (observation_index, MetadataCall::Name { contract_address }),
-            (observation_index, MetadataCall::Symbol { contract_address }),
-            (
-                observation_index,
-                MetadataCall::Decimals { contract_address },
-            ),
+            (event_index, MetadataCall::Name { contract_address }),
+            (event_index, MetadataCall::Symbol { contract_address }),
+            (event_index, MetadataCall::Decimals { contract_address }),
         ]);
     }
 
-    calls.sort_by_key(|(observation_index, _)| *observation_index);
+    calls.sort_by_key(|(event_index, _)| *event_index);
     let mut seen = HashSet::new();
     calls
         .into_iter()
@@ -156,15 +152,15 @@ fn collect_metadata_calls(
 }
 
 fn verify_committed_logs(
-    observations: &[EvmExecutionObservation],
+    events: &[EvmExecutionEvent],
     committed_logs: &[Log],
 ) -> Result<(), EvmChangesError> {
-    let observed_logs = observations.iter().filter_map(|observation| {
-        let EvmExecutionObservation::Log {
+    let observed_logs = events.iter().filter_map(|event| {
+        let EvmExecutionEvent::Log {
             address,
             topics,
             data,
-        } = observation
+        } = event
         else {
             return None;
         };
@@ -209,7 +205,7 @@ mod tests {
     use super::{analyze_changes, verify_committed_logs};
     use crate::{
         CompleteTransaction, CompleteTransactionVariant, EthereumChainSpec, EvmChange,
-        EvmChangesError, EvmExecutionObservation, EvmExecutionObserver, EvmTransactionExecution,
+        EvmChangesError, EvmExecutionEvent, EvmExecutionObserver, EvmTransactionExecutionResult,
         EvmTransactionExecutor, create_database,
     };
 
@@ -221,18 +217,18 @@ mod tests {
         let second_address = Address::repeat_byte(4);
         let second_topics = vec![B256::repeat_byte(5), B256::repeat_byte(6)];
         let second_data = Bytes::from_static(&[7, 8]);
-        let observations = vec![
-            EvmExecutionObservation::Log {
+        let events = vec![
+            EvmExecutionEvent::Log {
                 address: first_address,
                 topics: first_topics.clone(),
                 data: first_data.clone(),
             },
-            EvmExecutionObservation::Call {
+            EvmExecutionEvent::Call {
                 caller: Address::repeat_byte(9),
                 target: Address::repeat_byte(10),
                 value: U256::from(11),
             },
-            EvmExecutionObservation::Log {
+            EvmExecutionEvent::Log {
                 address: second_address,
                 topics: second_topics.clone(),
                 data: second_data.clone(),
@@ -245,9 +241,9 @@ mod tests {
                 .expect("second test log should be valid"),
         ];
 
-        assert!(verify_committed_logs(&observations, &committed_logs).is_ok());
+        assert!(verify_committed_logs(&events, &committed_logs).is_ok());
         assert!(matches!(
-            verify_committed_logs(&observations, &committed_logs[..1]),
+            verify_committed_logs(&events, &committed_logs[..1]),
             Err(EvmChangesError::CommittedLogCountMismatch {
                 observed_count: 2,
                 result_count: 1,
@@ -257,7 +253,7 @@ mod tests {
         let mut mismatched_logs = committed_logs;
         mismatched_logs[1].address = Address::repeat_byte(12);
         assert!(matches!(
-            verify_committed_logs(&observations, &mismatched_logs),
+            verify_committed_logs(&events, &mismatched_logs),
             Err(EvmChangesError::CommittedLogMismatch { index: 1 })
         ));
     }
@@ -332,12 +328,13 @@ mod tests {
         let executor =
             EvmTransactionExecutor::new(database, block, &chain_spec, EvmExecutionObserver::new())
                 .expect("test block should produce a valid execution environment");
-        let EvmTransactionExecution::Executed(mut output) = executor
+        let EvmTransactionExecutionResult::Executed(output) = executor
             .execute(&transaction)
             .expect("fixture execution should succeed")
         else {
             panic!("fixture transaction should execute");
         };
+        let mut output = output.commit().expect("fixture transaction should commit");
         assert!(output.is_success());
 
         analyze_changes(&mut output, &transaction, &chain_spec)

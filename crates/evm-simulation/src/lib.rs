@@ -26,7 +26,7 @@ pub use error::{
     EvmSimulationError, EvmStateAccessError, EvmTransactionCompletionError,
 };
 pub(crate) use execution::{
-    EvmExecutionObservation, EvmExecutionObserver, EvmTransactionExecution, EvmTransactionExecutor,
+    EvmExecutionEvent, EvmExecutionObserver, EvmTransactionExecutionResult, EvmTransactionExecutor,
     create_database, map_executed_outcome,
 };
 pub use execution_result::{EvmBlobGasFee, EvmExecutionGasFee, EvmExecutionResult, EvmFee, EvmGas};

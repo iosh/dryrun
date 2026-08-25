@@ -10,7 +10,7 @@ use tokio::runtime::Handle;
 use crate::{
     CompleteTransaction, EthereumChainSpec, EvmBlockContext, EvmExecutionObserver,
     EvmExecutionOutcome, EvmInitializationError, EvmSimulation, EvmSimulationError,
-    EvmSimulationRequest, EvmTransactionExecution, EvmTransactionExecutor,
+    EvmSimulationRequest, EvmTransactionExecutionResult, EvmTransactionExecutor,
     changes::analyze_changes, create_database, map_executed_outcome, resolve_block,
 };
 
@@ -92,8 +92,8 @@ fn simulate_blocking(
         EvmTransactionExecutor::new(database, block, &chain_spec, EvmExecutionObserver::new())?;
 
     let mut output = match executor.execute(&transaction)? {
-        EvmTransactionExecution::Executed(output) => output,
-        EvmTransactionExecution::NotExecuted(rejection) => {
+        EvmTransactionExecutionResult::Executed(output) => output.commit()?,
+        EvmTransactionExecutionResult::NotExecuted(rejection) => {
             return Ok(EvmSimulation {
                 context,
                 transaction,
@@ -104,7 +104,7 @@ fn simulate_blocking(
     };
 
     if !output.is_success() {
-        let (engine_result, execution_result) = (*output).into_outcome_parts();
+        let (engine_result, execution_result) = output.into_outcome_parts();
         let execution = map_executed_outcome(engine_result, &transaction, execution_result)?;
         return Ok(EvmSimulation {
             context,
@@ -116,7 +116,7 @@ fn simulate_blocking(
 
     let changes = analyze_changes(&mut output, &transaction, &chain_spec)?;
 
-    let (engine_result, execution_result) = (*output).into_outcome_parts();
+    let (engine_result, execution_result) = output.into_outcome_parts();
     let execution = map_executed_outcome(engine_result, &transaction, execution_result)?;
 
     Ok(EvmSimulation {

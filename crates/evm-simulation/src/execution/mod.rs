@@ -1,6 +1,6 @@
 mod env;
+mod events;
 mod fee_settlement;
-mod observation;
 mod outcome_mapping;
 mod rejection_mapping;
 mod state;
@@ -36,11 +36,11 @@ pub(crate) type MainnetEvm<INSP = ()> = MainnetEvmWithDb<MainnetEvmDatabase, INS
 pub(crate) type MainnetEvmWithDb<DB, INSP = ()> =
     RevmMainnetEvm<Context<BlockEnv, TxEnv, CfgEnv, DB>, INSP>;
 
-pub(crate) use observation::{EvmExecutionObservation, EvmExecutionObserver};
+pub(crate) use events::{EvmExecutionEvent, EvmExecutionObserver};
 pub(crate) use outcome_mapping::map_executed_outcome;
 
 #[derive(Debug)]
-pub(crate) enum EvmTransactionExecution<INSP> {
+pub(crate) enum EvmTransactionExecutionResult<INSP> {
     Executed(Box<ExecutedTransaction<INSP>>),
     NotExecuted(EvmTransactionRejection),
 }
@@ -49,12 +49,37 @@ pub(crate) enum EvmTransactionExecution<INSP> {
 pub(crate) struct ExecutedTransaction<INSP> {
     result: ExecutionResult<HaltReason>,
     gas: EvmGas,
-    transition: Option<EvmState>,
+    transition: EvmState,
     fee_settlement: EvmFeeSettlement,
     evm: MainnetEvm<INSP>,
 }
 
-impl<INSP> ExecutedTransaction<INSP> {
+impl ExecutedTransaction<EvmExecutionObserver> {
+    pub(crate) fn commit(mut self) -> Result<EvmTransactionExecution, EvmExecutionError> {
+        let events = self.evm.inspector.take_events();
+        self.evm.commit(self.transition.clone());
+
+        Ok(EvmTransactionExecution {
+            result: self.result,
+            gas: self.gas,
+            transition: self.transition,
+            fee_settlement: self.fee_settlement,
+            evm: self.evm,
+            events,
+        })
+    }
+}
+
+pub(crate) struct EvmTransactionExecution {
+    result: ExecutionResult<HaltReason>,
+    gas: EvmGas,
+    transition: EvmState,
+    fee_settlement: EvmFeeSettlement,
+    evm: MainnetEvm<EvmExecutionObserver>,
+    events: Vec<EvmExecutionEvent>,
+}
+
+impl EvmTransactionExecution {
     pub(crate) fn is_success(&self) -> bool {
         self.result.is_success()
     }
@@ -66,15 +91,14 @@ impl<INSP> ExecutedTransaction<INSP> {
             fee_settlement,
             ..
         } = self;
-        let execution_result = EvmExecutionResult::new(gas, fee_settlement.into_fee());
-
-        (result, execution_result)
+        (
+            result,
+            EvmExecutionResult::new(gas, fee_settlement.into_fee()),
+        )
     }
 
-    pub(crate) fn transition(&self) -> Result<&EvmState, EvmExecutionError> {
-        self.transition
-            .as_ref()
-            .ok_or(EvmExecutionError::TransitionAlreadyApplied)
+    pub(crate) fn transition(&self) -> &EvmState {
+        &self.transition
     }
 
     pub(crate) fn committed_logs(&self) -> &[Log] {
@@ -93,23 +117,15 @@ impl<INSP> ExecutedTransaction<INSP> {
         self.evm.ctx_ref().block.beneficiary
     }
 
-    pub(crate) const fn evm_mut(&mut self) -> &mut MainnetEvm<INSP> {
-        &mut self.evm
+    pub(crate) fn events(&self) -> &[EvmExecutionEvent] {
+        &self.events
     }
 
-    pub(crate) fn apply_transition(&mut self) -> Result<(), EvmExecutionError> {
-        let transition = self
-            .transition
-            .take()
-            .ok_or(EvmExecutionError::TransitionAlreadyApplied)?;
-        self.evm.commit(transition);
-        Ok(())
-    }
-}
-
-impl ExecutedTransaction<EvmExecutionObserver> {
-    pub(crate) fn take_observations(&mut self) -> Vec<EvmExecutionObservation> {
-        self.evm.inspector.take_observations()
+    pub(crate) fn with_post_state_vm<T>(
+        &mut self,
+        operation: impl FnOnce(&mut MainnetEvm<EvmExecutionObserver>) -> T,
+    ) -> T {
+        operation(&mut self.evm)
     }
 }
 
@@ -163,7 +179,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
     pub(crate) fn execute(
         mut self,
         transaction: &CompleteTransaction,
-    ) -> Result<EvmTransactionExecution<INSP>, EvmSimulationError>
+    ) -> Result<EvmTransactionExecutionResult<INSP>, EvmSimulationError>
     where
         INSP: revm::Inspector<Context<BlockEnv, TxEnv, CfgEnv, MainnetEvmDatabase>, EthInterpreter>,
     {
@@ -179,7 +195,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
                     self.block_gas_limit,
                     self.base_fee_per_gas,
                 )?;
-                return Ok(EvmTransactionExecution::NotExecuted(rejection));
+                return Ok(EvmTransactionExecutionResult::NotExecuted(rejection));
             }
             Err(EVMError::Header(error)) => {
                 return Err(
@@ -234,11 +250,11 @@ impl<INSP> EvmTransactionExecutor<INSP> {
         )
         .map_err(EvmExecutionError::from)?;
 
-        Ok(EvmTransactionExecution::Executed(Box::new(
+        Ok(EvmTransactionExecutionResult::Executed(Box::new(
             ExecutedTransaction {
                 result: result_and_state.result,
                 gas,
-                transition: Some(result_and_state.state),
+                transition: result_and_state.state,
                 fee_settlement,
                 evm: self.evm,
             },

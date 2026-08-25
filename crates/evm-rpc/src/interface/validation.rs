@@ -28,14 +28,12 @@ impl BlockRef {
                 "pending" | "earliest" => Err(ValidationError::not_supported(
                     "`block` supports `latest`, `safe`, `finalized`, or a hex block number",
                 )),
-                value if B256::from_str(value).is_ok() => Err(ValidationError::not_supported(
-                    "`block` does not support block hash selectors",
+                value if B256::from_str(value).is_ok() => Err(ValidationError::invalid_params(
+                    "`block` hash selectors must use `blockHash`",
                 )),
                 value => validate_hex_param(value, "block"),
             },
-            Self::Hash(_) => Err(ValidationError::not_supported(
-                "`block.blockHash` is not supported yet",
-            )),
+            Self::Hash(_) => Ok(()),
         }
     }
 }

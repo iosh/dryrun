@@ -3,35 +3,35 @@ mod read_call;
 
 use contract_standards::{DecodedStandardLog, decode_standard_log};
 
-use crate::EvmExecutionObservation;
+use crate::EvmExecutionEvent;
 
 pub(super) use metadata::load_metadata;
 
 #[derive(Debug)]
 pub(super) struct DecodedStandardOccurrence {
-    pub(super) observation_index: usize,
+    pub(super) event_index: usize,
     pub(super) decoded_log: DecodedStandardLog<alloy::primitives::Address>,
 }
 
 pub(super) fn decode_standard_occurrences(
-    observations: &[EvmExecutionObservation],
+    events: &[EvmExecutionEvent],
 ) -> Vec<DecodedStandardOccurrence> {
-    observations
+    events
         .iter()
         .enumerate()
-        .filter_map(|(observation_index, observation)| {
-            let EvmExecutionObservation::Log {
+        .filter_map(|(event_index, event)| {
+            let EvmExecutionEvent::Log {
                 address,
                 topics,
                 data,
-            } = observation
+            } = event
             else {
                 return None;
             };
 
             decode_standard_log(*address, topics, data, |address| address).map(|decoded_log| {
                 DecodedStandardOccurrence {
-                    observation_index,
+                    event_index,
                     decoded_log,
                 }
             })

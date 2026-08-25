@@ -5,7 +5,7 @@ use alloy::{
 };
 use contract_standards::Erc20Metadata;
 
-use crate::{EvmChange, EvmExecutionObservation, changes::ChangeOccurrence};
+use crate::{EvmChange, EvmExecutionEvent, changes::ChangeOccurrence};
 
 sol! {
     event Deposit(address indexed account, uint256 amount);
@@ -14,7 +14,7 @@ sol! {
 
 #[derive(Debug)]
 pub(super) struct WrappedNativeOccurrence {
-    observation_index: usize,
+    event_index: usize,
     contract_address: Address,
     event: WrappedNativeEvent,
 }
@@ -26,8 +26,8 @@ enum WrappedNativeEvent {
 }
 
 impl WrappedNativeOccurrence {
-    pub(super) const fn observation_index(&self) -> usize {
-        self.observation_index
+    pub(super) const fn event_index(&self) -> usize {
+        self.event_index
     }
 
     pub(super) const fn contract_address(&self) -> Address {
@@ -56,23 +56,23 @@ impl WrappedNativeOccurrence {
             },
         };
 
-        ChangeOccurrence::new(self.observation_index, change)
+        ChangeOccurrence::new(self.event_index, change)
     }
 }
 
 pub(super) fn decode_wrapped_native_occurrences(
-    observations: &[EvmExecutionObservation],
+    events: &[EvmExecutionEvent],
     contract_address: Address,
 ) -> Vec<WrappedNativeOccurrence> {
-    observations
+    events
         .iter()
         .enumerate()
-        .filter_map(|(observation_index, observation)| {
-            let EvmExecutionObservation::Log {
+        .filter_map(|(event_index, event)| {
+            let EvmExecutionEvent::Log {
                 address,
                 topics,
                 data,
-            } = observation
+            } = event
             else {
                 return None;
             };
@@ -100,7 +100,7 @@ pub(super) fn decode_wrapped_native_occurrences(
             };
 
             Some(WrappedNativeOccurrence {
-                observation_index,
+                event_index,
                 contract_address,
                 event,
             })
