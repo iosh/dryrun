@@ -11,6 +11,7 @@ mod outcome;
 mod rejection;
 mod simulation;
 mod simulator;
+mod state;
 mod transaction;
 
 pub(crate) use chain_spec::{EthereumChainSpec, EthereumExecutionSpec};
@@ -27,7 +28,7 @@ pub use error::{
 };
 pub(crate) use execution::{
     EvmExecutionEvent, EvmExecutionObserver, EvmTransactionExecutionResult, EvmTransactionExecutor,
-    create_database, map_executed_outcome,
+    map_executed_outcome,
 };
 pub use execution_result::{EvmBlobGasFee, EvmExecutionGasFee, EvmExecutionResult, EvmFee, EvmGas};
 pub use outcome::{
@@ -37,6 +38,7 @@ pub use outcome::{
 pub use rejection::EvmTransactionRejection;
 pub use simulation::{EvmBlockContext, EvmSimulation};
 pub use simulator::EvmTransactionSimulator;
+pub(crate) use state::create_database;
 pub use transaction::{
     AccessListItem, Authorization, CompleteTransaction, CompleteTransactionVariant,
     PartialTransaction, PartialTransactionVariant, SignedAuthorization, TransactionInput,

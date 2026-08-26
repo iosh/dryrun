@@ -91,8 +91,8 @@ fn simulate_blocking(
     let executor =
         EvmTransactionExecutor::new(database, block, &chain_spec, EvmExecutionObserver::new())?;
 
-    let mut output = match executor.execute(&transaction)? {
-        EvmTransactionExecutionResult::Executed(output) => output.commit()?,
+    let (output, state_view) = match executor.execute(&transaction)? {
+        EvmTransactionExecutionResult::Executed(output) => output.commit(&transaction),
         EvmTransactionExecutionResult::NotExecuted(rejection) => {
             return Ok(EvmSimulation {
                 context,
@@ -114,7 +114,7 @@ fn simulate_blocking(
         });
     }
 
-    let changes = analyze_changes(&mut output, &transaction, &chain_spec)?;
+    let changes = analyze_changes(&output, &state_view, &chain_spec)?;
 
     let (engine_result, execution_result) = output.into_outcome_parts();
     let execution = map_executed_outcome(engine_result, &transaction, execution_result)?;

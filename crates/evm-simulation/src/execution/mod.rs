@@ -3,7 +3,6 @@ mod events;
 mod fee_settlement;
 mod outcome_mapping;
 mod rejection_mapping;
-mod state;
 
 use self::{
     env::{create_block_env, create_cfg_env, create_tx_env},
@@ -13,13 +12,14 @@ use crate::{
     CompleteTransaction, CompleteTransactionVariant, EthereumChainSpec, EvmBlobGasFee,
     EvmBlockEnvironmentError, EvmExecutionError, EvmExecutionResult, EvmGas, EvmNotReadyError,
     EvmSimulationError, EvmStateAccessError, EvmTransactionRejection,
+    state::{EvmDatabase, EvmStateView, MainnetEvm},
 };
 use alloy::{
     consensus::{BlockHeader, Header, Sealed},
     primitives::{Address, Log},
 };
 use revm::{
-    Context, ExecuteCommitEvm, InspectEvm, MainBuilder, MainContext, MainnetEvm as RevmMainnetEvm,
+    Context, ExecuteCommitEvm, InspectEvm, MainBuilder, MainContext,
     context::{BlockEnv, CfgEnv, TxEnv},
     context_interface::{
         result::{EVMError, ExecutionResult, HaltReason, InvalidHeader},
@@ -30,11 +30,6 @@ use revm::{
     primitives::eip4844::GAS_PER_BLOB,
     state::EvmState,
 };
-
-pub(crate) type MainnetEvmDatabase = state::MainnetEvmDatabase;
-pub(crate) type MainnetEvm<INSP = ()> = MainnetEvmWithDb<MainnetEvmDatabase, INSP>;
-pub(crate) type MainnetEvmWithDb<DB, INSP = ()> =
-    RevmMainnetEvm<Context<BlockEnv, TxEnv, CfgEnv, DB>, INSP>;
 
 pub(crate) use events::{EvmExecutionEvent, EvmExecutionObserver};
 pub(crate) use outcome_mapping::map_executed_outcome;
@@ -55,18 +50,27 @@ pub(crate) struct ExecutedTransaction<INSP> {
 }
 
 impl ExecutedTransaction<EvmExecutionObserver> {
-    pub(crate) fn commit(mut self) -> Result<EvmTransactionExecution, EvmExecutionError> {
+    pub(crate) fn commit(
+        mut self,
+        transaction: &CompleteTransaction,
+    ) -> (EvmTransactionExecution, EvmStateView) {
         let events = self.evm.inspector.take_events();
+        let caller = self.evm.ctx_ref().tx.caller;
+        let beneficiary = self.evm.ctx_ref().block.beneficiary;
         self.evm.commit(self.transition.clone());
 
-        Ok(EvmTransactionExecution {
+        let state_view = EvmStateView::from_execution(self.evm, transaction);
+        let execution = EvmTransactionExecution {
             result: self.result,
             gas: self.gas,
             transition: self.transition,
             fee_settlement: self.fee_settlement,
-            evm: self.evm,
+            caller,
+            beneficiary,
             events,
-        })
+        };
+
+        (execution, state_view)
     }
 }
 
@@ -75,7 +79,8 @@ pub(crate) struct EvmTransactionExecution {
     gas: EvmGas,
     transition: EvmState,
     fee_settlement: EvmFeeSettlement,
-    evm: MainnetEvm<EvmExecutionObserver>,
+    caller: Address,
+    beneficiary: Address,
     events: Vec<EvmExecutionEvent>,
 }
 
@@ -110,22 +115,15 @@ impl EvmTransactionExecution {
     }
 
     pub(crate) fn caller(&self) -> Address {
-        self.evm.ctx_ref().tx.caller
+        self.caller
     }
 
     pub(crate) fn beneficiary(&self) -> Address {
-        self.evm.ctx_ref().block.beneficiary
+        self.beneficiary
     }
 
     pub(crate) fn events(&self) -> &[EvmExecutionEvent] {
         &self.events
-    }
-
-    pub(crate) fn with_post_state_vm<T>(
-        &mut self,
-        operation: impl FnOnce(&mut MainnetEvm<EvmExecutionObserver>) -> T,
-    ) -> T {
-        operation(&mut self.evm)
     }
 }
 
@@ -141,7 +139,7 @@ pub(crate) struct EvmTransactionExecutor<INSP> {
 
 impl<INSP> EvmTransactionExecutor<INSP> {
     pub(crate) fn new(
-        database: MainnetEvmDatabase,
+        database: EvmDatabase,
         block: Sealed<Header>,
         chain_spec: &EthereumChainSpec,
         inspector: INSP,
@@ -181,7 +179,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
         transaction: &CompleteTransaction,
     ) -> Result<EvmTransactionExecutionResult<INSP>, EvmSimulationError>
     where
-        INSP: revm::Inspector<Context<BlockEnv, TxEnv, CfgEnv, MainnetEvmDatabase>, EthInterpreter>,
+        INSP: revm::Inspector<Context<BlockEnv, TxEnv, CfgEnv, EvmDatabase>, EthInterpreter>,
     {
         let tx_env = create_tx_env(transaction);
         let effective_gas_price = tx_env.effective_gas_price(self.base_fee_per_gas as u128);
@@ -274,4 +272,3 @@ const fn map_header_error(error: InvalidHeader, block_number: u64) -> EvmBlockEn
 }
 
 pub(crate) use fee_settlement::EvmFeeSettlement;
-pub(crate) use state::create_database;

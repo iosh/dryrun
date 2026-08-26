@@ -1,5 +1,4 @@
 mod metadata;
-mod read_call;
 
 use contract_standards::{DecodedStandardLog, decode_standard_log};
 
