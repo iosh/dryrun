@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, error::Error as StdError, sync::Arc};
 
 use alloy::primitives::{Address, U256};
 use thiserror::Error;
@@ -86,15 +86,31 @@ pub enum EvmChangeResolutionError {
 
     #[error("conflicting delegation values for account {account}")]
     AccountDelegationConflict { account: Address },
+
+    #[error("change resolver could not produce complete changes")]
+    Resolver {
+        resolver: &'static str,
+        #[source]
+        source: Box<dyn StdError + Send + Sync + 'static>,
+    },
+}
+
+impl EvmChangeResolutionError {
+    pub fn resolver(resolver: &'static str, source: impl StdError + Send + Sync + 'static) -> Self {
+        Self::Resolver {
+            resolver,
+            source: Box::new(source),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
-struct EvmChangeSetBuilder {
+pub struct EvmChangeSetBuilder {
     items: BTreeMap<EvmChangeKey, EvmStateChange>,
 }
 
 impl EvmChangeSetBuilder {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
@@ -117,7 +133,7 @@ impl EvmChangeSetBuilder {
         Ok(())
     }
 
-    fn native_balance(
+    pub fn native_balance(
         &mut self,
         account: Address,
         before: U256,
@@ -135,7 +151,7 @@ impl EvmChangeSetBuilder {
         Ok(())
     }
 
-    fn account_delegation(
+    pub fn account_delegation(
         &mut self,
         account: Address,
         before: EvmAccountDelegation,
@@ -153,7 +169,7 @@ impl EvmChangeSetBuilder {
         Ok(())
     }
 
-    fn finish(self) -> EvmChangeSet {
+    pub fn finish(self) -> EvmChangeSet {
         EvmChangeSet {
             items: self.items.into_values().collect(),
         }
@@ -169,12 +185,20 @@ impl EvmStateChange {
     }
 }
 
-pub(crate) trait EvmChangeResolver {
+pub trait EvmChangeResolver: Send + Sync + 'static {
     fn resolve(
         &self,
         execution: &EvmTransactionExecution,
         views: &EvmStateViews,
     ) -> Result<EvmChangeSet, EvmChangeResolutionError>;
+
+    fn combine<R>(self, other: R) -> CombinedEvmChangeResolver<Self, R>
+    where
+        Self: Sized,
+        R: EvmChangeResolver,
+    {
+        CombinedEvmChangeResolver::new(self, other)
+    }
 }
 
 #[derive(Debug)]
@@ -193,11 +217,17 @@ impl From<Result<EvmChangeSet, EvmChangeResolutionError>> for EvmChanges {
 }
 
 #[derive(Debug, Clone)]
-struct NativeBalanceResolver {
+pub struct EvmNativeBalanceResolver {
     currency: EvmNativeCurrency,
 }
 
-impl EvmChangeResolver for NativeBalanceResolver {
+impl EvmNativeBalanceResolver {
+    pub fn new(currency: EvmNativeCurrency) -> Self {
+        Self { currency }
+    }
+}
+
+impl EvmChangeResolver for EvmNativeBalanceResolver {
     fn resolve(
         &self,
         execution: &EvmTransactionExecution,
@@ -205,8 +235,8 @@ impl EvmChangeResolver for NativeBalanceResolver {
     ) -> Result<EvmChangeSet, EvmChangeResolutionError> {
         let mut builder = EvmChangeSetBuilder::new();
         for &account in execution.native_balance_accounts() {
-            let before = views.before().read_account(account)?.balance;
-            let after = views.after().read_account(account)?.balance;
+            let before = views.before().read_account(account)?.balance();
+            let after = views.after().read_account(account)?.balance();
             builder.native_balance(account, before, after, self.currency.clone())?;
         }
         Ok(builder.finish())
@@ -214,9 +244,9 @@ impl EvmChangeResolver for NativeBalanceResolver {
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-struct AccountDelegationResolver;
+pub struct EvmAccountDelegationResolver;
 
-impl EvmChangeResolver for AccountDelegationResolver {
+impl EvmChangeResolver for EvmAccountDelegationResolver {
     fn resolve(
         &self,
         execution: &EvmTransactionExecution,
@@ -229,12 +259,12 @@ impl EvmChangeResolver for AccountDelegationResolver {
             builder.account_delegation(
                 account,
                 EvmAccountDelegation {
-                    delegate: before.delegation,
-                    nonce: before.nonce,
+                    delegate: before.delegation(),
+                    nonce: before.nonce(),
                 },
                 EvmAccountDelegation {
-                    delegate: after.delegation,
-                    nonce: after.nonce,
+                    delegate: after.delegation(),
+                    nonce: after.nonce(),
                 },
             )?;
         }
@@ -243,16 +273,16 @@ impl EvmChangeResolver for AccountDelegationResolver {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct StandardEvmChangeResolver {
-    components: CombinedEvmChangeResolver<NativeBalanceResolver, AccountDelegationResolver>,
+pub struct StandardEvmChangeResolver {
+    components: CombinedEvmChangeResolver<EvmNativeBalanceResolver, EvmAccountDelegationResolver>,
 }
 
 impl StandardEvmChangeResolver {
-    pub(crate) fn new(currency: EvmNativeCurrency) -> Self {
+    pub fn new(currency: EvmNativeCurrency) -> Self {
         Self {
             components: CombinedEvmChangeResolver::new(
-                NativeBalanceResolver { currency },
-                AccountDelegationResolver,
+                EvmNativeBalanceResolver::new(currency),
+                EvmAccountDelegationResolver,
             ),
         }
     }
@@ -269,14 +299,24 @@ impl EvmChangeResolver for StandardEvmChangeResolver {
 }
 
 #[derive(Debug, Clone)]
-struct CombinedEvmChangeResolver<A, B> {
-    first: A,
-    second: B,
+pub struct CombinedEvmChangeResolver<A, B> {
+    first: Arc<A>,
+    second: Arc<B>,
 }
 
 impl<A, B> CombinedEvmChangeResolver<A, B> {
-    const fn new(first: A, second: B) -> Self {
-        Self { first, second }
+    pub fn new(first: A, second: B) -> Self {
+        Self {
+            first: Arc::new(first),
+            second: Arc::new(second),
+        }
+    }
+
+    pub(crate) fn from_shared(first: Arc<A>, second: B) -> Self {
+        Self {
+            first,
+            second: Arc::new(second),
+        }
     }
 }
 

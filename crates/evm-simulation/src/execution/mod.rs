@@ -84,7 +84,8 @@ impl ExecutedTransaction<EvmExecutionObserver> {
     }
 }
 
-pub(crate) struct EvmTransactionExecution {
+#[derive(Debug)]
+pub struct EvmTransactionExecution {
     result: ExecutionResult<HaltReason>,
     gas: EvmGas,
     fee_settlement: EvmFeeSettlement,
@@ -106,11 +107,11 @@ impl EvmTransactionExecution {
         )
     }
 
-    pub(crate) fn native_balance_accounts(&self) -> &[Address] {
+    pub fn native_balance_accounts(&self) -> &[Address] {
         &self.native_balance_accounts
     }
 
-    pub(crate) fn applied_authorization_accounts(&self) -> &[Address] {
+    pub fn applied_authorization_accounts(&self) -> &[Address] {
         &self.applied_authorization_accounts
     }
 }

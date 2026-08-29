@@ -16,8 +16,10 @@ mod transaction;
 
 pub(crate) use chain_spec::{EthereumChainSpec, EthereumExecutionSpec};
 pub use changeset::{
-    EvmAccountDelegation, EvmAccountDelegationChange, EvmChangeResolutionError, EvmChangeSet,
-    EvmChanges, EvmNativeBalanceChange, EvmNativeCurrency, EvmStateChange,
+    CombinedEvmChangeResolver, EvmAccountDelegation, EvmAccountDelegationChange,
+    EvmAccountDelegationResolver, EvmChangeResolutionError, EvmChangeResolver, EvmChangeSet,
+    EvmChangeSetBuilder, EvmChanges, EvmNativeBalanceChange, EvmNativeBalanceResolver,
+    EvmNativeCurrency, EvmStateChange, StandardEvmChangeResolver,
 };
 pub(crate) use completion::complete_transaction;
 pub(crate) use context::resolve_block;
@@ -26,6 +28,7 @@ pub use error::{
     EvmNotReadyError, EvmResultIntegrationError, EvmSimulationError, EvmStateAccessError,
     EvmTransactionCompletionError,
 };
+pub use execution::EvmTransactionExecution;
 pub(crate) use execution::{
     EvmExecutionObserver, EvmTransactionExecutionResult, EvmTransactionExecutor,
     map_executed_outcome,
@@ -38,8 +41,8 @@ pub use outcome::{
 pub use rejection::EvmTransactionRejection;
 pub use simulation::{EvmBlockContext, EvmSimulation};
 pub use simulator::EvmTransactionSimulator;
-pub use state::EvmStateReadError;
 pub(crate) use state::create_database;
+pub use state::{EvmAccountState, EvmStateReadError, EvmStateView, EvmStateViews};
 pub use transaction::{
     AccessListItem, Authorization, CompleteTransaction, CompleteTransactionVariant,
     PartialTransaction, PartialTransactionVariant, SignedAuthorization, TransactionInput,

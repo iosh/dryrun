@@ -11,17 +11,31 @@ use crate::{
     CompleteTransaction, EthereumChainSpec, EvmBlockContext, EvmExecutionObserver,
     EvmExecutionOutcome, EvmInitializationError, EvmSimulation, EvmSimulationError,
     EvmSimulationRequest, EvmTransactionExecutionResult, EvmTransactionExecutor,
-    changeset::{EvmChangeResolver, EvmChangeSet, EvmChanges, StandardEvmChangeResolver},
+    changeset::{
+        CombinedEvmChangeResolver, EvmChangeResolver, EvmChangeSet, EvmChanges,
+        StandardEvmChangeResolver,
+    },
     create_database, map_executed_outcome, resolve_block,
 };
 
-#[derive(Debug, Clone)]
-pub struct EvmTransactionSimulator {
+#[derive(Debug)]
+pub struct EvmTransactionSimulator<R = StandardEvmChangeResolver> {
     provider: DynProvider<Ethereum>,
     chain_spec: Arc<EthereumChainSpec>,
+    resolver: Arc<R>,
 }
 
-impl EvmTransactionSimulator {
+impl<R> Clone for EvmTransactionSimulator<R> {
+    fn clone(&self) -> Self {
+        Self {
+            provider: self.provider.clone(),
+            chain_spec: Arc::clone(&self.chain_spec),
+            resolver: Arc::clone(&self.resolver),
+        }
+    }
+}
+
+impl EvmTransactionSimulator<StandardEvmChangeResolver> {
     pub async fn ethereum_mainnet(
         provider: DynProvider<Ethereum>,
     ) -> Result<Self, EvmInitializationError> {
@@ -38,12 +52,50 @@ impl EvmTransactionSimulator {
             });
         }
 
+        let resolver = StandardEvmChangeResolver::new(chain_spec.native_currency().clone());
         Ok(Self {
             provider,
             chain_spec: Arc::new(chain_spec),
+            resolver: Arc::new(resolver),
         })
     }
+}
 
+impl<R> EvmTransactionSimulator<R> {
+    pub fn with_change_resolver<N>(self, resolver: N) -> EvmTransactionSimulator<N>
+    where
+        N: EvmChangeResolver,
+    {
+        EvmTransactionSimulator {
+            provider: self.provider,
+            chain_spec: self.chain_spec,
+            resolver: Arc::new(resolver),
+        }
+    }
+
+    pub fn with_additional_change_resolver<N>(
+        self,
+        resolver: N,
+    ) -> EvmTransactionSimulator<CombinedEvmChangeResolver<R, N>>
+    where
+        R: EvmChangeResolver,
+        N: EvmChangeResolver,
+    {
+        EvmTransactionSimulator {
+            provider: self.provider,
+            chain_spec: self.chain_spec,
+            resolver: Arc::new(CombinedEvmChangeResolver::from_shared(
+                self.resolver,
+                resolver,
+            )),
+        }
+    }
+}
+
+impl<R> EvmTransactionSimulator<R>
+where
+    R: EvmChangeResolver,
+{
     /// Simulates one transaction and resolves its verified net state changes.
     ///
     /// The returned future must be polled inside an active Tokio runtime.
@@ -51,14 +103,14 @@ impl EvmTransactionSimulator {
         &self,
         request: EvmSimulationRequest,
     ) -> Result<EvmSimulation, EvmSimulationError> {
-        self.run_simulation(request, simulate_verified_changes_blocking)
+        self.run_simulation(request, simulate_verified_changes_blocking::<R>)
             .await
     }
 
     async fn run_simulation<T>(
         &self,
         request: EvmSimulationRequest,
-        simulate_blocking: BlockingSimulation<T>,
+        simulate_blocking: BlockingSimulation<R, T>,
     ) -> Result<T, EvmSimulationError>
     where
         T: Send + 'static,
@@ -74,6 +126,7 @@ impl EvmTransactionSimulator {
 
         let provider = self.provider.clone();
         let chain_spec = Arc::clone(&self.chain_spec);
+        let resolver = Arc::clone(&self.resolver);
         let blocking_runtime_handle = runtime_handle.clone();
 
         runtime_handle
@@ -82,6 +135,7 @@ impl EvmTransactionSimulator {
                     provider,
                     runtime_handle: blocking_runtime_handle,
                     chain_spec,
+                    resolver,
                     block,
                     transaction,
                 })
@@ -91,23 +145,28 @@ impl EvmTransactionSimulator {
     }
 }
 
-type BlockingSimulation<T> = fn(BlockingSimulationInput) -> Result<T, EvmSimulationError>;
+type BlockingSimulation<R, T> = fn(BlockingSimulationInput<R>) -> Result<T, EvmSimulationError>;
 
-struct BlockingSimulationInput {
+struct BlockingSimulationInput<R> {
     provider: DynProvider<Ethereum>,
     runtime_handle: Handle,
     chain_spec: Arc<EthereumChainSpec>,
+    resolver: Arc<R>,
     block: Sealed<Header>,
     transaction: CompleteTransaction,
 }
 
-fn simulate_verified_changes_blocking(
-    input: BlockingSimulationInput,
-) -> Result<EvmSimulation, EvmSimulationError> {
+fn simulate_verified_changes_blocking<R>(
+    input: BlockingSimulationInput<R>,
+) -> Result<EvmSimulation, EvmSimulationError>
+where
+    R: EvmChangeResolver,
+{
     let BlockingSimulationInput {
         provider,
         runtime_handle,
         chain_spec,
+        resolver,
         block,
         transaction,
     } = input;
@@ -128,10 +187,7 @@ fn simulate_verified_changes_blocking(
         }
     };
 
-    let changes = EvmChanges::from(
-        StandardEvmChangeResolver::new(chain_spec.native_currency().clone())
-            .resolve(&output, &state_views),
-    );
+    let changes = EvmChanges::from(resolver.resolve(&output, &state_views));
     let (engine_result, execution_result) = output.into_outcome_parts();
     let execution = map_executed_outcome(engine_result, &transaction, execution_result)?;
 

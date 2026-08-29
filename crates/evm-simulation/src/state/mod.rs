@@ -35,12 +35,12 @@ pub(crate) fn create_database(
 }
 
 #[derive(Debug)]
-pub(crate) struct EvmStateView {
+pub struct EvmStateView {
     inner: RefCell<EvmStateViewInner>,
 }
 
 #[derive(Debug)]
-pub(crate) struct EvmStateViews {
+pub struct EvmStateViews {
     before: EvmStateView,
     after: EvmStateView,
 }
@@ -53,11 +53,11 @@ impl EvmStateViews {
         }
     }
 
-    pub(crate) const fn before(&self) -> &EvmStateView {
+    pub const fn before(&self) -> &EvmStateView {
         &self.before
     }
 
-    pub(crate) const fn after(&self) -> &EvmStateView {
+    pub const fn after(&self) -> &EvmStateView {
         &self.after
     }
 }
@@ -71,10 +71,7 @@ impl EvmStateView {
         }
     }
 
-    pub(crate) fn read_account(
-        &self,
-        address: Address,
-    ) -> Result<EvmAccountState, EvmStateReadError> {
+    pub fn read_account(&self, address: Address) -> Result<EvmAccountState, EvmStateReadError> {
         let mut inner = self.inner.borrow_mut();
         let account = inner
             .evm
@@ -94,10 +91,24 @@ impl EvmStateView {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct EvmAccountState {
-    pub(crate) balance: alloy::primitives::U256,
-    pub(crate) nonce: u64,
-    pub(crate) delegation: Option<Address>,
+pub struct EvmAccountState {
+    balance: alloy::primitives::U256,
+    nonce: u64,
+    delegation: Option<Address>,
+}
+
+impl EvmAccountState {
+    pub const fn balance(&self) -> alloy::primitives::U256 {
+        self.balance
+    }
+
+    pub const fn nonce(&self) -> u64 {
+        self.nonce
+    }
+
+    pub const fn delegation(&self) -> Option<Address> {
+        self.delegation
+    }
 }
 
 #[derive(Debug)]
