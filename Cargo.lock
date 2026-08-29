@@ -3027,7 +3027,6 @@ dependencies = [
  "alloy-chains",
  "alloy-hardforks",
  "alloy-primitives",
- "contract-standards",
  "revm",
  "thiserror 2.0.18",
  "tokio",

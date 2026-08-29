@@ -12,11 +12,11 @@ use crate::{
     CompleteTransaction, CompleteTransactionVariant, EthereumChainSpec, EvmBlobGasFee,
     EvmBlockEnvironmentError, EvmExecutionError, EvmExecutionResult, EvmGas, EvmNotReadyError,
     EvmSimulationError, EvmStateAccessError, EvmTransactionRejection,
-    state::{EvmDatabase, EvmStateView, MainnetEvm},
+    state::{EvmDatabase, EvmStateViews, MainnetEvm},
 };
 use alloy::{
     consensus::{BlockHeader, Header, Sealed},
-    primitives::{Address, Log},
+    primitives::Address,
 };
 use revm::{
     Context, ExecuteCommitEvm, InspectEvm, MainBuilder, MainContext,
@@ -25,13 +25,12 @@ use revm::{
         result::{EVMError, ExecutionResult, HaltReason, InvalidHeader},
         transaction::Transaction,
     },
-    handler::EvmTr,
     interpreter::interpreter::EthInterpreter,
     primitives::eip4844::GAS_PER_BLOB,
     state::EvmState,
 };
 
-pub(crate) use events::{EvmExecutionEvent, EvmExecutionObserver};
+pub(crate) use events::EvmExecutionObserver;
 pub(crate) use outcome_mapping::map_executed_outcome;
 
 #[derive(Debug)]
@@ -46,49 +45,54 @@ pub(crate) struct ExecutedTransaction<INSP> {
     gas: EvmGas,
     transition: EvmState,
     fee_settlement: EvmFeeSettlement,
+    before_evm: MainnetEvm,
     evm: MainnetEvm<INSP>,
 }
 
 impl ExecutedTransaction<EvmExecutionObserver> {
-    pub(crate) fn commit(
+    pub(crate) fn commit(self) -> (EvmTransactionExecution, EvmStateViews) {
+        let (execution, transition, before_evm, mut evm) = self.into_commit_parts();
+        evm.commit(transition);
+        let state_views = EvmStateViews::new(before_evm, evm.with_inspector(()));
+
+        (execution, state_views)
+    }
+
+    fn into_commit_parts(
         mut self,
-        transaction: &CompleteTransaction,
-    ) -> (EvmTransactionExecution, EvmStateView) {
-        let events = self.evm.inspector.take_events();
-        let caller = self.evm.ctx_ref().tx.caller;
-        let beneficiary = self.evm.ctx_ref().block.beneficiary;
-        self.evm.commit(self.transition.clone());
-
-        let state_view = EvmStateView::from_execution(self.evm, transaction);
-        let execution = EvmTransactionExecution {
-            result: self.result,
-            gas: self.gas,
-            transition: self.transition,
-            fee_settlement: self.fee_settlement,
-            caller,
-            beneficiary,
-            events,
-        };
-
-        (execution, state_view)
+    ) -> (
+        EvmTransactionExecution,
+        EvmState,
+        MainnetEvm,
+        MainnetEvm<EvmExecutionObserver>,
+    ) {
+        let applied_authorization_accounts =
+            self.evm.inspector.take_applied_authorization_accounts();
+        let native_balance_accounts = changed_balance_accounts(&self.transition);
+        (
+            EvmTransactionExecution {
+                result: self.result,
+                gas: self.gas,
+                fee_settlement: self.fee_settlement,
+                native_balance_accounts,
+                applied_authorization_accounts,
+            },
+            self.transition,
+            self.before_evm,
+            self.evm,
+        )
     }
 }
 
 pub(crate) struct EvmTransactionExecution {
     result: ExecutionResult<HaltReason>,
     gas: EvmGas,
-    transition: EvmState,
     fee_settlement: EvmFeeSettlement,
-    caller: Address,
-    beneficiary: Address,
-    events: Vec<EvmExecutionEvent>,
+    native_balance_accounts: Vec<Address>,
+    applied_authorization_accounts: Vec<Address>,
 }
 
 impl EvmTransactionExecution {
-    pub(crate) fn is_success(&self) -> bool {
-        self.result.is_success()
-    }
-
     pub(crate) fn into_outcome_parts(self) -> (ExecutionResult<HaltReason>, EvmExecutionResult) {
         let Self {
             result,
@@ -102,33 +106,29 @@ impl EvmTransactionExecution {
         )
     }
 
-    pub(crate) fn transition(&self) -> &EvmState {
-        &self.transition
+    pub(crate) fn native_balance_accounts(&self) -> &[Address] {
+        &self.native_balance_accounts
     }
 
-    pub(crate) fn committed_logs(&self) -> &[Log] {
-        self.result.logs()
+    pub(crate) fn applied_authorization_accounts(&self) -> &[Address] {
+        &self.applied_authorization_accounts
     }
+}
 
-    pub(crate) const fn fee_settlement(&self) -> &EvmFeeSettlement {
-        &self.fee_settlement
-    }
-
-    pub(crate) fn caller(&self) -> Address {
-        self.caller
-    }
-
-    pub(crate) fn beneficiary(&self) -> Address {
-        self.beneficiary
-    }
-
-    pub(crate) fn events(&self) -> &[EvmExecutionEvent] {
-        &self.events
-    }
+fn changed_balance_accounts(transition: &EvmState) -> Vec<Address> {
+    let mut accounts = transition
+        .iter()
+        .filter_map(|(address, account)| {
+            (account.original_info.balance != account.info.balance).then_some(*address)
+        })
+        .collect::<Vec<_>>();
+    accounts.sort_unstable();
+    accounts
 }
 
 #[derive(Debug)]
 pub(crate) struct EvmTransactionExecutor<INSP> {
+    before_evm: MainnetEvm,
     evm: MainnetEvm<INSP>,
     chain_id: u64,
     block_number: u64,
@@ -139,7 +139,8 @@ pub(crate) struct EvmTransactionExecutor<INSP> {
 
 impl<INSP> EvmTransactionExecutor<INSP> {
     pub(crate) fn new(
-        database: EvmDatabase,
+        before_database: EvmDatabase,
+        after_database: EvmDatabase,
         block: Sealed<Header>,
         chain_spec: &EthereumChainSpec,
         inspector: INSP,
@@ -158,13 +159,19 @@ impl<INSP> EvmTransactionExecutor<INSP> {
             .blob_excess_gas_and_price
             .as_ref()
             .map(|blob| blob.blob_gasprice);
+        let before_evm = Context::mainnet()
+            .with_db(before_database)
+            .modify_cfg_chained(|cfg| *cfg = cfg_env.clone())
+            .modify_block_chained(|current_block| *current_block = block_env.clone())
+            .build_mainnet();
         let evm = Context::mainnet()
-            .with_db(database)
+            .with_db(after_database)
             .modify_cfg_chained(|cfg| *cfg = cfg_env)
             .modify_block_chained(|current_block| *current_block = block_env)
             .build_mainnet_with_inspector(inspector);
 
         Ok(Self {
+            before_evm,
             evm,
             chain_id,
             block_number,
@@ -241,7 +248,6 @@ impl<INSP> EvmTransactionExecutor<INSP> {
         };
         let fee_settlement = EvmFeeSettlement::new(
             &gas,
-            transaction.gas_limit,
             effective_gas_price,
             self.base_fee_per_gas,
             blob_gas_fee,
@@ -254,6 +260,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
                 gas,
                 transition: result_and_state.state,
                 fee_settlement,
+                before_evm: self.before_evm,
                 evm: self.evm,
             },
         )))

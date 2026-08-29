@@ -1,7 +1,7 @@
 use alloy::primitives::B256;
 
 mod chain_spec;
-mod changes;
+mod changeset;
 mod completion;
 mod context;
 mod error;
@@ -15,19 +15,19 @@ mod state;
 mod transaction;
 
 pub(crate) use chain_spec::{EthereumChainSpec, EthereumExecutionSpec};
-pub use changes::{EvmChange, NativeCurrency};
+pub use changeset::{
+    EvmAccountDelegation, EvmAccountDelegationChange, EvmChangeResolutionError, EvmChangeSet,
+    EvmChanges, EvmNativeBalanceChange, EvmNativeCurrency, EvmStateChange,
+};
 pub(crate) use completion::complete_transaction;
 pub(crate) use context::resolve_block;
-pub use contract_standards::{
-    Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem, StandardChange,
-};
 pub use error::{
-    EvmBlockEnvironmentError, EvmBlockResolutionError, EvmChangesError, EvmExecutionError,
-    EvmInitializationError, EvmNativeChangeError, EvmNotReadyError, EvmResultIntegrationError,
-    EvmSimulationError, EvmStateAccessError, EvmTransactionCompletionError,
+    EvmBlockEnvironmentError, EvmBlockResolutionError, EvmExecutionError, EvmInitializationError,
+    EvmNotReadyError, EvmResultIntegrationError, EvmSimulationError, EvmStateAccessError,
+    EvmTransactionCompletionError,
 };
 pub(crate) use execution::{
-    EvmExecutionEvent, EvmExecutionObserver, EvmTransactionExecutionResult, EvmTransactionExecutor,
+    EvmExecutionObserver, EvmTransactionExecutionResult, EvmTransactionExecutor,
     map_executed_outcome,
 };
 pub use execution_result::{EvmBlobGasFee, EvmExecutionGasFee, EvmExecutionResult, EvmFee, EvmGas};
@@ -38,6 +38,7 @@ pub use outcome::{
 pub use rejection::EvmTransactionRejection;
 pub use simulation::{EvmBlockContext, EvmSimulation};
 pub use simulator::EvmTransactionSimulator;
+pub use state::EvmStateReadError;
 pub(crate) use state::create_database;
 pub use transaction::{
     AccessListItem, Authorization, CompleteTransaction, CompleteTransactionVariant,

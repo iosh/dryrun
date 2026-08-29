@@ -1,8 +1,4 @@
-use alloy::{
-    primitives::{Address, U256},
-    transports::TransportError,
-};
-use contract_standards::{MetadataCall, MissingMetadataOutcome};
+use alloy::{primitives::U256, transports::TransportError};
 use revm::database::AlloyDBError;
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -220,73 +216,6 @@ impl From<EthereumChainSpecError> for EvmNotReadyError {
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum EvmNativeChangeError {
-    #[error("native account {address} is missing from transaction state")]
-    AccountMissing { address: Address },
-
-    #[error("native balance underflow for {address}: balance {balance}, cannot subtract {amount}")]
-    BalanceUnderflow {
-        address: Address,
-        balance: U256,
-        amount: U256,
-    },
-
-    #[error("native balance overflow for {address}: balance {balance}, cannot add {amount}")]
-    BalanceOverflow {
-        address: Address,
-        balance: U256,
-        amount: U256,
-    },
-
-    #[error(
-        "native balance mismatch for {address}: replayed {replayed_balance}, transaction state {state_balance}"
-    )]
-    BalanceMismatch {
-        address: Address,
-        replayed_balance: U256,
-        state_balance: U256,
-    },
-}
-
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum EvmChangesError {
-    #[error(transparent)]
-    Native(#[from] EvmNativeChangeError),
-
-    #[error(
-        "execution observer recorded {observed_count} committed logs, but the execution result contains {result_count}"
-    )]
-    CommittedLogCountMismatch {
-        observed_count: usize,
-        result_count: usize,
-    },
-
-    #[error("execution observer log {index} does not match the committed execution result")]
-    CommittedLogMismatch { index: usize },
-
-    #[error("state access failed while executing metadata probe {call:?}: {source}")]
-    MetadataStateAccess {
-        call: MetadataCall<Address>,
-        #[source]
-        source: EvmStateAccessError,
-    },
-
-    #[error("metadata probe {call:?} could not be executed: {details}")]
-    MetadataProbeExecution {
-        call: MetadataCall<Address>,
-        details: String,
-    },
-
-    #[error("a decoded change is missing a required metadata outcome")]
-    MissingMetadataOutcome {
-        #[from]
-        source: MissingMetadataOutcome,
-    },
-}
-
-#[derive(Debug, Error)]
-#[non_exhaustive]
 pub enum EvmSimulationError {
     #[error(transparent)]
     Input(#[from] TransactionInputError),
@@ -312,9 +241,6 @@ pub enum EvmSimulationError {
         #[source]
         source: JoinError,
     },
-
-    #[error(transparent)]
-    Changes(#[from] EvmChangesError),
 }
 
 impl EvmSimulationError {

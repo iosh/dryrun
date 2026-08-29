@@ -1,18 +1,16 @@
 use alloy::eips::eip7840::BlobParams;
 use alloy_chains::Chain;
 use alloy_hardforks::{EthereumChainHardforks, EthereumHardfork, EthereumHardforks};
-use alloy_primitives::Address;
 use revm::primitives::hardfork::SpecId;
 use thiserror::Error;
 
-use crate::NativeCurrency;
+use crate::changeset::EvmNativeCurrency;
 
 #[derive(Debug, Clone)]
 pub(crate) struct EthereumChainSpec {
     chain: Chain,
     hardforks: EthereumChainHardforks,
-    native_currency: NativeCurrency,
-    wrapped_native_token: Option<Address>,
+    native_currency: EvmNativeCurrency,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -27,14 +25,11 @@ impl EthereumChainSpec {
         Self {
             chain,
             hardforks: EthereumChainHardforks::mainnet(),
-            native_currency: NativeCurrency {
+            native_currency: EvmNativeCurrency {
                 name: "Ether".to_string(),
                 symbol: "ETH".to_string(),
                 decimals: 18,
             },
-            wrapped_native_token: chain
-                .named()
-                .and_then(|network| network.wrapped_native_token()),
         }
     }
 
@@ -42,12 +37,8 @@ impl EthereumChainSpec {
         self.chain.id()
     }
 
-    pub(crate) const fn native_currency(&self) -> &NativeCurrency {
+    pub(crate) const fn native_currency(&self) -> &EvmNativeCurrency {
         &self.native_currency
-    }
-
-    pub(crate) const fn wrapped_native_token_address(&self) -> Option<Address> {
-        self.wrapped_native_token
     }
 
     pub(crate) fn execution_spec(

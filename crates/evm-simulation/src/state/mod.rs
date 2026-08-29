@@ -1,26 +1,22 @@
-mod read_call;
-
-use std::{cell::RefCell, collections::HashMap};
+use std::cell::RefCell;
 
 use alloy::{
     eips::BlockId,
     network::Ethereum,
-    primitives::{Address, B256, Bytes},
+    primitives::{Address, B256},
     providers::DynProvider,
 };
 use revm::{
     Context, MainnetEvm as RevmMainnetEvm,
     context::{BlockEnv, CfgEnv, TxEnv},
-    context_interface::result::HaltReason,
+    context_interface::JournalTr,
     database::{AlloyDB, CacheDB, WrapDatabaseAsync},
     handler::EvmTr,
 };
 use thiserror::Error;
 use tokio::runtime::Handle;
 
-use crate::{CompleteTransaction, EvmStateAccessError};
-
-use self::read_call::execute_read_call;
+use crate::EvmStateAccessError;
 
 pub(crate) type EvmDatabase = CacheDB<WrapDatabaseAsync<AlloyDB<Ethereum, DynProvider<Ethereum>>>>;
 pub(crate) type MainnetEvm<INSP = ()> =
@@ -41,83 +37,83 @@ pub(crate) fn create_database(
 #[derive(Debug)]
 pub(crate) struct EvmStateView {
     inner: RefCell<EvmStateViewInner>,
-    call_context: EvmReadCallContext,
+}
+
+#[derive(Debug)]
+pub(crate) struct EvmStateViews {
+    before: EvmStateView,
+    after: EvmStateView,
+}
+
+impl EvmStateViews {
+    pub(crate) fn new<BEFORE, AFTER>(before: MainnetEvm<BEFORE>, after: MainnetEvm<AFTER>) -> Self {
+        Self {
+            before: EvmStateView::new(before),
+            after: EvmStateView::new(after),
+        }
+    }
+
+    pub(crate) const fn before(&self) -> &EvmStateView {
+        &self.before
+    }
+
+    pub(crate) const fn after(&self) -> &EvmStateView {
+        &self.after
+    }
 }
 
 impl EvmStateView {
-    pub(crate) fn from_execution<INSP>(
-        evm: MainnetEvm<INSP>,
-        transaction: &CompleteTransaction,
-    ) -> Self {
-        let mut evm = evm.with_inspector(());
-        let call_context = EvmReadCallContext {
-            caller: transaction.from,
-            nonce: transaction.nonce.saturating_add(1),
-            chain_id: transaction.chain_id,
-        };
-        let cfg = &mut evm.ctx_mut().cfg;
-        cfg.disable_nonce_check = true;
-        cfg.disable_balance_check = true;
-        cfg.disable_eip3607 = true;
-        cfg.disable_base_fee = true;
-        cfg.disable_fee_charge = true;
+    fn new<INSP>(evm: MainnetEvm<INSP>) -> Self {
+        let evm = evm.with_inspector(());
 
         Self {
             inner: RefCell::new(EvmStateViewInner::new(evm)),
-            call_context,
         }
     }
 
-    pub(crate) fn read_call(
+    pub(crate) fn read_account(
         &self,
-        target: Address,
-        data: Bytes,
-    ) -> Result<EvmReadCallResult, EvmStateReadError> {
-        let key = (target, data.clone());
-        if let Some(result) = self.inner.borrow().read_calls.get(&key) {
-            return Ok(result.clone());
-        }
+        address: Address,
+    ) -> Result<EvmAccountState, EvmStateReadError> {
         let mut inner = self.inner.borrow_mut();
-        let result = execute_read_call(&mut inner.evm, self.call_context, target, data)?;
-        inner.read_calls.insert(key, result.clone());
-        Ok(result)
+        let account = inner
+            .evm
+            .ctx_mut()
+            .journaled_state
+            .load_account_with_code(address)
+            .map_err(EvmStateAccessError::from)
+            .map_err(EvmStateReadError::from)?;
+        let info = &account.info;
+        let delegation = info.code.as_ref().and_then(|code| code.eip7702_address());
+        Ok(EvmAccountState {
+            balance: info.balance,
+            nonce: info.nonce,
+            delegation,
+        })
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EvmAccountState {
+    pub(crate) balance: alloy::primitives::U256,
+    pub(crate) nonce: u64,
+    pub(crate) delegation: Option<Address>,
 }
 
 #[derive(Debug)]
 struct EvmStateViewInner {
     evm: MainnetEvm,
-    read_calls: HashMap<(Address, Bytes), EvmReadCallResult>,
 }
 
 impl EvmStateViewInner {
     fn new(evm: MainnetEvm) -> Self {
-        Self {
-            evm,
-            read_calls: HashMap::new(),
-        }
+        Self { evm }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum EvmReadCallResult {
-    Success(Bytes),
-    Reverted(Bytes),
-    Halted(HaltReason),
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) struct EvmReadCallContext {
-    caller: Address,
-    nonce: u64,
-    chain_id: u64,
-}
-
 #[derive(Debug, Error)]
-pub(crate) enum EvmStateReadError {
+#[non_exhaustive]
+pub enum EvmStateReadError {
     #[error(transparent)]
     StateAccess(#[from] EvmStateAccessError),
-
-    #[error("read call execution failed: {details}")]
-    ReadCallExecution { details: String },
 }

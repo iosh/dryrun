@@ -11,7 +11,8 @@ use crate::{
     CompleteTransaction, EthereumChainSpec, EvmBlockContext, EvmExecutionObserver,
     EvmExecutionOutcome, EvmInitializationError, EvmSimulation, EvmSimulationError,
     EvmSimulationRequest, EvmTransactionExecutionResult, EvmTransactionExecutor,
-    changes::analyze_changes, create_database, map_executed_outcome, resolve_block,
+    changeset::{EvmChangeResolver, EvmChangeSet, EvmChanges, StandardEvmChangeResolver},
+    create_database, map_executed_outcome, resolve_block,
 };
 
 #[derive(Debug, Clone)]
@@ -43,11 +44,25 @@ impl EvmTransactionSimulator {
         })
     }
 
-    /// Simulates one transaction. The returned future must be polled inside an active Tokio runtime.
+    /// Simulates one transaction and resolves its verified net state changes.
+    ///
+    /// The returned future must be polled inside an active Tokio runtime.
     pub async fn simulate(
         &self,
         request: EvmSimulationRequest,
     ) -> Result<EvmSimulation, EvmSimulationError> {
+        self.run_simulation(request, simulate_verified_changes_blocking)
+            .await
+    }
+
+    async fn run_simulation<T>(
+        &self,
+        request: EvmSimulationRequest,
+        simulate_blocking: BlockingSimulation<T>,
+    ) -> Result<T, EvmSimulationError>
+    where
+        T: Send + 'static,
+    {
         let EvmSimulationRequest { block, transaction } = request;
         transaction.validate_requirements()?;
         let runtime_handle =
@@ -63,59 +78,60 @@ impl EvmTransactionSimulator {
 
         runtime_handle
             .spawn_blocking(move || {
-                simulate_blocking(
+                simulate_blocking(BlockingSimulationInput {
                     provider,
-                    blocking_runtime_handle,
+                    runtime_handle: blocking_runtime_handle,
                     chain_spec,
                     block,
                     transaction,
-                )
+                })
             })
             .await
             .map_err(EvmSimulationError::execution_task)?
     }
 }
 
-fn simulate_blocking(
+type BlockingSimulation<T> = fn(BlockingSimulationInput) -> Result<T, EvmSimulationError>;
+
+struct BlockingSimulationInput {
     provider: DynProvider<Ethereum>,
     runtime_handle: Handle,
     chain_spec: Arc<EthereumChainSpec>,
     block: Sealed<Header>,
     transaction: CompleteTransaction,
+}
+
+fn simulate_verified_changes_blocking(
+    input: BlockingSimulationInput,
 ) -> Result<EvmSimulation, EvmSimulationError> {
+    let BlockingSimulationInput {
+        provider,
+        runtime_handle,
+        chain_spec,
+        block,
+        transaction,
+    } = input;
     let context = EvmBlockContext {
         number: block.number(),
         hash: block.hash(),
     };
-    let database = create_database(provider, runtime_handle, block.hash());
-    let executor =
-        EvmTransactionExecutor::new(database, block, &chain_spec, EvmExecutionObserver::new())?;
-
-    let (output, state_view) = match executor.execute(&transaction)? {
-        EvmTransactionExecutionResult::Executed(output) => output.commit(&transaction),
+    let executor = create_executor(provider, runtime_handle, block, &chain_spec)?;
+    let (output, state_views) = match executor.execute(&transaction)? {
+        EvmTransactionExecutionResult::Executed(output) => output.commit(),
         EvmTransactionExecutionResult::NotExecuted(rejection) => {
             return Ok(EvmSimulation {
                 context,
                 transaction,
                 execution: EvmExecutionOutcome::NotExecuted(rejection),
-                changes: Vec::new(),
+                changes: EvmChanges::Complete(EvmChangeSet::default()),
             });
         }
     };
 
-    if !output.is_success() {
-        let (engine_result, execution_result) = output.into_outcome_parts();
-        let execution = map_executed_outcome(engine_result, &transaction, execution_result)?;
-        return Ok(EvmSimulation {
-            context,
-            transaction,
-            execution,
-            changes: Vec::new(),
-        });
-    }
-
-    let changes = analyze_changes(&output, &state_view, &chain_spec)?;
-
+    let changes = EvmChanges::from(
+        StandardEvmChangeResolver::new(chain_spec.native_currency().clone())
+            .resolve(&output, &state_views),
+    );
     let (engine_result, execution_result) = output.into_outcome_parts();
     let execution = map_executed_outcome(engine_result, &transaction, execution_result)?;
 
@@ -125,6 +141,24 @@ fn simulate_blocking(
         execution,
         changes,
     })
+}
+
+fn create_executor(
+    provider: DynProvider<Ethereum>,
+    runtime_handle: Handle,
+    block: Sealed<Header>,
+    chain_spec: &EthereumChainSpec,
+) -> Result<EvmTransactionExecutor<EvmExecutionObserver>, EvmSimulationError> {
+    let block_hash = block.hash();
+    let before_database = create_database(provider.clone(), runtime_handle.clone(), block_hash);
+    let after_database = create_database(provider, runtime_handle, block_hash);
+    EvmTransactionExecutor::new(
+        before_database,
+        after_database,
+        block,
+        chain_spec,
+        EvmExecutionObserver::new(),
+    )
 }
 
 #[cfg(test)]
