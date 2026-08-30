@@ -3010,6 +3010,7 @@ version = "0.1.0"
 dependencies = [
  "alloy-primitives",
  "alloy-serde",
+ "contract-standards",
  "evm-simulation",
  "jsonrpsee",
  "serde",
@@ -3027,6 +3028,8 @@ dependencies = [
  "alloy-chains",
  "alloy-hardforks",
  "alloy-primitives",
+ "alloy-sol-types",
+ "contract-standards",
  "revm",
  "thiserror 2.0.18",
  "tokio",

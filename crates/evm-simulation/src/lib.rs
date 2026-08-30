@@ -11,6 +11,7 @@ mod outcome;
 mod rejection;
 mod simulation;
 mod simulator;
+mod standard_resolver;
 mod state;
 mod transaction;
 
@@ -18,8 +19,9 @@ pub(crate) use chain_spec::{EthereumChainSpec, EthereumExecutionSpec};
 pub use changeset::{
     CombinedEvmChangeResolver, EvmAccountDelegation, EvmAccountDelegationChange,
     EvmAccountDelegationResolver, EvmChangeResolutionError, EvmChangeResolver, EvmChangeSet,
-    EvmChangeSetBuilder, EvmChanges, EvmNativeBalanceChange, EvmNativeBalanceResolver,
-    EvmNativeCurrency, EvmStateChange, StandardEvmChangeResolver,
+    EvmChangeSetBuilder, EvmChanges, EvmNativeChangeResolver, EvmNativeCurrency,
+    EvmNativeTransferChange, EvmSelfDestructBurnChange, EvmStateChange,
+    EvmWrappedNativeDepositChange, EvmWrappedNativeWithdrawalChange, StandardEvmChangeResolver,
 };
 pub(crate) use completion::complete_transaction;
 pub(crate) use context::resolve_block;
@@ -28,7 +30,11 @@ pub use error::{
     EvmNotReadyError, EvmResultIntegrationError, EvmSimulationError, EvmStateAccessError,
     EvmTransactionCompletionError,
 };
-pub use execution::EvmTransactionExecution;
+pub use execution::{
+    EvmCallKind, EvmCommittedFrame, EvmCommittedFrameKind, EvmCommittedLog,
+    EvmCommittedSelfdestruct, EvmExecutionPosition, EvmFrameId, EvmOccurrenceEvidenceError,
+    EvmSemanticLogOccurrence, EvmTransactionExecution,
+};
 pub(crate) use execution::{
     EvmExecutionObserver, EvmTransactionExecutionResult, EvmTransactionExecutor,
     map_executed_outcome,
@@ -41,8 +47,11 @@ pub use outcome::{
 pub use rejection::EvmTransactionRejection;
 pub use simulation::{EvmBlockContext, EvmSimulation};
 pub use simulator::EvmTransactionSimulator;
-pub(crate) use state::create_database;
-pub use state::{EvmAccountState, EvmStateReadError, EvmStateView, EvmStateViews};
+pub(crate) use standard_resolver::EvmStandardChangeResolver;
+pub use state::{
+    EvmAccountState, EvmOccurrenceHandle, EvmOccurrenceStateViews, EvmReadCallOutcome,
+    EvmStateReadError, EvmStateView, EvmStateViews,
+};
 pub use transaction::{
     AccessListItem, Authorization, CompleteTransaction, CompleteTransactionVariant,
     PartialTransaction, PartialTransactionVariant, SignedAuthorization, TransactionInput,

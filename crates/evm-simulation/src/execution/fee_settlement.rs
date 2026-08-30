@@ -29,4 +29,8 @@ impl EvmFeeSettlement {
     pub(crate) fn into_fee(self) -> EvmFee {
         self.fee
     }
+
+    pub(crate) const fn fee(&self) -> &EvmFee {
+        &self.fee
+    }
 }

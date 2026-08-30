@@ -17,6 +17,14 @@ static TRANSFER_SINGLE_TOPIC0: LazyLock<B256> =
 static TRANSFER_BATCH_TOPIC0: LazyLock<B256> =
     LazyLock::new(|| keccak256("TransferBatch(address,address,address,uint256[],uint256[])"));
 
+pub fn is_supported_event_topic(topic: &B256) -> bool {
+    topic == &*TRANSFER_TOPIC0
+        || topic == &*APPROVAL_TOPIC0
+        || topic == &*APPROVAL_FOR_ALL_TOPIC0
+        || topic == &*TRANSFER_SINGLE_TOPIC0
+        || topic == &*TRANSFER_BATCH_TOPIC0
+}
+
 pub(crate) fn decode_log(
     contract_address: Address,
     topics: &[B256],

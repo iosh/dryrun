@@ -124,6 +124,17 @@ impl From<AlloyDBError> for EvmStateAccessError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum EvmResultIntegrationError {
+    #[error("EVM execution observation was inconsistent: {details}")]
+    ExecutionObservation { details: String },
+
+    #[error(
+        "EVM inspector retained {observed} committed logs, but the execution result returned {result}"
+    )]
+    CommittedLogCountMismatch { observed: usize, result: usize },
+
+    #[error("EVM inspector log at committed index {index} differs from the execution result")]
+    CommittedLogMismatch { index: usize },
+
     #[error(
         "the execution engine returned gas limit {result_gas_limit}, but the transaction gas limit is {transaction_gas_limit}"
     )]
@@ -159,6 +170,14 @@ pub enum EvmResultIntegrationError {
 
     #[error("successful contract creation did not return the created address")]
     MissingCreateAddress,
+}
+
+impl EvmResultIntegrationError {
+    pub(crate) fn execution_observation(details: impl Into<String>) -> Self {
+        Self::ExecutionObservation {
+            details: details.into(),
+        }
+    }
 }
 
 #[derive(Debug, Error)]

@@ -15,7 +15,8 @@ use crate::{
         CombinedEvmChangeResolver, EvmChangeResolver, EvmChangeSet, EvmChanges,
         StandardEvmChangeResolver,
     },
-    create_database, map_executed_outcome, resolve_block,
+    map_executed_outcome, resolve_block,
+    state::EvmStateSource,
 };
 
 #[derive(Debug)]
@@ -52,7 +53,10 @@ impl EvmTransactionSimulator<StandardEvmChangeResolver> {
             });
         }
 
-        let resolver = StandardEvmChangeResolver::new(chain_spec.native_currency().clone());
+        let resolver = StandardEvmChangeResolver::with_wrapped_native_token(
+            chain_spec.native_currency().clone(),
+            chain_spec.wrapped_native_token_address(),
+        );
         Ok(Self {
             provider,
             chain_spec: Arc::new(chain_spec),
@@ -96,7 +100,7 @@ impl<R> EvmTransactionSimulator<R>
 where
     R: EvmChangeResolver,
 {
-    /// Simulates one transaction and resolves its verified net state changes.
+    /// Simulates one transaction and resolves its verified wallet semantic changes.
     ///
     /// The returned future must be polled inside an active Tokio runtime.
     pub async fn simulate(
@@ -176,7 +180,7 @@ where
     };
     let executor = create_executor(provider, runtime_handle, block, &chain_spec)?;
     let (output, state_views) = match executor.execute(&transaction)? {
-        EvmTransactionExecutionResult::Executed(output) => output.commit(),
+        EvmTransactionExecutionResult::Executed(output) => output.commit()?,
         EvmTransactionExecutionResult::NotExecuted(rejection) => {
             return Ok(EvmSimulation {
                 context,
@@ -206,14 +210,12 @@ fn create_executor(
     chain_spec: &EthereumChainSpec,
 ) -> Result<EvmTransactionExecutor<EvmExecutionObserver>, EvmSimulationError> {
     let block_hash = block.hash();
-    let before_database = create_database(provider.clone(), runtime_handle.clone(), block_hash);
-    let after_database = create_database(provider, runtime_handle, block_hash);
+    let state_source = EvmStateSource::new(provider, runtime_handle, block_hash);
     EvmTransactionExecutor::new(
-        before_database,
-        after_database,
+        state_source,
         block,
         chain_spec,
-        EvmExecutionObserver::new(),
+        EvmExecutionObserver::new(chain_spec.wrapped_native_token_address()),
     )
 }
 

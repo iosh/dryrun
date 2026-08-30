@@ -11,5 +11,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 alloy-primitives = { workspace = true }
 alloy-serde = { workspace = true }
+contract-standards = { workspace = true }
 evm-simulation = { workspace = true }
 simulation-tasks = { workspace = true }

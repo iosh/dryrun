@@ -6,6 +6,7 @@ mod metadata;
 mod standard_decoder;
 
 pub use change::{Erc1155TransferItem, StandardChange};
+pub use event_codec::is_supported_event_topic;
 pub use metadata::{
     Erc20Metadata, Erc721CollectionMetadata, MetadataCall, MetadataValues, MissingMetadataOutcome,
     metadata_calls,

@@ -1,8 +1,12 @@
-use alloy_primitives::{Bytes, U256};
+use alloy_primitives::{Address, Bytes, Log, U256};
+use contract_standards::{
+    Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem, StandardChange,
+};
 use evm_simulation::{
     EvmAccountDelegationChange, EvmBlockContext, EvmChanges, EvmExecutionOutcome, EvmHaltReason,
-    EvmNativeBalanceChange, EvmNativeCurrency, EvmSimulation, EvmStateChange, EvmSuccessOutput,
-    EvmTransactionRejection,
+    EvmNativeCurrency, EvmNativeTransferChange, EvmSelfDestructBurnChange, EvmSimulation,
+    EvmStateChange, EvmSuccessOutput, EvmTransactionRejection, EvmWrappedNativeDepositChange,
+    EvmWrappedNativeWithdrawalChange,
 };
 
 use crate::interface as rpc;
@@ -18,13 +22,24 @@ impl From<EvmSimulation> for rpc::EvmSimulateTransactionResponse {
         let chain_id = transaction.chain_id;
         let gas_limit = transaction.gas_limit;
 
-        let (status, result, output, failure) = match execution {
-            EvmExecutionOutcome::Success { result, output, .. } => {
+        let (status, result, output, logs, failure) = match execution {
+            EvmExecutionOutcome::Success {
+                result,
+                output,
+                logs,
+                ..
+            } => {
                 let output = match output {
                     EvmSuccessOutput::Call { return_data } => return_data,
                     EvmSuccessOutput::Create { runtime_code, .. } => runtime_code,
                 };
-                (rpc::ExecutionStatus::Success, Some(result), output, None)
+                (
+                    rpc::ExecutionStatus::Success,
+                    Some(result),
+                    output,
+                    logs.into_iter().map(Into::into).collect(),
+                    None,
+                )
             }
             EvmExecutionOutcome::Reverted {
                 result,
@@ -34,6 +49,7 @@ impl From<EvmSimulation> for rpc::EvmSimulateTransactionResponse {
                 rpc::ExecutionStatus::Failed,
                 Some(result),
                 revert_data,
+                Vec::new(),
                 Some(rpc::ExecutionFailure {
                     code: "REVERT".to_string(),
                     message: "execution reverted".to_string(),
@@ -44,12 +60,14 @@ impl From<EvmSimulation> for rpc::EvmSimulateTransactionResponse {
                 rpc::ExecutionStatus::Failed,
                 Some(result),
                 Bytes::new(),
+                Vec::new(),
                 Some(reason.into()),
             ),
             EvmExecutionOutcome::NotExecuted(rejection) => (
                 rpc::ExecutionStatus::NotExecuted,
                 None,
                 Bytes::new(),
+                Vec::new(),
                 Some(rejection.into()),
             ),
         };
@@ -72,9 +90,20 @@ impl From<EvmSimulation> for rpc::EvmSimulateTransactionResponse {
                 fee,
                 burnt_fee,
                 output,
+                logs,
                 failure,
             },
             changes: changes.into(),
+        }
+    }
+}
+
+impl From<Log> for rpc::SimulationLog {
+    fn from(log: Log) -> Self {
+        Self {
+            address: log.address,
+            topics: log.data.topics().to_vec(),
+            data: log.data.data,
         }
     }
 }
@@ -95,18 +124,32 @@ impl From<EvmChanges> for rpc::Changes {
 impl From<EvmStateChange> for rpc::StateChange {
     fn from(change: EvmStateChange) -> Self {
         match change {
-            EvmStateChange::NativeBalance(change) => change.into(),
+            EvmStateChange::NativeTransfer(change) => change.into(),
+            EvmStateChange::SelfDestructBurn(change) => change.into(),
             EvmStateChange::AccountDelegation(change) => change.into(),
+            EvmStateChange::WrappedNativeDeposit(change) => change.into(),
+            EvmStateChange::WrappedNativeWithdrawal(change) => change.into(),
+            EvmStateChange::Standard(change) => change.into(),
         }
     }
 }
 
-impl From<EvmNativeBalanceChange> for rpc::StateChange {
-    fn from(change: EvmNativeBalanceChange) -> Self {
-        Self::NativeBalance {
-            account: change.account,
-            before: change.before,
-            after: change.after,
+impl From<EvmNativeTransferChange> for rpc::StateChange {
+    fn from(change: EvmNativeTransferChange) -> Self {
+        Self::NativeTransfer {
+            from: change.from,
+            to: change.to,
+            raw_amount: change.raw_amount,
+            currency: change.currency.into(),
+        }
+    }
+}
+
+impl From<EvmSelfDestructBurnChange> for rpc::StateChange {
+    fn from(change: EvmSelfDestructBurnChange) -> Self {
+        Self::SelfDestructBurn {
+            contract_address: change.contract_address,
+            raw_amount: change.raw_amount,
             currency: change.currency.into(),
         }
     }
@@ -118,6 +161,154 @@ impl From<EvmAccountDelegationChange> for rpc::StateChange {
             account: change.account,
             before: change.before.into(),
             after: change.after.into(),
+        }
+    }
+}
+
+impl From<EvmWrappedNativeDepositChange> for rpc::StateChange {
+    fn from(change: EvmWrappedNativeDepositChange) -> Self {
+        Self::WrappedNativeDeposit {
+            contract_address: change.contract_address,
+            account: change.account,
+            raw_amount: change.raw_amount,
+            metadata: change.metadata.into(),
+        }
+    }
+}
+
+impl From<EvmWrappedNativeWithdrawalChange> for rpc::StateChange {
+    fn from(change: EvmWrappedNativeWithdrawalChange) -> Self {
+        Self::WrappedNativeWithdrawal {
+            contract_address: change.contract_address,
+            account: change.account,
+            raw_amount: change.raw_amount,
+            metadata: change.metadata.into(),
+        }
+    }
+}
+
+impl From<StandardChange<Address>> for rpc::StateChange {
+    fn from(change: StandardChange<Address>) -> Self {
+        match change {
+            StandardChange::Erc20Transfer {
+                contract_address,
+                from,
+                to,
+                raw_amount,
+                metadata,
+            } => Self::Erc20Transfer {
+                contract_address,
+                from,
+                to,
+                raw_amount,
+                metadata: metadata.into(),
+            },
+            StandardChange::Erc20Approval {
+                contract_address,
+                owner,
+                spender,
+                approved_amount,
+                metadata,
+            } => Self::Erc20Approval {
+                contract_address,
+                owner,
+                spender,
+                approved_amount,
+                metadata: metadata.into(),
+            },
+            StandardChange::Erc721Transfer {
+                contract_address,
+                from,
+                to,
+                token_id,
+                metadata,
+            } => Self::Erc721Transfer {
+                contract_address,
+                from,
+                to,
+                token_id,
+                metadata: metadata.into(),
+            },
+            StandardChange::Erc721Approval {
+                contract_address,
+                owner,
+                approved_address,
+                token_id,
+                metadata,
+            } => Self::Erc721Approval {
+                contract_address,
+                owner,
+                approved_address,
+                token_id,
+                metadata: metadata.into(),
+            },
+            StandardChange::OperatorApproval {
+                contract_address,
+                owner,
+                operator,
+                approved,
+            } => Self::OperatorApproval {
+                contract_address,
+                owner,
+                operator,
+                approved,
+            },
+            StandardChange::Erc1155TransferSingle {
+                contract_address,
+                operator,
+                from,
+                to,
+                token_id,
+                raw_amount,
+            } => Self::Erc1155TransferSingle {
+                contract_address,
+                operator,
+                from,
+                to,
+                token_id,
+                raw_amount,
+            },
+            StandardChange::Erc1155TransferBatch {
+                contract_address,
+                operator,
+                from,
+                to,
+                items,
+            } => Self::Erc1155TransferBatch {
+                contract_address,
+                operator,
+                from,
+                to,
+                items: items.into_iter().map(Into::into).collect(),
+            },
+        }
+    }
+}
+
+impl From<Erc20Metadata> for rpc::Erc20Metadata {
+    fn from(metadata: Erc20Metadata) -> Self {
+        Self {
+            name: metadata.name,
+            symbol: metadata.symbol,
+            decimals: metadata.decimals,
+        }
+    }
+}
+
+impl From<Erc721CollectionMetadata> for rpc::Erc721CollectionMetadata {
+    fn from(metadata: Erc721CollectionMetadata) -> Self {
+        Self {
+            name: metadata.name,
+            symbol: metadata.symbol,
+        }
+    }
+}
+
+impl From<Erc1155TransferItem> for rpc::Erc1155TransferItem {
+    fn from(item: Erc1155TransferItem) -> Self {
+        Self {
+            token_id: item.token_id,
+            raw_amount: item.raw_amount,
         }
     }
 }

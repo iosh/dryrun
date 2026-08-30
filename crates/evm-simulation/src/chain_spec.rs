@@ -11,6 +11,7 @@ pub(crate) struct EthereumChainSpec {
     chain: Chain,
     hardforks: EthereumChainHardforks,
     native_currency: EvmNativeCurrency,
+    wrapped_native_token: Option<alloy::primitives::Address>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -30,6 +31,9 @@ impl EthereumChainSpec {
                 symbol: "ETH".to_string(),
                 decimals: 18,
             },
+            wrapped_native_token: chain
+                .named()
+                .and_then(|network| network.wrapped_native_token()),
         }
     }
 
@@ -39,6 +43,10 @@ impl EthereumChainSpec {
 
     pub(crate) const fn native_currency(&self) -> &EvmNativeCurrency {
         &self.native_currency
+    }
+
+    pub(crate) const fn wrapped_native_token_address(&self) -> Option<alloy::primitives::Address> {
+        self.wrapped_native_token
     }
 
     pub(crate) fn execution_spec(

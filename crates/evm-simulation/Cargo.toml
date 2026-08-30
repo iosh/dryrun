@@ -8,6 +8,8 @@ alloy = { workspace = true }
 alloy-chains = { workspace = true }
 alloy-hardforks = { workspace = true }
 alloy-primitives = { workspace = true }
+alloy-sol-types = { workspace = true }
+contract-standards = { workspace = true }
 revm = { workspace = true, features = [
     "alloydb",
     "optional_balance_check",
