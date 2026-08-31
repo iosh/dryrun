@@ -55,6 +55,14 @@ export function toChangeItemViewModel(
           change.symbol,
         ),
       };
+    case 'ACCOUNT_DELEGATION':
+      return {
+        detail: `${change.before.delegate ? shortHex(change.before.delegate) : 'No delegate'} -> ${change.after.delegate ? shortHex(change.after.delegate) : 'No delegate'}`,
+        identifier: change.account,
+        label: 'Account delegation',
+        title: 'EIP-7702',
+        tone: 'violet',
+      };
     case 'WRAPPED_NATIVE_DEPOSIT':
       return {
         identifier: change.contractAddress,

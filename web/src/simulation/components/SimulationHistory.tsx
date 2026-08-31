@@ -23,7 +23,10 @@ import {
 } from '../../ui/Tooltip.tsx';
 import { getEnvironment } from '../environment.ts';
 import { HISTORY_LIMIT } from '../history.ts';
-import type { SimulationRecord } from '../types.ts';
+import {
+  simulationChanges,
+  type SimulationRecord,
+} from '../types.ts';
 
 export interface SimulationHistoryProps {
   activeRecordId: string | null;
@@ -183,6 +186,7 @@ function HistoryEntry({
   const environment = getEnvironment(record.environmentId);
   const transaction = record.request.transaction;
   const status = record.response.execution.status;
+  const changes = simulationChanges(record.response);
 
   return (
     <article
@@ -229,7 +233,9 @@ function HistoryEntry({
             {status.replace('_', ' ')}
           </span>
           <span className="truncate text-ink-400">
-            {record.response.changes.length} changes
+            {changes.error
+              ? 'Changes unavailable'
+              : `${changes.items.length} changes`}
           </span>
         </div>
 

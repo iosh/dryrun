@@ -7,7 +7,10 @@ import {
   type ChangeAddressViewModel,
   type FlowEndpoint,
 } from '../../flowView.ts';
-import type { SimulationRecord } from '../../types.ts';
+import {
+  simulationChanges,
+  type SimulationRecord,
+} from '../../types.ts';
 import type {
   ExecutionAnchor,
   FlowLaneViewModel,
@@ -20,7 +23,9 @@ export function createSimulationResultViewModel(
   record: SimulationRecord,
 ): SimulationResultViewModel {
   const environment = getEnvironment(record.environmentId);
-  const changes = record.response.changes;
+  const { error: changesError, items: changes } = simulationChanges(
+    record.response,
+  );
   const changeFlows = changes.map((change) => ({
     change,
     items: toAssetFlowItemViewModels(change),
@@ -40,6 +45,7 @@ export function createSimulationResultViewModel(
   return {
     anchor: executionAnchor(record),
     changes,
+    changesError,
     environment,
     flowItems,
     lanes: buildFlowLanes(record, flowItems),

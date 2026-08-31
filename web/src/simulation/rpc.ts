@@ -26,6 +26,18 @@ export interface EvmSelfDestructBurnChange extends EvmNativeCurrency {
   rawAmount: string;
 }
 
+export interface EvmAccountDelegationChange {
+  changeType: 'ACCOUNT_DELEGATION';
+  account: string;
+  before: EvmDelegationState;
+  after: EvmDelegationState;
+}
+
+export interface EvmDelegationState {
+  delegate: string | null;
+  nonce: string;
+}
+
 export interface EvmWrappedNativeDepositChange
   extends FungibleAssetMetadata {
   changeType: 'WRAPPED_NATIVE_DEPOSIT';
@@ -109,6 +121,7 @@ export interface EvmErc1155TransferBatchChange {
 export type EvmChange =
   | EvmNativeTransferChange
   | EvmSelfDestructBurnChange
+  | EvmAccountDelegationChange
   | EvmWrappedNativeDepositChange
   | EvmWrappedNativeWithdrawalChange
   | EvmErc20TransferChange
@@ -118,6 +131,204 @@ export type EvmChange =
   | EvmOperatorApprovalChange
   | EvmErc1155TransferSingleChange
   | EvmErc1155TransferBatchChange;
+
+export type EvmNativeTransferChangeWire = Omit<
+  EvmNativeTransferChange,
+  'changeType'
+> & { type: 'nativeTransfer' };
+
+export type EvmSelfDestructBurnChangeWire = Omit<
+  EvmSelfDestructBurnChange,
+  'changeType'
+> & { type: 'selfDestructBurn' };
+
+export type EvmAccountDelegationChangeWire = Omit<
+  EvmAccountDelegationChange,
+  'changeType'
+> & { type: 'accountDelegation' };
+
+export type EvmWrappedNativeDepositChangeWire = Omit<
+  EvmWrappedNativeDepositChange,
+  'changeType'
+> & { type: 'wrappedNativeDeposit' };
+
+export type EvmWrappedNativeWithdrawalChangeWire = Omit<
+  EvmWrappedNativeWithdrawalChange,
+  'changeType'
+> & { type: 'wrappedNativeWithdrawal' };
+
+export type EvmErc20TransferChangeWire = Omit<
+  EvmErc20TransferChange,
+  'changeType'
+> & { type: 'erc20Transfer' };
+
+export type EvmErc20ApprovalChangeWire = Omit<
+  EvmErc20ApprovalChange,
+  'changeType'
+> & { type: 'erc20Approval' };
+
+export type EvmErc721TransferChangeWire = Omit<
+  EvmErc721TransferChange,
+  'changeType'
+> & { type: 'erc721Transfer' };
+
+export type EvmErc721ApprovalChangeWire = Omit<
+  EvmErc721ApprovalChange,
+  'changeType'
+> & { type: 'erc721Approval' };
+
+export type EvmOperatorApprovalChangeWire = Omit<
+  EvmOperatorApprovalChange,
+  'changeType'
+> & { type: 'operatorApproval' };
+
+export type EvmErc1155TransferSingleChangeWire = Omit<
+  EvmErc1155TransferSingleChange,
+  'changeType'
+> & { type: 'erc1155TransferSingle' };
+
+export type EvmErc1155TransferBatchChangeWire = Omit<
+  EvmErc1155TransferBatchChange,
+  'changeType'
+> & { type: 'erc1155TransferBatch' };
+
+export type EvmChangeWire =
+  | EvmNativeTransferChangeWire
+  | EvmSelfDestructBurnChangeWire
+  | EvmAccountDelegationChangeWire
+  | EvmWrappedNativeDepositChangeWire
+  | EvmWrappedNativeWithdrawalChangeWire
+  | EvmErc20TransferChangeWire
+  | EvmErc20ApprovalChangeWire
+  | EvmErc721TransferChangeWire
+  | EvmErc721ApprovalChangeWire
+  | EvmOperatorApprovalChangeWire
+  | EvmErc1155TransferSingleChangeWire
+  | EvmErc1155TransferBatchChangeWire;
+
+export type EvmChanges =
+  | { status: 'complete'; items: EvmChangeWire[] }
+  | { status: 'unavailable'; error: string };
+
+export function normalizeEvmChange(change: EvmChangeWire): EvmChange {
+  switch (change.type) {
+    case 'nativeTransfer':
+      return {
+        changeType: 'NATIVE_TRANSFER',
+        from: change.from,
+        to: change.to,
+        rawAmount: change.rawAmount,
+        name: change.name,
+        symbol: change.symbol,
+        decimals: change.decimals,
+      };
+    case 'selfDestructBurn':
+      return {
+        changeType: 'SELF_DESTRUCT_BURN',
+        contractAddress: change.contractAddress,
+        rawAmount: change.rawAmount,
+        name: change.name,
+        symbol: change.symbol,
+        decimals: change.decimals,
+      };
+    case 'accountDelegation':
+      return {
+        changeType: 'ACCOUNT_DELEGATION',
+        account: change.account,
+        before: change.before,
+        after: change.after,
+      };
+    case 'wrappedNativeDeposit':
+      return {
+        changeType: 'WRAPPED_NATIVE_DEPOSIT',
+        contractAddress: change.contractAddress,
+        account: change.account,
+        rawAmount: change.rawAmount,
+        name: change.name,
+        symbol: change.symbol,
+        decimals: change.decimals,
+      };
+    case 'wrappedNativeWithdrawal':
+      return {
+        changeType: 'WRAPPED_NATIVE_WITHDRAWAL',
+        contractAddress: change.contractAddress,
+        account: change.account,
+        rawAmount: change.rawAmount,
+        name: change.name,
+        symbol: change.symbol,
+        decimals: change.decimals,
+      };
+    case 'erc20Transfer':
+      return {
+        changeType: 'ERC20_TRANSFER',
+        contractAddress: change.contractAddress,
+        from: change.from,
+        to: change.to,
+        rawAmount: change.rawAmount,
+        name: change.name,
+        symbol: change.symbol,
+        decimals: change.decimals,
+      };
+    case 'erc20Approval':
+      return {
+        changeType: 'ERC20_APPROVAL',
+        contractAddress: change.contractAddress,
+        owner: change.owner,
+        spender: change.spender,
+        approvedAmount: change.approvedAmount,
+        name: change.name,
+        symbol: change.symbol,
+        decimals: change.decimals,
+      };
+    case 'erc721Transfer':
+      return {
+        changeType: 'ERC721_TRANSFER',
+        contractAddress: change.contractAddress,
+        from: change.from,
+        to: change.to,
+        tokenId: change.tokenId,
+        name: change.name,
+        symbol: change.symbol,
+      };
+    case 'erc721Approval':
+      return {
+        changeType: 'ERC721_APPROVAL',
+        contractAddress: change.contractAddress,
+        owner: change.owner,
+        approvedAddress: change.approvedAddress,
+        tokenId: change.tokenId,
+        name: change.name,
+        symbol: change.symbol,
+      };
+    case 'operatorApproval':
+      return {
+        changeType: 'OPERATOR_APPROVAL',
+        contractAddress: change.contractAddress,
+        owner: change.owner,
+        operator: change.operator,
+        approved: change.approved,
+      };
+    case 'erc1155TransferSingle':
+      return {
+        changeType: 'ERC1155_TRANSFER_SINGLE',
+        contractAddress: change.contractAddress,
+        operator: change.operator,
+        from: change.from,
+        to: change.to,
+        tokenId: change.tokenId,
+        rawAmount: change.rawAmount,
+      };
+    case 'erc1155TransferBatch':
+      return {
+        changeType: 'ERC1155_TRANSFER_BATCH',
+        contractAddress: change.contractAddress,
+        operator: change.operator,
+        from: change.from,
+        to: change.to,
+        items: change.items,
+      };
+  }
+}
 
 interface EspaceNativeCurrency {
   name: string;
@@ -435,7 +646,14 @@ export interface EvmExecution {
   fee: string;
   burntFee: string;
   output: string;
+  logs: SimulationLog[];
   failure?: ExecutionFailure;
+}
+
+export interface SimulationLog {
+  address: string;
+  topics: string[];
+  data: string;
 }
 
 export interface EspaceExecution {
@@ -471,7 +689,7 @@ export interface CoreExecution {
 
 export interface EthereumResponse {
   execution: EvmExecution;
-  changes: EvmChange[];
+  changes: EvmChanges;
 }
 
 export interface EspaceResponse {

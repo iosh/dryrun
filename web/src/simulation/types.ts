@@ -5,6 +5,7 @@ import type {
   EvmChange,
   RpcSimulationResponse,
 } from './rpc.ts';
+import { normalizeEvmChange } from './rpc.ts';
 
 export type TxTypeOption =
   | 'auto'
@@ -77,6 +78,29 @@ export type SimulationRequest = HexSimulationRequest | CoreSimulationRequest;
 export type SimulationResponse = RpcSimulationResponse;
 
 export type SimulationChange = EvmChange | EspaceChange | CoreChange;
+
+export interface SimulationChanges {
+  items: readonly SimulationChange[];
+  error: string | null;
+}
+
+export function simulationChanges(
+  response: RpcSimulationResponse,
+): SimulationChanges {
+  const changes = response.changes;
+  if (Array.isArray(changes)) {
+    return { items: changes, error: null };
+  }
+
+  if (changes.status === 'unavailable') {
+    return { items: [], error: changes.error };
+  }
+
+  return {
+    items: changes.items.map(normalizeEvmChange),
+    error: null,
+  };
+}
 
 export interface SimulationRecord {
   id: string;

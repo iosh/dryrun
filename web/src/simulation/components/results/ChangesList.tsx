@@ -1,4 +1,4 @@
-import { ChevronDown, Database } from 'lucide-react';
+import { AlertTriangle, ChevronDown, Database } from 'lucide-react';
 
 import { cn } from '../../../lib/cn.ts';
 import { formatJson } from '../../../lib/formatting.ts';
@@ -24,10 +24,12 @@ import type { AddressHighlightController } from './resultTypes.ts';
 export function ChangesList({
   addressHighlight,
   changes,
+  changesError,
   record,
 }: Readonly<{
   addressHighlight: AddressHighlightController;
   changes: readonly SimulationChange[];
+  changesError: string | null;
   record: SimulationRecord;
 }>) {
   return (
@@ -38,11 +40,23 @@ export function ChangesList({
           <h3 className="mt-1 text-lg font-semibold">Changes</h3>
         </div>
         <span className="flex h-7 min-w-7 items-center justify-center rounded-full bg-shell-100 px-2 text-xs font-semibold text-ink-600">
-          {changes.length}
+          {changesError ? '—' : changes.length}
         </span>
       </div>
 
-      {changes.length > 0 ? (
+      {changesError ? (
+        <div className="border-l-2 border-amber-500 bg-amber-50 px-5 py-5 text-amber-950">
+          <div className="flex items-start gap-3">
+            <AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold">Changes unavailable</p>
+              <p className="mt-1 break-words text-sm leading-5 text-amber-900">
+                {changesError}
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : changes.length > 0 ? (
         <div>
           {changes.map((change, index) => (
             <ChangeRow

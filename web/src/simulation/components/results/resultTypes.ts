@@ -49,6 +49,7 @@ export interface SenderImpactItem {
 export interface SimulationResultViewModel {
   anchor: ExecutionAnchor;
   changes: readonly SimulationChange[];
+  changesError: string | null;
   environment: EnvironmentDefinition;
   flowItems: readonly SequencedAssetFlowItemViewModel[];
   lanes: readonly FlowLaneViewModel[];

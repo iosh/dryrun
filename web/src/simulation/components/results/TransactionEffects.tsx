@@ -29,7 +29,7 @@ export function TransactionEffects({
           <h3 className="mt-1 text-lg font-semibold">Effects</h3>
         </div>
         <span className="flex h-7 min-w-7 items-center justify-center rounded-full bg-shell-100 px-2 text-xs font-semibold text-ink-600">
-          {viewModel.changes.length}
+          {viewModel.changesError ? '—' : viewModel.changes.length}
         </span>
       </div>
 

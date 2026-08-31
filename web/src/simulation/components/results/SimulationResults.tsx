@@ -88,7 +88,9 @@ function SimulationResult({ record }: Readonly<{ record: SimulationRecord }>) {
     >
       <ExecutionSummary
         anchor={viewModel.anchor}
-        changesCount={viewModel.changes.length}
+        changesCount={
+          viewModel.changesError ? 'Unavailable' : String(viewModel.changes.length)
+        }
         execution={execution}
         nativeSymbol={viewModel.environment.nativeSymbol}
         networkLabel={`${viewModel.environment.shortLabel} ${viewModel.environment.networkLabel}`}
@@ -112,6 +114,7 @@ function SimulationResult({ record }: Readonly<{ record: SimulationRecord }>) {
       <ChangesList
         addressHighlight={addressHighlight}
         changes={viewModel.changes}
+        changesError={viewModel.changesError}
         record={record}
       />
 

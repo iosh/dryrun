@@ -193,6 +193,8 @@ export function getChangeAddresses(
       return [{ address: change.from, label: 'From' }];
     case 'SELF_DESTRUCT_BURN':
       return [{ address: change.contractAddress, label: 'Contract' }];
+    case 'ACCOUNT_DELEGATION':
+      return [{ address: change.account, label: 'Account' }];
     case 'WRAPPED_NATIVE_DEPOSIT':
     case 'WRAPPED_NATIVE_WITHDRAWAL':
       return [

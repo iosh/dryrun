@@ -27,7 +27,7 @@ export function ExecutionSummary({
   networkLabel,
 }: Readonly<{
   anchor: ExecutionAnchor;
-  changesCount: number;
+  changesCount: string;
   execution: SimulationExecution;
   nativeSymbol: string;
   networkLabel: string;
