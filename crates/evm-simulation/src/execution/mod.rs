@@ -13,7 +13,8 @@ use self::{
 use crate::{
     CompleteTransaction, CompleteTransactionVariant, EthereumChainSpec, EvmBlobGasFee,
     EvmBlockEnvironmentError, EvmExecutionError, EvmExecutionResult, EvmGas, EvmNotReadyError,
-    EvmResultIntegrationError, EvmSimulationError, EvmStateAccessError, EvmTransactionRejection,
+    EvmResultIntegrationError, EvmSimulationError, EvmSimulationLimits, EvmStateAccessError,
+    EvmTransactionRejection,
     state::{
         EvmDatabase, EvmExecutionIdentity, EvmOccurrenceHandle, EvmStateSource,
         EvmStateViewFactory, EvmStateViews, MainnetEvm,
@@ -33,7 +34,7 @@ use revm::{
     },
     handler::EvmTr,
     interpreter::interpreter::EthInterpreter,
-    primitives::eip4844::GAS_PER_BLOB,
+    primitives::{eip4844::GAS_PER_BLOB, hardfork::SpecId},
     state::EvmState,
 };
 
@@ -280,6 +281,7 @@ pub(crate) struct EvmTransactionExecutor<INSP> {
     block_number: u64,
     block_gas_limit: u64,
     base_fee_per_gas: u64,
+    burn_enabled: bool,
     blob_gas_price: Option<u128>,
     block_beneficiary: Address,
 }
@@ -290,6 +292,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
         block: Sealed<Header>,
         chain_spec: &EthereumChainSpec,
         inspector: INSP,
+        limits: EvmSimulationLimits,
     ) -> Result<Self, EvmSimulationError> {
         let block_number = block.number();
         let execution_spec = chain_spec
@@ -301,12 +304,14 @@ impl<INSP> EvmTransactionExecutor<INSP> {
             create_block_env(block.inner(), execution_spec).map_err(EvmExecutionError::from)?;
         let block_gas_limit = block_env.gas_limit;
         let base_fee_per_gas = block_env.basefee;
+        let burn_enabled = execution_spec.spec_id.is_enabled_in(SpecId::LONDON);
         let blob_gas_price = block_env
             .blob_excess_gas_and_price
             .as_ref()
             .map(|blob| blob.blob_gasprice);
         let block_beneficiary = block_env.beneficiary;
-        let state_view_factory = EvmStateViewFactory::new(state_source, cfg_env, block_env);
+        let state_view_factory =
+            EvmStateViewFactory::with_limits(state_source, cfg_env, block_env, limits);
         let evm = state_view_factory.create_execution_evm(inspector);
 
         Ok(Self {
@@ -316,6 +321,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
             block_number,
             block_gas_limit,
             base_fee_per_gas,
+            burn_enabled,
             blob_gas_price,
             block_beneficiary,
         })
@@ -390,6 +396,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
             &gas,
             effective_gas_price,
             self.base_fee_per_gas,
+            self.burn_enabled,
             blob_gas_fee,
         )
         .map_err(EvmExecutionError::from)?;

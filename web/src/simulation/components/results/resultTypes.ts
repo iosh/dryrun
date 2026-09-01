@@ -2,7 +2,6 @@ import type { EnvironmentDefinition } from '../../environment.ts';
 import type { AssetFlowItemViewModel } from '../../flowView.ts';
 import type {
   SimulationChange,
-  SimulationRecord,
 } from '../../types.ts';
 
 export interface AddressHighlightController {
@@ -51,13 +50,43 @@ export interface SimulationResultViewModel {
   changes: readonly SimulationChange[];
   changesError: string | null;
   environment: EnvironmentDefinition;
+  execution: SimulationExecution;
   flowItems: readonly SequencedAssetFlowItemViewModel[];
   lanes: readonly FlowLaneViewModel[];
   senderImpacts: readonly SenderImpactItem[];
   stateEffects: readonly SimulationChange[];
 }
 
-export type SimulationExecution =
-  SimulationRecord['response']['execution'];
+export type SimulationExecutionStatus =
+  | 'success'
+  | 'reverted'
+  | 'failed'
+  | 'rejected';
+
+export interface SimulationExecutionFailure {
+  detail?: string;
+  message: string;
+}
+
+export interface SimulationExecution {
+  blobGasFee: string | null;
+  blobGasPrice: string | null;
+  blobGasUsed: string | null;
+  burntGasFee: string | null;
+  chainId: string;
+  contractAddress: string | null;
+  effectiveGasPrice: string | null;
+  failure: SimulationExecutionFailure | null;
+  gasCharged: string | null;
+  gasCoveredBySponsor: boolean | null;
+  gasFee: string | null;
+  gasLimit: string;
+  gasUsed: string | null;
+  logsCount: number;
+  output: { label: string; value: string } | null;
+  status: SimulationExecutionStatus;
+  storageCoveredBySponsor: boolean | null;
+  totalFee: string | null;
+}
 
 export type FlowSegment = 'full' | 'left-half' | 'right-half' | null;

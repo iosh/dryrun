@@ -185,7 +185,14 @@ function HistoryEntry({
 }>) {
   const environment = getEnvironment(record.environmentId);
   const transaction = record.request.transaction;
-  const status = record.response.execution.status;
+  const status =
+    'outcome' in record.response
+      ? record.response.outcome.status
+      : record.response.execution.status === 'SUCCESS'
+        ? 'success'
+        : record.response.execution.status === 'FAILED'
+          ? 'failed'
+          : 'rejected';
   const changes = simulationChanges(record.response);
 
   return (
@@ -223,14 +230,14 @@ function HistoryEntry({
             <span
               className={cn(
                 'h-1.5 w-1.5 rounded-full',
-                status === 'SUCCESS'
+                status === 'success'
                   ? 'bg-emerald-500'
-                  : status === 'FAILED'
+                  : status === 'failed' || status === 'reverted'
                     ? 'bg-red-500'
                     : 'bg-amber-500',
               )}
             />
-            {status.replace('_', ' ')}
+            {status}
           </span>
           <span className="truncate text-ink-400">
             {changes.error

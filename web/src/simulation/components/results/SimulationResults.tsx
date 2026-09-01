@@ -72,7 +72,7 @@ function SimulationResult({ record }: Readonly<{ record: SimulationRecord }>) {
     () => createSimulationResultViewModel(record),
     [record],
   );
-  const execution = record.response.execution;
+  const execution = viewModel.execution;
 
   return (
     <div

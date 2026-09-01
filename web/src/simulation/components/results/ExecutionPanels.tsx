@@ -37,11 +37,11 @@ export function ExecutionSummary({
       <div
         className={cn(
           'flex flex-col gap-4 border-b px-5 py-5 sm:flex-row sm:items-center sm:justify-between',
-          execution.status === 'SUCCESS'
+          execution.status === 'success'
             ? 'border-emerald-200 bg-emerald-50'
-            : execution.status === 'FAILED'
-              ? 'border-red-200 bg-red-50'
-              : 'border-amber-200 bg-amber-50',
+            : execution.status === 'rejected'
+              ? 'border-amber-200 bg-amber-50'
+              : 'border-red-200 bg-red-50',
         )}
       >
         <div className="flex items-center gap-3">
@@ -65,11 +65,15 @@ export function ExecutionSummary({
         <SummaryMetric label="Changes" value={String(changesCount)} />
         <SummaryMetric
           label="Gas used"
-          value={formatHexQuantity(execution.gasUsed)}
+          value={execution.gasUsed ? formatHexQuantity(execution.gasUsed) : '—'}
         />
         <SummaryMetric
           label="Fee"
-          value={formatNativeAmount(execution.fee, nativeSymbol)}
+          value={
+            execution.totalFee
+              ? formatNativeAmount(execution.totalFee, nativeSymbol)
+              : '—'
+          }
         />
         <SummaryMetric
           label="Chain ID"
@@ -83,7 +87,7 @@ export function ExecutionSummary({
 export function ExecutionFailure({
   failure,
 }: Readonly<{
-  failure: { code: string; message: string; reason?: string | null };
+  failure: { detail?: string; message: string };
 }>) {
   return (
     <section className="border-l-2 border-red-500 bg-red-50 px-4 py-3 text-red-900">
@@ -94,10 +98,11 @@ export function ExecutionFailure({
         />
         <div className="min-w-0">
           <p className="text-sm font-semibold">{failure.message}</p>
-          <p className="mt-1 font-mono text-[11px] text-red-800">
-            {failure.code}
-            {failure.reason ? ` / ${failure.reason}` : ''}
-          </p>
+          {failure.detail ? (
+            <p className="mt-1 font-mono text-[11px] text-red-800">
+              {failure.detail}
+            </p>
+          ) : null}
         </div>
       </div>
     </section>
@@ -123,35 +128,66 @@ export function ExecutionDetails({
       <dl className="grid sm:grid-cols-2 xl:grid-cols-3">
         <DetailItem
           label="Gas used"
-          value={formatHexQuantity(execution.gasUsed)}
+          value={execution.gasUsed ? formatHexQuantity(execution.gasUsed) : 'Not executed'}
         />
         <DetailItem
           label="Gas limit"
           value={formatHexQuantity(execution.gasLimit)}
         />
-        {'gasCharged' in execution ? (
+        {execution.effectiveGasPrice ? (
+          <DetailItem
+            label="Effective gas price"
+            value={formatHexQuantity(execution.effectiveGasPrice)}
+          />
+        ) : null}
+        {execution.gasCharged ? (
           <DetailItem
             label="Gas charged"
             value={formatHexQuantity(execution.gasCharged)}
           />
         ) : null}
-        <DetailItem
-          label="Fee"
-          value={formatNativeAmount(execution.fee, nativeSymbol)}
-        />
-        <DetailItem
-          label="Burnt fee"
-          value={
-            execution.burntFee
-              ? formatNativeAmount(execution.burntFee, nativeSymbol)
-              : 'None'
-          }
-        />
+        {execution.gasFee ? (
+          <DetailItem
+            label="Gas fee"
+            value={formatNativeAmount(execution.gasFee, nativeSymbol)}
+          />
+        ) : null}
+        {execution.blobGasUsed ? (
+          <DetailItem
+            label="Blob gas used"
+            value={formatHexQuantity(execution.blobGasUsed)}
+          />
+        ) : null}
+        {execution.blobGasPrice ? (
+          <DetailItem
+            label="Blob gas price"
+            value={formatHexQuantity(execution.blobGasPrice)}
+          />
+        ) : null}
+        {execution.blobGasFee ? (
+          <DetailItem
+            label="Blob gas fee"
+            value={formatNativeAmount(execution.blobGasFee, nativeSymbol)}
+          />
+        ) : null}
+        {execution.totalFee ? (
+          <DetailItem
+            label="Total fee"
+            value={formatNativeAmount(execution.totalFee, nativeSymbol)}
+          />
+        ) : null}
+        {execution.burntGasFee !== null ? (
+          <DetailItem
+            label="Burnt gas fee"
+            value={formatNativeAmount(execution.burntGasFee, nativeSymbol)}
+          />
+        ) : null}
+        <DetailItem label="Logs" value={String(execution.logsCount)} />
         <DetailItem
           label={anchor.label}
           value={formatHexQuantity(anchor.number)}
         />
-        {'gasCoveredBySponsor' in execution ? (
+        {execution.gasCoveredBySponsor !== null ? (
           <>
             <DetailItem
               label="Gas sponsored"
@@ -165,6 +201,15 @@ export function ExecutionDetails({
         ) : null}
       </dl>
 
+      {execution.contractAddress ? (
+        <div className="border-t border-line px-5 py-4">
+          <p className="text-xs font-medium text-ink-600">Contract address</p>
+          <p className="mt-2 break-all font-mono text-[11px] leading-5 text-ink-950">
+            {execution.contractAddress}
+          </p>
+        </div>
+      ) : null}
+
       <div className="border-t border-line px-5 py-4">
         <p className="text-xs font-medium text-ink-600">
           {anchor.label} hash
@@ -177,11 +222,11 @@ export function ExecutionDetails({
         </div>
       </div>
 
-      <details className="group border-t border-line">
+      {execution.output ? <details className="group border-t border-line">
         <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-4 px-5 text-sm font-medium [&::-webkit-details-marker]:hidden">
           <span className="flex items-center gap-2">
             <Code2 aria-hidden="true" className="h-4 w-4 text-ink-600" />
-            Output
+            {execution.output.label}
           </span>
           <ChevronDown
             aria-hidden="true"
@@ -191,14 +236,14 @@ export function ExecutionDetails({
         <div className="relative border-t border-line bg-code">
           <CopyButton
             className="absolute right-3 top-3 z-10 bg-code text-code-ink hover:bg-white/10 hover:text-white"
-            label="Copy output"
-            value={execution.output}
+            label={`Copy ${execution.output.label.toLowerCase()}`}
+            value={execution.output.value}
           />
           <pre className="max-h-72 overflow-auto px-5 py-4 pr-14 font-mono text-[11px] leading-5 text-code-ink">
-            {execution.output}
+            {execution.output.value}
           </pre>
         </div>
-      </details>
+      </details> : null}
     </section>
   );
 }
@@ -206,12 +251,12 @@ export function ExecutionDetails({
 function StatusIcon({
   status,
 }: Readonly<{ status: SimulationExecution['status'] }>) {
-  if (status === 'SUCCESS') {
+  if (status === 'success') {
     return (
       <CheckCircle2 aria-hidden="true" className="h-7 w-7 text-emerald-600" />
     );
   }
-  if (status === 'FAILED') {
+  if (status === 'failed' || status === 'reverted') {
     return <XCircle aria-hidden="true" className="h-7 w-7 text-red-600" />;
   }
   return (
@@ -220,7 +265,8 @@ function StatusIcon({
 }
 
 function statusLabel(status: SimulationExecution['status']) {
-  if (status === 'SUCCESS') return 'Success';
-  if (status === 'FAILED') return 'Failed';
-  return 'Not executed';
+  if (status === 'success') return 'Success';
+  if (status === 'reverted') return 'Reverted';
+  if (status === 'failed') return 'Failed';
+  return 'Rejected';
 }

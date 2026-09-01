@@ -4,6 +4,7 @@ import {
   formatRawAmount,
   shortHex,
 } from '../lib/formatting.ts';
+import type { EvmChange } from './rpc.ts';
 import type { SimulationChange } from './types.ts';
 
 export type ChangeTone = 'amber' | 'blue' | 'green' | 'red' | 'violet';
@@ -20,6 +21,10 @@ export interface ChangeItemViewModel {
 export function toChangeItemViewModel(
   change: SimulationChange,
 ): ChangeItemViewModel {
+  if ('type' in change) {
+    return toEvmChangeItemViewModel(change);
+  }
+
   switch (change.changeType) {
     case 'NATIVE_TRANSFER':
       return {
@@ -54,14 +59,6 @@ export function toChangeItemViewModel(
           change.decimals,
           change.symbol,
         ),
-      };
-    case 'ACCOUNT_DELEGATION':
-      return {
-        detail: `${change.before.delegate ? shortHex(change.before.delegate) : 'No delegate'} -> ${change.after.delegate ? shortHex(change.after.delegate) : 'No delegate'}`,
-        identifier: change.account,
-        label: 'Account delegation',
-        title: 'EIP-7702',
-        tone: 'violet',
       };
     case 'WRAPPED_NATIVE_DEPOSIT':
       return {
@@ -280,6 +277,185 @@ export function toChangeItemViewModel(
       };
     }
   }
+}
+
+function toEvmChangeItemViewModel(change: EvmChange): ChangeItemViewModel {
+  switch (change.type) {
+    case 'nativeTransfer':
+      return {
+        label: 'Transfer',
+        title: change.symbol,
+        tone: 'blue',
+        value: formatFungibleAmount(
+          change.rawAmount,
+          change.decimals,
+          change.symbol,
+        ),
+      };
+    case 'selfDestructBurn':
+      return {
+        identifier: change.contractAddress,
+        label: 'Self-destruct burn',
+        title: change.symbol,
+        tone: 'red',
+        value: formatFungibleAmount(
+          change.rawAmount,
+          change.decimals,
+          change.symbol,
+        ),
+      };
+    case 'accountDelegation':
+      return {
+        detail: `${change.before.delegate ? shortHex(change.before.delegate) : 'No delegate'} -> ${change.after.delegate ? shortHex(change.after.delegate) : 'No delegate'}`,
+        identifier: change.account,
+        label: 'Account delegation',
+        title: 'EIP-7702',
+        tone: 'violet',
+      };
+    case 'wrappedNativeDeposit':
+      return {
+        identifier: change.contractAddress,
+        label: 'Wrapped native deposit',
+        title: tokenName(change, 'Wrapped native'),
+        tone: 'violet',
+        value: formatFungibleAmount(
+          change.rawAmount,
+          metadataDecimals(change),
+          metadataSymbol(change),
+        ),
+      };
+    case 'wrappedNativeWithdrawal':
+      return {
+        identifier: change.contractAddress,
+        label: 'Wrapped native withdrawal',
+        title: tokenName(change, 'Wrapped native'),
+        tone: 'amber',
+        value: formatFungibleAmount(
+          change.rawAmount,
+          metadataDecimals(change),
+          metadataSymbol(change),
+        ),
+      };
+    case 'erc20Transfer':
+      return evmErc20AmountView(change, 'ERC-20 transfer', 'blue');
+    case 'erc20Mint':
+      return evmErc20AmountView(change, 'ERC-20 mint', 'green');
+    case 'erc20Burn':
+      return evmErc20AmountView(change, 'ERC-20 burn', 'red');
+    case 'erc20Approval':
+      return {
+        detail: `${formatFungibleAmount(change.before, metadataDecimals(change), metadataSymbol(change))} -> ${formatFungibleAmount(change.after, metadataDecimals(change), metadataSymbol(change))}`,
+        identifier: change.contractAddress,
+        label: 'ERC-20 approval',
+        title: tokenName(change, 'ERC-20'),
+        tone: BigInt(change.after) === 0n ? 'amber' : 'green',
+      };
+    case 'erc721Transfer':
+      return evmErc721View(change, 'ERC-721 transfer', 'blue');
+    case 'erc721Mint':
+      return evmErc721View(change, 'ERC-721 mint', 'green');
+    case 'erc721Burn':
+      return evmErc721View(change, 'ERC-721 burn', 'red');
+    case 'erc721Approval':
+      return {
+        detail: `Token #${formatHexQuantity(change.tokenId)} | ${approvalAddress(change.before)} -> ${approvalAddress(change.after)}`,
+        identifier: change.contractAddress,
+        label: 'ERC-721 approval',
+        title: tokenName(change, 'ERC-721'),
+        tone: change.after ? 'green' : 'amber',
+      };
+    case 'operatorApproval':
+      return {
+        detail: `${change.before ? 'Enabled' : 'Disabled'} -> ${change.after ? 'Enabled' : 'Disabled'}`,
+        identifier: change.contractAddress,
+        label: 'Operator approval',
+        title: 'Token collection',
+        tone: change.after ? 'green' : 'amber',
+      };
+    case 'erc1155TransferSingle':
+      return evmErc1155SingleView(change, 'ERC-1155 transfer', 'blue');
+    case 'erc1155MintSingle':
+      return evmErc1155SingleView(change, 'ERC-1155 mint', 'green');
+    case 'erc1155BurnSingle':
+      return evmErc1155SingleView(change, 'ERC-1155 burn', 'red');
+    case 'erc1155TransferBatch':
+      return evmErc1155BatchView(change, 'ERC-1155 batch', 'blue');
+    case 'erc1155MintBatch':
+      return evmErc1155BatchView(change, 'ERC-1155 batch mint', 'green');
+    case 'erc1155BurnBatch':
+      return evmErc1155BatchView(change, 'ERC-1155 batch burn', 'red');
+  }
+}
+
+function evmErc20AmountView(
+  change: Extract<EvmChange, { type: 'erc20Transfer' | 'erc20Mint' | 'erc20Burn' }>,
+  label: string,
+  tone: ChangeTone,
+): ChangeItemViewModel {
+  return {
+    identifier: change.contractAddress,
+    label,
+    title: tokenName(change, 'ERC-20'),
+    tone,
+    value: formatFungibleAmount(
+      change.rawAmount,
+      metadataDecimals(change),
+      metadataSymbol(change),
+    ),
+  };
+}
+
+function evmErc721View(
+  change: Extract<EvmChange, { type: 'erc721Transfer' | 'erc721Mint' | 'erc721Burn' }>,
+  label: string,
+  tone: ChangeTone,
+): ChangeItemViewModel {
+  return {
+    identifier: change.contractAddress,
+    label,
+    title: `${tokenName(change, 'ERC-721')} #${formatHexQuantity(change.tokenId)}`,
+    tone,
+  };
+}
+
+function evmErc1155SingleView(
+  change: Extract<
+    EvmChange,
+    { type: 'erc1155TransferSingle' | 'erc1155MintSingle' | 'erc1155BurnSingle' }
+  >,
+  label: string,
+  tone: ChangeTone,
+): ChangeItemViewModel {
+  return {
+    detail: `Token #${formatHexQuantity(change.tokenId)}`,
+    identifier: change.contractAddress,
+    label,
+    title: 'ERC-1155',
+    tone,
+    value: formatHexQuantity(change.rawAmount),
+  };
+}
+
+function evmErc1155BatchView(
+  change: Extract<
+    EvmChange,
+    { type: 'erc1155TransferBatch' | 'erc1155MintBatch' | 'erc1155BurnBatch' }
+  >,
+  label: string,
+  tone: ChangeTone,
+): ChangeItemViewModel {
+  return {
+    detail: 'Ordered batch',
+    identifier: change.contractAddress,
+    label,
+    title: 'ERC-1155',
+    tone,
+    value: `${change.items.length} ${change.items.length === 1 ? 'item' : 'items'}`,
+  };
+}
+
+function approvalAddress(address: string | null) {
+  return address ? shortHex(address) : 'None';
 }
 
 function tokenName(

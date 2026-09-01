@@ -84,16 +84,18 @@ impl EvmGas {
 pub struct EvmExecutionGasFee {
     effective_gas_price: u128,
     charged_amount: U256,
-    burnt_amount: U256,
+    burnt_amount: Option<U256>,
 }
 
 impl EvmExecutionGasFee {
     pub(crate) fn new(
         effective_gas_price: u128,
         charged_amount: U256,
-        burnt_amount: U256,
+        burnt_amount: Option<U256>,
     ) -> Result<Self, EvmResultIntegrationError> {
-        if burnt_amount > charged_amount {
+        if let Some(burnt_amount) = burnt_amount
+            && burnt_amount > charged_amount
+        {
             return Err(EvmResultIntegrationError::BurntFeeExceedsCharged {
                 charged_amount,
                 burnt_amount,
@@ -119,12 +121,20 @@ impl EvmExecutionGasFee {
 
     /// Base-fee portion of the charged amount that is burnt.
     pub const fn burnt_amount(&self) -> U256 {
+        match self.burnt_amount {
+            Some(amount) => amount,
+            None => U256::ZERO,
+        }
+    }
+
+    /// Base-fee burn amount, absent before EIP-1559 is active.
+    pub const fn burnt_amount_if_applicable(&self) -> Option<U256> {
         self.burnt_amount
     }
 
     /// Priority-fee portion paid to the block beneficiary.
     pub fn beneficiary_reward(&self) -> U256 {
-        self.charged_amount - self.burnt_amount
+        self.charged_amount - self.burnt_amount()
     }
 }
 

@@ -10,7 +10,8 @@ use tokio::runtime::Handle;
 use crate::{
     CompleteTransaction, EthereumChainSpec, EvmBlockContext, EvmExecutionObserver,
     EvmExecutionOutcome, EvmInitializationError, EvmSimulation, EvmSimulationError,
-    EvmSimulationRequest, EvmTransactionExecutionResult, EvmTransactionExecutor,
+    EvmSimulationLimits, EvmSimulationRequest, EvmTransactionExecutionResult,
+    EvmTransactionExecutor,
     changeset::{
         CombinedEvmChangeResolver, EvmChangeResolver, EvmChangeSet, EvmChanges,
         StandardEvmChangeResolver,
@@ -24,6 +25,7 @@ pub struct EvmTransactionSimulator<R = StandardEvmChangeResolver> {
     provider: DynProvider<Ethereum>,
     chain_spec: Arc<EthereumChainSpec>,
     resolver: Arc<R>,
+    limits: EvmSimulationLimits,
 }
 
 impl<R> Clone for EvmTransactionSimulator<R> {
@@ -32,6 +34,7 @@ impl<R> Clone for EvmTransactionSimulator<R> {
             provider: self.provider.clone(),
             chain_spec: Arc::clone(&self.chain_spec),
             resolver: Arc::clone(&self.resolver),
+            limits: self.limits.clone(),
         }
     }
 }
@@ -61,6 +64,7 @@ impl EvmTransactionSimulator<StandardEvmChangeResolver> {
             provider,
             chain_spec: Arc::new(chain_spec),
             resolver: Arc::new(resolver),
+            limits: EvmSimulationLimits::default(),
         })
     }
 }
@@ -74,6 +78,7 @@ impl<R> EvmTransactionSimulator<R> {
             provider: self.provider,
             chain_spec: self.chain_spec,
             resolver: Arc::new(resolver),
+            limits: self.limits,
         }
     }
 
@@ -92,7 +97,13 @@ impl<R> EvmTransactionSimulator<R> {
                 self.resolver,
                 resolver,
             )),
+            limits: self.limits,
         }
+    }
+
+    pub fn with_limits(mut self, limits: EvmSimulationLimits) -> Self {
+        self.limits = limits;
+        self
     }
 }
 
@@ -131,6 +142,7 @@ where
         let provider = self.provider.clone();
         let chain_spec = Arc::clone(&self.chain_spec);
         let resolver = Arc::clone(&self.resolver);
+        let limits = self.limits.clone();
         let blocking_runtime_handle = runtime_handle.clone();
 
         runtime_handle
@@ -140,6 +152,7 @@ where
                     runtime_handle: blocking_runtime_handle,
                     chain_spec,
                     resolver,
+                    limits,
                     block,
                     transaction,
                 })
@@ -156,6 +169,7 @@ struct BlockingSimulationInput<R> {
     runtime_handle: Handle,
     chain_spec: Arc<EthereumChainSpec>,
     resolver: Arc<R>,
+    limits: EvmSimulationLimits,
     block: Sealed<Header>,
     transaction: CompleteTransaction,
 }
@@ -171,6 +185,7 @@ where
         runtime_handle,
         chain_spec,
         resolver,
+        limits,
         block,
         transaction,
     } = input;
@@ -178,7 +193,7 @@ where
         number: block.number(),
         hash: block.hash(),
     };
-    let executor = create_executor(provider, runtime_handle, block, &chain_spec)?;
+    let executor = create_executor(provider, runtime_handle, block, &chain_spec, limits)?;
     let (output, state_views) = match executor.execute(&transaction)? {
         EvmTransactionExecutionResult::Executed(output) => output.commit()?,
         EvmTransactionExecutionResult::NotExecuted(rejection) => {
@@ -208,6 +223,7 @@ fn create_executor(
     runtime_handle: Handle,
     block: Sealed<Header>,
     chain_spec: &EthereumChainSpec,
+    limits: EvmSimulationLimits,
 ) -> Result<EvmTransactionExecutor<EvmExecutionObserver>, EvmSimulationError> {
     let block_hash = block.hash();
     let state_source = EvmStateSource::new(provider, runtime_handle, block_hash);
@@ -215,7 +231,11 @@ fn create_executor(
         state_source,
         block,
         chain_spec,
-        EvmExecutionObserver::new(chain_spec.wrapped_native_token_address()),
+        EvmExecutionObserver::with_limits(
+            chain_spec.wrapped_native_token_address(),
+            limits.clone(),
+        ),
+        limits,
     )
 }
 

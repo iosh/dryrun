@@ -5,7 +5,7 @@ use std::{
 };
 
 use alloy::primitives::{Address, U256};
-use contract_standards::StandardChange;
+use contract_standards::{Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem};
 use thiserror::Error;
 
 use crate::{
@@ -81,7 +81,113 @@ pub enum EvmStateChange {
     AccountDelegation(EvmAccountDelegationChange),
     WrappedNativeDeposit(EvmWrappedNativeDepositChange),
     WrappedNativeWithdrawal(EvmWrappedNativeWithdrawalChange),
-    Standard(StandardChange<Address>),
+    Standard(EvmStandardChange),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EvmStandardChange {
+    Erc20Transfer {
+        contract_address: Address,
+        from: Address,
+        to: Address,
+        raw_amount: U256,
+        metadata: Erc20Metadata,
+    },
+    Erc20Mint {
+        contract_address: Address,
+        to: Address,
+        raw_amount: U256,
+        metadata: Erc20Metadata,
+    },
+    Erc20Burn {
+        contract_address: Address,
+        from: Address,
+        raw_amount: U256,
+        metadata: Erc20Metadata,
+    },
+    Erc20Approval {
+        contract_address: Address,
+        owner: Address,
+        spender: Address,
+        before: U256,
+        after: U256,
+        metadata: Erc20Metadata,
+    },
+    Erc721Transfer {
+        contract_address: Address,
+        from: Address,
+        to: Address,
+        token_id: U256,
+        metadata: Erc721CollectionMetadata,
+    },
+    Erc721Mint {
+        contract_address: Address,
+        to: Address,
+        token_id: U256,
+        metadata: Erc721CollectionMetadata,
+    },
+    Erc721Burn {
+        contract_address: Address,
+        from: Address,
+        token_id: U256,
+        metadata: Erc721CollectionMetadata,
+    },
+    Erc721Approval {
+        contract_address: Address,
+        owner: Address,
+        before: Option<Address>,
+        after: Option<Address>,
+        token_id: U256,
+        metadata: Erc721CollectionMetadata,
+    },
+    OperatorApproval {
+        contract_address: Address,
+        owner: Address,
+        operator: Address,
+        before: bool,
+        after: bool,
+    },
+    Erc1155TransferSingle {
+        contract_address: Address,
+        operator: Address,
+        from: Address,
+        to: Address,
+        token_id: U256,
+        raw_amount: U256,
+    },
+    Erc1155MintSingle {
+        contract_address: Address,
+        operator: Address,
+        to: Address,
+        token_id: U256,
+        raw_amount: U256,
+    },
+    Erc1155BurnSingle {
+        contract_address: Address,
+        operator: Address,
+        from: Address,
+        token_id: U256,
+        raw_amount: U256,
+    },
+    Erc1155TransferBatch {
+        contract_address: Address,
+        operator: Address,
+        from: Address,
+        to: Address,
+        items: Vec<Erc1155TransferItem>,
+    },
+    Erc1155MintBatch {
+        contract_address: Address,
+        operator: Address,
+        to: Address,
+        items: Vec<Erc1155TransferItem>,
+    },
+    Erc1155BurnBatch {
+        contract_address: Address,
+        operator: Address,
+        from: Address,
+        items: Vec<Erc1155TransferItem>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +271,17 @@ enum StandardChangeKey {
         contract: Address,
         owner: Address,
         spender: Address,
+        before: U256,
+        after: U256,
+    },
+    Erc20Mint {
+        contract: Address,
+        to: Address,
+        amount: U256,
+    },
+    Erc20Burn {
+        contract: Address,
+        from: Address,
         amount: U256,
     },
     Erc721Transfer {
@@ -176,14 +293,26 @@ enum StandardChangeKey {
     Erc721Approval {
         contract: Address,
         owner: Address,
-        approved: Option<Address>,
+        before: Option<Address>,
+        after: Option<Address>,
+        token_id: U256,
+    },
+    Erc721Mint {
+        contract: Address,
+        to: Address,
+        token_id: U256,
+    },
+    Erc721Burn {
+        contract: Address,
+        from: Address,
         token_id: U256,
     },
     OperatorApproval {
         contract: Address,
         owner: Address,
         operator: Address,
-        approved: bool,
+        before: bool,
+        after: bool,
     },
     Erc1155TransferSingle {
         contract: Address,
@@ -198,6 +327,32 @@ enum StandardChangeKey {
         operator: Address,
         from: Address,
         to: Address,
+        items: Vec<(U256, U256)>,
+    },
+    Erc1155MintSingle {
+        contract: Address,
+        operator: Address,
+        to: Address,
+        token_id: U256,
+        amount: U256,
+    },
+    Erc1155BurnSingle {
+        contract: Address,
+        operator: Address,
+        from: Address,
+        token_id: U256,
+        amount: U256,
+    },
+    Erc1155MintBatch {
+        contract: Address,
+        operator: Address,
+        to: Address,
+        items: Vec<(U256, U256)>,
+    },
+    Erc1155BurnBatch {
+        contract: Address,
+        operator: Address,
+        from: Address,
         items: Vec<(U256, U256)>,
     },
 }
@@ -372,7 +527,7 @@ impl EvmChangeSetBuilder {
     pub(crate) fn standard(
         &mut self,
         position: EvmExecutionPosition,
-        change: StandardChange<Address>,
+        change: EvmStandardChange,
     ) -> Result<(), EvmChangeResolutionError> {
         self.insert_at(
             EvmChangePosition::Execution(position),
@@ -478,15 +633,23 @@ impl EvmChangeEntry {
 }
 
 fn merge_standard_metadata(
-    existing: &mut StandardChange<Address>,
-    incoming: StandardChange<Address>,
+    existing: &mut EvmStandardChange,
+    incoming: EvmStandardChange,
     conflicts: &mut EvmMetadataConflicts,
     incoming_conflicts: EvmMetadataConflicts,
 ) -> bool {
     match (existing, incoming) {
         (
-            StandardChange::Erc20Transfer { metadata, .. },
-            StandardChange::Erc20Transfer {
+            EvmStandardChange::Erc20Transfer { metadata, .. }
+            | EvmStandardChange::Erc20Mint { metadata, .. }
+            | EvmStandardChange::Erc20Burn { metadata, .. },
+            EvmStandardChange::Erc20Transfer {
+                metadata: incoming, ..
+            }
+            | EvmStandardChange::Erc20Mint {
+                metadata: incoming, ..
+            }
+            | EvmStandardChange::Erc20Burn {
                 metadata: incoming, ..
             },
         ) => {
@@ -494,8 +657,8 @@ fn merge_standard_metadata(
             true
         }
         (
-            StandardChange::Erc20Approval { metadata, .. },
-            StandardChange::Erc20Approval {
+            EvmStandardChange::Erc20Approval { metadata, .. },
+            EvmStandardChange::Erc20Approval {
                 metadata: incoming, ..
             },
         ) => {
@@ -503,8 +666,16 @@ fn merge_standard_metadata(
             true
         }
         (
-            StandardChange::Erc721Transfer { metadata, .. },
-            StandardChange::Erc721Transfer {
+            EvmStandardChange::Erc721Transfer { metadata, .. }
+            | EvmStandardChange::Erc721Mint { metadata, .. }
+            | EvmStandardChange::Erc721Burn { metadata, .. },
+            EvmStandardChange::Erc721Transfer {
+                metadata: incoming, ..
+            }
+            | EvmStandardChange::Erc721Mint {
+                metadata: incoming, ..
+            }
+            | EvmStandardChange::Erc721Burn {
                 metadata: incoming, ..
             },
         ) => {
@@ -523,8 +694,8 @@ fn merge_standard_metadata(
             true
         }
         (
-            StandardChange::Erc721Approval { metadata, .. },
-            StandardChange::Erc721Approval {
+            EvmStandardChange::Erc721Approval { metadata, .. },
+            EvmStandardChange::Erc721Approval {
                 metadata: incoming, ..
             },
         ) => {
@@ -595,9 +766,9 @@ fn merge_metadata_field<T: Eq>(
 }
 
 impl StandardChangeKey {
-    fn from(change: &StandardChange<Address>) -> Self {
+    fn from(change: &EvmStandardChange) -> Self {
         match change {
-            StandardChange::Erc20Transfer {
+            EvmStandardChange::Erc20Transfer {
                 contract_address,
                 from,
                 to,
@@ -609,19 +780,41 @@ impl StandardChangeKey {
                 to: *to,
                 amount: *raw_amount,
             },
-            StandardChange::Erc20Approval {
+            EvmStandardChange::Erc20Mint {
+                contract_address,
+                to,
+                raw_amount,
+                ..
+            } => Self::Erc20Mint {
+                contract: *contract_address,
+                to: *to,
+                amount: *raw_amount,
+            },
+            EvmStandardChange::Erc20Burn {
+                contract_address,
+                from,
+                raw_amount,
+                ..
+            } => Self::Erc20Burn {
+                contract: *contract_address,
+                from: *from,
+                amount: *raw_amount,
+            },
+            EvmStandardChange::Erc20Approval {
                 contract_address,
                 owner,
                 spender,
-                approved_amount,
+                before,
+                after,
                 ..
             } => Self::Erc20Approval {
                 contract: *contract_address,
                 owner: *owner,
                 spender: *spender,
-                amount: *approved_amount,
+                before: *before,
+                after: *after,
             },
-            StandardChange::Erc721Transfer {
+            EvmStandardChange::Erc721Transfer {
                 contract_address,
                 from,
                 to,
@@ -633,30 +826,54 @@ impl StandardChangeKey {
                 to: *to,
                 token_id: *token_id,
             },
-            StandardChange::Erc721Approval {
+            EvmStandardChange::Erc721Mint {
+                contract_address,
+                to,
+                token_id,
+                ..
+            } => Self::Erc721Mint {
+                contract: *contract_address,
+                to: *to,
+                token_id: *token_id,
+            },
+            EvmStandardChange::Erc721Burn {
+                contract_address,
+                from,
+                token_id,
+                ..
+            } => Self::Erc721Burn {
+                contract: *contract_address,
+                from: *from,
+                token_id: *token_id,
+            },
+            EvmStandardChange::Erc721Approval {
                 contract_address,
                 owner,
-                approved_address,
+                before,
+                after,
                 token_id,
                 ..
             } => Self::Erc721Approval {
                 contract: *contract_address,
                 owner: *owner,
-                approved: *approved_address,
+                before: *before,
+                after: *after,
                 token_id: *token_id,
             },
-            StandardChange::OperatorApproval {
+            EvmStandardChange::OperatorApproval {
                 contract_address,
                 owner,
                 operator,
-                approved,
+                before,
+                after,
             } => Self::OperatorApproval {
                 contract: *contract_address,
                 owner: *owner,
                 operator: *operator,
-                approved: *approved,
+                before: *before,
+                after: *after,
             },
-            StandardChange::Erc1155TransferSingle {
+            EvmStandardChange::Erc1155TransferSingle {
                 contract_address,
                 operator,
                 from,
@@ -671,7 +888,33 @@ impl StandardChangeKey {
                 token_id: *token_id,
                 amount: *raw_amount,
             },
-            StandardChange::Erc1155TransferBatch {
+            EvmStandardChange::Erc1155MintSingle {
+                contract_address,
+                operator,
+                to,
+                token_id,
+                raw_amount,
+            } => Self::Erc1155MintSingle {
+                contract: *contract_address,
+                operator: *operator,
+                to: *to,
+                token_id: *token_id,
+                amount: *raw_amount,
+            },
+            EvmStandardChange::Erc1155BurnSingle {
+                contract_address,
+                operator,
+                from,
+                token_id,
+                raw_amount,
+            } => Self::Erc1155BurnSingle {
+                contract: *contract_address,
+                operator: *operator,
+                from: *from,
+                token_id: *token_id,
+                amount: *raw_amount,
+            },
+            EvmStandardChange::Erc1155TransferBatch {
                 contract_address,
                 operator,
                 from,
@@ -682,6 +925,34 @@ impl StandardChangeKey {
                 operator: *operator,
                 from: *from,
                 to: *to,
+                items: items
+                    .iter()
+                    .map(|item| (item.token_id, item.raw_amount))
+                    .collect(),
+            },
+            EvmStandardChange::Erc1155MintBatch {
+                contract_address,
+                operator,
+                to,
+                items,
+            } => Self::Erc1155MintBatch {
+                contract: *contract_address,
+                operator: *operator,
+                to: *to,
+                items: items
+                    .iter()
+                    .map(|item| (item.token_id, item.raw_amount))
+                    .collect(),
+            },
+            EvmStandardChange::Erc1155BurnBatch {
+                contract_address,
+                operator,
+                from,
+                items,
+            } => Self::Erc1155BurnBatch {
+                contract: *contract_address,
+                operator: *operator,
+                from: *from,
                 items: items
                     .iter()
                     .map(|item| (item.token_id, item.raw_amount))

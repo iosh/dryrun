@@ -1,5 +1,6 @@
 import { formatAmount, formatNativeAmount } from '../../../lib/formatting.ts';
 import { getEnvironment } from '../../environment.ts';
+import type { EvmOutcome } from '../../rpc.ts';
 import {
   normalizeAddress,
   toAssetFlowItemViewModels,
@@ -16,6 +17,7 @@ import type {
   FlowLaneViewModel,
   FlowSegment,
   SenderImpactItem,
+  SimulationExecution,
   SimulationResultViewModel,
 } from './resultTypes.ts';
 
@@ -41,21 +43,22 @@ export function createSimulationResultViewModel(
   const stateEffects = changeFlows.flatMap(({ change, items }) =>
     items.length === 0 ? [change] : [],
   );
+  const execution = simulationExecution(record);
 
   return {
     anchor: executionAnchor(record),
     changes,
     changesError,
     environment,
+    execution,
     flowItems,
     lanes: buildFlowLanes(record, flowItems),
     senderImpacts: senderNetImpacts(
       flowItems,
       record.request.transaction.from,
-      formatNativeAmount(
-        record.response.execution.fee,
-        environment.nativeSymbol,
-      ),
+      execution.totalFee === null
+        ? null
+        : formatNativeAmount(execution.totalFee, environment.nativeSymbol),
     ),
     stateEffects,
   };
@@ -142,6 +145,14 @@ export function changeAddressLabel(
 }
 
 function executionAnchor(record: SimulationRecord): ExecutionAnchor {
+  if ('outcome' in record.response) {
+    return {
+      hash: record.response.state.blockHash,
+      label: 'Block',
+      number: record.response.state.blockNumber,
+    };
+  }
+
   const execution = record.response.execution;
   return 'block' in execution
     ? {
@@ -159,7 +170,7 @@ function executionAnchor(record: SimulationRecord): ExecutionAnchor {
 function senderNetImpacts(
   flowItems: readonly AssetFlowItemViewModel[],
   sender: string,
-  fee: string,
+  fee: string | null,
 ): SenderImpactItem[] {
   const normalizedSender = normalizeAddress(sender);
   const balances = new Map<
@@ -201,8 +212,112 @@ function senderNetImpacts(
       value: formatSenderNetValue(balance.amount, balance.item),
     });
   }
-  impacts.push({ label: 'Fee', tone: 'neutral', value: fee });
+  if (fee !== null) {
+    impacts.push({ label: 'Fee', tone: 'neutral', value: fee });
+  }
   return impacts;
+}
+
+function simulationExecution(record: SimulationRecord): SimulationExecution {
+  const response = record.response;
+  if ('outcome' in response) {
+    const outcome = response.outcome;
+    const executed = 'gasUsed' in outcome;
+    const blobGasFee = executed ? outcome.blobGasFee ?? null : null;
+    const gasFee = executed ? outcome.gasFee : null;
+    return {
+      blobGasFee,
+      blobGasPrice: executed ? outcome.blobGasPrice ?? null : null,
+      blobGasUsed: executed ? outcome.blobGasUsed ?? null : null,
+      burntGasFee: executed ? outcome.burntGasFee ?? null : null,
+      chainId: response.transaction.chainId,
+      contractAddress:
+        outcome.status === 'success' && 'contractAddress' in outcome
+          ? outcome.contractAddress
+          : null,
+      effectiveGasPrice: executed ? outcome.effectiveGasPrice : null,
+      failure: evmFailure(outcome),
+      gasCharged: null,
+      gasCoveredBySponsor: null,
+      gasFee,
+      gasLimit: response.transaction.gas,
+      gasUsed: executed ? outcome.gasUsed : null,
+      logsCount: outcome.status === 'success' ? outcome.logs.length : 0,
+      output: evmOutput(outcome),
+      status: outcome.status,
+      storageCoveredBySponsor: null,
+      totalFee: gasFee === null ? null : addHexQuantities(gasFee, blobGasFee),
+    };
+  }
+
+  const execution = response.execution;
+  return {
+    blobGasFee: null,
+    blobGasPrice: null,
+    blobGasUsed: null,
+    burntGasFee: execution.burntFee,
+    chainId: execution.chainId,
+    contractAddress: null,
+    effectiveGasPrice: null,
+    failure: execution.failure
+      ? {
+          detail: [execution.failure.code, execution.failure.reason]
+            .filter(Boolean)
+            .join(' / '),
+          message: execution.failure.message,
+        }
+      : null,
+    gasCharged: 'gasCharged' in execution ? execution.gasCharged : null,
+    gasCoveredBySponsor:
+      'gasCoveredBySponsor' in execution
+        ? execution.gasCoveredBySponsor
+        : null,
+    gasFee: execution.fee,
+    gasLimit: execution.gasLimit,
+    gasUsed: execution.gasUsed,
+    logsCount: 0,
+    output: { label: 'Output', value: execution.output },
+    status:
+      execution.status === 'SUCCESS'
+        ? 'success'
+        : execution.status === 'FAILED'
+          ? 'failed'
+          : 'rejected',
+    storageCoveredBySponsor:
+      'storageCoveredBySponsor' in execution
+        ? execution.storageCoveredBySponsor
+        : null,
+    totalFee: execution.fee,
+  };
+}
+
+function evmFailure(outcome: EvmOutcome) {
+  switch (outcome.status) {
+    case 'reverted':
+      return {
+        detail: outcome.reason,
+        message: 'Execution reverted',
+      };
+    case 'failed':
+    case 'rejected':
+      return { message: outcome.error };
+    case 'success':
+      return null;
+  }
+}
+
+function evmOutput(outcome: EvmOutcome) {
+  if (outcome.status === 'reverted') {
+    return { label: 'Revert data', value: outcome.revertData };
+  }
+  if (outcome.status !== 'success') return null;
+  return 'returnData' in outcome
+    ? { label: 'Return data', value: outcome.returnData }
+    : { label: 'Runtime code', value: outcome.runtimeCode };
+}
+
+function addHexQuantities(left: string, right: string | null) {
+  return `0x${(BigInt(left) + (right === null ? 0n : BigInt(right))).toString(16)}`;
 }
 
 function formatSenderNetValue(

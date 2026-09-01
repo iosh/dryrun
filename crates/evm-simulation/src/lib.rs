@@ -7,6 +7,7 @@ mod context;
 mod error;
 mod execution;
 mod execution_result;
+mod limits;
 mod outcome;
 mod rejection;
 mod simulation;
@@ -20,7 +21,7 @@ pub use changeset::{
     CombinedEvmChangeResolver, EvmAccountDelegation, EvmAccountDelegationChange,
     EvmAccountDelegationResolver, EvmChangeResolutionError, EvmChangeResolver, EvmChangeSet,
     EvmChangeSetBuilder, EvmChanges, EvmNativeChangeResolver, EvmNativeCurrency,
-    EvmNativeTransferChange, EvmSelfDestructBurnChange, EvmStateChange,
+    EvmNativeTransferChange, EvmSelfDestructBurnChange, EvmStandardChange, EvmStateChange,
     EvmWrappedNativeDepositChange, EvmWrappedNativeWithdrawalChange, StandardEvmChangeResolver,
 };
 pub(crate) use completion::complete_transaction;
@@ -40,6 +41,7 @@ pub(crate) use execution::{
     map_executed_outcome,
 };
 pub use execution_result::{EvmBlobGasFee, EvmExecutionGasFee, EvmExecutionResult, EvmFee, EvmGas};
+pub use limits::EvmSimulationLimits;
 pub use outcome::{
     EvmExecutionOutcome, EvmHaltReason, EvmOutOfGasReason, EvmRevertReason, EvmSuccessOutput,
     EvmSuccessReason,

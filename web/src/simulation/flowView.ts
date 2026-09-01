@@ -3,6 +3,7 @@ import {
   type ChangeTone,
 } from './changeView.ts';
 import { formatHexQuantity } from '../lib/formatting.ts';
+import type { EvmChange } from './rpc.ts';
 import type { SimulationChange } from './types.ts';
 
 export interface ChangeAddressViewModel {
@@ -39,6 +40,9 @@ export function toAssetFlowItemViewModels(
   change: SimulationChange,
 ): AssetFlowItemViewModel[] {
   const view = toChangeItemViewModel(change);
+  if ('type' in change) {
+    return toEvmAssetFlowItemViewModels(change, view);
+  }
 
   switch (change.changeType) {
     case 'NATIVE_TRANSFER':
@@ -183,6 +187,10 @@ export function toAssetFlowItemViewModels(
 export function getChangeAddresses(
   change: SimulationChange,
 ): ChangeAddressViewModel[] {
+  if ('type' in change) {
+    return getEvmChangeAddresses(change);
+  }
+
   switch (change.changeType) {
     case 'NATIVE_TRANSFER':
       return [
@@ -193,8 +201,6 @@ export function getChangeAddresses(
       return [{ address: change.from, label: 'From' }];
     case 'SELF_DESTRUCT_BURN':
       return [{ address: change.contractAddress, label: 'Contract' }];
-    case 'ACCOUNT_DELEGATION':
-      return [{ address: change.account, label: 'Account' }];
     case 'WRAPPED_NATIVE_DEPOSIT':
     case 'WRAPPED_NATIVE_WITHDRAWAL':
       return [
@@ -286,6 +292,280 @@ export function getChangeAddresses(
         ...address,
         label: `${address.label} / eSpace`,
       }));
+  }
+}
+
+function toEvmAssetFlowItemViewModels(
+  change: EvmChange,
+  view: ReturnType<typeof toChangeItemViewModel>,
+): AssetFlowItemViewModel[] {
+  switch (change.type) {
+    case 'nativeTransfer':
+      return [
+        {
+          assetKey: `NATIVE:${change.symbol}`,
+          assetTitle: change.symbol,
+          decimals: change.decimals,
+          from: addressEndpoint('From', change.from),
+          label: view.label,
+          rawAmount: change.rawAmount,
+          to: addressEndpoint('To', change.to),
+          tone: view.tone,
+          value: view.value ?? view.title,
+        },
+      ];
+    case 'erc20Transfer':
+      return [evmErc20Flow(change, view, change.from, change.to)];
+    case 'erc20Mint':
+      return [
+        evmErc20Flow(
+          change,
+          view,
+          { kind: 'terminal', label: 'Mint' },
+          change.to,
+        ),
+      ];
+    case 'erc20Burn':
+      return [
+        evmErc20Flow(
+          change,
+          view,
+          change.from,
+          { kind: 'terminal', label: 'Burn' },
+        ),
+      ];
+    case 'erc721Transfer':
+      return [evmErc721Flow(change, view, change.from, change.to)];
+    case 'erc721Mint':
+      return [
+        evmErc721Flow(
+          change,
+          view,
+          { kind: 'terminal', label: 'Mint' },
+          change.to,
+        ),
+      ];
+    case 'erc721Burn':
+      return [
+        evmErc721Flow(
+          change,
+          view,
+          change.from,
+          { kind: 'terminal', label: 'Burn' },
+        ),
+      ];
+    case 'erc1155TransferSingle':
+      return [evmErc1155SingleFlow(change, view, change.from, change.to)];
+    case 'erc1155MintSingle':
+      return [
+        evmErc1155SingleFlow(
+          change,
+          view,
+          { kind: 'terminal', label: 'Mint' },
+          change.to,
+        ),
+      ];
+    case 'erc1155BurnSingle':
+      return [
+        evmErc1155SingleFlow(
+          change,
+          view,
+          change.from,
+          { kind: 'terminal', label: 'Burn' },
+        ),
+      ];
+    case 'erc1155TransferBatch':
+      return evmErc1155BatchFlows(change, view, change.from, change.to);
+    case 'erc1155MintBatch':
+      return evmErc1155BatchFlows(
+        change,
+        view,
+        { kind: 'terminal', label: 'Mint' },
+        change.to,
+      );
+    case 'erc1155BurnBatch':
+      return evmErc1155BatchFlows(
+        change,
+        view,
+        change.from,
+        { kind: 'terminal', label: 'Burn' },
+      );
+    default:
+      return [];
+  }
+}
+
+function evmErc20Flow(
+  change: Extract<EvmChange, { type: 'erc20Transfer' | 'erc20Mint' | 'erc20Burn' }>,
+  view: ReturnType<typeof toChangeItemViewModel>,
+  from: string | FlowEndpoint,
+  to: string | FlowEndpoint,
+): AssetFlowItemViewModel {
+  return {
+    assetKey: `ERC20:${normalizeAddress(change.contractAddress)}`,
+    assetIdentifier: change.contractAddress,
+    assetTitle: view.title,
+    decimals: change.decimals ?? 0,
+    from: flowEndpoint('From', from),
+    label: view.label,
+    rawAmount: change.rawAmount,
+    to: flowEndpoint('To', to),
+    tone: view.tone,
+    value: view.value ?? view.title,
+  };
+}
+
+function evmErc721Flow(
+  change: Extract<EvmChange, { type: 'erc721Transfer' | 'erc721Mint' | 'erc721Burn' }>,
+  view: ReturnType<typeof toChangeItemViewModel>,
+  from: string | FlowEndpoint,
+  to: string | FlowEndpoint,
+): AssetFlowItemViewModel {
+  return {
+    assetKey: `ERC721:${normalizeAddress(change.contractAddress)}:${change.tokenId}`,
+    assetIdentifier: change.contractAddress,
+    assetTitle: view.title,
+    decimals: 0,
+    from: flowEndpoint('From', from),
+    label: view.label,
+    rawAmount: '0x1',
+    to: flowEndpoint('To', to),
+    tone: view.tone,
+    value: view.title,
+  };
+}
+
+function evmErc1155SingleFlow(
+  change: Extract<
+    EvmChange,
+    { type: 'erc1155TransferSingle' | 'erc1155MintSingle' | 'erc1155BurnSingle' }
+  >,
+  view: ReturnType<typeof toChangeItemViewModel>,
+  from: string | FlowEndpoint,
+  to: string | FlowEndpoint,
+): AssetFlowItemViewModel {
+  const assetTitle = `ERC-1155 #${formatHexQuantity(change.tokenId)}`;
+  return {
+    assetKey: `ERC1155:${normalizeAddress(change.contractAddress)}:${change.tokenId}`,
+    assetIdentifier: change.contractAddress,
+    assetTitle,
+    decimals: 0,
+    from: flowEndpoint('From', from),
+    label: view.label,
+    rawAmount: change.rawAmount,
+    to: flowEndpoint('To', to),
+    tone: view.tone,
+    value: `${formatHexQuantity(change.rawAmount)} ${assetTitle}`,
+  };
+}
+
+function evmErc1155BatchFlows(
+  change: Extract<
+    EvmChange,
+    { type: 'erc1155TransferBatch' | 'erc1155MintBatch' | 'erc1155BurnBatch' }
+  >,
+  view: ReturnType<typeof toChangeItemViewModel>,
+  from: string | FlowEndpoint,
+  to: string | FlowEndpoint,
+): AssetFlowItemViewModel[] {
+  return change.items.map((item) => {
+    const assetTitle = `ERC-1155 #${formatHexQuantity(item.tokenId)}`;
+    return {
+      assetKey: `ERC1155:${normalizeAddress(change.contractAddress)}:${item.tokenId}`,
+      assetIdentifier: change.contractAddress,
+      assetTitle,
+      decimals: 0,
+      from: flowEndpoint('From', from),
+      label: view.label,
+      rawAmount: item.rawAmount,
+      to: flowEndpoint('To', to),
+      tone: view.tone,
+      value: `${formatHexQuantity(item.rawAmount)} ${assetTitle}`,
+    };
+  });
+}
+
+function flowEndpoint(label: string, endpoint: string | FlowEndpoint): FlowEndpoint {
+  return typeof endpoint === 'string' ? addressEndpoint(label, endpoint) : endpoint;
+}
+
+function getEvmChangeAddresses(change: EvmChange): ChangeAddressViewModel[] {
+  switch (change.type) {
+    case 'nativeTransfer':
+      return [
+        { address: change.from, label: 'From' },
+        { address: change.to, label: 'To' },
+      ];
+    case 'selfDestructBurn':
+      return [{ address: change.contractAddress, label: 'Contract' }];
+    case 'accountDelegation':
+      return [{ address: change.account, label: 'Account' }];
+    case 'wrappedNativeDeposit':
+    case 'wrappedNativeWithdrawal':
+      return [
+        { address: change.account, label: 'Account' },
+        { address: change.contractAddress, label: 'Wrapper contract' },
+      ];
+    case 'erc20Transfer':
+    case 'erc721Transfer':
+      return [
+        { address: change.from, label: 'From' },
+        { address: change.to, label: 'To' },
+        { address: change.contractAddress, label: 'Asset contract' },
+      ];
+    case 'erc20Mint':
+    case 'erc721Mint':
+      return [
+        { address: change.to, label: 'To' },
+        { address: change.contractAddress, label: 'Asset contract' },
+      ];
+    case 'erc20Burn':
+    case 'erc721Burn':
+      return [
+        { address: change.from, label: 'From' },
+        { address: change.contractAddress, label: 'Asset contract' },
+      ];
+    case 'erc1155TransferSingle':
+    case 'erc1155TransferBatch':
+      return [
+        { address: change.from, label: 'From' },
+        { address: change.to, label: 'To' },
+        { address: change.operator, label: 'Operator' },
+        { address: change.contractAddress, label: 'Asset contract' },
+      ];
+    case 'erc1155MintSingle':
+    case 'erc1155MintBatch':
+      return [
+        { address: change.to, label: 'To' },
+        { address: change.operator, label: 'Operator' },
+        { address: change.contractAddress, label: 'Asset contract' },
+      ];
+    case 'erc1155BurnSingle':
+    case 'erc1155BurnBatch':
+      return [
+        { address: change.from, label: 'From' },
+        { address: change.operator, label: 'Operator' },
+        { address: change.contractAddress, label: 'Asset contract' },
+      ];
+    case 'erc20Approval':
+      return [
+        { address: change.owner, label: 'Owner' },
+        { address: change.spender, label: 'Spender' },
+        { address: change.contractAddress, label: 'Asset contract' },
+      ];
+    case 'erc721Approval':
+      return compactAddresses([
+        { address: change.owner, label: 'Owner' },
+        change.before ? { address: change.before, label: 'Previous approval' } : null,
+        change.after ? { address: change.after, label: 'Approved address' } : null,
+        { address: change.contractAddress, label: 'Asset contract' },
+      ]);
+    case 'operatorApproval':
+      return [
+        { address: change.owner, label: 'Owner' },
+        { address: change.operator, label: 'Operator' },
+        { address: change.contractAddress, label: 'Asset contract' },
+      ];
   }
 }
 

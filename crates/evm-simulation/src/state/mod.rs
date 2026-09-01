@@ -28,12 +28,7 @@ use revm::{
 use thiserror::Error;
 use tokio::runtime::Handle;
 
-use crate::EvmStateAccessError;
-
-const MAX_READ_CALLS: usize = 256;
-const MAX_STATE_READS: usize = 4_096;
-const READ_CALL_GAS_LIMIT: u64 = 1_000_000;
-const MAX_READ_CALL_OUTPUT_BYTES: usize = 64 * 1024;
+use crate::{EvmSimulationLimits, EvmStateAccessError};
 
 pub(crate) type EvmDatabase = CacheDB<WrapDatabaseAsync<AlloyDB<Ethereum, DynProvider<Ethereum>>>>;
 pub(crate) type MainnetEvm<INSP = ()> =
@@ -76,11 +71,26 @@ pub(crate) struct EvmStateViewFactory {
     source: EvmStateSource,
     cfg: CfgEnv,
     block: BlockEnv,
+    limits: EvmSimulationLimits,
 }
 
 impl EvmStateViewFactory {
     pub(crate) fn new(source: EvmStateSource, cfg: CfgEnv, block: BlockEnv) -> Self {
-        Self { source, cfg, block }
+        Self::with_limits(source, cfg, block, EvmSimulationLimits::default())
+    }
+
+    pub(crate) fn with_limits(
+        source: EvmStateSource,
+        cfg: CfgEnv,
+        block: BlockEnv,
+        limits: EvmSimulationLimits,
+    ) -> Self {
+        Self {
+            source,
+            cfg,
+            block,
+            limits,
+        }
     }
 
     pub(crate) fn create_execution_evm<INSP>(&self, inspector: INSP) -> MainnetEvm<INSP> {
@@ -174,7 +184,7 @@ impl EvmStateViews {
         finalized_state: EvmState,
     ) -> Self {
         let anchor_cache = Arc::new(anchor_cache);
-        let budget = Arc::new(EvmStateReadBudget::default());
+        let budget = Arc::new(EvmStateReadBudget::new(&factory.limits));
         let view = |overlay| {
             EvmStateView::new(EvmStateViewSeed {
                 factory: factory.clone(),
@@ -332,7 +342,13 @@ impl EvmStateView {
             &self.seed.overlay,
             true,
         );
-        let gas_limit = READ_CALL_GAS_LIMIT.min(self.seed.factory.block.gas_limit);
+        let gas_limit = self
+            .seed
+            .factory
+            .limits
+            .read_call_gas_limit
+            .unwrap_or(self.seed.factory.block.gas_limit)
+            .min(self.seed.factory.block.gas_limit);
         let transaction = TxEnv {
             caller: self.seed.caller,
             gas_limit,
@@ -351,10 +367,10 @@ impl EvmStateView {
                 reason: reason.to_string(),
             },
         };
-        if outcome.output_len() > MAX_READ_CALL_OUTPUT_BYTES {
-            return Err(EvmStateReadError::ReadCallOutputLimitExceeded {
-                limit: MAX_READ_CALL_OUTPUT_BYTES,
-            });
+        if let Some(limit) = self.seed.factory.limits.max_read_call_output_bytes
+            && outcome.output_len() > limit
+        {
+            return Err(EvmStateReadError::ReadCallOutputLimitExceeded { limit });
         }
         Ok(outcome)
     }
@@ -378,33 +394,46 @@ struct EvmStateViewSeed {
     budget: Arc<EvmStateReadBudget>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct EvmStateReadBudget {
     state_reads: AtomicUsize,
     read_calls: AtomicUsize,
+    max_state_reads: Option<usize>,
+    max_read_calls: Option<usize>,
 }
 
 impl EvmStateReadBudget {
+    fn new(limits: &EvmSimulationLimits) -> Self {
+        Self {
+            state_reads: AtomicUsize::new(0),
+            read_calls: AtomicUsize::new(0),
+            max_state_reads: limits.max_state_reads,
+            max_read_calls: limits.max_read_calls,
+        }
+    }
+
     fn consume_state_read(&self) -> Result<(), EvmStateReadError> {
+        let Some(limit) = self.max_state_reads else {
+            return Ok(());
+        };
         self.state_reads
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
-                (used < MAX_STATE_READS).then_some(used + 1)
+                (used < limit).then_some(used + 1)
             })
             .map(|_| ())
-            .map_err(|_| EvmStateReadError::StateReadLimitExceeded {
-                limit: MAX_STATE_READS,
-            })
+            .map_err(|_| EvmStateReadError::StateReadLimitExceeded { limit })
     }
 
     fn consume_read_call(&self) -> Result<(), EvmStateReadError> {
+        let Some(limit) = self.max_read_calls else {
+            return Ok(());
+        };
         self.read_calls
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
-                (used < MAX_READ_CALLS).then_some(used + 1)
+                (used < limit).then_some(used + 1)
             })
             .map(|_| ())
-            .map_err(|_| EvmStateReadError::ReadCallLimitExceeded {
-                limit: MAX_READ_CALLS,
-            })
+            .map_err(|_| EvmStateReadError::ReadCallLimitExceeded { limit })
     }
 }
 

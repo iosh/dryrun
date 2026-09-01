@@ -5,13 +5,14 @@ use alloy::{
     sol_types::{SolCall, SolType, SolValue, abi::TokenSeq, sol},
 };
 use contract_standards::{
-    DecodedStandardLog, MetadataCall, MetadataValues, decode_standard_log,
+    DecodedStandardLog, Erc1155TransferItem, MetadataCall, MetadataValues, decode_standard_log,
     is_supported_event_topic, metadata_calls,
 };
 use thiserror::Error;
 
 use crate::{
     EvmChangeResolutionError, EvmChangeResolver, EvmChangeSet, EvmChangeSetBuilder,
+    EvmStandardChange,
     changeset::{EvmWrappedNativeDepositChange, EvmWrappedNativeWithdrawalChange},
     execution::{
         EvmCommittedFrame, EvmCommittedFrameKind, EvmExecutionPosition, EvmFrameId,
@@ -24,6 +25,7 @@ sol! {
     interface IERC20State {
         function balanceOf(address account) external view returns (uint256);
         function allowance(address owner, address spender) external view returns (uint256);
+        function totalSupply() external view returns (uint256);
     }
 
     interface IERC721State {
@@ -68,8 +70,9 @@ impl EvmStandardChangeResolver {
 
         let mut final_checks = HashMap::new();
         let mut wrapped_pair_evidence = HashMap::new();
+        let mut verified = Vec::with_capacity(candidates.len());
         for (candidate_index, candidate) in candidates.iter().enumerate() {
-            verify_candidate(
+            verified.push(verify_candidate(
                 candidate_index,
                 candidate,
                 execution,
@@ -77,7 +80,7 @@ impl EvmStandardChangeResolver {
                 &collection.pairs,
                 &mut wrapped_pair_evidence,
                 &mut final_checks,
-            )?;
+            )?);
         }
         for (pair_index, pair) in collection.pairs.iter().enumerate() {
             if !wrapped_pair_evidence
@@ -94,25 +97,22 @@ impl EvmStandardChangeResolver {
 
         let metadata = load_metadata(&candidates, views);
         let mut builder = EvmChangeSetBuilder::new();
-        for candidate in candidates {
-            match candidate {
-                Candidate::Standard {
-                    occurrence,
-                    decoded,
-                    ..
-                } => {
-                    let change = decoded
-                        .into_change(&metadata)
-                        .map_err(|error| standard_error(error.to_string()))?;
+        for (candidate, verified) in candidates.into_iter().zip(verified) {
+            match (candidate, verified) {
+                (Candidate::Standard { occurrence, .. }, VerifiedCandidate::Standard(change)) => {
+                    let change = change.into_change(&metadata)?;
                     builder.standard(occurrence.position(), change)?;
                 }
-                Candidate::Wrapped {
-                    occurrence,
-                    contract,
-                    account,
-                    amount,
-                    direction,
-                } => {
+                (
+                    Candidate::Wrapped {
+                        occurrence,
+                        contract,
+                        account,
+                        amount,
+                        direction,
+                    },
+                    VerifiedCandidate::Wrapped,
+                ) => {
                     let change_metadata = metadata
                         .erc20_metadata(&contract)
                         .map_err(|error| standard_error(error.to_string()))?;
@@ -137,6 +137,7 @@ impl EvmStandardChangeResolver {
                         )?,
                     }
                 }
+                _ => return Err(standard_error("candidate verification result mismatch")),
             }
         }
 
@@ -254,6 +255,7 @@ enum StandardCandidate {
     },
     Erc1155TransferSingle {
         contract: Address,
+        operator: Address,
         from: Address,
         to: Address,
         token_id: U256,
@@ -261,10 +263,263 @@ enum StandardCandidate {
     },
     Erc1155TransferBatch {
         contract: Address,
+        operator: Address,
         from: Address,
         to: Address,
         items: Vec<(U256, U256)>,
     },
+}
+
+#[derive(Debug)]
+enum VerifiedCandidate {
+    Standard(VerifiedStandardChange),
+    Wrapped,
+}
+
+#[derive(Debug)]
+enum VerifiedStandardChange {
+    Erc20Transfer {
+        contract: Address,
+        from: Address,
+        to: Address,
+        amount: U256,
+    },
+    Erc20Approval {
+        contract: Address,
+        owner: Address,
+        spender: Address,
+        before: U256,
+        after: U256,
+    },
+    Erc721Transfer {
+        contract: Address,
+        from: Address,
+        to: Address,
+        token_id: U256,
+    },
+    Erc721Approval {
+        contract: Address,
+        owner: Address,
+        before: Option<Address>,
+        after: Option<Address>,
+        token_id: U256,
+    },
+    OperatorApproval {
+        contract: Address,
+        owner: Address,
+        operator: Address,
+        before: bool,
+        after: bool,
+    },
+    Erc1155TransferSingle {
+        contract: Address,
+        operator: Address,
+        from: Address,
+        to: Address,
+        token_id: U256,
+        amount: U256,
+    },
+    Erc1155TransferBatch {
+        contract: Address,
+        operator: Address,
+        from: Address,
+        to: Address,
+        items: Vec<(U256, U256)>,
+    },
+}
+
+impl VerifiedStandardChange {
+    fn into_change(
+        self,
+        metadata: &MetadataValues<Address>,
+    ) -> Result<EvmStandardChange, EvmChangeResolutionError> {
+        Ok(match self {
+            Self::Erc20Transfer {
+                contract,
+                from,
+                to,
+                amount,
+            } => {
+                let metadata = metadata
+                    .erc20_metadata(&contract)
+                    .map_err(|error| standard_error(error.to_string()))?;
+                if from == Address::ZERO {
+                    EvmStandardChange::Erc20Mint {
+                        contract_address: contract,
+                        to,
+                        raw_amount: amount,
+                        metadata,
+                    }
+                } else if to == Address::ZERO {
+                    EvmStandardChange::Erc20Burn {
+                        contract_address: contract,
+                        from,
+                        raw_amount: amount,
+                        metadata,
+                    }
+                } else {
+                    EvmStandardChange::Erc20Transfer {
+                        contract_address: contract,
+                        from,
+                        to,
+                        raw_amount: amount,
+                        metadata,
+                    }
+                }
+            }
+            Self::Erc20Approval {
+                contract,
+                owner,
+                spender,
+                before,
+                after,
+            } => EvmStandardChange::Erc20Approval {
+                contract_address: contract,
+                owner,
+                spender,
+                before,
+                after,
+                metadata: metadata
+                    .erc20_metadata(&contract)
+                    .map_err(|error| standard_error(error.to_string()))?,
+            },
+            Self::Erc721Transfer {
+                contract,
+                from,
+                to,
+                token_id,
+            } => {
+                let metadata = metadata
+                    .erc721_collection_metadata(&contract)
+                    .map_err(|error| standard_error(error.to_string()))?;
+                if from == Address::ZERO {
+                    EvmStandardChange::Erc721Mint {
+                        contract_address: contract,
+                        to,
+                        token_id,
+                        metadata,
+                    }
+                } else if to == Address::ZERO {
+                    EvmStandardChange::Erc721Burn {
+                        contract_address: contract,
+                        from,
+                        token_id,
+                        metadata,
+                    }
+                } else {
+                    EvmStandardChange::Erc721Transfer {
+                        contract_address: contract,
+                        from,
+                        to,
+                        token_id,
+                        metadata,
+                    }
+                }
+            }
+            Self::Erc721Approval {
+                contract,
+                owner,
+                before,
+                after,
+                token_id,
+            } => EvmStandardChange::Erc721Approval {
+                contract_address: contract,
+                owner,
+                before,
+                after,
+                token_id,
+                metadata: metadata
+                    .erc721_collection_metadata(&contract)
+                    .map_err(|error| standard_error(error.to_string()))?,
+            },
+            Self::OperatorApproval {
+                contract,
+                owner,
+                operator,
+                before,
+                after,
+            } => EvmStandardChange::OperatorApproval {
+                contract_address: contract,
+                owner,
+                operator,
+                before,
+                after,
+            },
+            Self::Erc1155TransferSingle {
+                contract,
+                operator,
+                from,
+                to,
+                token_id,
+                amount,
+            } => {
+                if from == Address::ZERO {
+                    EvmStandardChange::Erc1155MintSingle {
+                        contract_address: contract,
+                        operator,
+                        to,
+                        token_id,
+                        raw_amount: amount,
+                    }
+                } else if to == Address::ZERO {
+                    EvmStandardChange::Erc1155BurnSingle {
+                        contract_address: contract,
+                        operator,
+                        from,
+                        token_id,
+                        raw_amount: amount,
+                    }
+                } else {
+                    EvmStandardChange::Erc1155TransferSingle {
+                        contract_address: contract,
+                        operator,
+                        from,
+                        to,
+                        token_id,
+                        raw_amount: amount,
+                    }
+                }
+            }
+            Self::Erc1155TransferBatch {
+                contract,
+                operator,
+                from,
+                to,
+                items,
+            } => {
+                let items = items
+                    .into_iter()
+                    .map(|(token_id, raw_amount)| Erc1155TransferItem {
+                        token_id,
+                        raw_amount,
+                    })
+                    .collect();
+                if from == Address::ZERO {
+                    EvmStandardChange::Erc1155MintBatch {
+                        contract_address: contract,
+                        operator,
+                        to,
+                        items,
+                    }
+                } else if to == Address::ZERO {
+                    EvmStandardChange::Erc1155BurnBatch {
+                        contract_address: contract,
+                        operator,
+                        from,
+                        items,
+                    }
+                } else {
+                    EvmStandardChange::Erc1155TransferBatch {
+                        contract_address: contract,
+                        operator,
+                        from,
+                        to,
+                        items,
+                    }
+                }
+            }
+        })
+    }
 }
 
 fn collect_candidates(
@@ -456,6 +711,7 @@ fn decode_standard_candidate(log: &Log) -> Result<StandardCandidate, &'static st
             .map_err(|_| "TransferSingle data is not canonical")?;
         return Ok(StandardCandidate::Erc1155TransferSingle {
             contract: log.address,
+            operator: indexed_address(&topics[1])?,
             from: indexed_address(&topics[2])?,
             to: indexed_address(&topics[3])?,
             token_id,
@@ -477,6 +733,7 @@ fn decode_standard_candidate(log: &Log) -> Result<StandardCandidate, &'static st
         }
         return Ok(StandardCandidate::Erc1155TransferBatch {
             contract: log.address,
+            operator: indexed_address(&topics[1])?,
             from: indexed_address(&topics[2])?,
             to: indexed_address(&topics[3])?,
             items: token_ids.into_iter().zip(amounts).collect(),
@@ -555,7 +812,7 @@ fn verify_candidate(
     pairs: &[WrappedTransferPair],
     wrapped_pair_evidence: &mut HashMap<usize, WrappedPairEvidence>,
     final_checks: &mut HashMap<CheckKey, CheckValue>,
-) -> Result<(), EvmChangeResolutionError> {
+) -> Result<VerifiedCandidate, EvmChangeResolutionError> {
     let pair = pairs.iter().enumerate().find_map(|(index, pair)| {
         (pair.standard_index == candidate_index || pair.wrapped_index == candidate_index)
             .then_some((index, *pair))
@@ -575,7 +832,7 @@ fn verify_candidate(
                 wrapped_pair_evidence,
                 final_checks,
             };
-            context.verify_standard(kind)?;
+            Ok(VerifiedCandidate::Standard(context.verify_standard(kind)?))
         }
         Candidate::Wrapped {
             occurrence,
@@ -585,7 +842,7 @@ fn verify_candidate(
             direction,
         } => {
             let around = views.around(occurrence.handle())?;
-            verify_wrapped_transition(
+            let (after, total_supply_after) = verify_wrapped_transition(
                 execution,
                 occurrence.frame_id(),
                 occurrence.position(),
@@ -598,7 +855,6 @@ fn verify_candidate(
                 pair,
                 wrapped_pair_evidence,
             )?;
-            let after = read_erc20_balance(around.current(), *contract, *account)?;
             final_checks.insert(
                 CheckKey::Erc20Balance {
                     contract: *contract,
@@ -606,9 +862,15 @@ fn verify_candidate(
                 },
                 CheckValue::Amount(after),
             );
+            final_checks.insert(
+                CheckKey::Erc20TotalSupply {
+                    contract: *contract,
+                },
+                CheckValue::Amount(total_supply_after),
+            );
+            Ok(VerifiedCandidate::Wrapped)
         }
     }
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -624,30 +886,36 @@ fn verify_wrapped_transition(
     direction: WrappedDirection,
     pair: Option<(usize, WrappedTransferPair)>,
     wrapped_pair_evidence: &mut HashMap<usize, WrappedPairEvidence>,
-) -> Result<(), EvmChangeResolutionError> {
+) -> Result<(U256, U256), EvmChangeResolutionError> {
     require_wrapped_operation_evidence(
         execution, frame_id, contract, account, amount, direction, position,
     )?;
     let before = read_erc20_balance(previous, contract, account)?;
     let after = read_erc20_balance(current, contract, account)?;
+    let total_supply_before = read_erc20_total_supply(previous, contract)?;
+    let total_supply_after = read_erc20_total_supply(current, contract)?;
     let expected = match direction {
         WrappedDirection::Deposit => before.checked_add(amount),
         WrappedDirection::Withdrawal => before.checked_sub(amount),
     };
+    let expected_total_supply = match direction {
+        WrappedDirection::Deposit => total_supply_before.checked_add(amount),
+        WrappedDirection::Withdrawal => total_supply_before.checked_sub(amount),
+    };
 
-    if expected == Some(after) {
+    if expected == Some(after) && expected_total_supply == Some(total_supply_after) {
         record_wrapped_pair(
             wrapped_pair_evidence,
             pair,
             WrappedTransitionEvidence::Exact,
         );
-        return Ok(());
+        return Ok((after, total_supply_after));
     }
 
-    if before != after {
+    if before != after || total_supply_before != total_supply_after {
         return Err(mismatch(
             position,
-            "wrapped-native balance does not match Deposit/Withdrawal",
+            "wrapped-native balance or total supply does not match Deposit/Withdrawal",
         ));
     }
 
@@ -662,7 +930,7 @@ fn verify_wrapped_transition(
         Some(pair),
         WrappedTransitionEvidence::Unchanged,
     );
-    Ok(())
+    Ok((after, total_supply_after))
 }
 
 fn require_wrapped_operation_evidence(
@@ -727,14 +995,22 @@ impl VerificationContext<'_> {
     fn verify_standard(
         &mut self,
         kind: &StandardCandidate,
-    ) -> Result<(), EvmChangeResolutionError> {
-        match kind {
+    ) -> Result<VerifiedStandardChange, EvmChangeResolutionError> {
+        let change = match kind {
             StandardCandidate::Erc20Transfer {
                 contract,
                 from,
                 to,
                 amount,
-            } => self.verify_erc20_transfer(*contract, *from, *to, *amount)?,
+            } => {
+                self.verify_erc20_transfer(*contract, *from, *to, *amount)?;
+                VerifiedStandardChange::Erc20Transfer {
+                    contract: *contract,
+                    from: *from,
+                    to: *to,
+                    amount: *amount,
+                }
+            }
             StandardCandidate::Erc20Approval {
                 contract,
                 owner,
@@ -768,6 +1044,13 @@ impl VerificationContext<'_> {
                     },
                     CheckValue::Amount(after),
                 );
+                VerifiedStandardChange::Erc20Approval {
+                    contract: *contract,
+                    owner: *owner,
+                    spender: *spender,
+                    before,
+                    after,
+                }
             }
             StandardCandidate::Erc721Transfer {
                 contract,
@@ -775,6 +1058,12 @@ impl VerificationContext<'_> {
                 to,
                 token_id,
             } => {
+                if *from == Address::ZERO && *to == Address::ZERO {
+                    return Err(mismatch(
+                        self.position,
+                        "ERC-721 Transfer cannot mint to or burn from the zero address",
+                    ));
+                }
                 let before = read_owner(self.previous, *contract, *token_id)?;
                 let after = read_owner(self.current, *contract, *token_id)?;
                 if *from == Address::ZERO {
@@ -808,6 +1097,28 @@ impl VerificationContext<'_> {
                         self.position,
                     )?;
                 }
+                let approval_before = if before.is_some() {
+                    read_approved(self.previous, *contract, *token_id)?
+                } else {
+                    read_approved_optional(self.previous, *contract, *token_id)?
+                };
+                if *from == Address::ZERO && approval_before.is_some() {
+                    return Err(mismatch(
+                        self.position,
+                        "ERC-721 mint started with an unexpected token approval",
+                    ));
+                }
+                let approval_after = if after.is_some() {
+                    read_approved(self.current, *contract, *token_id)?
+                } else {
+                    read_approved_optional(self.current, *contract, *token_id)?
+                };
+                if approval_after.is_some() {
+                    return Err(mismatch(
+                        self.position,
+                        "ERC-721 Transfer did not clear the token approval",
+                    ));
+                }
                 self.final_checks.insert(
                     CheckKey::Owner {
                         contract: *contract,
@@ -815,6 +1126,19 @@ impl VerificationContext<'_> {
                     },
                     CheckValue::Owner(after),
                 );
+                self.final_checks.insert(
+                    CheckKey::Approved {
+                        contract: *contract,
+                        token_id: *token_id,
+                    },
+                    CheckValue::Owner(None),
+                );
+                VerifiedStandardChange::Erc721Transfer {
+                    contract: *contract,
+                    from: *from,
+                    to: *to,
+                    token_id: *token_id,
+                }
             }
             StandardCandidate::Erc721Approval {
                 contract,
@@ -855,6 +1179,13 @@ impl VerificationContext<'_> {
                     },
                     CheckValue::Owner(after),
                 );
+                VerifiedStandardChange::Erc721Approval {
+                    contract: *contract,
+                    owner: *owner,
+                    before,
+                    after,
+                    token_id: *token_id,
+                }
             }
             StandardCandidate::OperatorApproval {
                 contract,
@@ -889,24 +1220,56 @@ impl VerificationContext<'_> {
                     },
                     CheckValue::Bool(after),
                 );
+                VerifiedStandardChange::OperatorApproval {
+                    contract: *contract,
+                    owner: *owner,
+                    operator: *operator,
+                    before,
+                    after,
+                }
             }
             StandardCandidate::Erc1155TransferSingle {
                 contract,
+                operator,
                 from,
                 to,
                 token_id,
                 amount,
             } => {
-                self.verify_erc1155_transfer(*contract, *from, *to, &[(*token_id, *amount)], false)?
+                self.verify_erc1155_transfer(
+                    *contract,
+                    *from,
+                    *to,
+                    &[(*token_id, *amount)],
+                    false,
+                )?;
+                VerifiedStandardChange::Erc1155TransferSingle {
+                    contract: *contract,
+                    operator: *operator,
+                    from: *from,
+                    to: *to,
+                    token_id: *token_id,
+                    amount: *amount,
+                }
             }
             StandardCandidate::Erc1155TransferBatch {
                 contract,
+                operator,
                 from,
                 to,
                 items,
-            } => self.verify_erc1155_transfer(*contract, *from, *to, items, true)?,
-        }
-        Ok(())
+            } => {
+                self.verify_erc1155_transfer(*contract, *from, *to, items, true)?;
+                VerifiedStandardChange::Erc1155TransferBatch {
+                    contract: *contract,
+                    operator: *operator,
+                    from: *from,
+                    to: *to,
+                    items: items.clone(),
+                }
+            }
+        };
+        Ok(change)
     }
 
     fn verify_erc20_transfer(
@@ -916,6 +1279,12 @@ impl VerificationContext<'_> {
         to: Address,
         amount: U256,
     ) -> Result<(), EvmChangeResolutionError> {
+        if from == Address::ZERO && to == Address::ZERO {
+            return Err(mismatch(
+                self.position,
+                "ERC-20 Transfer cannot mint to or burn from the zero address",
+            ));
+        }
         let from_before = (from != Address::ZERO)
             .then(|| read_erc20_balance(self.previous, contract, from))
             .transpose()?;
@@ -927,6 +1296,12 @@ impl VerificationContext<'_> {
             .transpose()?;
         let to_after = (to != Address::ZERO)
             .then(|| read_erc20_balance(self.current, contract, to))
+            .transpose()?;
+        let total_supply_before = (from == Address::ZERO || to == Address::ZERO)
+            .then(|| read_erc20_total_supply(self.previous, contract))
+            .transpose()?;
+        let total_supply_after = (from == Address::ZERO || to == Address::ZERO)
+            .then(|| read_erc20_total_supply(self.current, contract))
             .transpose()?;
 
         let source_exact = match (from_before, from_after) {
@@ -949,6 +1324,19 @@ impl VerificationContext<'_> {
             (None, None) => true,
             _ => false,
         };
+        let supply_exact = match (total_supply_before, total_supply_after) {
+            (Some(before), Some(after)) if from == Address::ZERO => {
+                before.checked_add(amount) == Some(after)
+            }
+            (Some(before), Some(after)) => before.checked_sub(amount) == Some(after),
+            (None, None) => true,
+            _ => false,
+        };
+        let supply_unchanged = match (total_supply_before, total_supply_after) {
+            (Some(before), Some(after)) => before == after,
+            (None, None) => true,
+            _ => false,
+        };
 
         if from == to {
             if !source_unchanged {
@@ -958,12 +1346,12 @@ impl VerificationContext<'_> {
                 ));
             }
             self.require_erc20_transfer_evidence(contract, from, to, amount)?;
-        } else if source_exact && target_exact {
+        } else if source_exact && target_exact && supply_exact {
             if amount == U256::ZERO {
                 self.require_erc20_transfer_evidence(contract, from, to, amount)?;
             }
             self.record_wrapped_pair(WrappedTransitionEvidence::Exact);
-        } else if source_unchanged && target_unchanged {
+        } else if source_unchanged && target_unchanged && supply_unchanged {
             let Some((_, pair)) = self.pair else {
                 return Err(mismatch(
                     self.position,
@@ -1006,6 +1394,12 @@ impl VerificationContext<'_> {
                     contract,
                     account: to,
                 },
+                CheckValue::Amount(value),
+            );
+        }
+        if let Some(value) = total_supply_after {
+            self.final_checks.insert(
+                CheckKey::Erc20TotalSupply { contract },
                 CheckValue::Amount(value),
             );
         }
@@ -1058,6 +1452,12 @@ impl VerificationContext<'_> {
         items: &[(U256, U256)],
         batch: bool,
     ) -> Result<(), EvmChangeResolutionError> {
+        if from == Address::ZERO && to == Address::ZERO {
+            return Err(mismatch(
+                self.position,
+                "ERC-1155 transfer cannot mint to or burn from the zero address",
+            ));
+        }
         if from == to || items.iter().any(|(_, amount)| *amount == U256::ZERO) {
             require_erc1155_transfer_evidence(
                 self.execution,
@@ -1182,6 +1582,9 @@ enum CheckKey {
         contract: Address,
         account: Address,
     },
+    Erc20TotalSupply {
+        contract: Address,
+    },
     Erc1155Balance {
         contract: Address,
         account: Address,
@@ -1223,6 +1626,9 @@ fn verify_final_checks(
             CheckKey::Erc20Balance { contract, account } => {
                 CheckValue::Amount(read_erc20_balance(views.finalized(), *contract, *account)?)
             }
+            CheckKey::Erc20TotalSupply { contract } => {
+                CheckValue::Amount(read_erc20_total_supply(views.finalized(), *contract)?)
+            }
             CheckKey::Erc1155Balance {
                 contract,
                 account,
@@ -1247,7 +1653,17 @@ fn verify_final_checks(
                 CheckValue::Owner(read_owner(views.finalized(), *contract, *token_id)?)
             }
             CheckKey::Approved { contract, token_id } => {
-                CheckValue::Owner(read_approved(views.finalized(), *contract, *token_id)?)
+                let owner_key = CheckKey::Owner {
+                    contract: *contract,
+                    token_id: *token_id,
+                };
+                let token_is_missing = checks.get(&owner_key) == Some(&CheckValue::Owner(None));
+                let approved = if token_is_missing {
+                    read_approved_optional(views.finalized(), *contract, *token_id)?
+                } else {
+                    read_approved(views.finalized(), *contract, *token_id)?
+                };
+                CheckValue::Owner(approved)
             }
             CheckKey::Operator {
                 contract,
@@ -1282,6 +1698,20 @@ fn read_erc20_balance(
     )?;
     IERC20State::balanceOfCall::abi_decode_returns_validate(&output)
         .map_err(|error| standard_error(format!("invalid balanceOf return data: {error}")))
+}
+
+fn read_erc20_total_supply(
+    view: &EvmStateView,
+    contract: Address,
+) -> Result<U256, EvmChangeResolutionError> {
+    let output = read_call_output(
+        view,
+        contract,
+        IERC20State::totalSupplyCall {}.abi_encode().into(),
+        "totalSupply()",
+    )?;
+    IERC20State::totalSupplyCall::abi_decode_returns_validate(&output)
+        .map_err(|error| standard_error(format!("invalid totalSupply return data: {error}")))
 }
 
 fn read_erc1155_balance(
@@ -1362,6 +1792,31 @@ fn read_approved(
     let address = IERC721State::getApprovedCall::abi_decode_returns_validate(&output)
         .map_err(|error| standard_error(format!("invalid getApproved return data: {error}")))?;
     Ok(nonzero_address(address))
+}
+
+fn read_approved_optional(
+    view: &EvmStateView,
+    contract: Address,
+    token_id: U256,
+) -> Result<Option<Address>, EvmChangeResolutionError> {
+    match view.read_call(
+        contract,
+        IERC721State::getApprovedCall { tokenId: token_id }
+            .abi_encode()
+            .into(),
+    )? {
+        EvmReadCallOutcome::Success(output) => {
+            let address = IERC721State::getApprovedCall::abi_decode_returns_validate(&output)
+                .map_err(|error| {
+                    standard_error(format!("invalid getApproved return data: {error}"))
+                })?;
+            Ok(nonzero_address(address))
+        }
+        EvmReadCallOutcome::Reverted(_) => Ok(None),
+        EvmReadCallOutcome::Halted { reason } => {
+            Err(standard_error(format!("getApproved halted: {reason}")))
+        }
+    }
 }
 
 fn read_operator(
@@ -1675,9 +2130,6 @@ fn selector(signature: &str) -> [u8; 4] {
 }
 
 fn load_metadata(candidates: &[Candidate], views: &EvmStateViews) -> MetadataValues<Address> {
-    const MAX_METADATA_CALLS: usize = 64;
-    const MAX_METADATA_OUTPUT_BYTES: usize = 4 * 1024;
-
     let decoded = candidates.iter().filter_map(|candidate| match candidate {
         Candidate::Standard { decoded, .. } => Some(decoded),
         Candidate::Wrapped { .. } => None,
@@ -1706,16 +2158,10 @@ fn load_metadata(candidates: &[Candidate], views: &EvmStateViews) -> MetadataVal
     }
 
     let mut values = MetadataValues::default();
-    for (index, call) in calls.into_iter().enumerate() {
-        if index >= MAX_METADATA_CALLS {
-            values.record_unavailable(call);
-            continue;
-        }
+    for call in calls {
         let target = *call.contract_address();
         match views.finalized().read_call(target, call.call_data()) {
-            Ok(EvmReadCallOutcome::Success(output))
-                if output.len() <= MAX_METADATA_OUTPUT_BYTES =>
-            {
+            Ok(EvmReadCallOutcome::Success(output)) => {
                 values.record_output(call, &output);
             }
             Ok(_) | Err(_) => values.record_unavailable(call),

@@ -13,8 +13,7 @@ use revm::{
 };
 use thiserror::Error;
 
-const MAX_OCCURRENCE_CHECKPOINTS: usize = 256;
-const MAX_RETAINED_STATE_UNITS: usize = 1_000_000;
+use crate::EvmSimulationLimits;
 
 static DEPOSIT_TOPIC0: LazyLock<B256> = LazyLock::new(|| keccak256("Deposit(address,uint256)"));
 static WITHDRAWAL_TOPIC0: LazyLock<B256> =
@@ -212,6 +211,7 @@ pub(crate) enum EvmExecutionObservationError {
 #[derive(Debug, Default)]
 pub(crate) struct EvmExecutionObserver {
     wrapped_native_token: Option<Address>,
+    limits: EvmSimulationLimits,
     applied_authorization_accounts: Option<Vec<Address>>,
     frames: Vec<EvmCommittedFrame>,
     logs: Vec<EvmCommittedLog>,
@@ -230,6 +230,17 @@ impl EvmExecutionObserver {
     pub(crate) fn new(wrapped_native_token: Option<Address>) -> Self {
         Self {
             wrapped_native_token,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn with_limits(
+        wrapped_native_token: Option<Address>,
+        limits: EvmSimulationLimits,
+    ) -> Self {
+        Self {
+            wrapped_native_token,
+            limits,
             ..Self::default()
         }
     }
@@ -433,25 +444,28 @@ impl EvmExecutionObserver {
         if self.evidence_error.is_some() {
             return None;
         }
-        if self.checkpoints.len() >= MAX_OCCURRENCE_CHECKPOINTS {
-            self.evidence_error = Some(EvmOccurrenceEvidenceError::CheckpointLimitExceeded {
-                limit: MAX_OCCURRENCE_CHECKPOINTS,
-            });
+        if let Some(limit) = self.limits.max_occurrence_checkpoints
+            && self.checkpoints.len() >= limit
+        {
+            self.evidence_error =
+                Some(EvmOccurrenceEvidenceError::CheckpointLimitExceeded { limit });
             return None;
         }
 
         let state_units = retained_state_units(state);
-        let Some(retained_state_units) = self.retained_state_units.checked_add(state_units) else {
-            self.evidence_error = Some(EvmOccurrenceEvidenceError::RetainedStateLimitExceeded {
-                limit: MAX_RETAINED_STATE_UNITS,
-            });
-            return None;
-        };
-        if retained_state_units > MAX_RETAINED_STATE_UNITS {
-            self.evidence_error = Some(EvmOccurrenceEvidenceError::RetainedStateLimitExceeded {
-                limit: MAX_RETAINED_STATE_UNITS,
-            });
-            return None;
+        let retained_state_units = self.retained_state_units.saturating_add(state_units);
+        if let Some(limit) = self.limits.max_retained_state_entries {
+            let Some(retained_state_units) = self.retained_state_units.checked_add(state_units)
+            else {
+                self.evidence_error =
+                    Some(EvmOccurrenceEvidenceError::RetainedStateLimitExceeded { limit });
+                return None;
+            };
+            if retained_state_units > limit {
+                self.evidence_error =
+                    Some(EvmOccurrenceEvidenceError::RetainedStateLimitExceeded { limit });
+                return None;
+            }
         }
 
         let checkpoint_index = self.checkpoints.len();

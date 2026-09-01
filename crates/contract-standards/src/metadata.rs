@@ -207,7 +207,8 @@ where
         })
     }
 
-    pub(crate) fn erc721(
+    /// Returns ERC-721 collection metadata after both getter outcomes were recorded.
+    pub fn erc721_collection_metadata(
         &self,
         collection: &A,
     ) -> Result<Erc721CollectionMetadata, MissingMetadataOutcome> {
@@ -223,6 +224,13 @@ where
                 .ok_or(MissingMetadataOutcome)?
                 .clone(),
         })
+    }
+
+    pub(crate) fn erc721(
+        &self,
+        collection: &A,
+    ) -> Result<Erc721CollectionMetadata, MissingMetadataOutcome> {
+        self.erc721_collection_metadata(collection)
     }
 }
 

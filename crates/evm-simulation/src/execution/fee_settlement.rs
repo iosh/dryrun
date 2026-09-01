@@ -13,12 +13,13 @@ impl EvmFeeSettlement {
         gas: &EvmGas,
         effective_gas_price: u128,
         base_fee_per_gas: u64,
+        burn_enabled: bool,
         blob_gas_fee: Option<EvmBlobGasFee>,
     ) -> Result<Self, EvmResultIntegrationError> {
         let effective_gas_price_u256 = U256::from(effective_gas_price);
         let gas_used = U256::from(gas.gas_used());
         let charged_amount = gas_used * effective_gas_price_u256;
-        let burnt_amount = gas_used * U256::from(base_fee_per_gas);
+        let burnt_amount = burn_enabled.then_some(gas_used * U256::from(base_fee_per_gas));
         let execution_gas_fee =
             EvmExecutionGasFee::new(effective_gas_price, charged_amount, burnt_amount)?;
         Ok(Self {

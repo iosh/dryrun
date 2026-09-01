@@ -133,27 +133,181 @@ pub struct SignedAuthorization {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct EvmSimulateTransactionResponse {
-    pub execution: Execution,
+    pub state: EvmState,
+    pub transaction: CompletedTransaction,
+    pub outcome: Outcome,
     pub changes: Changes,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub struct Execution {
+pub struct EvmState {
+    #[serde(with = "quantity")]
+    pub block_number: u64,
+    pub block_hash: B256,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum CompletedTransaction {
+    Legacy(LegacyTransaction),
+    Eip2930(Eip2930Transaction),
+    Eip1559(Eip1559Transaction),
+    Eip4844(Eip4844Transaction),
+    Eip7702(Eip7702Transaction),
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletedTransactionBase {
+    #[serde(rename = "type", with = "quantity")]
+    pub tx_type: u8,
     #[serde(with = "quantity")]
     pub chain_id: u64,
-    pub block: EvmBlockContext,
-    pub status: ExecutionStatus,
+    pub from: Address,
+    pub to: Option<Address>,
+    #[serde(with = "quantity")]
+    pub nonce: u64,
+    #[serde(with = "quantity")]
+    pub gas: u64,
+    pub value: U256,
+    pub data: Bytes,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LegacyTransaction {
+    #[serde(flatten)]
+    pub base: CompletedTransactionBase,
+    #[serde(with = "quantity")]
+    pub gas_price: u128,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Eip2930Transaction {
+    #[serde(flatten)]
+    pub base: CompletedTransactionBase,
+    #[serde(with = "quantity")]
+    pub gas_price: u128,
+    pub access_list: Vec<AccessListItem>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Eip1559Transaction {
+    #[serde(flatten)]
+    pub base: CompletedTransactionBase,
+    #[serde(with = "quantity")]
+    pub max_fee_per_gas: u128,
+    #[serde(with = "quantity")]
+    pub max_priority_fee_per_gas: u128,
+    pub access_list: Vec<AccessListItem>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Eip4844Transaction {
+    #[serde(flatten)]
+    pub base: CompletedTransactionBase,
+    #[serde(with = "quantity")]
+    pub max_fee_per_gas: u128,
+    #[serde(with = "quantity")]
+    pub max_priority_fee_per_gas: u128,
+    #[serde(with = "quantity")]
+    pub max_fee_per_blob_gas: u128,
+    pub access_list: Vec<AccessListItem>,
+    pub blob_versioned_hashes: Vec<B256>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Eip7702Transaction {
+    #[serde(flatten)]
+    pub base: CompletedTransactionBase,
+    #[serde(with = "quantity")]
+    pub max_fee_per_gas: u128,
+    #[serde(with = "quantity")]
+    pub max_priority_fee_per_gas: u128,
+    pub access_list: Vec<AccessListItem>,
+    pub authorization_list: Vec<SignedAuthorization>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "lowercase")]
+pub enum Outcome {
+    Success(SuccessOutcome),
+    Reverted(RevertedOutcome),
+    Failed(FailedOutcome),
+    Rejected { error: String },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum SuccessOutcome {
+    Call(SuccessCallOutcome),
+    Create(SuccessCreateOutcome),
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SuccessCallOutcome {
+    #[serde(flatten)]
+    pub accounting: ExecutionAccounting,
+    pub return_data: Bytes,
+    pub logs: Vec<SimulationLog>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SuccessCreateOutcome {
+    #[serde(flatten)]
+    pub accounting: ExecutionAccounting,
+    pub contract_address: Address,
+    pub runtime_code: Bytes,
+    pub logs: Vec<SimulationLog>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RevertedOutcome {
+    #[serde(flatten)]
+    pub accounting: ExecutionAccounting,
+    pub revert_data: Bytes,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FailedOutcome {
+    #[serde(flatten)]
+    pub accounting: ExecutionAccounting,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionAccounting {
     #[serde(with = "quantity")]
     pub gas_used: u64,
     #[serde(with = "quantity")]
-    pub gas_limit: u64,
-    pub fee: U256,
-    pub burnt_fee: U256,
-    pub output: Bytes,
-    pub logs: Vec<SimulationLog>,
+    pub effective_gas_price: u128,
+    pub gas_fee: U256,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub failure: Option<ExecutionFailure>,
+    pub burnt_gas_fee: Option<U256>,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub blob: Option<BlobGasAccounting>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BlobGasAccounting {
+    #[serde(with = "quantity")]
+    pub blob_gas_used: u64,
+    #[serde(with = "quantity")]
+    pub blob_gas_price: u128,
+    pub blob_gas_fee: U256,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -162,31 +316,6 @@ pub struct SimulationLog {
     pub address: Address,
     pub topics: Vec<B256>,
     pub data: Bytes,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct EvmBlockContext {
-    #[serde(with = "quantity")]
-    pub number: u64,
-    pub hash: B256,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "UPPERCASE")]
-pub enum ExecutionStatus {
-    Success,
-    Failed,
-    NotExecuted,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecutionFailure {
-    pub code: String,
-    pub message: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -248,12 +377,30 @@ pub enum StateChange {
         #[serde(flatten)]
         metadata: Erc20Metadata,
     },
+    Erc20Mint {
+        contract_address: Address,
+        to: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
+        #[serde(flatten)]
+        metadata: Erc20Metadata,
+    },
+    Erc20Burn {
+        contract_address: Address,
+        from: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
+        #[serde(flatten)]
+        metadata: Erc20Metadata,
+    },
     Erc20Approval {
         contract_address: Address,
         owner: Address,
         spender: Address,
         #[serde(serialize_with = "u256_hex::serialize")]
-        approved_amount: U256,
+        before: U256,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        after: U256,
         #[serde(flatten)]
         metadata: Erc20Metadata,
     },
@@ -266,10 +413,27 @@ pub enum StateChange {
         #[serde(flatten)]
         metadata: Erc721CollectionMetadata,
     },
+    Erc721Mint {
+        contract_address: Address,
+        to: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        token_id: U256,
+        #[serde(flatten)]
+        metadata: Erc721CollectionMetadata,
+    },
+    Erc721Burn {
+        contract_address: Address,
+        from: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        token_id: U256,
+        #[serde(flatten)]
+        metadata: Erc721CollectionMetadata,
+    },
     Erc721Approval {
         contract_address: Address,
         owner: Address,
-        approved_address: Option<Address>,
+        before: Option<Address>,
+        after: Option<Address>,
         #[serde(serialize_with = "u256_hex::serialize")]
         token_id: U256,
         #[serde(flatten)]
@@ -279,7 +443,8 @@ pub enum StateChange {
         contract_address: Address,
         owner: Address,
         operator: Address,
-        approved: bool,
+        before: bool,
+        after: bool,
     },
     Erc1155TransferSingle {
         contract_address: Address,
@@ -291,11 +456,41 @@ pub enum StateChange {
         #[serde(serialize_with = "u256_hex::serialize")]
         raw_amount: U256,
     },
+    Erc1155MintSingle {
+        contract_address: Address,
+        operator: Address,
+        to: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        token_id: U256,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
+    },
+    Erc1155BurnSingle {
+        contract_address: Address,
+        operator: Address,
+        from: Address,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        token_id: U256,
+        #[serde(serialize_with = "u256_hex::serialize")]
+        raw_amount: U256,
+    },
     Erc1155TransferBatch {
         contract_address: Address,
         operator: Address,
         from: Address,
         to: Address,
+        items: Vec<Erc1155TransferItem>,
+    },
+    Erc1155MintBatch {
+        contract_address: Address,
+        operator: Address,
+        to: Address,
+        items: Vec<Erc1155TransferItem>,
+    },
+    Erc1155BurnBatch {
+        contract_address: Address,
+        operator: Address,
+        from: Address,
         items: Vec<Erc1155TransferItem>,
     },
 }

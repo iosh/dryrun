@@ -5,7 +5,6 @@ import type {
   EvmChange,
   RpcSimulationResponse,
 } from './rpc.ts';
-import { normalizeEvmChange } from './rpc.ts';
 
 export type TxTypeOption =
   | 'auto'
@@ -97,7 +96,7 @@ export function simulationChanges(
   }
 
   return {
-    items: changes.items.map(normalizeEvmChange),
+    items: changes.items,
     error: null,
   };
 }

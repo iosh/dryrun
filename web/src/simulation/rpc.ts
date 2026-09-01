@@ -14,20 +14,20 @@ interface EvmNativeCurrency {
 }
 
 export interface EvmNativeTransferChange extends EvmNativeCurrency {
-  changeType: 'NATIVE_TRANSFER';
+  type: 'nativeTransfer';
   from: string;
   to: string;
   rawAmount: string;
 }
 
 export interface EvmSelfDestructBurnChange extends EvmNativeCurrency {
-  changeType: 'SELF_DESTRUCT_BURN';
+  type: 'selfDestructBurn';
   contractAddress: string;
   rawAmount: string;
 }
 
 export interface EvmAccountDelegationChange {
-  changeType: 'ACCOUNT_DELEGATION';
+  type: 'accountDelegation';
   account: string;
   before: EvmDelegationState;
   after: EvmDelegationState;
@@ -40,7 +40,7 @@ export interface EvmDelegationState {
 
 export interface EvmWrappedNativeDepositChange
   extends FungibleAssetMetadata {
-  changeType: 'WRAPPED_NATIVE_DEPOSIT';
+  type: 'wrappedNativeDeposit';
   contractAddress: string;
   account: string;
   rawAmount: string;
@@ -48,58 +48,107 @@ export interface EvmWrappedNativeDepositChange
 
 export interface EvmWrappedNativeWithdrawalChange
   extends FungibleAssetMetadata {
-  changeType: 'WRAPPED_NATIVE_WITHDRAWAL';
+  type: 'wrappedNativeWithdrawal';
   contractAddress: string;
   account: string;
   rawAmount: string;
 }
 
 export interface EvmErc20TransferChange extends FungibleAssetMetadata {
-  changeType: 'ERC20_TRANSFER';
+  type: 'erc20Transfer';
   contractAddress: string;
   from: string;
   to: string;
   rawAmount: string;
 }
 
+export interface EvmErc20MintChange extends FungibleAssetMetadata {
+  type: 'erc20Mint';
+  contractAddress: string;
+  to: string;
+  rawAmount: string;
+}
+
+export interface EvmErc20BurnChange extends FungibleAssetMetadata {
+  type: 'erc20Burn';
+  contractAddress: string;
+  from: string;
+  rawAmount: string;
+}
+
 export interface EvmErc20ApprovalChange extends FungibleAssetMetadata {
-  changeType: 'ERC20_APPROVAL';
+  type: 'erc20Approval';
   contractAddress: string;
   owner: string;
   spender: string;
-  approvedAmount: string;
+  before: string;
+  after: string;
 }
 
 export interface EvmErc721TransferChange extends AssetMetadata {
-  changeType: 'ERC721_TRANSFER';
+  type: 'erc721Transfer';
   contractAddress: string;
   from: string;
   to: string;
+  tokenId: string;
+}
+
+export interface EvmErc721MintChange extends AssetMetadata {
+  type: 'erc721Mint';
+  contractAddress: string;
+  to: string;
+  tokenId: string;
+}
+
+export interface EvmErc721BurnChange extends AssetMetadata {
+  type: 'erc721Burn';
+  contractAddress: string;
+  from: string;
   tokenId: string;
 }
 
 export interface EvmErc721ApprovalChange extends AssetMetadata {
-  changeType: 'ERC721_APPROVAL';
+  type: 'erc721Approval';
   contractAddress: string;
   owner: string;
-  approvedAddress: string | null;
+  before: string | null;
+  after: string | null;
   tokenId: string;
 }
 
 export interface EvmOperatorApprovalChange {
-  changeType: 'OPERATOR_APPROVAL';
+  type: 'operatorApproval';
   contractAddress: string;
   owner: string;
   operator: string;
-  approved: boolean;
+  before: boolean;
+  after: boolean;
 }
 
 export interface EvmErc1155TransferSingleChange {
-  changeType: 'ERC1155_TRANSFER_SINGLE';
+  type: 'erc1155TransferSingle';
   contractAddress: string;
   operator: string;
   from: string;
   to: string;
+  tokenId: string;
+  rawAmount: string;
+}
+
+export interface EvmErc1155MintSingleChange {
+  type: 'erc1155MintSingle';
+  contractAddress: string;
+  operator: string;
+  to: string;
+  tokenId: string;
+  rawAmount: string;
+}
+
+export interface EvmErc1155BurnSingleChange {
+  type: 'erc1155BurnSingle';
+  contractAddress: string;
+  operator: string;
+  from: string;
   tokenId: string;
   rawAmount: string;
 }
@@ -110,11 +159,27 @@ export interface Erc1155TransferItem {
 }
 
 export interface EvmErc1155TransferBatchChange {
-  changeType: 'ERC1155_TRANSFER_BATCH';
+  type: 'erc1155TransferBatch';
   contractAddress: string;
   operator: string;
   from: string;
   to: string;
+  items: Erc1155TransferItem[];
+}
+
+export interface EvmErc1155MintBatchChange {
+  type: 'erc1155MintBatch';
+  contractAddress: string;
+  operator: string;
+  to: string;
+  items: Erc1155TransferItem[];
+}
+
+export interface EvmErc1155BurnBatchChange {
+  type: 'erc1155BurnBatch';
+  contractAddress: string;
+  operator: string;
+  from: string;
   items: Erc1155TransferItem[];
 }
 
@@ -125,210 +190,24 @@ export type EvmChange =
   | EvmWrappedNativeDepositChange
   | EvmWrappedNativeWithdrawalChange
   | EvmErc20TransferChange
+  | EvmErc20MintChange
+  | EvmErc20BurnChange
   | EvmErc20ApprovalChange
   | EvmErc721TransferChange
+  | EvmErc721MintChange
+  | EvmErc721BurnChange
   | EvmErc721ApprovalChange
   | EvmOperatorApprovalChange
   | EvmErc1155TransferSingleChange
-  | EvmErc1155TransferBatchChange;
-
-export type EvmNativeTransferChangeWire = Omit<
-  EvmNativeTransferChange,
-  'changeType'
-> & { type: 'nativeTransfer' };
-
-export type EvmSelfDestructBurnChangeWire = Omit<
-  EvmSelfDestructBurnChange,
-  'changeType'
-> & { type: 'selfDestructBurn' };
-
-export type EvmAccountDelegationChangeWire = Omit<
-  EvmAccountDelegationChange,
-  'changeType'
-> & { type: 'accountDelegation' };
-
-export type EvmWrappedNativeDepositChangeWire = Omit<
-  EvmWrappedNativeDepositChange,
-  'changeType'
-> & { type: 'wrappedNativeDeposit' };
-
-export type EvmWrappedNativeWithdrawalChangeWire = Omit<
-  EvmWrappedNativeWithdrawalChange,
-  'changeType'
-> & { type: 'wrappedNativeWithdrawal' };
-
-export type EvmErc20TransferChangeWire = Omit<
-  EvmErc20TransferChange,
-  'changeType'
-> & { type: 'erc20Transfer' };
-
-export type EvmErc20ApprovalChangeWire = Omit<
-  EvmErc20ApprovalChange,
-  'changeType'
-> & { type: 'erc20Approval' };
-
-export type EvmErc721TransferChangeWire = Omit<
-  EvmErc721TransferChange,
-  'changeType'
-> & { type: 'erc721Transfer' };
-
-export type EvmErc721ApprovalChangeWire = Omit<
-  EvmErc721ApprovalChange,
-  'changeType'
-> & { type: 'erc721Approval' };
-
-export type EvmOperatorApprovalChangeWire = Omit<
-  EvmOperatorApprovalChange,
-  'changeType'
-> & { type: 'operatorApproval' };
-
-export type EvmErc1155TransferSingleChangeWire = Omit<
-  EvmErc1155TransferSingleChange,
-  'changeType'
-> & { type: 'erc1155TransferSingle' };
-
-export type EvmErc1155TransferBatchChangeWire = Omit<
-  EvmErc1155TransferBatchChange,
-  'changeType'
-> & { type: 'erc1155TransferBatch' };
-
-export type EvmChangeWire =
-  | EvmNativeTransferChangeWire
-  | EvmSelfDestructBurnChangeWire
-  | EvmAccountDelegationChangeWire
-  | EvmWrappedNativeDepositChangeWire
-  | EvmWrappedNativeWithdrawalChangeWire
-  | EvmErc20TransferChangeWire
-  | EvmErc20ApprovalChangeWire
-  | EvmErc721TransferChangeWire
-  | EvmErc721ApprovalChangeWire
-  | EvmOperatorApprovalChangeWire
-  | EvmErc1155TransferSingleChangeWire
-  | EvmErc1155TransferBatchChangeWire;
+  | EvmErc1155MintSingleChange
+  | EvmErc1155BurnSingleChange
+  | EvmErc1155TransferBatchChange
+  | EvmErc1155MintBatchChange
+  | EvmErc1155BurnBatchChange;
 
 export type EvmChanges =
-  | { status: 'complete'; items: EvmChangeWire[] }
+  | { status: 'complete'; items: EvmChange[] }
   | { status: 'unavailable'; error: string };
-
-export function normalizeEvmChange(change: EvmChangeWire): EvmChange {
-  switch (change.type) {
-    case 'nativeTransfer':
-      return {
-        changeType: 'NATIVE_TRANSFER',
-        from: change.from,
-        to: change.to,
-        rawAmount: change.rawAmount,
-        name: change.name,
-        symbol: change.symbol,
-        decimals: change.decimals,
-      };
-    case 'selfDestructBurn':
-      return {
-        changeType: 'SELF_DESTRUCT_BURN',
-        contractAddress: change.contractAddress,
-        rawAmount: change.rawAmount,
-        name: change.name,
-        symbol: change.symbol,
-        decimals: change.decimals,
-      };
-    case 'accountDelegation':
-      return {
-        changeType: 'ACCOUNT_DELEGATION',
-        account: change.account,
-        before: change.before,
-        after: change.after,
-      };
-    case 'wrappedNativeDeposit':
-      return {
-        changeType: 'WRAPPED_NATIVE_DEPOSIT',
-        contractAddress: change.contractAddress,
-        account: change.account,
-        rawAmount: change.rawAmount,
-        name: change.name,
-        symbol: change.symbol,
-        decimals: change.decimals,
-      };
-    case 'wrappedNativeWithdrawal':
-      return {
-        changeType: 'WRAPPED_NATIVE_WITHDRAWAL',
-        contractAddress: change.contractAddress,
-        account: change.account,
-        rawAmount: change.rawAmount,
-        name: change.name,
-        symbol: change.symbol,
-        decimals: change.decimals,
-      };
-    case 'erc20Transfer':
-      return {
-        changeType: 'ERC20_TRANSFER',
-        contractAddress: change.contractAddress,
-        from: change.from,
-        to: change.to,
-        rawAmount: change.rawAmount,
-        name: change.name,
-        symbol: change.symbol,
-        decimals: change.decimals,
-      };
-    case 'erc20Approval':
-      return {
-        changeType: 'ERC20_APPROVAL',
-        contractAddress: change.contractAddress,
-        owner: change.owner,
-        spender: change.spender,
-        approvedAmount: change.approvedAmount,
-        name: change.name,
-        symbol: change.symbol,
-        decimals: change.decimals,
-      };
-    case 'erc721Transfer':
-      return {
-        changeType: 'ERC721_TRANSFER',
-        contractAddress: change.contractAddress,
-        from: change.from,
-        to: change.to,
-        tokenId: change.tokenId,
-        name: change.name,
-        symbol: change.symbol,
-      };
-    case 'erc721Approval':
-      return {
-        changeType: 'ERC721_APPROVAL',
-        contractAddress: change.contractAddress,
-        owner: change.owner,
-        approvedAddress: change.approvedAddress,
-        tokenId: change.tokenId,
-        name: change.name,
-        symbol: change.symbol,
-      };
-    case 'operatorApproval':
-      return {
-        changeType: 'OPERATOR_APPROVAL',
-        contractAddress: change.contractAddress,
-        owner: change.owner,
-        operator: change.operator,
-        approved: change.approved,
-      };
-    case 'erc1155TransferSingle':
-      return {
-        changeType: 'ERC1155_TRANSFER_SINGLE',
-        contractAddress: change.contractAddress,
-        operator: change.operator,
-        from: change.from,
-        to: change.to,
-        tokenId: change.tokenId,
-        rawAmount: change.rawAmount,
-      };
-    case 'erc1155TransferBatch':
-      return {
-        changeType: 'ERC1155_TRANSFER_BATCH',
-        contractAddress: change.contractAddress,
-        operator: change.operator,
-        from: change.from,
-        to: change.to,
-        items: change.items,
-      };
-  }
-}
 
 interface EspaceNativeCurrency {
   name: string;
@@ -637,18 +516,123 @@ export interface SimulatedBlock {
   hash: string;
 }
 
-export interface EvmExecution {
-  chainId: string;
-  block: SimulatedBlock;
-  status: ExecutionStatus;
-  gasUsed: string;
-  gasLimit: string;
-  fee: string;
-  burntFee: string;
-  output: string;
-  logs: SimulationLog[];
-  failure?: ExecutionFailure;
+export interface EvmState {
+  blockNumber: string;
+  blockHash: string;
 }
+
+export interface EvmAccessListItem {
+  address: string;
+  storageKeys: string[];
+}
+
+export interface EvmSignedAuthorization {
+  chainId: string;
+  address: string;
+  nonce: string;
+  yParity: string;
+  r: string;
+  s: string;
+}
+
+interface EvmCompletedTransactionBase {
+  type: string;
+  chainId: string;
+  from: string;
+  to: string | null;
+  nonce: string;
+  gas: string;
+  value: string;
+  data: string;
+}
+
+export interface EvmLegacyTransaction extends EvmCompletedTransactionBase {
+  type: '0x0';
+  gasPrice: string;
+}
+
+export interface EvmEip2930Transaction extends EvmCompletedTransactionBase {
+  type: '0x1';
+  gasPrice: string;
+  accessList: EvmAccessListItem[];
+}
+
+export interface EvmEip1559Transaction extends EvmCompletedTransactionBase {
+  type: '0x2';
+  maxFeePerGas: string;
+  maxPriorityFeePerGas: string;
+  accessList: EvmAccessListItem[];
+}
+
+export interface EvmEip4844Transaction extends EvmCompletedTransactionBase {
+  type: '0x3';
+  maxFeePerGas: string;
+  maxPriorityFeePerGas: string;
+  maxFeePerBlobGas: string;
+  accessList: EvmAccessListItem[];
+  blobVersionedHashes: string[];
+}
+
+export interface EvmEip7702Transaction extends EvmCompletedTransactionBase {
+  type: '0x4';
+  maxFeePerGas: string;
+  maxPriorityFeePerGas: string;
+  accessList: EvmAccessListItem[];
+  authorizationList: EvmSignedAuthorization[];
+}
+
+export type EvmCompletedTransaction =
+  | EvmLegacyTransaction
+  | EvmEip2930Transaction
+  | EvmEip1559Transaction
+  | EvmEip4844Transaction
+  | EvmEip7702Transaction;
+
+interface EvmExecutionAccounting {
+  gasUsed: string;
+  effectiveGasPrice: string;
+  gasFee: string;
+  burntGasFee?: string;
+  blobGasUsed?: string;
+  blobGasPrice?: string;
+  blobGasFee?: string;
+}
+
+export interface EvmSuccessCallOutcome extends EvmExecutionAccounting {
+  status: 'success';
+  returnData: string;
+  logs: SimulationLog[];
+}
+
+export interface EvmSuccessCreateOutcome extends EvmExecutionAccounting {
+  status: 'success';
+  contractAddress: string;
+  runtimeCode: string;
+  logs: SimulationLog[];
+}
+
+export interface EvmRevertedOutcome extends EvmExecutionAccounting {
+  status: 'reverted';
+  revertData: string;
+  reason?: string;
+}
+
+export interface EvmFailedOutcome extends EvmExecutionAccounting {
+  status: 'failed';
+  error: string;
+}
+
+export interface EvmRejectedOutcome {
+  status: 'rejected';
+  error: string;
+}
+
+export type EvmOutcome =
+  | EvmSuccessCallOutcome
+  | EvmSuccessCreateOutcome
+  | EvmRevertedOutcome
+  | EvmFailedOutcome
+  | EvmRejectedOutcome;
 
 export interface SimulationLog {
   address: string;
@@ -688,7 +672,9 @@ export interface CoreExecution {
 }
 
 export interface EthereumResponse {
-  execution: EvmExecution;
+  state: EvmState;
+  transaction: EvmCompletedTransaction;
+  outcome: EvmOutcome;
   changes: EvmChanges;
 }
 

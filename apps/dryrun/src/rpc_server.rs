@@ -12,7 +12,7 @@ use conflux_simulation::{
     espace::EspaceTransactionSimulator,
 };
 use evm_rpc::{DryrunRpcServer, RpcHandler};
-use evm_simulation::EvmTransactionSimulator;
+use evm_simulation::{EvmSimulationLimits, EvmTransactionSimulator};
 use jsonrpsee::{
     RpcModule,
     server::{BatchRequestConfig, Server, ServerConfig as JsonRpcServerConfig, ServerHandle},
@@ -89,7 +89,15 @@ async fn add_evm_rpc_module(
         .await
         .map_err(|error| {
             startup_error(format!("failed to initialize Ethereum simulation: {error}"))
-        })?;
+        })?
+        .with_limits(EvmSimulationLimits {
+            max_occurrence_checkpoints: config.limits.max_occurrence_checkpoints,
+            max_retained_state_entries: config.limits.max_retained_state_entries,
+            max_state_reads: config.limits.max_state_reads,
+            max_read_calls: config.limits.max_read_calls,
+            read_call_gas_limit: config.limits.read_call_gas_limit,
+            max_read_call_output_bytes: config.limits.max_read_call_output_bytes,
+        });
 
     rpc_module
         .merge(RpcHandler::new(evm_simulator, simulation_tasks).into_rpc())
