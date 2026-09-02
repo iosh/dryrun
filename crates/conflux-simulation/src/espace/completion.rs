@@ -1,9 +1,8 @@
 use alloy_primitives::U256;
 
 use super::{
-    EspaceCompleteTransaction, EspaceCompleteTransactionVariant, EspacePartialTransaction,
-    EspacePartialTransactionVariant, EspaceTransactionCompletionError, EspaceTransactionInput,
-    ResolvedEspaceContext,
+    EspaceCompleteTransaction, EspacePartialTransaction, EspaceTransactionCommon,
+    EspaceTransactionCompletionError, EspaceTransactionInput, ResolvedEspaceContext, TxType,
 };
 use crate::state::{ConfluxSimulationProvider, EspaceEstimateTransaction};
 
@@ -14,7 +13,10 @@ pub(crate) async fn complete_transaction(
     chain_id: u64,
 ) -> Result<EspaceCompleteTransaction, EspaceTransactionCompletionError> {
     match input {
-        EspaceTransactionInput::Complete(transaction) => Ok(transaction),
+        EspaceTransactionInput::Complete(transaction) => {
+            transaction.validate()?;
+            Ok(transaction)
+        }
         EspaceTransactionInput::Partial(transaction) => {
             complete_partial_transaction(transaction, provider, context, chain_id).await
         }
@@ -27,6 +29,20 @@ async fn complete_partial_transaction(
     context: &ResolvedEspaceContext,
     chain_id: u64,
 ) -> Result<EspaceCompleteTransaction, EspaceTransactionCompletionError> {
+    let transaction_type = transaction.transaction_type.unwrap_or_else(|| {
+        transaction.preferred_type(
+            context
+                .base_fee_per_gas()
+                .map_or(false, |fee| !fee.is_zero()),
+        )
+    });
+    if transaction_type == TxType::Eip4844 {
+        return Err(
+            EspaceTransactionCompletionError::UnsupportedTransactionType { transaction_type },
+        );
+    }
+    transaction.validate(transaction_type)?;
+
     let EspacePartialTransaction {
         from,
         to,
@@ -35,7 +51,14 @@ async fn complete_partial_transaction(
         value,
         input,
         chain_id: requested_chain_id,
-        variant,
+        gas_price,
+        max_fee_per_gas,
+        max_priority_fee_per_gas,
+        max_fee_per_blob_gas: _,
+        access_list,
+        blob_versioned_hashes: _,
+        authorization_list,
+        transaction_type: _,
     } = transaction;
     let chain_id = requested_chain_id.unwrap_or(chain_id);
     let nonce = match nonce {
@@ -54,100 +77,82 @@ async fn complete_partial_transaction(
             })?
         }
     };
-    let variant = complete_variant(variant, provider, context).await?;
     let value = value.unwrap_or_default();
     let input = input.unwrap_or_default();
-    let gas_limit = match gas_limit {
-        Some(gas_limit) => gas_limit,
-        None => {
-            let estimate = provider
-                .eth_estimate_gas(
-                    EspaceEstimateTransaction {
-                        from,
-                        to,
-                        nonce,
-                        value,
-                        data: &input,
-                        chain_id,
-                        variant: &variant,
-                    },
-                    context.state_block(),
-                )
-                .await
-                .map_err(|source| EspaceTransactionCompletionError::GasEstimation {
-                    block_number: context.public_context.number,
-                    source,
-                })?;
-            u64::try_from(estimate).map_err(|_| {
-                EspaceTransactionCompletionError::GasEstimateOutOfRange {
-                    block_number: context.public_context.number,
-                    value: crate::primitive::u256_from_cfx(estimate),
-                }
-            })?
-        }
-    };
-
-    Ok(EspaceCompleteTransaction {
+    let needs_gas_estimate = gas_limit.is_none();
+    let common = EspaceTransactionCommon {
         from,
         to,
         nonce,
-        gas_limit,
+        gas_limit: gas_limit.unwrap_or_default(),
         value,
         input,
         chain_id,
-        variant,
-    })
-}
-
-async fn complete_variant(
-    variant: EspacePartialTransactionVariant,
-    provider: &ConfluxSimulationProvider,
-    context: &ResolvedEspaceContext,
-) -> Result<EspaceCompleteTransactionVariant, EspaceTransactionCompletionError> {
-    match variant {
-        EspacePartialTransactionVariant::Legacy { gas_price } => {
-            Ok(EspaceCompleteTransactionVariant::Legacy {
-                gas_price: complete_gas_price(provider, gas_price).await?,
-            })
-        }
-        EspacePartialTransactionVariant::Eip2930 {
-            gas_price,
-            access_list,
-        } => Ok(EspaceCompleteTransactionVariant::Eip2930 {
+    };
+    let access_list = access_list.unwrap_or_default();
+    let authorization_list = authorization_list.unwrap_or_default();
+    let mut transaction = match transaction_type {
+        TxType::Legacy => EspaceCompleteTransaction::Legacy {
+            common,
+            gas_price: complete_gas_price(provider, gas_price).await?,
+        },
+        TxType::Eip2930 => EspaceCompleteTransaction::Eip2930 {
+            common,
             gas_price: complete_gas_price(provider, gas_price).await?,
             access_list,
-        }),
-        EspacePartialTransactionVariant::Eip1559 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            access_list,
-        } => {
+        },
+        TxType::Eip1559 => {
             let (max_fee_per_gas, max_priority_fee_per_gas) =
                 complete_dynamic_fees(provider, context, max_fee_per_gas, max_priority_fee_per_gas)
                     .await?;
-            Ok(EspaceCompleteTransactionVariant::Eip1559 {
+            EspaceCompleteTransaction::Eip1559 {
+                common,
                 max_fee_per_gas,
                 max_priority_fee_per_gas,
                 access_list,
-            })
+            }
         }
-        EspacePartialTransactionVariant::Eip7702 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            access_list,
-            authorization_list,
-        } => {
+        TxType::Eip7702 => {
             let (max_fee_per_gas, max_priority_fee_per_gas) =
                 complete_dynamic_fees(provider, context, max_fee_per_gas, max_priority_fee_per_gas)
                     .await?;
-            Ok(EspaceCompleteTransactionVariant::Eip7702 {
+            EspaceCompleteTransaction::Eip7702 {
+                common,
                 max_fee_per_gas,
                 max_priority_fee_per_gas,
                 access_list,
                 authorization_list,
-            })
+            }
         }
+        TxType::Eip4844 => {
+            return Err(
+                EspaceTransactionCompletionError::UnsupportedTransactionType { transaction_type },
+            );
+        }
+    };
+
+    if needs_gas_estimate {
+        let estimate = provider
+            .eth_estimate_gas(
+                EspaceEstimateTransaction {
+                    transaction: &transaction,
+                },
+                context.state_block(),
+            )
+            .await
+            .map_err(|source| EspaceTransactionCompletionError::GasEstimation {
+                block_number: context.public_context.number,
+                source,
+            })?;
+        transaction.common_mut().gas_limit = u64::try_from(estimate).map_err(|_| {
+            EspaceTransactionCompletionError::GasEstimateOutOfRange {
+                block_number: context.public_context.number,
+                value: crate::primitive::u256_from_cfx(estimate),
+            }
+        })?;
     }
+
+    Ok(transaction)
 }
 
 async fn complete_gas_price(

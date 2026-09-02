@@ -81,8 +81,9 @@ impl From<EspaceSimulation> for SimulateEspaceTransactionResponse {
             execution,
             changes,
         } = simulation;
-        let gas_limit = transaction.gas_limit;
-        let chain_id = transaction.chain_id;
+        let common = transaction.common();
+        let gas_limit = common.gas_limit;
+        let chain_id = common.chain_id;
 
         let (status, result, output, failure) = match execution {
             EspaceExecutionOutcome::Success { result, output, .. } => {

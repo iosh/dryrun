@@ -1,9 +1,7 @@
 use revm::context_interface::result::InvalidTransaction;
 use revm::primitives::eip4844::VERSIONED_HASH_VERSION_KZG;
 
-use crate::{
-    CompleteTransaction, CompleteTransactionVariant, EvmExecutionError, EvmTransactionRejection,
-};
+use crate::{CompleteTransaction, EvmExecutionError, EvmTransactionRejection};
 
 pub(super) fn map_transaction_rejection(
     error: InvalidTransaction,
@@ -12,6 +10,7 @@ pub(super) fn map_transaction_rejection(
     block_gas_limit: u64,
     base_fee_per_gas: u64,
 ) -> Result<EvmTransactionRejection, EvmExecutionError> {
+    let common = transaction.common();
     let rejection = match error {
         InvalidTransaction::PriorityFeeGreaterThanMaxFee => {
             let (max_fee_per_gas, max_priority_fee_per_gas) = dynamic_fee_fields(transaction)
@@ -33,7 +32,7 @@ pub(super) fn map_transaction_rejection(
         }
         InvalidTransaction::CallerGasLimitMoreThanBlock => {
             EvmTransactionRejection::GasLimitExceedsBlockGasLimit {
-                gas_limit: transaction.gas_limit,
+                gas_limit: common.gas_limit,
                 block_gas_limit,
             }
         }
@@ -55,7 +54,7 @@ pub(super) fn map_transaction_rejection(
             gas_limit,
         },
         InvalidTransaction::RejectCallerWithCode => EvmTransactionRejection::SenderHasCode {
-            sender: transaction.from,
+            sender: common.from,
         },
         InvalidTransaction::LackOfFundForMaxFee { fee, balance } => {
             EvmTransactionRejection::InsufficientFunds {
@@ -79,7 +78,7 @@ pub(super) fn map_transaction_rejection(
             EvmTransactionRejection::CreateInitCodeSizeLimit
         }
         InvalidTransaction::InvalidChainId => EvmTransactionRejection::InvalidChainId {
-            transaction_chain_id: transaction.chain_id,
+            transaction_chain_id: common.chain_id,
             expected_chain_id,
         },
         InvalidTransaction::BlobGasPriceGreaterThanMax {
@@ -132,10 +131,10 @@ pub(super) fn map_transaction_rejection(
 }
 
 fn unsupported_blob_version(transaction: &CompleteTransaction) -> Option<(usize, u8)> {
-    let CompleteTransactionVariant::Eip4844 {
+    let CompleteTransaction::Eip4844 {
         blob_versioned_hashes,
         ..
-    } = &transaction.variant
+    } = transaction
     else {
         return None;
     };
@@ -149,40 +148,38 @@ fn unsupported_blob_version(transaction: &CompleteTransaction) -> Option<(usize,
 }
 
 fn transaction_gas_price(transaction: &CompleteTransaction) -> u128 {
-    match transaction.variant {
-        CompleteTransactionVariant::Legacy { gas_price }
-        | CompleteTransactionVariant::Eip2930 { gas_price, .. } => gas_price,
-        CompleteTransactionVariant::Eip1559 {
+    match transaction {
+        CompleteTransaction::Legacy { gas_price, .. }
+        | CompleteTransaction::Eip2930 { gas_price, .. } => *gas_price,
+        CompleteTransaction::Eip1559 {
             max_fee_per_gas, ..
         }
-        | CompleteTransactionVariant::Eip4844 {
+        | CompleteTransaction::Eip4844 {
             max_fee_per_gas, ..
         }
-        | CompleteTransactionVariant::Eip7702 {
+        | CompleteTransaction::Eip7702 {
             max_fee_per_gas, ..
-        } => max_fee_per_gas,
+        } => *max_fee_per_gas,
     }
 }
 
 fn dynamic_fee_fields(transaction: &CompleteTransaction) -> Option<(u128, u128)> {
-    match transaction.variant {
-        CompleteTransactionVariant::Eip1559 {
+    match transaction {
+        CompleteTransaction::Eip1559 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             ..
         }
-        | CompleteTransactionVariant::Eip4844 {
+        | CompleteTransaction::Eip4844 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             ..
         }
-        | CompleteTransactionVariant::Eip7702 {
+        | CompleteTransaction::Eip7702 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             ..
-        } => Some((max_fee_per_gas, max_priority_fee_per_gas)),
-        CompleteTransactionVariant::Legacy { .. } | CompleteTransactionVariant::Eip2930 { .. } => {
-            None
-        }
+        } => Some((*max_fee_per_gas, *max_priority_fee_per_gas)),
+        CompleteTransaction::Legacy { .. } | CompleteTransaction::Eip2930 { .. } => None,
     }
 }

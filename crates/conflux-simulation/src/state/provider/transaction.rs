@@ -1,6 +1,6 @@
 use crate::{
     core_space::{CoreSpaceAccessListItem, CoreSpaceCompleteTransactionVariant},
-    espace::EspaceCompleteTransactionVariant,
+    espace::EspaceCompleteTransaction,
     primitive::{access_list_to_cfx, address_to_cfx, alloy_u256_from_u64, u256_to_cfx},
 };
 use alloy::{
@@ -28,13 +28,7 @@ pub(crate) struct CoreSpaceResourceEstimate {
 }
 
 pub(crate) struct EspaceEstimateTransaction<'a> {
-    pub(crate) from: AlloyAddress,
-    pub(crate) to: Option<AlloyAddress>,
-    pub(crate) nonce: u64,
-    pub(crate) value: AlloyU256,
-    pub(crate) data: &'a AlloyBytes,
-    pub(crate) chain_id: u64,
-    pub(crate) variant: &'a EspaceCompleteTransactionVariant,
+    pub(crate) transaction: &'a EspaceCompleteTransaction,
 }
 
 pub(crate) struct CoreSpaceEstimateTransaction<'a> {
@@ -191,44 +185,49 @@ pub(crate) struct CoreSpaceBalanceCheck {
 fn espace_estimate_gas_request(
     transaction: EspaceEstimateTransaction<'_>,
 ) -> EspaceRpcTransactionRequest {
+    let transaction = transaction.transaction;
+    let common = transaction.common();
     let mut request = EspaceRpcTransactionRequest {
-        from: Some(address_to_cfx(transaction.from)),
-        to: transaction.to.map(address_to_cfx),
-        value: Some(u256_to_cfx(transaction.value)),
-        input: TransactionInput::new(transaction.data.clone()),
-        nonce: Some(U256::from(transaction.nonce)),
-        chain_id: Some(U256::from(transaction.chain_id)),
+        from: Some(address_to_cfx(common.from)),
+        to: common.to.map(address_to_cfx),
+        value: Some(u256_to_cfx(common.value)),
+        input: TransactionInput::new(common.input.clone()),
+        nonce: Some(U256::from(common.nonce)),
+        chain_id: Some(U256::from(common.chain_id)),
         ..Default::default()
     };
 
-    match transaction.variant {
-        EspaceCompleteTransactionVariant::Legacy { gas_price } => {
+    match transaction {
+        EspaceCompleteTransaction::Legacy { gas_price, .. } => {
             request.transaction_type = Some(U64::from(0));
             request.gas_price = Some(u256_to_cfx(*gas_price));
         }
-        EspaceCompleteTransactionVariant::Eip2930 {
+        EspaceCompleteTransaction::Eip2930 {
             gas_price,
             access_list,
+            ..
         } => {
             request.transaction_type = Some(U64::from(1));
             request.gas_price = Some(u256_to_cfx(*gas_price));
             request.access_list = Some(access_list_to_cfx(access_list.to_vec()));
         }
-        EspaceCompleteTransactionVariant::Eip1559 {
+        EspaceCompleteTransaction::Eip1559 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             access_list,
+            ..
         } => {
             request.transaction_type = Some(U64::from(2));
             request.max_fee_per_gas = Some(u256_to_cfx(*max_fee_per_gas));
             request.max_priority_fee_per_gas = Some(u256_to_cfx(*max_priority_fee_per_gas));
             request.access_list = Some(access_list_to_cfx(access_list.to_vec()));
         }
-        EspaceCompleteTransactionVariant::Eip7702 {
+        EspaceCompleteTransaction::Eip7702 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             access_list,
             authorization_list,
+            ..
         } => {
             request.transaction_type = Some(U64::from(4));
             request.max_fee_per_gas = Some(u256_to_cfx(*max_fee_per_gas));

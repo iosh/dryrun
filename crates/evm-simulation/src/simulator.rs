@@ -131,7 +131,6 @@ where
         T: Send + 'static,
     {
         let EvmSimulationRequest { block, transaction } = request;
-        transaction.validate_requirements()?;
         let runtime_handle =
             Handle::try_current().map_err(|_| EvmSimulationError::RuntimeUnavailable)?;
         let block = resolve_block(&self.provider, block).await?;

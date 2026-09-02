@@ -55,7 +55,8 @@ fn map_success_output(
     output: RevmOutput,
     transaction: &CompleteTransaction,
 ) -> Result<EvmSuccessOutput, EvmExecutionError> {
-    match (transaction.to, output) {
+    let common = transaction.common();
+    match (common.to, output) {
         (Some(_), RevmOutput::Call(return_data)) => Ok(EvmSuccessOutput::Call { return_data }),
         (None, RevmOutput::Create(runtime_code, Some(address))) => Ok(EvmSuccessOutput::Create {
             address,

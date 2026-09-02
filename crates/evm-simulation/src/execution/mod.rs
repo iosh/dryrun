@@ -11,10 +11,9 @@ use self::{
     rejection_mapping::map_transaction_rejection,
 };
 use crate::{
-    CompleteTransaction, CompleteTransactionVariant, EthereumChainSpec, EvmBlobGasFee,
-    EvmBlockEnvironmentError, EvmExecutionError, EvmExecutionResult, EvmGas, EvmNotReadyError,
-    EvmResultIntegrationError, EvmSimulationError, EvmSimulationLimits, EvmStateAccessError,
-    EvmTransactionRejection,
+    CompleteTransaction, EthereumChainSpec, EvmBlobGasFee, EvmBlockEnvironmentError,
+    EvmExecutionError, EvmExecutionResult, EvmGas, EvmNotReadyError, EvmResultIntegrationError,
+    EvmSimulationError, EvmSimulationLimits, EvmStateAccessError, EvmTransactionRejection,
     state::{
         EvmDatabase, EvmExecutionIdentity, EvmOccurrenceHandle, EvmStateSource,
         EvmStateViewFactory, EvmStateViews, MainnetEvm,
@@ -362,8 +361,9 @@ impl<INSP> EvmTransactionExecutor<INSP> {
         };
 
         let result_gas = result_and_state.result.gas();
+        let common = transaction.common();
         let gas = EvmGas::new(
-            transaction.gas_limit,
+            common.gas_limit,
             result_gas.limit(),
             result_gas.intrinsic_gas(),
             result_gas.spent(),
@@ -371,8 +371,8 @@ impl<INSP> EvmTransactionExecutor<INSP> {
             result_gas.floor_gas(),
         )
         .map_err(EvmExecutionError::from)?;
-        let blob_gas_fee = match &transaction.variant {
-            CompleteTransactionVariant::Eip4844 {
+        let blob_gas_fee = match transaction {
+            CompleteTransaction::Eip4844 {
                 blob_versioned_hashes,
                 ..
             } => {
@@ -387,10 +387,10 @@ impl<INSP> EvmTransactionExecutor<INSP> {
                     gas_price,
                 ))
             }
-            CompleteTransactionVariant::Legacy { .. }
-            | CompleteTransactionVariant::Eip2930 { .. }
-            | CompleteTransactionVariant::Eip1559 { .. }
-            | CompleteTransactionVariant::Eip7702 { .. } => None,
+            CompleteTransaction::Legacy { .. }
+            | CompleteTransaction::Eip2930 { .. }
+            | CompleteTransaction::Eip1559 { .. }
+            | CompleteTransaction::Eip7702 { .. } => None,
         };
         let fee_settlement = EvmFeeSettlement::new(
             &gas,
@@ -409,7 +409,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
                 fee_settlement,
                 evm: self.evm,
                 state_view_factory: self.state_view_factory,
-                read_call_caller: transaction.from,
+                read_call_caller: common.from,
                 block_beneficiary: self.block_beneficiary,
             },
         )))

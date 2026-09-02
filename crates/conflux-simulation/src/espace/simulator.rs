@@ -33,7 +33,6 @@ impl EspaceTransactionSimulator {
         request: EspaceSimulationRequest,
     ) -> Result<EspaceSimulation, EspaceSimulationError> {
         let EspaceSimulationRequest { block, transaction } = request;
-        transaction.validate_requirements()?;
         let runtime_handle =
             Handle::try_current().map_err(|_| EspaceSimulationError::RuntimeUnavailable)?;
         let mut context = resolve_espace_context(self.backend.provider(), block).await?;

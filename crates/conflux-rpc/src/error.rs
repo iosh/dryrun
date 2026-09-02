@@ -90,6 +90,9 @@ pub(super) fn espace_error_response(error: EspaceSimulationError) -> ErrorObject
         EspaceSimulationError::Context(error @ EspaceContextError::EspaceBlockNotFound { .. }) => {
             context_not_found(error.to_string())
         }
+        EspaceSimulationError::Completion(
+            error @ EspaceTransactionCompletionError::UnsupportedTransactionType { .. },
+        ) => ValidationError::not_supported(error.to_string()).into(),
         EspaceSimulationError::Completion(error) => {
             warn!(error = ?error, "Conflux eSpace transaction completion failed");
             transaction_completion_failed(transaction_completion_message(&error))

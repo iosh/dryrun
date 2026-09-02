@@ -5,8 +5,7 @@ use cfx_rpc_eth_types::Bytes as RpcBytes;
 use cfx_types::{Address as CfxAddress, H256, U64, U256};
 use conflux_simulation::espace::{
     AccessListItem, Authorization, EspaceBlockSelector, EspacePartialTransaction,
-    EspacePartialTransactionVariant, EspaceSimulationRequest, EspaceTransactionInput,
-    SignedAuthorization,
+    EspaceSimulationRequest, EspaceTransactionInput, SignedAuthorization, TxType,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -15,7 +14,7 @@ use super::{cfx_address_to_alloy, cfx_h256_to_alloy, cfx_u256_to_alloy, u64_para
 use crate::error::ValidationError;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct EspaceRpcTransactionRequest {
     from: Option<CfxAddress>,
     to: Option<CfxAddress>,
@@ -31,6 +30,8 @@ struct EspaceRpcTransactionRequest {
     #[serde(rename = "type")]
     transaction_type: Option<U64>,
     chain_id: Option<U256>,
+    max_fee_per_blob_gas: Option<U256>,
+    blob_versioned_hashes: Option<Vec<H256>>,
     authorization_list: Option<Vec<RpcSignedAuthorization>>,
 }
 
@@ -84,45 +85,6 @@ struct SimulateTransactionOptions {
     block_overrides: Option<Value>,
     #[serde(default)]
     include: Option<Value>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RpcTransactionType {
-    Legacy,
-    Eip2930,
-    Eip1559,
-    Eip7702,
-}
-
-impl RpcTransactionType {
-    fn classify(transaction: &EspaceRpcTransactionRequest) -> Result<Self, ValidationError> {
-        if let Some(transaction_type) = transaction.transaction_type {
-            return match transaction_type.as_u64() {
-                0x0 => Ok(Self::Legacy),
-                0x1 => Ok(Self::Eip2930),
-                0x2 => Ok(Self::Eip1559),
-                0x4 => Ok(Self::Eip7702),
-                0x3 => Err(ValidationError::not_supported(
-                    "`transaction.type` `0x3` / EIP-4844 is not supported by eSpace",
-                )),
-                _ => Err(ValidationError::invalid_params(
-                    "`transaction.type` must be one of `0x0`, `0x1`, `0x2`, or `0x4`",
-                )),
-            };
-        }
-
-        Ok(if transaction.authorization_list.is_some() {
-            Self::Eip7702
-        } else if transaction.max_fee_per_gas.is_some()
-            || transaction.max_priority_fee_per_gas.is_some()
-        {
-            Self::Eip1559
-        } else if transaction.access_list.is_some() {
-            Self::Eip2930
-        } else {
-            Self::Legacy
-        })
-    }
 }
 
 impl TryFrom<SimulateEspaceTransactionRequest> for EspaceSimulationRequest {
@@ -214,12 +176,7 @@ fn map_block_ref(block: BlockRef) -> Result<EspaceBlockSelector, ValidationError
 fn map_transaction(
     transaction: EspaceRpcTransactionRequest,
 ) -> Result<EspaceTransactionInput, ValidationError> {
-    let transaction_type = RpcTransactionType::classify(&transaction)?;
     let from = require_transaction_from(&transaction)?;
-    let chain_id = transaction
-        .chain_id
-        .ok_or_else(|| ValidationError::invalid_params("`transaction.chainId` is required"))?;
-    let chain_id = u64_param(chain_id, "transaction.chainId")?;
     let EspaceRpcTransactionRequest {
         to,
         nonce,
@@ -231,9 +188,16 @@ fn map_transaction(
         gas_price,
         max_fee_per_gas,
         max_priority_fee_per_gas,
+        max_fee_per_blob_gas,
+        blob_versioned_hashes,
         authorization_list,
+        transaction_type,
+        chain_id,
         ..
     } = transaction;
+    let chain_id = chain_id
+        .ok_or_else(|| ValidationError::invalid_params("`transaction.chainId` is required"))?;
+    let chain_id = u64_param(chain_id, "transaction.chainId")?;
     let input = match (input, data) {
         (Some(input), Some(data)) if input != data => {
             return Err(ValidationError::invalid_params(
@@ -243,30 +207,21 @@ fn map_transaction(
         (Some(input), _) | (_, Some(input)) => Some(Bytes::from(input.0)),
         (None, None) => None,
     };
-    let variant = match transaction_type {
-        RpcTransactionType::Legacy => EspacePartialTransactionVariant::Legacy {
-            gas_price: gas_price.map(cfx_u256_to_alloy),
-        },
-        RpcTransactionType::Eip2930 => EspacePartialTransactionVariant::Eip2930 {
-            gas_price: gas_price.map(cfx_u256_to_alloy),
-            access_list: map_access_list(access_list),
-        },
-        RpcTransactionType::Eip1559 => EspacePartialTransactionVariant::Eip1559 {
-            max_fee_per_gas: max_fee_per_gas.map(cfx_u256_to_alloy),
-            max_priority_fee_per_gas: max_priority_fee_per_gas.map(cfx_u256_to_alloy),
-            access_list: map_access_list(access_list),
-        },
-        RpcTransactionType::Eip7702 => EspacePartialTransactionVariant::Eip7702 {
-            max_fee_per_gas: max_fee_per_gas.map(cfx_u256_to_alloy),
-            max_priority_fee_per_gas: max_priority_fee_per_gas.map(cfx_u256_to_alloy),
-            access_list: map_access_list(access_list),
-            authorization_list: authorization_list
-                .unwrap_or_default()
-                .into_iter()
-                .map(map_signed_authorization)
-                .collect::<Result<_, _>>()?,
-        },
-    };
+    let transaction_type = transaction_type
+        .map(|value| match value.as_u64() {
+            0x3 => Err(ValidationError::not_supported(
+                "`transaction.type` `0x3` / EIP-4844 is not supported by eSpace",
+            )),
+            raw => TxType::try_from(raw).map_err(|_| {
+                ValidationError::invalid_params(
+                    "`transaction.type` must be one of `0x0`, `0x1`, `0x2`, or `0x4`",
+                )
+            }),
+        })
+        .transpose()?;
+    let authorization_list = authorization_list
+        .map(|items| items.into_iter().map(map_signed_authorization).collect())
+        .transpose()?;
 
     Ok(EspaceTransactionInput::Partial(EspacePartialTransaction {
         from: cfx_address_to_alloy(from),
@@ -280,23 +235,32 @@ fn map_transaction(
         value: value.map(cfx_u256_to_alloy),
         input,
         chain_id: Some(chain_id),
-        variant,
+        transaction_type,
+        gas_price: gas_price.map(cfx_u256_to_alloy),
+        max_fee_per_gas: max_fee_per_gas.map(cfx_u256_to_alloy),
+        max_priority_fee_per_gas: max_priority_fee_per_gas.map(cfx_u256_to_alloy),
+        max_fee_per_blob_gas: max_fee_per_blob_gas.map(cfx_u256_to_alloy),
+        access_list: map_access_list(access_list),
+        blob_versioned_hashes: blob_versioned_hashes
+            .map(|items| items.into_iter().map(cfx_h256_to_alloy).collect()),
+        authorization_list,
     }))
 }
 
-fn map_access_list(items: Option<Vec<RpcAccessListItem>>) -> Vec<AccessListItem> {
-    items
-        .unwrap_or_default()
-        .into_iter()
-        .map(|item| AccessListItem {
-            address: cfx_address_to_alloy(item.address),
-            storage_keys: item
-                .storage_keys
-                .into_iter()
-                .map(cfx_h256_to_alloy)
-                .collect(),
-        })
-        .collect()
+fn map_access_list(items: Option<Vec<RpcAccessListItem>>) -> Option<Vec<AccessListItem>> {
+    items.map(|items| {
+        items
+            .into_iter()
+            .map(|item| AccessListItem {
+                address: cfx_address_to_alloy(item.address),
+                storage_keys: item
+                    .storage_keys
+                    .into_iter()
+                    .map(cfx_h256_to_alloy)
+                    .collect(),
+            })
+            .collect()
+    })
 }
 
 fn map_signed_authorization(

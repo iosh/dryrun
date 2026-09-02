@@ -6,12 +6,18 @@ use contract_standards::{MetadataCall, MissingMetadataOutcome};
 use thiserror::Error;
 use tokio::task::JoinError;
 
-use super::{EspaceContextError, EspaceTransactionInputError};
+use super::{EspaceContextError, EspaceTransactionInputError, TxType};
 use crate::{ConfluxRpcError, ExecutionBlockContextError};
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum EspaceTransactionCompletionError {
+    #[error(transparent)]
+    Input(#[from] EspaceTransactionInputError),
+
+    #[error("eSpace does not support {transaction_type} transactions")]
+    UnsupportedTransactionType { transaction_type: TxType },
+
     #[error("failed to fetch the sender nonce at eSpace block {block_number}: {source}")]
     NonceLookup {
         block_number: u64,
@@ -211,7 +217,7 @@ pub enum EspaceSimulationError {
     #[error(transparent)]
     Context(#[from] EspaceContextError),
     #[error(transparent)]
-    Completion(#[from] EspaceTransactionCompletionError),
+    Completion(EspaceTransactionCompletionError),
     #[error(transparent)]
     Execution(#[from] EspaceExecutionError),
     #[error(transparent)]
@@ -223,6 +229,15 @@ pub enum EspaceSimulationError {
         #[source]
         source: JoinError,
     },
+}
+
+impl From<EspaceTransactionCompletionError> for EspaceSimulationError {
+    fn from(error: EspaceTransactionCompletionError) -> Self {
+        match error {
+            EspaceTransactionCompletionError::Input(input) => Self::Input(input),
+            error => Self::Completion(error),
+        }
+    }
 }
 
 impl EspaceSimulationError {

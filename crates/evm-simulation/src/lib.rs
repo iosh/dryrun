@@ -55,9 +55,8 @@ pub use state::{
     EvmStateReadError, EvmStateView, EvmStateViews,
 };
 pub use transaction::{
-    AccessListItem, Authorization, CompleteTransaction, CompleteTransactionVariant,
-    PartialTransaction, PartialTransactionVariant, SignedAuthorization, TransactionInput,
-    TransactionInputError,
+    AccessListItem, Authorization, CompleteTransaction, PartialTransaction, SignedAuthorization,
+    TransactionCommon, TransactionInput, TransactionInputError, TxType,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

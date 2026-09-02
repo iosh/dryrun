@@ -26,9 +26,10 @@ pub(crate) fn convert_executor_outcome(
     state: &State,
     core_space_network: Network,
 ) -> Result<EspaceExecutionOutcome, EspaceExecutionError> {
+    let common = transaction.common();
     match outcome {
         ConfluxExecutionOutcome::Success(output) => {
-            let result = build_execution_result(&output, transaction.gas_limit)?;
+            let result = build_execution_result(&output, common.gas_limit)?;
             let logs = convert_committed_logs(&output, core_space_network)?;
             let output = build_success_output(&output, prepared, transaction, state)?;
             Ok(EspaceExecutionOutcome::Success {
@@ -38,7 +39,7 @@ pub(crate) fn convert_executor_outcome(
             })
         }
         ConfluxExecutionOutcome::Failed { error, details } => {
-            let result = build_execution_result(&details, transaction.gas_limit)?;
+            let result = build_execution_result(&details, common.gas_limit)?;
             let return_data = details.common.output.clone();
             match error {
                 ExecutionError::VmError(VmError::Reverted) => {
@@ -84,20 +85,21 @@ fn build_success_output(
     transaction: &EspaceCompleteTransaction,
     state: &State,
 ) -> Result<EspaceSuccessOutput, EspaceExecutionError> {
-    if transaction.to.is_some() {
+    let common = transaction.common();
+    if common.to.is_some() {
         return Ok(EspaceSuccessOutput::Call {
             return_data: output.common.output.clone(),
         });
     }
 
-    let sender = address_to_cfx(transaction.from).with_evm_space();
-    let nonce = CfxU256::from(transaction.nonce);
+    let sender = address_to_cfx(common.from).with_evm_space();
+    let nonce = CfxU256::from(common.nonce);
     let (created, _) = contract_address(
         CreateContractAddress::FromSenderNonce,
         prepared.env.number,
         &sender,
         &nonce,
-        transaction.input.as_ref(),
+        common.input.as_ref(),
     );
     if !output.contracts_created.contains(&created) {
         return Err(EspaceResultIntegrationError::MissingCreatedContract {

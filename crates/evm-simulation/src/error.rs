@@ -47,6 +47,9 @@ impl EvmBlockResolutionError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum EvmTransactionCompletionError {
+    #[error(transparent)]
+    Input(#[from] TransactionInputError),
+
     #[error("failed to fetch the sender nonce at block {block_number}: {source}")]
     NonceLookup {
         block_number: u64,
@@ -243,7 +246,7 @@ pub enum EvmSimulationError {
     BlockResolution(#[from] EvmBlockResolutionError),
 
     #[error(transparent)]
-    TransactionCompletion(#[from] EvmTransactionCompletionError),
+    TransactionCompletion(EvmTransactionCompletionError),
 
     #[error(transparent)]
     NotReady(#[from] EvmNotReadyError),
@@ -260,6 +263,15 @@ pub enum EvmSimulationError {
         #[source]
         source: JoinError,
     },
+}
+
+impl From<EvmTransactionCompletionError> for EvmSimulationError {
+    fn from(error: EvmTransactionCompletionError) -> Self {
+        match error {
+            EvmTransactionCompletionError::Input(input) => Self::Input(input),
+            error => Self::TransactionCompletion(error),
+        }
+    }
 }
 
 impl EvmSimulationError {

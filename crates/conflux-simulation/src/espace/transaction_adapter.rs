@@ -5,8 +5,7 @@ use primitives::transaction::{
 };
 
 use super::{
-    EspaceCompleteTransaction, EspaceCompleteTransactionVariant, EspaceTransactionInputError,
-    EspaceTransactionRejection,
+    EspaceCompleteTransaction, EspaceTransactionInputError, EspaceTransactionRejection, TxType,
 };
 use crate::{
     chain_spec::EspaceTransactionValidationRules,
@@ -19,15 +18,16 @@ pub(crate) fn classify_transaction_rejection(
     expected_chain_id: u64,
     rules: EspaceTransactionValidationRules,
 ) -> Option<EspaceTransactionRejection> {
-    if transaction.chain_id != expected_chain_id {
+    let common = transaction.common();
+    if common.chain_id != expected_chain_id {
         return Some(EspaceTransactionRejection::InvalidChainId {
-            transaction_chain_id: transaction.chain_id,
+            transaction_chain_id: common.chain_id,
             expected_chain_id,
         });
     }
 
-    let rejection = match &transaction.variant {
-        EspaceCompleteTransactionVariant::Legacy { gas_price } => {
+    let rejection = match transaction {
+        EspaceCompleteTransaction::Legacy { gas_price, .. } => {
             if !rules.legacy_transactions_active {
                 Some(EspaceTransactionRejection::LegacyTransactionNotActivated)
             } else if gas_price.is_zero() {
@@ -36,7 +36,7 @@ pub(crate) fn classify_transaction_rejection(
                 None
             }
         }
-        EspaceCompleteTransactionVariant::Eip2930 { gas_price, .. } => {
+        EspaceCompleteTransaction::Eip2930 { gas_price, .. } => {
             if !rules.typed_transactions_active {
                 Some(EspaceTransactionRejection::Eip2930NotActivated)
             } else if gas_price.is_zero() {
@@ -45,7 +45,7 @@ pub(crate) fn classify_transaction_rejection(
                 None
             }
         }
-        EspaceCompleteTransactionVariant::Eip1559 {
+        EspaceCompleteTransaction::Eip1559 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             ..
@@ -56,7 +56,7 @@ pub(crate) fn classify_transaction_rejection(
             rules.priority_fee_cap_active,
             EspaceTransactionRejection::Eip1559NotActivated,
         ),
-        EspaceCompleteTransactionVariant::Eip7702 {
+        EspaceCompleteTransaction::Eip7702 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             ..
@@ -79,22 +79,22 @@ pub(crate) fn classify_transaction_rejection(
     }
 
     if rules.initcode_size_limit_active
-        && transaction.to.is_none()
-        && transaction.input.len() > rules.max_initcode_size
+        && common.to.is_none()
+        && common.input.len() > rules.max_initcode_size
     {
         return Some(EspaceTransactionRejection::CreateInitCodeSizeLimit {
-            size: transaction.input.len(),
+            size: common.input.len(),
             limit: rules.max_initcode_size,
         });
     }
 
     if rules.calldata_floor_active {
-        let required_gas = alloy_primitives::U256::from(transaction.input.len())
+        let required_gas = alloy_primitives::U256::from(common.input.len())
             * alloy_primitives::U256::from(100_u64);
-        if alloy_primitives::U256::from(transaction.gas_limit) < required_gas {
+        if alloy_primitives::U256::from(common.gas_limit) < required_gas {
             return Some(EspaceTransactionRejection::CalldataGasRequirement {
                 required_gas,
-                gas_limit: transaction.gas_limit,
+                gas_limit: common.gas_limit,
             });
         }
     }
@@ -126,18 +126,19 @@ fn classify_dynamic_fee_rejection(
 pub(crate) fn build_executor_transaction(
     transaction: &EspaceCompleteTransaction,
 ) -> Result<ExecutorEspaceTransactionInput, EspaceTransactionInputError> {
-    let sender = address_to_cfx(transaction.from);
-    let chain_id = transaction.chain_id as u32;
-    let nonce = CfxU256::from(transaction.nonce);
-    let gas = CfxU256::from(transaction.gas_limit);
-    let value = u256_to_cfx(transaction.value);
-    let data = transaction.input.to_vec();
-    let action = transaction.to.map_or(Action::Create, |address| {
+    let common = transaction.common();
+    let sender = address_to_cfx(common.from);
+    let chain_id = common.chain_id as u32;
+    let nonce = CfxU256::from(common.nonce);
+    let gas = CfxU256::from(common.gas_limit);
+    let value = u256_to_cfx(common.value);
+    let data = common.input.to_vec();
+    let action = common.to.map_or(Action::Create, |address| {
         Action::Call(address_to_cfx(address))
     });
 
-    let tx = match &transaction.variant {
-        EspaceCompleteTransactionVariant::Legacy { gas_price } => {
+    let tx = match transaction {
+        EspaceCompleteTransaction::Legacy { gas_price, .. } => {
             EthereumTransaction::Eip155(Eip155Transaction {
                 nonce,
                 gas_price: u256_to_cfx(*gas_price),
@@ -148,9 +149,10 @@ pub(crate) fn build_executor_transaction(
                 data,
             })
         }
-        EspaceCompleteTransactionVariant::Eip2930 {
+        EspaceCompleteTransaction::Eip2930 {
             gas_price,
             access_list,
+            ..
         } => EthereumTransaction::Eip2930(Eip2930Transaction {
             chain_id,
             nonce,
@@ -161,10 +163,11 @@ pub(crate) fn build_executor_transaction(
             data,
             access_list: access_list_to_cfx(access_list.clone()),
         }),
-        EspaceCompleteTransactionVariant::Eip1559 {
+        EspaceCompleteTransaction::Eip1559 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             access_list,
+            ..
         } => EthereumTransaction::Eip1559(Eip1559Transaction {
             chain_id,
             nonce,
@@ -176,22 +179,24 @@ pub(crate) fn build_executor_transaction(
             data,
             access_list: access_list_to_cfx(access_list.clone()),
         }),
-        EspaceCompleteTransactionVariant::Eip7702 {
+        EspaceCompleteTransaction::Eip7702 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             access_list,
             authorization_list,
+            ..
         } => EthereumTransaction::Eip7702(Eip7702Transaction {
             chain_id,
             nonce,
             max_priority_fee_per_gas: u256_to_cfx(*max_priority_fee_per_gas),
             max_fee_per_gas: u256_to_cfx(*max_fee_per_gas),
             gas,
-            destination: address_to_cfx(
-                transaction
-                    .to
-                    .ok_or(EspaceTransactionInputError::Eip7702CallDestinationRequired)?,
-            ),
+            destination: address_to_cfx(common.to.ok_or(
+                EspaceTransactionInputError::MissingField {
+                    transaction_type: TxType::Eip7702,
+                    field: "to",
+                },
+            )?),
             value,
             data,
             access_list: access_list_to_cfx(access_list.clone()),
@@ -222,9 +227,7 @@ mod tests {
     use super::classify_transaction_rejection;
     use crate::{
         chain_spec::ConfluxChainSpec,
-        espace::{
-            EspaceCompleteTransaction, EspaceCompleteTransactionVariant, EspaceTransactionRejection,
-        },
+        espace::{EspaceCompleteTransaction, EspaceTransactionCommon, EspaceTransactionRejection},
     };
 
     const CIP645_HEIGHT: u64 = 129_680_000;
@@ -263,14 +266,14 @@ mod tests {
             Bytes::from(vec![0_u8; EIP3860_MAX_INITCODE_SIZE]),
             U256::from(1),
         );
-        transaction.gas_limit = 10_000_000;
+        transaction.common_mut().gas_limit = 10_000_000;
 
         assert_eq!(
             classify_transaction_rejection(&transaction, 1030, rules),
             None
         );
 
-        transaction.input = Bytes::from(vec![0_u8; EIP3860_MAX_INITCODE_SIZE + 1]);
+        transaction.common_mut().input = Bytes::from(vec![0_u8; EIP3860_MAX_INITCODE_SIZE + 1]);
         assert!(matches!(
             classify_transaction_rejection(&transaction, 1030, rules),
             Some(EspaceTransactionRejection::CreateInitCodeSizeLimit { size, limit })
@@ -284,19 +287,19 @@ mod tests {
         input: Bytes,
         max_priority_fee_per_gas: U256,
     ) -> EspaceCompleteTransaction {
-        EspaceCompleteTransaction {
-            from: Address::repeat_byte(1),
-            to,
-            nonce: 0,
-            gas_limit: 1_000_000,
-            value: U256::ZERO,
-            input,
-            chain_id: 1030,
-            variant: EspaceCompleteTransactionVariant::Eip1559 {
-                max_fee_per_gas: U256::from(2),
-                max_priority_fee_per_gas,
-                access_list: Vec::new(),
+        EspaceCompleteTransaction::Eip1559 {
+            common: EspaceTransactionCommon {
+                from: Address::repeat_byte(1),
+                to,
+                nonce: 0,
+                gas_limit: 1_000_000,
+                value: U256::ZERO,
+                input,
+                chain_id: 1030,
             },
+            max_fee_per_gas: U256::from(2),
+            max_priority_fee_per_gas,
+            access_list: Vec::new(),
         }
     }
 }

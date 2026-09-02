@@ -39,9 +39,9 @@ pub use result::EspaceSimulation;
 pub(crate) use settlement::verify_fee_settlement;
 pub use simulator::EspaceTransactionSimulator;
 pub use transaction::{
-    AccessListItem, Authorization, EspaceCompleteTransaction, EspaceCompleteTransactionVariant,
-    EspacePartialTransaction, EspacePartialTransactionVariant, EspaceTransactionInput,
-    EspaceTransactionInputError, SignedAuthorization,
+    AccessListItem, Authorization, EspaceCompleteTransaction, EspacePartialTransaction,
+    EspaceTransactionCommon, EspaceTransactionInput, EspaceTransactionInputError,
+    SignedAuthorization, TxType,
 };
 pub(crate) use transaction_adapter::{build_executor_transaction, classify_transaction_rejection};
 

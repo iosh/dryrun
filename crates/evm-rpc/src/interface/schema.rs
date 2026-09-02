@@ -57,8 +57,12 @@ pub struct Transaction {
         with = "quantity::opt"
     )]
     pub tx_type: Option<u8>,
-    #[serde(with = "quantity")]
-    pub chain_id: u64,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "quantity::opt"
+    )]
+    pub chain_id: Option<u64>,
     pub from: Address,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to: Option<Address>,

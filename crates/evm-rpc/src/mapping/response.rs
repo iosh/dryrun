@@ -1,11 +1,10 @@
 use alloy_primitives::Log;
 use contract_standards::{Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem};
 use evm_simulation::{
-    CompleteTransaction, CompleteTransactionVariant, EvmAccountDelegationChange, EvmBlockContext,
-    EvmChanges, EvmExecutionOutcome, EvmExecutionResult, EvmNativeCurrency,
-    EvmNativeTransferChange, EvmSelfDestructBurnChange, EvmSimulation, EvmStandardChange,
-    EvmStateChange, EvmSuccessOutput, EvmWrappedNativeDepositChange,
-    EvmWrappedNativeWithdrawalChange,
+    CompleteTransaction, EvmAccountDelegationChange, EvmBlockContext, EvmChanges,
+    EvmExecutionOutcome, EvmExecutionResult, EvmNativeCurrency, EvmNativeTransferChange,
+    EvmSelfDestructBurnChange, EvmSimulation, EvmStandardChange, EvmStateChange, EvmSuccessOutput,
+    EvmWrappedNativeDepositChange, EvmWrappedNativeWithdrawalChange,
 };
 
 use crate::interface as rpc;
@@ -39,62 +38,50 @@ impl From<EvmBlockContext> for rpc::EvmState {
 
 impl From<CompleteTransaction> for rpc::CompletedTransaction {
     fn from(transaction: CompleteTransaction) -> Self {
-        let CompleteTransaction {
-            from,
-            to,
-            nonce,
-            gas_limit,
-            value,
-            input,
-            chain_id,
-            variant,
-        } = transaction;
-        let tx_type = match &variant {
-            CompleteTransactionVariant::Legacy { .. } => 0,
-            CompleteTransactionVariant::Eip2930 { .. } => 1,
-            CompleteTransactionVariant::Eip1559 { .. } => 2,
-            CompleteTransactionVariant::Eip4844 { .. } => 3,
-            CompleteTransactionVariant::Eip7702 { .. } => 4,
-        };
+        let common = transaction.common().clone();
+        let tx_type = transaction.transaction_type() as u8;
         let base = rpc::CompletedTransactionBase {
             tx_type,
-            chain_id,
-            from,
-            to,
-            nonce,
-            gas: gas_limit,
-            value,
-            data: input,
+            chain_id: common.chain_id,
+            from: common.from,
+            to: common.to,
+            nonce: common.nonce,
+            gas: common.gas_limit,
+            value: common.value,
+            data: common.input,
         };
 
-        match variant {
-            CompleteTransactionVariant::Legacy { gas_price } => {
+        match transaction {
+            CompleteTransaction::Legacy { gas_price, .. } => {
                 Self::Legacy(rpc::LegacyTransaction { base, gas_price })
             }
-            CompleteTransactionVariant::Eip2930 {
+            CompleteTransaction::Eip2930 {
                 gas_price,
                 access_list,
+                ..
             } => Self::Eip2930(rpc::Eip2930Transaction {
                 base,
                 gas_price,
                 access_list: access_list.into_iter().map(Into::into).collect(),
             }),
-            CompleteTransactionVariant::Eip1559 {
+            CompleteTransaction::Eip1559 {
                 max_fee_per_gas,
                 max_priority_fee_per_gas,
                 access_list,
+                ..
             } => Self::Eip1559(rpc::Eip1559Transaction {
                 base,
                 max_fee_per_gas,
                 max_priority_fee_per_gas,
                 access_list: access_list.into_iter().map(Into::into).collect(),
             }),
-            CompleteTransactionVariant::Eip4844 {
+            CompleteTransaction::Eip4844 {
                 max_fee_per_gas,
                 max_priority_fee_per_gas,
                 max_fee_per_blob_gas,
                 access_list,
                 blob_versioned_hashes,
+                ..
             } => Self::Eip4844(rpc::Eip4844Transaction {
                 base,
                 max_fee_per_gas,
@@ -103,11 +90,12 @@ impl From<CompleteTransaction> for rpc::CompletedTransaction {
                 access_list: access_list.into_iter().map(Into::into).collect(),
                 blob_versioned_hashes,
             }),
-            CompleteTransactionVariant::Eip7702 {
+            CompleteTransaction::Eip7702 {
                 max_fee_per_gas,
                 max_priority_fee_per_gas,
                 access_list,
                 authorization_list,
+                ..
             } => Self::Eip7702(rpc::Eip7702Transaction {
                 base,
                 max_fee_per_gas,
