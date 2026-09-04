@@ -12,13 +12,13 @@ use thiserror::Error;
 
 use crate::{
     EvmChangeResolutionError, EvmChangeResolver, EvmChangeSet, EvmChangeSetBuilder,
-    EvmStandardChange,
+    EvmObservationRequirements, EvmStandardChange,
     changeset::{EvmWrappedNativeDepositChange, EvmWrappedNativeWithdrawalChange},
     execution::{
-        EvmCommittedFrame, EvmCommittedFrameKind, EvmExecutionPosition, EvmFrameId,
+        EvmCommittedFrame, EvmExecutionPosition, EvmFrameAction, EvmFrameId,
         EvmSemanticLogOccurrence, EvmTransactionExecution,
     },
-    state::{EvmReadCallOutcome, EvmStateView, EvmStateViews},
+    state::{EvmReadCallOutcome, EvmStateAccess, EvmStateReader},
 };
 
 sol! {
@@ -60,7 +60,7 @@ impl EvmStandardChangeResolver {
     pub(crate) fn resolve(
         &self,
         execution: &EvmTransactionExecution,
-        views: &EvmStateViews,
+        state: &EvmStateAccess,
     ) -> Result<EvmChangeSet, EvmChangeResolutionError> {
         let collection = collect_candidates(execution, self.wrapped_native_token)?;
         let candidates = collection.candidates;
@@ -76,7 +76,7 @@ impl EvmStandardChangeResolver {
                 candidate_index,
                 candidate,
                 execution,
-                views,
+                state,
                 &collection.pairs,
                 &mut wrapped_pair_evidence,
                 &mut final_checks,
@@ -93,9 +93,9 @@ impl EvmStandardChangeResolver {
                 ));
             }
         }
-        verify_final_checks(&final_checks, views)?;
+        verify_final_checks(&final_checks, state)?;
 
-        let metadata = load_metadata(&candidates, views);
+        let metadata = load_metadata(&candidates, state);
         let mut builder = EvmChangeSetBuilder::new();
         for (candidate, verified) in candidates.into_iter().zip(verified) {
             match (candidate, verified) {
@@ -146,12 +146,24 @@ impl EvmStandardChangeResolver {
 }
 
 impl EvmChangeResolver for EvmStandardChangeResolver {
+    fn observation_requirements(&self) -> EvmObservationRequirements {
+        let mut requirements = EvmObservationRequirements::new();
+        for topic0 in contract_standards::supported_event_topics() {
+            requirements.checkpoint_any_address(*topic0);
+        }
+        if let Some(address) = self.wrapped_native_token {
+            requirements.checkpoint_at(address, *DEPOSIT_TOPIC0);
+            requirements.checkpoint_at(address, *WITHDRAWAL_TOPIC0);
+        }
+        requirements
+    }
+
     fn resolve(
         &self,
         execution: &EvmTransactionExecution,
-        views: &EvmStateViews,
+        state: &EvmStateAccess,
     ) -> Result<EvmChangeSet, EvmChangeResolutionError> {
-        Self::resolve(self, execution, views)
+        Self::resolve(self, execution, state)
     }
 }
 
@@ -808,7 +820,7 @@ fn verify_candidate(
     candidate_index: usize,
     candidate: &Candidate,
     execution: &EvmTransactionExecution,
-    views: &EvmStateViews,
+    state: &EvmStateAccess,
     pairs: &[WrappedTransferPair],
     wrapped_pair_evidence: &mut HashMap<usize, WrappedPairEvidence>,
     final_checks: &mut HashMap<CheckKey, CheckValue>,
@@ -821,7 +833,7 @@ fn verify_candidate(
         Candidate::Standard {
             occurrence, kind, ..
         } => {
-            let around = views.around(occurrence.handle())?;
+            let around = state.around(occurrence.handle())?;
             let mut context = VerificationContext {
                 position: occurrence.position(),
                 execution,
@@ -841,7 +853,7 @@ fn verify_candidate(
             amount,
             direction,
         } => {
-            let around = views.around(occurrence.handle())?;
+            let around = state.around(occurrence.handle())?;
             let (after, total_supply_after) = verify_wrapped_transition(
                 execution,
                 occurrence.frame_id(),
@@ -878,8 +890,8 @@ fn verify_wrapped_transition(
     execution: &EvmTransactionExecution,
     frame_id: EvmFrameId,
     position: EvmExecutionPosition,
-    previous: &EvmStateView,
-    current: &EvmStateView,
+    previous: &EvmStateReader,
+    current: &EvmStateReader,
     contract: Address,
     account: Address,
     amount: U256,
@@ -984,8 +996,8 @@ struct VerificationContext<'a> {
     position: EvmExecutionPosition,
     execution: &'a EvmTransactionExecution,
     frame_id: EvmFrameId,
-    previous: &'a EvmStateView,
-    current: &'a EvmStateView,
+    previous: &'a EvmStateReader,
+    current: &'a EvmStateReader,
     pair: Option<(usize, WrappedTransferPair)>,
     wrapped_pair_evidence: &'a mut HashMap<usize, WrappedPairEvidence>,
     final_checks: &'a mut HashMap<CheckKey, CheckValue>,
@@ -1619,22 +1631,22 @@ enum CheckValue {
 
 fn verify_final_checks(
     checks: &HashMap<CheckKey, CheckValue>,
-    views: &EvmStateViews,
+    state: &EvmStateAccess,
 ) -> Result<(), EvmChangeResolutionError> {
     for (key, expected) in checks {
         let actual = match key {
             CheckKey::Erc20Balance { contract, account } => {
-                CheckValue::Amount(read_erc20_balance(views.finalized(), *contract, *account)?)
+                CheckValue::Amount(read_erc20_balance(state.finalized(), *contract, *account)?)
             }
             CheckKey::Erc20TotalSupply { contract } => {
-                CheckValue::Amount(read_erc20_total_supply(views.finalized(), *contract)?)
+                CheckValue::Amount(read_erc20_total_supply(state.finalized(), *contract)?)
             }
             CheckKey::Erc1155Balance {
                 contract,
                 account,
                 token_id,
             } => CheckValue::Amount(read_erc1155_balance(
-                views.finalized(),
+                state.finalized(),
                 *contract,
                 *account,
                 *token_id,
@@ -1644,13 +1656,13 @@ fn verify_final_checks(
                 owner,
                 spender,
             } => CheckValue::Amount(read_allowance(
-                views.finalized(),
+                state.finalized(),
                 *contract,
                 *owner,
                 *spender,
             )?),
             CheckKey::Owner { contract, token_id } => {
-                CheckValue::Owner(read_owner(views.finalized(), *contract, *token_id)?)
+                CheckValue::Owner(read_owner(state.finalized(), *contract, *token_id)?)
             }
             CheckKey::Approved { contract, token_id } => {
                 let owner_key = CheckKey::Owner {
@@ -1659,9 +1671,9 @@ fn verify_final_checks(
                 };
                 let token_is_missing = checks.get(&owner_key) == Some(&CheckValue::Owner(None));
                 let approved = if token_is_missing {
-                    read_approved_optional(views.finalized(), *contract, *token_id)?
+                    read_approved_optional(state.finalized(), *contract, *token_id)?
                 } else {
-                    read_approved(views.finalized(), *contract, *token_id)?
+                    read_approved(state.finalized(), *contract, *token_id)?
                 };
                 CheckValue::Owner(approved)
             }
@@ -1670,7 +1682,7 @@ fn verify_final_checks(
                 owner,
                 operator,
             } => CheckValue::Bool(read_operator(
-                views.finalized(),
+                state.finalized(),
                 *contract,
                 *owner,
                 *operator,
@@ -1686,7 +1698,7 @@ fn verify_final_checks(
 }
 
 fn read_erc20_balance(
-    view: &EvmStateView,
+    view: &EvmStateReader,
     contract: Address,
     account: Address,
 ) -> Result<U256, EvmChangeResolutionError> {
@@ -1701,7 +1713,7 @@ fn read_erc20_balance(
 }
 
 fn read_erc20_total_supply(
-    view: &EvmStateView,
+    view: &EvmStateReader,
     contract: Address,
 ) -> Result<U256, EvmChangeResolutionError> {
     let output = read_call_output(
@@ -1715,7 +1727,7 @@ fn read_erc20_total_supply(
 }
 
 fn read_erc1155_balance(
-    view: &EvmStateView,
+    view: &EvmStateReader,
     contract: Address,
     account: Address,
     token_id: U256,
@@ -1736,7 +1748,7 @@ fn read_erc1155_balance(
 }
 
 fn read_allowance(
-    view: &EvmStateView,
+    view: &EvmStateReader,
     contract: Address,
     owner: Address,
     spender: Address,
@@ -1754,7 +1766,7 @@ fn read_allowance(
 }
 
 fn read_owner(
-    view: &EvmStateView,
+    view: &EvmStateReader,
     contract: Address,
     token_id: U256,
 ) -> Result<Option<Address>, EvmChangeResolutionError> {
@@ -1777,7 +1789,7 @@ fn read_owner(
 }
 
 fn read_approved(
-    view: &EvmStateView,
+    view: &EvmStateReader,
     contract: Address,
     token_id: U256,
 ) -> Result<Option<Address>, EvmChangeResolutionError> {
@@ -1795,7 +1807,7 @@ fn read_approved(
 }
 
 fn read_approved_optional(
-    view: &EvmStateView,
+    view: &EvmStateReader,
     contract: Address,
     token_id: U256,
 ) -> Result<Option<Address>, EvmChangeResolutionError> {
@@ -1820,7 +1832,7 @@ fn read_approved_optional(
 }
 
 fn read_operator(
-    view: &EvmStateView,
+    view: &EvmStateReader,
     contract: Address,
     owner: Address,
     operator: Address,
@@ -1838,7 +1850,7 @@ fn read_operator(
 }
 
 fn read_call_output(
-    view: &EvmStateView,
+    view: &EvmStateReader,
     target: Address,
     calldata: Bytes,
     operation: &'static str,
@@ -2036,14 +2048,14 @@ fn has_call_in_scope(
     matches: impl Fn(Address, U256, &[u8]) -> bool,
 ) -> bool {
     execution.committed_frames().iter().any(|frame| {
-        let EvmCommittedFrameKind::Call {
+        let EvmFrameAction::Call {
             caller,
             target,
             bytecode_address,
             value,
             input,
             ..
-        } = frame.kind()
+        } = frame.action()
         else {
             return false;
         };
@@ -2063,12 +2075,12 @@ fn has_value_call(
     position: EvmExecutionPosition,
 ) -> bool {
     execution.committed_frames().iter().any(|frame| {
-        let EvmCommittedFrameKind::Call {
+        let EvmFrameAction::Call {
             caller,
             target,
             value,
             ..
-        } = frame.kind()
+        } = frame.action()
         else {
             return false;
         };
@@ -2129,7 +2141,7 @@ fn selector(signature: &str) -> [u8; 4] {
     [hash[0], hash[1], hash[2], hash[3]]
 }
 
-fn load_metadata(candidates: &[Candidate], views: &EvmStateViews) -> MetadataValues<Address> {
+fn load_metadata(candidates: &[Candidate], state: &EvmStateAccess) -> MetadataValues<Address> {
     let decoded = candidates.iter().filter_map(|candidate| match candidate {
         Candidate::Standard { decoded, .. } => Some(decoded),
         Candidate::Wrapped { .. } => None,
@@ -2160,7 +2172,7 @@ fn load_metadata(candidates: &[Candidate], views: &EvmStateViews) -> MetadataVal
     let mut values = MetadataValues::default();
     for call in calls {
         let target = *call.contract_address();
-        match views.finalized().read_call(target, call.call_data()) {
+        match state.finalized().read_call(target, call.call_data()) {
             Ok(EvmReadCallOutcome::Success(output)) => {
                 values.record_output(call, &output);
             }

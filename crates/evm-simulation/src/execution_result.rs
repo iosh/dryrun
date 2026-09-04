@@ -21,10 +21,9 @@ impl EvmGas {
         floor_gas: u64,
     ) -> Result<Self, EvmResultIntegrationError> {
         if result_gas_limit != transaction_gas_limit {
-            return Err(EvmResultIntegrationError::GasLimitMismatch {
-                transaction_gas_limit,
-                result_gas_limit,
-            });
+            return Err(EvmResultIntegrationError::new(format!(
+                "execution engine returned gas limit {result_gas_limit}, but the transaction gas limit is {transaction_gas_limit}"
+            )));
         }
 
         if spent_before_refund > result_gas_limit
@@ -32,13 +31,9 @@ impl EvmGas {
             || intrinsic_gas > spent_before_refund
             || floor_gas > result_gas_limit
         {
-            return Err(EvmResultIntegrationError::InvalidGasAccounting {
-                gas_limit: result_gas_limit,
-                intrinsic_gas,
-                spent_before_refund,
-                refund_credit,
-                floor_gas,
-            });
+            return Err(EvmResultIntegrationError::new(format!(
+                "execution engine returned inconsistent gas accounting: gas limit {result_gas_limit}, intrinsic gas {intrinsic_gas}, spent before refund {spent_before_refund}, refund credit {refund_credit}, floor gas {floor_gas}"
+            )));
         }
 
         Ok(Self {
@@ -96,10 +91,9 @@ impl EvmExecutionGasFee {
         if let Some(burnt_amount) = burnt_amount
             && burnt_amount > charged_amount
         {
-            return Err(EvmResultIntegrationError::BurntFeeExceedsCharged {
-                charged_amount,
-                burnt_amount,
-            });
+            return Err(EvmResultIntegrationError::new(format!(
+                "burnt execution fee {burnt_amount} exceeds charged execution fee {charged_amount}"
+            )));
         }
 
         Ok(Self {
@@ -223,7 +217,7 @@ impl EvmFee {
     }
 }
 
-/// Gas and fee facts for a transaction that entered the EVM.
+/// Gas and fee data for a transaction that entered the EVM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmExecutionResult {
     gas: EvmGas,
@@ -251,10 +245,8 @@ mod tests {
     use revm::context_interface::result::ResultGas;
 
     use super::EvmGas;
-    use crate::EvmResultIntegrationError;
-
     #[test]
-    fn preserves_revm_gas_semantics_and_rejects_inconsistent_facts() {
+    fn preserves_revm_gas_semantics_and_rejects_inconsistent_data() {
         for result_gas in [
             ResultGas::new(100_000, 60_000, 12_000, 0, 21_000),
             ResultGas::new(100_000, 60_000, 12_000, 55_000, 21_000),
@@ -267,21 +259,12 @@ mod tests {
                 result_gas.inner_refunded(),
                 result_gas.floor_gas(),
             )
-            .expect("valid Revm gas facts should integrate");
+            .expect("valid Revm gas data should integrate");
 
             assert_eq!(gas.gas_used(), result_gas.used());
         }
 
-        assert!(matches!(
-            EvmGas::new(90_000, 100_000, 21_000, 60_000, 12_000, 0),
-            Err(EvmResultIntegrationError::GasLimitMismatch {
-                transaction_gas_limit: 90_000,
-                result_gas_limit: 100_000,
-            })
-        ));
-        assert!(matches!(
-            EvmGas::new(100_000, 100_000, 21_000, 30_000, 31_000, 0),
-            Err(EvmResultIntegrationError::InvalidGasAccounting { .. })
-        ));
+        assert!(EvmGas::new(90_000, 100_000, 21_000, 60_000, 12_000, 0).is_err());
+        assert!(EvmGas::new(100_000, 100_000, 21_000, 30_000, 31_000, 0).is_err());
     }
 }

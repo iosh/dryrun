@@ -1,7 +1,4 @@
-use std::sync::LazyLock;
-
-use alloy::primitives::{Address, B256, Bytes, Log, U256, keccak256};
-use contract_standards::is_supported_event_topic;
+use alloy::primitives::{Address, Bytes, Log, U256};
 use revm::{
     Inspector,
     context::{ContextTr, JournalEntry},
@@ -13,11 +10,7 @@ use revm::{
 };
 use thiserror::Error;
 
-use crate::EvmSimulationLimits;
-
-static DEPOSIT_TOPIC0: LazyLock<B256> = LazyLock::new(|| keccak256("Deposit(address,uint256)"));
-static WITHDRAWAL_TOPIC0: LazyLock<B256> =
-    LazyLock::new(|| keccak256("Withdrawal(address,uint256)"));
+use crate::{EvmObservationRequirements, EvmSimulationLimits};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EvmExecutionPosition(usize);
@@ -46,7 +39,7 @@ pub enum EvmCallKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EvmCommittedFrameKind {
+pub enum EvmFrameAction {
     Call {
         kind: EvmCallKind,
         caller: Address,
@@ -68,7 +61,7 @@ pub struct EvmCommittedFrame {
     id: EvmFrameId,
     parent: Option<EvmFrameId>,
     position: EvmExecutionPosition,
-    kind: EvmCommittedFrameKind,
+    action: EvmFrameAction,
 }
 
 impl EvmCommittedFrame {
@@ -84,8 +77,8 @@ impl EvmCommittedFrame {
         self.position
     }
 
-    pub const fn kind(&self) -> &EvmCommittedFrameKind {
-        &self.kind
+    pub const fn action(&self) -> &EvmFrameAction {
+        &self.action
     }
 }
 
@@ -143,7 +136,7 @@ impl EvmCommittedLog {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[non_exhaustive]
-pub enum EvmOccurrenceEvidenceError {
+pub enum EvmObservationError {
     #[error("semantic occurrence checkpoint limit {limit} exceeded")]
     CheckpointLimitExceeded { limit: usize },
 
@@ -159,7 +152,7 @@ pub(crate) struct EvmExecutionObservation {
     pub(crate) selfdestructs: Vec<EvmCommittedSelfdestruct>,
     pub(crate) semantic_logs: Vec<ObservedSemanticLog>,
     pub(crate) checkpoints: Vec<EvmState>,
-    pub(crate) evidence_error: Option<EvmOccurrenceEvidenceError>,
+    pub(crate) limit_error: Option<EvmObservationError>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -182,7 +175,7 @@ struct FrameRollbackPoint {
     semantic_logs_len: usize,
     checkpoints_len: usize,
     retained_state_units: usize,
-    evidence_error: Option<EvmOccurrenceEvidenceError>,
+    limit_error: Option<EvmObservationError>,
 }
 
 #[derive(Debug)]
@@ -208,9 +201,9 @@ pub(crate) enum EvmExecutionObservationError {
     OpenFrames { open_frames: usize },
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct EvmExecutionObserver {
-    wrapped_native_token: Option<Address>,
+    requirements: EvmObservationRequirements,
     limits: EvmSimulationLimits,
     applied_authorization_accounts: Option<Vec<Address>>,
     frames: Vec<EvmCommittedFrame>,
@@ -222,33 +215,39 @@ pub(crate) struct EvmExecutionObserver {
     next_frame_id: usize,
     next_position: usize,
     retained_state_units: usize,
-    evidence_error: Option<EvmOccurrenceEvidenceError>,
+    limit_error: Option<EvmObservationError>,
     observation_error: Option<EvmExecutionObservationError>,
 }
 
 impl EvmExecutionObserver {
-    pub(crate) fn new(wrapped_native_token: Option<Address>) -> Self {
-        Self {
-            wrapped_native_token,
-            ..Self::default()
-        }
-    }
-
-    pub(crate) fn with_limits(
-        wrapped_native_token: Option<Address>,
+    pub(crate) fn with_requirements(
+        requirements: EvmObservationRequirements,
         limits: EvmSimulationLimits,
     ) -> Self {
         Self {
-            wrapped_native_token,
+            requirements,
             limits,
-            ..Self::default()
+            applied_authorization_accounts: None,
+            frames: Vec::new(),
+            logs: Vec::new(),
+            selfdestructs: Vec::new(),
+            semantic_logs: Vec::new(),
+            checkpoints: Vec::new(),
+            open_frames: Vec::new(),
+            next_frame_id: 0,
+            next_position: 0,
+            retained_state_units: 0,
+            limit_error: None,
+            observation_error: None,
         }
     }
 
     pub(crate) fn take_observation(
         &mut self,
     ) -> Result<EvmExecutionObservation, EvmExecutionObservationError> {
-        std::mem::take(self).finish()
+        let replacement =
+            Self::with_requirements(EvmObservationRequirements::new(), self.limits.clone());
+        std::mem::replace(self, replacement).finish()
     }
 
     fn finish(self) -> Result<EvmExecutionObservation, EvmExecutionObservationError> {
@@ -268,7 +267,7 @@ impl EvmExecutionObserver {
             selfdestructs: self.selfdestructs,
             semantic_logs: self.semantic_logs,
             checkpoints: self.checkpoints,
-            evidence_error: self.evidence_error,
+            limit_error: self.limit_error,
         })
     }
 
@@ -295,7 +294,7 @@ impl EvmExecutionObserver {
         self.applied_authorization_accounts = Some(accounts);
     }
 
-    fn start_frame(&mut self, kind: FrameKind, frame_kind: EvmCommittedFrameKind) {
+    fn start_frame(&mut self, kind: FrameKind, action: EvmFrameAction) {
         let id = EvmFrameId(self.next_frame_id);
         self.next_frame_id += 1;
         let parent = self.open_frames.last().map(|frame| frame.id);
@@ -306,7 +305,7 @@ impl EvmExecutionObserver {
             semantic_logs_len: self.semantic_logs.len(),
             checkpoints_len: self.checkpoints.len(),
             retained_state_units: self.retained_state_units,
-            evidence_error: self.evidence_error.clone(),
+            limit_error: self.limit_error.clone(),
         };
         let frame_index = self.frames.len();
         let position = self.next_position();
@@ -314,7 +313,7 @@ impl EvmExecutionObserver {
             id,
             parent,
             position,
-            kind: frame_kind,
+            action,
         });
         self.open_frames.push(OpenFrame {
             id,
@@ -354,7 +353,7 @@ impl EvmExecutionObserver {
                 .truncate(frame.rollback.semantic_logs_len);
             self.checkpoints.truncate(frame.rollback.checkpoints_len);
             self.retained_state_units = frame.rollback.retained_state_units;
-            self.evidence_error = frame.rollback.evidence_error;
+            self.limit_error = frame.rollback.limit_error;
             return;
         }
 
@@ -365,10 +364,10 @@ impl EvmExecutionObserver {
                 });
                 return;
             };
-            let EvmCommittedFrameKind::Create {
+            let EvmFrameAction::Create {
                 created_address: address,
                 ..
-            } = &mut committed_frame.kind
+            } = &mut committed_frame.action
             else {
                 self.record_observation_error(EvmExecutionObservationError::FrameKindMismatch {
                     actual: "call",
@@ -398,7 +397,7 @@ impl EvmExecutionObserver {
             .data
             .topics()
             .first()
-            .is_some_and(|topic| self.is_checkpoint_candidate(log.address, topic));
+            .is_some_and(|topic| self.requirements.matches_log(log.address, topic));
         self.logs.push(EvmCommittedLog {
             position,
             frame_id,
@@ -434,38 +433,29 @@ impl EvmExecutionObserver {
         });
     }
 
-    fn is_checkpoint_candidate(&self, address: Address, topic: &B256) -> bool {
-        is_supported_event_topic(topic)
-            || (self.wrapped_native_token == Some(address)
-                && (topic == &*DEPOSIT_TOPIC0 || topic == &*WITHDRAWAL_TOPIC0))
-    }
-
     fn capture_checkpoint(&mut self, state: &EvmState) -> Option<usize> {
-        if self.evidence_error.is_some() {
+        if self.limit_error.is_some() {
             return None;
         }
-        if let Some(limit) = self.limits.max_occurrence_checkpoints
-            && self.checkpoints.len() >= limit
-        {
-            self.evidence_error =
-                Some(EvmOccurrenceEvidenceError::CheckpointLimitExceeded { limit });
+        if self.checkpoints.len() >= self.limits.max_occurrence_checkpoints {
+            self.limit_error = Some(EvmObservationError::CheckpointLimitExceeded {
+                limit: self.limits.max_occurrence_checkpoints,
+            });
             return None;
         }
 
         let state_units = retained_state_units(state);
-        let retained_state_units = self.retained_state_units.saturating_add(state_units);
-        if let Some(limit) = self.limits.max_retained_state_entries {
-            let Some(retained_state_units) = self.retained_state_units.checked_add(state_units)
-            else {
-                self.evidence_error =
-                    Some(EvmOccurrenceEvidenceError::RetainedStateLimitExceeded { limit });
-                return None;
-            };
-            if retained_state_units > limit {
-                self.evidence_error =
-                    Some(EvmOccurrenceEvidenceError::RetainedStateLimitExceeded { limit });
-                return None;
-            }
+        let Some(retained_state_units) = self.retained_state_units.checked_add(state_units) else {
+            self.limit_error = Some(EvmObservationError::RetainedStateLimitExceeded {
+                limit: self.limits.max_retained_state_entries,
+            });
+            return None;
+        };
+        if retained_state_units > self.limits.max_retained_state_entries {
+            self.limit_error = Some(EvmObservationError::RetainedStateLimitExceeded {
+                limit: self.limits.max_retained_state_entries,
+            });
+            return None;
         }
 
         let checkpoint_index = self.checkpoints.len();
@@ -517,7 +507,7 @@ where
         self.observe_transaction_start(context);
         self.start_frame(
             FrameKind::Call,
-            EvmCommittedFrameKind::Call {
+            EvmFrameAction::Call {
                 kind: inputs.scheme.into(),
                 caller: inputs.caller,
                 target: inputs.target_address,
@@ -537,7 +527,7 @@ where
         self.observe_transaction_start(context);
         self.start_frame(
             FrameKind::Create,
-            EvmCommittedFrameKind::Create {
+            EvmFrameAction::Create {
                 caller: inputs.caller(),
                 value: inputs.value(),
                 init_code: inputs.init_code().clone(),
@@ -586,10 +576,11 @@ mod tests {
         state::{AccountInfo, Bytecode, bytecode::opcode},
     };
 
-    use super::{
-        EvmExecutionObservation, EvmExecutionObserver, EvmOccurrenceEvidenceError,
-        MAX_OCCURRENCE_CHECKPOINTS,
-    };
+    use crate::EvmObservationRequirements;
+
+    use super::{EvmExecutionObservation, EvmExecutionObserver, EvmObservationError};
+
+    const TEST_MAX_OCCURRENCE_CHECKPOINTS: usize = 2;
 
     #[test]
     fn committed_candidate_retains_its_state_checkpoint() {
@@ -667,38 +658,79 @@ mod tests {
     #[test]
     fn committed_checkpoint_limit_makes_occurrence_evidence_unavailable() {
         let mut code = Vec::new();
-        for _ in 0..=MAX_OCCURRENCE_CHECKPOINTS {
+        for _ in 0..=TEST_MAX_OCCURRENCE_CHECKPOINTS {
             push_log(&mut code, keccak256("Approval(address,address,uint256)"));
         }
         code.push(opcode::STOP);
 
-        let (result_logs, observation) = execute(code);
+        let (result_logs, observation) = execute_with_limits(
+            code,
+            crate::EvmSimulationLimits {
+                max_occurrence_checkpoints: TEST_MAX_OCCURRENCE_CHECKPOINTS,
+                max_retained_state_entries: usize::MAX,
+                max_state_reads: usize::MAX,
+                max_read_calls: usize::MAX,
+                read_call_gas_limit: u64::MAX,
+                max_read_call_output_bytes: usize::MAX,
+            },
+        );
 
-        assert_eq!(result_logs, MAX_OCCURRENCE_CHECKPOINTS + 1);
+        assert_eq!(result_logs, TEST_MAX_OCCURRENCE_CHECKPOINTS + 1);
         assert_eq!(
             observation.semantic_logs.len(),
-            MAX_OCCURRENCE_CHECKPOINTS + 1
+            TEST_MAX_OCCURRENCE_CHECKPOINTS + 1
         );
-        assert_eq!(observation.checkpoints.len(), MAX_OCCURRENCE_CHECKPOINTS);
+        assert_eq!(
+            observation.checkpoints.len(),
+            TEST_MAX_OCCURRENCE_CHECKPOINTS
+        );
         assert!(matches!(
-            observation.evidence_error,
-            Some(EvmOccurrenceEvidenceError::CheckpointLimitExceeded {
-                limit: MAX_OCCURRENCE_CHECKPOINTS
+            observation.limit_error,
+            Some(EvmObservationError::CheckpointLimitExceeded {
+                limit: TEST_MAX_OCCURRENCE_CHECKPOINTS
             })
         ));
     }
 
     fn execute(code: Vec<u8>) -> (usize, EvmExecutionObservation) {
+        execute_with_limits(code, test_limits())
+    }
+
+    fn execute_with_limits(
+        code: Vec<u8>,
+        limits: crate::EvmSimulationLimits,
+    ) -> (usize, EvmExecutionObservation) {
         let database = BenchmarkDB::new_bytecode(Bytecode::new_raw(Bytes::from(code)));
         let context = Context::mainnet().with_db(database);
-        let mut evm = context.build_mainnet_with_inspector(EvmExecutionObserver::new(None));
+        let mut evm = context.build_mainnet_with_inspector(
+            EvmExecutionObserver::with_requirements(approval_requirements(), limits),
+        );
         execute_evm(&mut evm)
     }
 
     fn execute_database(database: InMemoryDB) -> (usize, EvmExecutionObservation) {
         let context = Context::mainnet().with_db(database);
-        let mut evm = context.build_mainnet_with_inspector(EvmExecutionObserver::new(None));
+        let mut evm = context.build_mainnet_with_inspector(
+            EvmExecutionObserver::with_requirements(approval_requirements(), test_limits()),
+        );
         execute_evm(&mut evm)
+    }
+
+    fn test_limits() -> crate::EvmSimulationLimits {
+        crate::EvmSimulationLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            usize::MAX,
+        )
+    }
+
+    fn approval_requirements() -> EvmObservationRequirements {
+        let mut requirements = EvmObservationRequirements::new();
+        requirements.checkpoint_any_address(keccak256("Approval(address,address,uint256)"));
+        requirements
     }
 
     fn execute_evm<DB>(

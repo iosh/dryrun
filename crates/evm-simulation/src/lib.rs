@@ -8,6 +8,7 @@ mod error;
 mod execution;
 mod execution_result;
 mod limits;
+mod observation;
 mod outcome;
 mod rejection;
 mod simulation;
@@ -32,16 +33,16 @@ pub use error::{
     EvmTransactionCompletionError,
 };
 pub use execution::{
-    EvmCallKind, EvmCommittedFrame, EvmCommittedFrameKind, EvmCommittedLog,
-    EvmCommittedSelfdestruct, EvmExecutionPosition, EvmFrameId, EvmOccurrenceEvidenceError,
+    EvmCallKind, EvmCommittedFrame, EvmCommittedLog, EvmCommittedSelfdestruct,
+    EvmExecutionPosition, EvmFrameAction, EvmFrameId, EvmObservationError,
     EvmSemanticLogOccurrence, EvmTransactionExecution,
 };
 pub(crate) use execution::{
     EvmExecutionObserver, EvmTransactionExecutionResult, EvmTransactionExecutor,
-    map_executed_outcome,
 };
 pub use execution_result::{EvmBlobGasFee, EvmExecutionGasFee, EvmExecutionResult, EvmFee, EvmGas};
 pub use limits::EvmSimulationLimits;
+pub use observation::EvmObservationRequirements;
 pub use outcome::{
     EvmExecutionOutcome, EvmHaltReason, EvmOutOfGasReason, EvmRevertReason, EvmSuccessOutput,
     EvmSuccessReason,
@@ -51,8 +52,8 @@ pub use simulation::{EvmBlockContext, EvmSimulation};
 pub use simulator::EvmTransactionSimulator;
 pub(crate) use standard_resolver::EvmStandardChangeResolver;
 pub use state::{
-    EvmAccountState, EvmOccurrenceHandle, EvmOccurrenceStateViews, EvmReadCallOutcome,
-    EvmStateReadError, EvmStateView, EvmStateViews,
+    EvmAccountState, EvmOccurrenceHandle, EvmOccurrenceStateReaders, EvmReadCallOutcome,
+    EvmStateAccess, EvmStateReadError, EvmStateReader,
 };
 pub use transaction::{
     AccessListItem, Authorization, CompleteTransaction, PartialTransaction, SignedAuthorization,

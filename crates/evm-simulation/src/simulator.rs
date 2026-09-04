@@ -9,14 +9,14 @@ use tokio::runtime::Handle;
 
 use crate::{
     CompleteTransaction, EthereumChainSpec, EvmBlockContext, EvmExecutionObserver,
-    EvmExecutionOutcome, EvmInitializationError, EvmSimulation, EvmSimulationError,
-    EvmSimulationLimits, EvmSimulationRequest, EvmTransactionExecutionResult,
+    EvmExecutionOutcome, EvmInitializationError, EvmObservationRequirements, EvmSimulation,
+    EvmSimulationError, EvmSimulationLimits, EvmSimulationRequest, EvmTransactionExecutionResult,
     EvmTransactionExecutor,
     changeset::{
         CombinedEvmChangeResolver, EvmChangeResolver, EvmChangeSet, EvmChanges,
         StandardEvmChangeResolver,
     },
-    map_executed_outcome, resolve_block,
+    resolve_block,
     state::EvmStateSource,
 };
 
@@ -42,6 +42,7 @@ impl<R> Clone for EvmTransactionSimulator<R> {
 impl EvmTransactionSimulator<StandardEvmChangeResolver> {
     pub async fn ethereum_mainnet(
         provider: DynProvider<Ethereum>,
+        limits: EvmSimulationLimits,
     ) -> Result<Self, EvmInitializationError> {
         let chain_spec = EthereumChainSpec::mainnet();
         let actual_chain_id = provider
@@ -64,7 +65,7 @@ impl EvmTransactionSimulator<StandardEvmChangeResolver> {
             provider,
             chain_spec: Arc::new(chain_spec),
             resolver: Arc::new(resolver),
-            limits: EvmSimulationLimits::default(),
+            limits,
         })
     }
 }
@@ -99,11 +100,6 @@ impl<R> EvmTransactionSimulator<R> {
             )),
             limits: self.limits,
         }
-    }
-
-    pub fn with_limits(mut self, limits: EvmSimulationLimits) -> Self {
-        self.limits = limits;
-        self
     }
 }
 
@@ -192,9 +188,17 @@ where
         number: block.number(),
         hash: block.hash(),
     };
-    let executor = create_executor(provider, runtime_handle, block, &chain_spec, limits)?;
-    let (output, state_views) = match executor.execute(&transaction)? {
-        EvmTransactionExecutionResult::Executed(output) => output.commit()?,
+    let requirements = resolver.observation_requirements();
+    let executor = create_executor(
+        provider,
+        runtime_handle,
+        block,
+        &chain_spec,
+        requirements,
+        limits,
+    )?;
+    let (output, state) = match executor.execute(&transaction)? {
+        EvmTransactionExecutionResult::Executed(output) => output.commit(&transaction)?,
         EvmTransactionExecutionResult::NotExecuted(rejection) => {
             return Ok(EvmSimulation {
                 context,
@@ -205,9 +209,8 @@ where
         }
     };
 
-    let changes = EvmChanges::from(resolver.resolve(&output, &state_views));
-    let (engine_result, execution_result) = output.into_outcome_parts();
-    let execution = map_executed_outcome(engine_result, &transaction, execution_result)?;
+    let changes = EvmChanges::from(resolver.resolve(&output, &state));
+    let execution = output.into_outcome();
 
     Ok(EvmSimulation {
         context,
@@ -222,6 +225,7 @@ fn create_executor(
     runtime_handle: Handle,
     block: Sealed<Header>,
     chain_spec: &EthereumChainSpec,
+    requirements: EvmObservationRequirements,
     limits: EvmSimulationLimits,
 ) -> Result<EvmTransactionExecutor<EvmExecutionObserver>, EvmSimulationError> {
     let block_hash = block.hash();
@@ -230,10 +234,7 @@ fn create_executor(
         state_source,
         block,
         chain_spec,
-        EvmExecutionObserver::with_limits(
-            chain_spec.wrapped_native_token_address(),
-            limits.clone(),
-        ),
+        EvmExecutionObserver::with_requirements(requirements, limits.clone()),
         limits,
     )
 }
@@ -250,15 +251,16 @@ mod tests {
     };
 
     use super::EvmTransactionSimulator;
-    use crate::EvmInitializationError;
+    use crate::{EvmInitializationError, EvmSimulationLimits};
 
     #[test]
     fn returns_typed_initialization_errors() {
         let mismatch_asserter = Asserter::new();
         mismatch_asserter.push_success(&"0x5");
-        let mismatch = block_on(EvmTransactionSimulator::ethereum_mainnet(mock_provider(
-            mismatch_asserter,
-        )))
+        let mismatch = block_on(EvmTransactionSimulator::ethereum_mainnet(
+            mock_provider(mismatch_asserter),
+            test_limits(),
+        ))
         .expect_err("wrong chain id should reject initialization");
         assert!(matches!(
             mismatch,
@@ -270,9 +272,10 @@ mod tests {
 
         let failure_asserter = Asserter::new();
         failure_asserter.push_failure_msg("provider unavailable");
-        let failure = block_on(EvmTransactionSimulator::ethereum_mainnet(mock_provider(
-            failure_asserter,
-        )))
+        let failure = block_on(EvmTransactionSimulator::ethereum_mainnet(
+            mock_provider(failure_asserter),
+            test_limits(),
+        ))
         .expect_err("provider failure should reject initialization");
         assert!(matches!(
             failure,
@@ -282,6 +285,17 @@ mod tests {
 
     fn mock_provider(asserter: Asserter) -> DynProvider<Ethereum> {
         RootProvider::new(RpcClient::mocked(asserter)).erased()
+    }
+
+    fn test_limits() -> EvmSimulationLimits {
+        EvmSimulationLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            usize::MAX,
+        )
     }
 
     fn block_on<T>(future: impl Future<Output = T>) -> T {

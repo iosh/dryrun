@@ -9,12 +9,12 @@ use contract_standards::{Erc20Metadata, Erc721CollectionMetadata, Erc1155Transfe
 use thiserror::Error;
 
 use crate::{
-    EvmStandardChangeResolver,
+    EvmObservationRequirements, EvmStandardChangeResolver,
     execution::{
-        EvmCallKind, EvmCommittedFrameKind, EvmExecutionPosition, EvmOccurrenceEvidenceError,
+        EvmCallKind, EvmExecutionPosition, EvmFrameAction, EvmObservationError,
         EvmTransactionExecution,
     },
-    state::{EvmStateReadError, EvmStateViews},
+    state::{EvmStateAccess, EvmStateReadError},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -361,39 +361,15 @@ enum StandardChangeKey {
 #[non_exhaustive]
 pub enum EvmChangeResolutionError {
     #[error(transparent)]
-    OccurrenceEvidence(#[from] EvmOccurrenceEvidenceError),
+    Observation(#[from] EvmObservationError),
 
     #[error(transparent)]
     StateRead(#[from] EvmStateReadError),
 
-    #[error("native balance underflow for {address}: balance {balance}, cannot subtract {amount}")]
-    NativeBalanceUnderflow {
-        address: Address,
-        balance: U256,
-        amount: U256,
-    },
+    #[error("conflicting changes: {details}")]
+    Conflict { details: String },
 
-    #[error("native balance overflow for {address}: balance {balance}, cannot add {amount}")]
-    NativeBalanceOverflow {
-        address: Address,
-        balance: U256,
-        amount: U256,
-    },
-
-    #[error("native balance mismatch for {address}: replayed {replayed}, state {actual}")]
-    NativeBalanceMismatch {
-        address: Address,
-        replayed: U256,
-        actual: U256,
-    },
-
-    #[error("conflicting delegation values for account {account}")]
-    AccountDelegationConflict { account: Address },
-
-    #[error("conflicting semantic changes at execution position {position:?}")]
-    SemanticConflict { position: usize },
-
-    #[error("change resolver could not produce complete changes")]
+    #[error("{resolver} resolver could not produce complete changes: {source}")]
     Resolver {
         resolver: &'static str,
         #[source]
@@ -406,6 +382,12 @@ impl EvmChangeResolutionError {
         Self::Resolver {
             resolver,
             source: Box::new(source),
+        }
+    }
+
+    fn conflict(details: impl Into<String>) -> Self {
+        Self::Conflict {
+            details: details.into(),
         }
     }
 }
@@ -440,14 +422,16 @@ impl EvmChangeSetBuilder {
             if existing.merge_duplicate(entry) {
                 return Ok(());
             }
-            return Err(match key {
+            let details = match key {
                 EvmChangeKey::AccountDelegation(account) => {
-                    EvmChangeResolutionError::AccountDelegationConflict { account }
+                    format!("different delegation values for account {account}")
                 }
-                _ => EvmChangeResolutionError::SemanticConflict {
-                    position: position.index(),
-                },
-            });
+                _ => format!(
+                    "different semantic values at execution position {}",
+                    position.index()
+                ),
+            };
+            return Err(EvmChangeResolutionError::conflict(details));
         }
         if matches!(position, EvmChangePosition::Execution(_))
             && self
@@ -455,9 +439,10 @@ impl EvmChangeSetBuilder {
                 .keys()
                 .any(|(existing_position, _)| *existing_position == position)
         {
-            return Err(EvmChangeResolutionError::SemanticConflict {
-                position: position.index(),
-            });
+            return Err(EvmChangeResolutionError::conflict(format!(
+                "multiple semantic changes at execution position {}",
+                position.index()
+            )));
         }
         self.entries.insert(map_key, entry);
         Ok(())
@@ -973,10 +958,12 @@ impl EvmChangePosition {
 }
 
 pub trait EvmChangeResolver: Send + Sync + 'static {
+    fn observation_requirements(&self) -> EvmObservationRequirements;
+
     fn resolve(
         &self,
         execution: &EvmTransactionExecution,
-        views: &EvmStateViews,
+        state: &EvmStateAccess,
     ) -> Result<EvmChangeSet, EvmChangeResolutionError>;
 
     fn combine<R>(self, other: R) -> CombinedEvmChangeResolver<Self, R>
@@ -1018,6 +1005,24 @@ enum EvmNativeOperation {
     },
 }
 
+#[derive(Debug, Error)]
+#[error("{details}")]
+struct NativeResolverDiagnostic {
+    details: String,
+}
+
+impl NativeResolverDiagnostic {
+    fn new(details: impl Into<String>) -> Self {
+        Self {
+            details: details.into(),
+        }
+    }
+}
+
+fn native_resolution_error(details: impl Into<String>) -> EvmChangeResolutionError {
+    EvmChangeResolutionError::resolver("native currency", NativeResolverDiagnostic::new(details))
+}
+
 #[derive(Debug, Clone)]
 pub struct EvmNativeChangeResolver {
     currency: EvmNativeCurrency,
@@ -1030,13 +1035,17 @@ impl EvmNativeChangeResolver {
 }
 
 impl EvmChangeResolver for EvmNativeChangeResolver {
+    fn observation_requirements(&self) -> EvmObservationRequirements {
+        EvmObservationRequirements::new()
+    }
+
     fn resolve(
         &self,
         execution: &EvmTransactionExecution,
-        views: &EvmStateViews,
+        state: &EvmStateAccess,
     ) -> Result<EvmChangeSet, EvmChangeResolutionError> {
-        let operations = collect_native_operations(execution)?;
-        replay_native_balances(execution, views, &operations)?;
+        let operations = collect_native_operations(execution);
+        replay_native_balances(execution, state, &operations)?;
 
         let mut builder = EvmChangeSetBuilder::new();
         for operation in operations {
@@ -1061,14 +1070,12 @@ impl EvmChangeResolver for EvmNativeChangeResolver {
     }
 }
 
-fn collect_native_operations(
-    execution: &EvmTransactionExecution,
-) -> Result<Vec<EvmNativeOperation>, EvmChangeResolutionError> {
+fn collect_native_operations(execution: &EvmTransactionExecution) -> Vec<EvmNativeOperation> {
     let mut operations = Vec::new();
 
     for frame in execution.committed_frames() {
-        match frame.kind() {
-            EvmCommittedFrameKind::Call {
+        match frame.action() {
+            EvmFrameAction::Call {
                 kind: EvmCallKind::Call,
                 caller,
                 target,
@@ -1082,7 +1089,7 @@ fn collect_native_operations(
                     amount: *value,
                 });
             }
-            EvmCommittedFrameKind::Create {
+            EvmFrameAction::Create {
                 caller,
                 value,
                 created_address,
@@ -1102,7 +1109,7 @@ fn collect_native_operations(
                     });
                 }
             }
-            EvmCommittedFrameKind::Call { .. } | EvmCommittedFrameKind::Create { .. } => {}
+            EvmFrameAction::Call { .. } | EvmFrameAction::Create { .. } => {}
         }
     }
 
@@ -1132,12 +1139,12 @@ fn collect_native_operations(
         EvmNativeOperation::Transfer { position, .. }
         | EvmNativeOperation::SelfDestructBurn { position, .. } => *position,
     });
-    Ok(operations)
+    operations
 }
 
 fn replay_native_balances(
     execution: &EvmTransactionExecution,
-    views: &EvmStateViews,
+    state: &EvmStateAccess,
     operations: &[EvmNativeOperation],
 ) -> Result<(), EvmChangeResolutionError> {
     let mut addresses = BTreeSet::new();
@@ -1157,7 +1164,7 @@ fn replay_native_balances(
 
     let mut replayed = BTreeMap::new();
     for address in addresses {
-        let balance = views.initial().read_account(address)?.balance();
+        let balance = state.initial().read_account(address)?.balance();
         replayed.insert(address, balance);
     }
 
@@ -1190,13 +1197,11 @@ fn replay_native_balances(
     )?;
 
     for (&address, &replayed_balance) in &replayed {
-        let actual = views.finalized().read_account(address)?.balance();
+        let actual = state.finalized().read_account(address)?.balance();
         if replayed_balance != actual {
-            return Err(EvmChangeResolutionError::NativeBalanceMismatch {
-                address,
-                replayed: replayed_balance,
-                actual,
-            });
+            return Err(native_resolution_error(format!(
+                "finalized native balance differs from replay for {address}: replayed {replayed_balance}, state {actual}"
+            )));
         }
     }
 
@@ -1212,14 +1217,11 @@ fn decrease_native_balance(
         unreachable!("native replay address set must contain every operation account")
     });
     let current = *balance;
-    *balance =
-        current
-            .checked_sub(amount)
-            .ok_or(EvmChangeResolutionError::NativeBalanceUnderflow {
-                address,
-                balance: current,
-                amount,
-            })?;
+    *balance = current.checked_sub(amount).ok_or_else(|| {
+        native_resolution_error(format!(
+            "native balance replay violated the execution invariant for {address}"
+        ))
+    })?;
     Ok(())
 }
 
@@ -1232,14 +1234,11 @@ fn increase_native_balance(
         unreachable!("native replay address set must contain every operation account")
     });
     let current = *balance;
-    *balance =
-        current
-            .checked_add(amount)
-            .ok_or(EvmChangeResolutionError::NativeBalanceOverflow {
-                address,
-                balance: current,
-                amount,
-            })?;
+    *balance = current.checked_add(amount).ok_or_else(|| {
+        native_resolution_error(format!(
+            "native balance replay violated the execution invariant for {address}"
+        ))
+    })?;
     Ok(())
 }
 
@@ -1247,15 +1246,19 @@ fn increase_native_balance(
 pub struct EvmAccountDelegationResolver;
 
 impl EvmChangeResolver for EvmAccountDelegationResolver {
+    fn observation_requirements(&self) -> EvmObservationRequirements {
+        EvmObservationRequirements::new()
+    }
+
     fn resolve(
         &self,
         execution: &EvmTransactionExecution,
-        views: &EvmStateViews,
+        state: &EvmStateAccess,
     ) -> Result<EvmChangeSet, EvmChangeResolutionError> {
         let mut builder = EvmChangeSetBuilder::new();
         for &account in execution.applied_authorization_accounts() {
-            let before = views.before().read_account(account)?;
-            let after = views.after().read_account(account)?;
+            let before = state.initial().read_account(account)?;
+            let after = state.finalized().read_account(account)?;
             builder.account_delegation(
                 account,
                 EvmAccountDelegation {
@@ -1302,12 +1305,16 @@ impl StandardEvmChangeResolver {
 }
 
 impl EvmChangeResolver for StandardEvmChangeResolver {
+    fn observation_requirements(&self) -> EvmObservationRequirements {
+        self.components.observation_requirements()
+    }
+
     fn resolve(
         &self,
         execution: &EvmTransactionExecution,
-        views: &EvmStateViews,
+        state: &EvmStateAccess,
     ) -> Result<EvmChangeSet, EvmChangeResolutionError> {
-        self.components.resolve(execution, views)
+        self.components.resolve(execution, state)
     }
 }
 
@@ -1338,13 +1345,19 @@ where
     A: EvmChangeResolver,
     B: EvmChangeResolver,
 {
+    fn observation_requirements(&self) -> EvmObservationRequirements {
+        self.first
+            .observation_requirements()
+            .merge(&self.second.observation_requirements())
+    }
+
     fn resolve(
         &self,
         execution: &EvmTransactionExecution,
-        views: &EvmStateViews,
+        state: &EvmStateAccess,
     ) -> Result<EvmChangeSet, EvmChangeResolutionError> {
-        let first = self.first.resolve(execution, views)?;
-        let second = self.second.resolve(execution, views)?;
+        let first = self.first.resolve(execution, state)?;
+        let second = self.second.resolve(execution, state)?;
         first.merge(second)
     }
 }

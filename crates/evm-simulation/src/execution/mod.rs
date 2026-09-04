@@ -8,15 +8,17 @@ use std::sync::Arc;
 
 use self::{
     env::{create_block_env, create_cfg_env, create_tx_env},
+    outcome_mapping::{EvmFinalStatus, map_executed_status},
     rejection_mapping::map_transaction_rejection,
 };
 use crate::{
     CompleteTransaction, EthereumChainSpec, EvmBlobGasFee, EvmBlockEnvironmentError,
-    EvmExecutionError, EvmExecutionResult, EvmGas, EvmNotReadyError, EvmResultIntegrationError,
-    EvmSimulationError, EvmSimulationLimits, EvmStateAccessError, EvmTransactionRejection,
+    EvmExecutionError, EvmExecutionOutcome, EvmExecutionResult, EvmGas, EvmNotReadyError,
+    EvmResultIntegrationError, EvmSimulationError, EvmSimulationLimits, EvmStateAccessError,
+    EvmTransactionRejection,
     state::{
-        EvmDatabase, EvmExecutionIdentity, EvmOccurrenceHandle, EvmStateSource,
-        EvmStateViewFactory, EvmStateViews, MainnetEvm,
+        EvmDatabase, EvmExecutionIdentity, EvmOccurrenceHandle, EvmStateAccess,
+        EvmStateAccessFactory, EvmStateSource, MainnetEvm,
     },
 };
 use alloy::{
@@ -39,10 +41,9 @@ use revm::{
 
 pub(crate) use events::EvmExecutionObserver;
 pub use events::{
-    EvmCallKind, EvmCommittedFrame, EvmCommittedFrameKind, EvmCommittedLog,
-    EvmCommittedSelfdestruct, EvmExecutionPosition, EvmFrameId, EvmOccurrenceEvidenceError,
+    EvmCallKind, EvmCommittedFrame, EvmCommittedLog, EvmCommittedSelfdestruct,
+    EvmExecutionPosition, EvmFrameAction, EvmFrameId, EvmObservationError,
 };
-pub(crate) use outcome_mapping::map_executed_outcome;
 
 #[derive(Debug)]
 pub(crate) enum EvmTransactionExecutionResult<INSP> {
@@ -57,7 +58,7 @@ pub(crate) struct ExecutedTransaction<INSP> {
     transition: EvmState,
     fee_settlement: EvmFeeSettlement,
     evm: MainnetEvm<INSP>,
-    state_view_factory: EvmStateViewFactory,
+    state_access_factory: EvmStateAccessFactory,
     read_call_caller: Address,
     block_beneficiary: Address,
 }
@@ -65,13 +66,14 @@ pub(crate) struct ExecutedTransaction<INSP> {
 impl ExecutedTransaction<EvmExecutionObserver> {
     pub(crate) fn commit(
         mut self,
-    ) -> Result<(EvmTransactionExecution, EvmStateViews), EvmExecutionError> {
-        let observation =
-            self.evm.inspector.take_observation().map_err(|error| {
-                EvmResultIntegrationError::execution_observation(error.to_string())
-            })?;
+        transaction: &CompleteTransaction,
+    ) -> Result<(EvmTransactionExecution, EvmStateAccess), EvmExecutionError> {
+        let observation = self.evm.inspector.take_observation().map_err(|error| {
+            EvmResultIntegrationError::new(format!("execution observation: {error}"))
+        })?;
         verify_committed_logs(&observation.logs, self.result.logs())?;
         verify_committed_create_addresses(&observation.frames)?;
+        let status = map_executed_status(self.result, transaction)?;
 
         let anchor_cache = self.evm.ctx().db().cache.clone();
         let identity = Arc::new(EvmExecutionIdentity);
@@ -82,28 +84,28 @@ impl ExecutedTransaction<EvmExecutionObserver> {
             selfdestructs,
             semantic_logs,
             checkpoints,
-            evidence_error,
+            limit_error,
         } = observation;
-        let semantic_log_occurrences = match evidence_error {
+        let semantic_log_occurrences = match limit_error {
             Some(error) => Err(error),
             None => Ok(semantic_logs
                 .into_iter()
                 .map(|semantic_log| {
                     let checkpoint_index = semantic_log.checkpoint_index.ok_or_else(|| {
-                        EvmResultIntegrationError::execution_observation(format!(
+                        EvmResultIntegrationError::new(format!(
                             "semantic log at index {} has no occurrence checkpoint",
                             semantic_log.log_index
                         ))
                     })?;
                     if checkpoint_index >= checkpoints.len() {
-                        return Err(EvmResultIntegrationError::execution_observation(format!(
+                        return Err(EvmResultIntegrationError::new(format!(
                             "semantic log at index {} references missing occurrence checkpoint {}",
                             semantic_log.log_index, checkpoint_index
                         )));
                     }
                     let committed_log =
                         logs.get(semantic_log.log_index).cloned().ok_or_else(|| {
-                            EvmResultIntegrationError::execution_observation(format!(
+                            EvmResultIntegrationError::new(format!(
                                 "semantic log at index {} has no retained log",
                                 semantic_log.log_index
                             ))
@@ -120,8 +122,8 @@ impl ExecutedTransaction<EvmExecutionObserver> {
         } else {
             Vec::new()
         };
-        let state_views = EvmStateViews::new(
-            self.state_view_factory,
+        let state_access = EvmStateAccess::new(
+            self.state_access_factory,
             anchor_cache,
             Arc::clone(&identity),
             self.read_call_caller,
@@ -129,7 +131,7 @@ impl ExecutedTransaction<EvmExecutionObserver> {
             self.transition,
         );
         let execution = EvmTransactionExecution {
-            result: self.result,
+            status,
             gas: self.gas,
             fee_settlement: self.fee_settlement,
             fee_payer: self.read_call_caller,
@@ -141,7 +143,7 @@ impl ExecutedTransaction<EvmExecutionObserver> {
             semantic_log_occurrences,
         };
 
-        Ok((execution, state_views))
+        Ok((execution, state_access))
     }
 }
 
@@ -171,7 +173,7 @@ impl EvmSemanticLogOccurrence {
 
 #[derive(Debug)]
 pub struct EvmTransactionExecution {
-    result: ExecutionResult<HaltReason>,
+    status: EvmFinalStatus,
     gas: EvmGas,
     fee_settlement: EvmFeeSettlement,
     fee_payer: Address,
@@ -180,21 +182,39 @@ pub struct EvmTransactionExecution {
     committed_frames: Vec<EvmCommittedFrame>,
     committed_logs: Vec<EvmCommittedLog>,
     committed_selfdestructs: Vec<EvmCommittedSelfdestruct>,
-    semantic_log_occurrences: Result<Vec<EvmSemanticLogOccurrence>, EvmOccurrenceEvidenceError>,
+    semantic_log_occurrences: Result<Vec<EvmSemanticLogOccurrence>, EvmObservationError>,
 }
 
 impl EvmTransactionExecution {
-    pub(crate) fn into_outcome_parts(self) -> (ExecutionResult<HaltReason>, EvmExecutionResult) {
+    pub(crate) fn into_outcome(self) -> EvmExecutionOutcome {
         let Self {
-            result,
+            status,
             gas,
             fee_settlement,
+            committed_logs,
             ..
         } = self;
-        (
-            result,
-            EvmExecutionResult::new(gas, fee_settlement.into_fee()),
-        )
+        let result = EvmExecutionResult::new(gas, fee_settlement.into_fee());
+        match status {
+            EvmFinalStatus::Success { reason, output } => EvmExecutionOutcome::Success {
+                result,
+                reason,
+                output,
+                logs: committed_logs
+                    .into_iter()
+                    .map(|log| log.log().clone())
+                    .collect(),
+            },
+            EvmFinalStatus::Reverted {
+                revert_data,
+                reason,
+            } => EvmExecutionOutcome::Reverted {
+                result,
+                revert_data,
+                reason,
+            },
+            EvmFinalStatus::Halted { reason } => EvmExecutionOutcome::Halted { result, reason },
+        }
     }
 
     pub fn fee_payer(&self) -> Address {
@@ -227,7 +247,7 @@ impl EvmTransactionExecution {
 
     pub fn semantic_log_occurrences(
         &self,
-    ) -> Result<&[EvmSemanticLogOccurrence], EvmOccurrenceEvidenceError> {
+    ) -> Result<&[EvmSemanticLogOccurrence], EvmObservationError> {
         self.semantic_log_occurrences
             .as_deref()
             .map_err(Clone::clone)
@@ -239,10 +259,11 @@ fn verify_committed_logs(
     result: &[Log],
 ) -> Result<(), EvmResultIntegrationError> {
     if observed.len() != result.len() {
-        return Err(EvmResultIntegrationError::CommittedLogCountMismatch {
-            observed: observed.len(),
-            result: result.len(),
-        });
+        return Err(EvmResultIntegrationError::new(format!(
+            "observer retained {} committed logs, but the execution result returned {}",
+            observed.len(),
+            result.len()
+        )));
     }
     if let Some((index, _)) = observed
         .iter()
@@ -250,7 +271,9 @@ fn verify_committed_logs(
         .enumerate()
         .find(|(_, (observed, result))| observed.log() != *result)
     {
-        return Err(EvmResultIntegrationError::CommittedLogMismatch { index });
+        return Err(EvmResultIntegrationError::new(format!(
+            "observer log at committed index {index} differs from the execution result"
+        )));
     }
     Ok(())
 }
@@ -260,14 +283,16 @@ fn verify_committed_create_addresses(
 ) -> Result<(), EvmResultIntegrationError> {
     if frames.iter().any(|frame| {
         matches!(
-            frame.kind(),
-            EvmCommittedFrameKind::Create {
+            frame.action(),
+            EvmFrameAction::Create {
                 created_address: None,
                 ..
             }
         )
     }) {
-        return Err(EvmResultIntegrationError::MissingCreateAddress);
+        return Err(EvmResultIntegrationError::new(
+            "successful contract creation did not return the created address",
+        ));
     }
     Ok(())
 }
@@ -275,7 +300,7 @@ fn verify_committed_create_addresses(
 #[derive(Debug)]
 pub(crate) struct EvmTransactionExecutor<INSP> {
     evm: MainnetEvm<INSP>,
-    state_view_factory: EvmStateViewFactory,
+    state_access_factory: EvmStateAccessFactory,
     chain_id: u64,
     block_number: u64,
     block_gas_limit: u64,
@@ -309,13 +334,13 @@ impl<INSP> EvmTransactionExecutor<INSP> {
             .as_ref()
             .map(|blob| blob.blob_gasprice);
         let block_beneficiary = block_env.beneficiary;
-        let state_view_factory =
-            EvmStateViewFactory::with_limits(state_source, cfg_env, block_env, limits);
-        let evm = state_view_factory.create_execution_evm(inspector);
+        let state_access_factory =
+            EvmStateAccessFactory::with_limits(state_source, cfg_env, block_env, limits);
+        let evm = state_access_factory.create_execution_evm(inspector);
 
         Ok(Self {
             evm,
-            state_view_factory,
+            state_access_factory,
             chain_id,
             block_number,
             block_gas_limit,
@@ -408,7 +433,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
                 transition: result_and_state.state,
                 fee_settlement,
                 evm: self.evm,
-                state_view_factory: self.state_view_factory,
+                state_access_factory: self.state_access_factory,
                 read_call_caller: common.from,
                 block_beneficiary: self.block_beneficiary,
             },

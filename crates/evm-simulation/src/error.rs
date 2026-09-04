@@ -1,4 +1,4 @@
-use alloy::{primitives::U256, transports::TransportError};
+use alloy::transports::TransportError;
 use revm::database::AlloyDBError;
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -125,59 +125,14 @@ impl From<AlloyDBError> for EvmStateAccessError {
 }
 
 #[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum EvmResultIntegrationError {
-    #[error("EVM execution observation was inconsistent: {details}")]
-    ExecutionObservation { details: String },
-
-    #[error(
-        "EVM inspector retained {observed} committed logs, but the execution result returned {result}"
-    )]
-    CommittedLogCountMismatch { observed: usize, result: usize },
-
-    #[error("EVM inspector log at committed index {index} differs from the execution result")]
-    CommittedLogMismatch { index: usize },
-
-    #[error(
-        "the execution engine returned gas limit {result_gas_limit}, but the transaction gas limit is {transaction_gas_limit}"
-    )]
-    GasLimitMismatch {
-        transaction_gas_limit: u64,
-        result_gas_limit: u64,
-    },
-
-    #[error(
-        "the execution engine returned inconsistent gas accounting: gas limit {gas_limit}, \
-         intrinsic gas {intrinsic_gas}, spent before refund {spent_before_refund}, \
-         refund credit {refund_credit}, floor gas {floor_gas}"
-    )]
-    InvalidGasAccounting {
-        gas_limit: u64,
-        intrinsic_gas: u64,
-        spent_before_refund: u64,
-        refund_credit: u64,
-        floor_gas: u64,
-    },
-
-    #[error("burnt execution fee {burnt_amount} exceeds charged execution fee {charged_amount}")]
-    BurntFeeExceedsCharged {
-        charged_amount: U256,
-        burnt_amount: U256,
-    },
-
-    #[error("the execution engine returned create output for a call transaction")]
-    CreateOutputForCall,
-
-    #[error("the execution engine returned call output for a contract creation transaction")]
-    CallOutputForCreate,
-
-    #[error("successful contract creation did not return the created address")]
-    MissingCreateAddress,
+#[error("EVM execution result could not be integrated: {details}")]
+pub struct EvmResultIntegrationError {
+    details: String,
 }
 
 impl EvmResultIntegrationError {
-    pub(crate) fn execution_observation(details: impl Into<String>) -> Self {
-        Self::ExecutionObservation {
+    pub(crate) fn new(details: impl Into<String>) -> Self {
+        Self {
             details: details.into(),
         }
     }
@@ -200,9 +155,6 @@ pub enum EvmExecutionError {
 
     #[error("EVM execution engine failed: {details}")]
     EngineFailure { details: String },
-
-    #[error("the transaction transition has already been applied")]
-    TransitionAlreadyApplied,
 }
 
 impl EvmExecutionError {

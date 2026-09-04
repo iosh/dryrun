@@ -25,6 +25,19 @@ pub fn is_supported_event_topic(topic: &B256) -> bool {
         || topic == &*TRANSFER_BATCH_TOPIC0
 }
 
+pub fn supported_event_topics() -> &'static [B256] {
+    static TOPICS: LazyLock<[B256; 5]> = LazyLock::new(|| {
+        [
+            *TRANSFER_TOPIC0,
+            *APPROVAL_TOPIC0,
+            *APPROVAL_FOR_ALL_TOPIC0,
+            *TRANSFER_SINGLE_TOPIC0,
+            *TRANSFER_BATCH_TOPIC0,
+        ]
+    });
+    &*TOPICS
+}
+
 pub(crate) fn decode_log(
     contract_address: Address,
     topics: &[B256],

@@ -67,18 +67,14 @@ impl EvmStateSource {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct EvmStateViewFactory {
+pub(crate) struct EvmStateAccessFactory {
     source: EvmStateSource,
     cfg: CfgEnv,
     block: BlockEnv,
     limits: EvmSimulationLimits,
 }
 
-impl EvmStateViewFactory {
-    pub(crate) fn new(source: EvmStateSource, cfg: CfgEnv, block: BlockEnv) -> Self {
-        Self::with_limits(source, cfg, block, EvmSimulationLimits::default())
-    }
-
+impl EvmStateAccessFactory {
     pub(crate) fn with_limits(
         source: EvmStateSource,
         cfg: CfgEnv,
@@ -161,22 +157,22 @@ impl PartialEq for EvmOccurrenceHandle {
 impl Eq for EvmOccurrenceHandle {}
 
 #[derive(Debug)]
-pub struct EvmStateView {
-    seed: EvmStateViewSeed,
-    cache: RefCell<EvmStateViewCache>,
+pub struct EvmStateReader {
+    seed: EvmStateReaderSeed,
+    cache: RefCell<EvmStateReaderCache>,
 }
 
 #[derive(Debug)]
-pub struct EvmStateViews {
+pub struct EvmStateAccess {
     identity: Arc<EvmExecutionIdentity>,
-    initial: EvmStateView,
-    occurrences: Vec<EvmStateView>,
-    finalized: EvmStateView,
+    initial: EvmStateReader,
+    occurrences: Vec<EvmStateReader>,
+    finalized: EvmStateReader,
 }
 
-impl EvmStateViews {
+impl EvmStateAccess {
     pub(crate) fn new(
-        factory: EvmStateViewFactory,
+        factory: EvmStateAccessFactory,
         anchor_cache: Cache,
         identity: Arc<EvmExecutionIdentity>,
         caller: Address,
@@ -186,7 +182,7 @@ impl EvmStateViews {
         let anchor_cache = Arc::new(anchor_cache);
         let budget = Arc::new(EvmStateReadBudget::new(&factory.limits));
         let view = |overlay| {
-            EvmStateView::new(EvmStateViewSeed {
+            EvmStateReader::new(EvmStateReaderSeed {
                 factory: factory.clone(),
                 anchor_cache: Arc::clone(&anchor_cache),
                 overlay,
@@ -203,23 +199,18 @@ impl EvmStateViews {
         }
     }
 
-    pub const fn initial(&self) -> &EvmStateView {
+    pub const fn initial(&self) -> &EvmStateReader {
         &self.initial
     }
 
-    pub const fn finalized(&self) -> &EvmStateView {
+    pub const fn finalized(&self) -> &EvmStateReader {
         &self.finalized
     }
 
-    pub const fn before(&self) -> &EvmStateView {
-        self.initial()
-    }
-
-    pub const fn after(&self) -> &EvmStateView {
-        self.finalized()
-    }
-
-    pub fn at(&self, occurrence: &EvmOccurrenceHandle) -> Result<&EvmStateView, EvmStateReadError> {
+    pub fn at(
+        &self,
+        occurrence: &EvmOccurrenceHandle,
+    ) -> Result<&EvmStateReader, EvmStateReadError> {
         let checkpoint_index = self.checkpoint_index(occurrence)?;
         Ok(self.occurrence(checkpoint_index))
     }
@@ -227,7 +218,7 @@ impl EvmStateViews {
     pub fn around(
         &self,
         occurrence: &EvmOccurrenceHandle,
-    ) -> Result<EvmOccurrenceStateViews<'_>, EvmStateReadError> {
+    ) -> Result<EvmOccurrenceStateReaders<'_>, EvmStateReadError> {
         let checkpoint_index = self.checkpoint_index(occurrence)?;
         let current = self.occurrence(checkpoint_index);
         let previous = if checkpoint_index == 0 {
@@ -236,7 +227,7 @@ impl EvmStateViews {
             self.occurrence(checkpoint_index - 1)
         };
 
-        Ok(EvmOccurrenceStateViews { previous, current })
+        Ok(EvmOccurrenceStateReaders { previous, current })
     }
 
     fn checkpoint_index(
@@ -249,7 +240,7 @@ impl EvmStateViews {
         Ok(occurrence.checkpoint_index)
     }
 
-    fn occurrence(&self, checkpoint_index: usize) -> &EvmStateView {
+    fn occurrence(&self, checkpoint_index: usize) -> &EvmStateReader {
         self.occurrences.get(checkpoint_index).unwrap_or_else(|| {
             unreachable!(
                 "occurrence handle checkpoint must have a corresponding finalized state view"
@@ -259,26 +250,26 @@ impl EvmStateViews {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct EvmOccurrenceStateViews<'a> {
-    previous: &'a EvmStateView,
-    current: &'a EvmStateView,
+pub struct EvmOccurrenceStateReaders<'a> {
+    previous: &'a EvmStateReader,
+    current: &'a EvmStateReader,
 }
 
-impl<'a> EvmOccurrenceStateViews<'a> {
-    pub const fn previous(self) -> &'a EvmStateView {
+impl<'a> EvmOccurrenceStateReaders<'a> {
+    pub const fn previous(self) -> &'a EvmStateReader {
         self.previous
     }
 
-    pub const fn current(self) -> &'a EvmStateView {
+    pub const fn current(self) -> &'a EvmStateReader {
         self.current
     }
 }
 
-impl EvmStateView {
-    fn new(seed: EvmStateViewSeed) -> Self {
+impl EvmStateReader {
+    fn new(seed: EvmStateReaderSeed) -> Self {
         Self {
             seed,
-            cache: RefCell::new(EvmStateViewCache::default()),
+            cache: RefCell::new(EvmStateReaderCache::default()),
         }
     }
 
@@ -347,7 +338,6 @@ impl EvmStateView {
             .factory
             .limits
             .read_call_gas_limit
-            .unwrap_or(self.seed.factory.block.gas_limit)
             .min(self.seed.factory.block.gas_limit);
         let transaction = TxEnv {
             caller: self.seed.caller,
@@ -367,10 +357,10 @@ impl EvmStateView {
                 reason: reason.to_string(),
             },
         };
-        if let Some(limit) = self.seed.factory.limits.max_read_call_output_bytes
-            && outcome.output_len() > limit
-        {
-            return Err(EvmStateReadError::ReadCallOutputLimitExceeded { limit });
+        if outcome.output_len() > self.seed.factory.limits.max_read_call_output_bytes {
+            return Err(EvmStateReadError::ReadCallOutputLimitExceeded {
+                limit: self.seed.factory.limits.max_read_call_output_bytes,
+            });
         }
         Ok(outcome)
     }
@@ -386,8 +376,8 @@ impl EvmStateView {
 }
 
 #[derive(Debug)]
-struct EvmStateViewSeed {
-    factory: EvmStateViewFactory,
+struct EvmStateReaderSeed {
+    factory: EvmStateAccessFactory,
     anchor_cache: Arc<Cache>,
     overlay: EvmState,
     caller: Address,
@@ -398,8 +388,8 @@ struct EvmStateViewSeed {
 struct EvmStateReadBudget {
     state_reads: AtomicUsize,
     read_calls: AtomicUsize,
-    max_state_reads: Option<usize>,
-    max_read_calls: Option<usize>,
+    max_state_reads: usize,
+    max_read_calls: usize,
 }
 
 impl EvmStateReadBudget {
@@ -413,27 +403,25 @@ impl EvmStateReadBudget {
     }
 
     fn consume_state_read(&self) -> Result<(), EvmStateReadError> {
-        let Some(limit) = self.max_state_reads else {
-            return Ok(());
-        };
         self.state_reads
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
-                (used < limit).then_some(used + 1)
+                (used < self.max_state_reads).then_some(used + 1)
             })
             .map(|_| ())
-            .map_err(|_| EvmStateReadError::StateReadLimitExceeded { limit })
+            .map_err(|_| EvmStateReadError::StateReadLimitExceeded {
+                limit: self.max_state_reads,
+            })
     }
 
     fn consume_read_call(&self) -> Result<(), EvmStateReadError> {
-        let Some(limit) = self.max_read_calls else {
-            return Ok(());
-        };
         self.read_calls
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
-                (used < limit).then_some(used + 1)
+                (used < self.max_read_calls).then_some(used + 1)
             })
             .map(|_| ())
-            .map_err(|_| EvmStateReadError::ReadCallLimitExceeded { limit })
+            .map_err(|_| EvmStateReadError::ReadCallLimitExceeded {
+                limit: self.max_read_calls,
+            })
     }
 }
 
@@ -479,7 +467,7 @@ impl EvmReadCallOutcome {
 }
 
 #[derive(Debug, Default)]
-struct EvmStateViewCache {
+struct EvmStateReaderCache {
     accounts: HashMap<Address, EvmAccountState>,
     storage: HashMap<(Address, B256), B256>,
 }
@@ -525,6 +513,8 @@ fn map_read_call_error(error: EVMError<AlloyDBError>) -> EvmStateReadError {
 mod tests {
     use std::sync::Arc;
 
+    use crate::EvmSimulationLimits;
+
     use alloy::{
         network::Ethereum,
         primitives::{Address, B256, Bytes, U256},
@@ -539,8 +529,8 @@ mod tests {
     };
 
     use super::{
-        EvmExecutionIdentity, EvmOccurrenceHandle, EvmReadCallOutcome, EvmStateReadError,
-        EvmStateSource, EvmStateViewFactory, EvmStateViews,
+        EvmExecutionIdentity, EvmOccurrenceHandle, EvmReadCallOutcome, EvmStateAccess,
+        EvmStateAccessFactory, EvmStateReadError, EvmStateSource,
     };
 
     #[test]
@@ -557,7 +547,7 @@ mod tests {
             Bytecode::default(),
         );
         let identity = Arc::new(EvmExecutionIdentity);
-        let views = EvmStateViews::new(
+        let access = EvmStateAccess::new(
             factory,
             anchor_cache,
             Arc::clone(&identity),
@@ -568,24 +558,26 @@ mod tests {
         let first = EvmOccurrenceHandle::new(Arc::clone(&identity), 0);
         let second = EvmOccurrenceHandle::new(Arc::clone(&identity), 1);
 
-        assert_eq!(storage_value(views.initial(), account), U256::ZERO);
-        let first_views = views.around(&first).expect("first handle should resolve");
-        assert_eq!(storage_value(first_views.previous(), account), U256::ZERO);
+        assert_eq!(storage_value(access.initial(), account), U256::ZERO);
+        let first_readers = access.around(&first).expect("first handle should resolve");
+        assert_eq!(storage_value(first_readers.previous(), account), U256::ZERO);
         assert_eq!(
-            storage_value(first_views.current(), account),
+            storage_value(first_readers.current(), account),
             U256::from(100)
         );
-        let second_views = views.around(&second).expect("second handle should resolve");
+        let second_readers = access
+            .around(&second)
+            .expect("second handle should resolve");
         assert_eq!(
-            storage_value(second_views.previous(), account),
+            storage_value(second_readers.previous(), account),
             U256::from(100)
         );
-        assert_eq!(storage_value(second_views.current(), account), U256::ZERO);
-        assert_eq!(storage_value(views.finalized(), account), U256::ZERO);
+        assert_eq!(storage_value(second_readers.current(), account), U256::ZERO);
+        assert_eq!(storage_value(access.finalized(), account), U256::ZERO);
 
         let foreign = EvmOccurrenceHandle::new(Arc::new(EvmExecutionIdentity), 0);
         assert!(matches!(
-            views.at(&foreign),
+            access.at(&foreign),
             Err(EvmStateReadError::ForeignOccurrence)
         ));
     }
@@ -614,7 +606,7 @@ mod tests {
         let (factory, anchor_cache) =
             factory_and_cache(runtime.handle().clone(), contract, caller, code);
         let identity = Arc::new(EvmExecutionIdentity);
-        let views = EvmStateViews::new(
+        let access = EvmStateAccess::new(
             factory,
             anchor_cache,
             identity,
@@ -623,7 +615,7 @@ mod tests {
             EvmState::default(),
         );
 
-        let EvmReadCallOutcome::Success(output) = views
+        let EvmReadCallOutcome::Success(output) = access
             .initial()
             .read_call(contract, Bytes::new())
             .expect("read call should succeed")
@@ -631,7 +623,7 @@ mod tests {
             panic!("read call should return successfully");
         };
         assert_eq!(U256::from_be_slice(&output), U256::from(1));
-        assert_eq!(storage_value(views.initial(), contract), U256::ZERO);
+        assert_eq!(storage_value(access.initial(), contract), U256::ZERO);
     }
 
     fn factory_and_cache(
@@ -639,7 +631,7 @@ mod tests {
         contract: Address,
         caller: Address,
         code: Bytecode,
-    ) -> (EvmStateViewFactory, revm::database::Cache) {
+    ) -> (EvmStateAccessFactory, revm::database::Cache) {
         let source = EvmStateSource::new(mock_provider(), runtime_handle, B256::repeat_byte(3));
         let mut database = source.create_database(revm::database::Cache::default());
         database.insert_account_info(contract, AccountInfo::default().with_code(code));
@@ -649,12 +641,18 @@ mod tests {
             .expect("cached account should accept storage");
         let block = BlockEnv {
             beneficiary: caller,
-            gas_limit: 30_000_000,
+            // Keep the fixture below revm's transaction gas cap so the
+            // isolated read-call exercises state rollback rather than input
+            // rejection.
+            gas_limit: 10_000_000,
             ..Default::default()
         };
         let cfg = CfgEnv::new_with_spec(SpecId::OSAKA).with_chain_id(1);
 
-        (EvmStateViewFactory::new(source, cfg, block), database.cache)
+        (
+            EvmStateAccessFactory::with_limits(source, cfg, block, test_limits()),
+            database.cache,
+        )
     }
 
     fn storage_state(account: Address, value: u64) -> EvmState {
@@ -667,8 +665,19 @@ mod tests {
         std::iter::once((account, account_state)).collect()
     }
 
-    fn storage_value(view: &super::EvmStateView, account: Address) -> U256 {
-        let word = view
+    fn test_limits() -> EvmSimulationLimits {
+        EvmSimulationLimits::new(
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            usize::MAX,
+            u64::MAX,
+            usize::MAX,
+        )
+    }
+
+    fn storage_value(reader: &super::EvmStateReader, account: Address) -> U256 {
+        let word = reader
             .storage_word(account, B256::ZERO)
             .expect("storage should be readable");
         U256::from_be_slice(word.as_slice())

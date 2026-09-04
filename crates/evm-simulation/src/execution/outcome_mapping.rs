@@ -6,38 +6,42 @@ use revm::context_interface::result::{
 };
 
 use crate::{
-    CompleteTransaction, EvmExecutionError, EvmExecutionOutcome, EvmExecutionResult, EvmHaltReason,
-    EvmOutOfGasReason, EvmResultIntegrationError, EvmRevertReason, EvmSuccessOutput,
-    EvmSuccessReason,
+    CompleteTransaction, EvmExecutionError, EvmHaltReason, EvmOutOfGasReason,
+    EvmResultIntegrationError, EvmRevertReason, EvmSuccessOutput, EvmSuccessReason,
 };
 
-pub(crate) fn map_executed_outcome(
+#[derive(Debug)]
+pub(crate) enum EvmFinalStatus {
+    Success {
+        reason: EvmSuccessReason,
+        output: EvmSuccessOutput,
+    },
+    Reverted {
+        revert_data: Bytes,
+        reason: Option<EvmRevertReason>,
+    },
+    Halted {
+        reason: EvmHaltReason,
+    },
+}
+
+pub(crate) fn map_executed_status(
     result: RevmExecutionResult<HaltReason>,
     transaction: &CompleteTransaction,
-    execution_result: EvmExecutionResult,
-) -> Result<EvmExecutionOutcome, EvmExecutionError> {
+) -> Result<EvmFinalStatus, EvmExecutionError> {
     match result {
-        RevmExecutionResult::Success {
-            reason,
-            logs,
-            output,
-            ..
-        } => Ok(EvmExecutionOutcome::Success {
-            result: execution_result,
+        RevmExecutionResult::Success { reason, output, .. } => Ok(EvmFinalStatus::Success {
             reason: map_success_reason(reason),
             output: map_success_output(output, transaction)?,
-            logs,
         }),
         RevmExecutionResult::Revert { output, .. } => {
             let reason = decode_revert_reason(&output);
-            Ok(EvmExecutionOutcome::Reverted {
-                result: execution_result,
+            Ok(EvmFinalStatus::Reverted {
                 revert_data: output,
                 reason,
             })
         }
-        RevmExecutionResult::Halt { reason, .. } => Ok(EvmExecutionOutcome::Halted {
-            result: execution_result,
+        RevmExecutionResult::Halt { reason, .. } => Ok(EvmFinalStatus::Halted {
             reason: map_halt_reason(reason),
         }),
     }
@@ -62,13 +66,18 @@ fn map_success_output(
             address,
             runtime_code,
         }),
-        (Some(_), RevmOutput::Create(_, _)) => {
-            Err(EvmResultIntegrationError::CreateOutputForCall.into())
-        }
-        (None, RevmOutput::Call(_)) => Err(EvmResultIntegrationError::CallOutputForCreate.into()),
-        (None, RevmOutput::Create(_, None)) => {
-            Err(EvmResultIntegrationError::MissingCreateAddress.into())
-        }
+        (Some(_), RevmOutput::Create(_, _)) => Err(EvmResultIntegrationError::new(
+            "execution engine returned create output for a call transaction",
+        )
+        .into()),
+        (None, RevmOutput::Call(_)) => Err(EvmResultIntegrationError::new(
+            "execution engine returned call output for a contract creation transaction",
+        )
+        .into()),
+        (None, RevmOutput::Create(_, None)) => Err(EvmResultIntegrationError::new(
+            "successful contract creation did not return the created address",
+        )
+        .into()),
     }
 }
 

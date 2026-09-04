@@ -334,8 +334,8 @@ mod tests {
         ))
         .expect("missing provider-backed fields should complete");
 
-        assert_eq!(completed.nonce, 7);
-        assert_eq!(completed.gas_limit, 21_000);
+        assert_eq!(completed.common().nonce, 7);
+        assert_eq!(completed.common().gas_limit, 21_000);
         assert!(matches!(
             completed,
             CompleteTransaction::Legacy { gas_price: 100, .. }
