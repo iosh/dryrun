@@ -18,12 +18,9 @@ impl EspaceGas {
         gas_charged: u64,
     ) -> Result<Self, EspaceResultIntegrationError> {
         if intrinsic_gas > gas_used || gas_used > gas_limit || gas_charged > gas_limit {
-            return Err(EspaceResultIntegrationError::InvalidGasAccounting {
-                gas_limit,
-                intrinsic_gas,
-                gas_used,
-                gas_charged,
-            });
+            return Err(EspaceResultIntegrationError::new(format!(
+                "executor returned inconsistent gas accounting: gas limit {gas_limit}, intrinsic gas {intrinsic_gas}, gas used {gas_used}, gas charged {gas_charged}"
+            )));
         }
 
         Ok(Self {
@@ -61,10 +58,9 @@ impl EspaceFee {
         if let Some(burnt_amount) = burnt_amount
             && burnt_amount > charged_amount
         {
-            return Err(EspaceResultIntegrationError::BurntFeeExceedsCharged {
-                charged_amount,
-                burnt_amount,
-            });
+            return Err(EspaceResultIntegrationError::new(format!(
+                "burnt fee {burnt_amount} exceeds charged fee {charged_amount}"
+            )));
         }
 
         Ok(Self {
@@ -82,7 +78,7 @@ impl EspaceFee {
     }
 }
 
-/// Gas and fee facts for a transaction that entered eSpace execution.
+/// Gas and fee data for a transaction that entered eSpace execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EspaceExecutionResult {
     gas: EspaceGas,

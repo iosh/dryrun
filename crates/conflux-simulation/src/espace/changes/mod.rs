@@ -5,12 +5,9 @@ mod wrapped_native;
 use std::collections::HashSet;
 
 use alloy_primitives::{Address, U256};
-use cfx_executor::{machine::Machine, state::State};
 use contract_standards::{Erc20Metadata, MetadataCall, StandardChange, metadata_calls};
 
-use crate::execution::{
-    CommittedExecutionTrace, ConfluxExecutionOutput, PreparedTransactionExecution, TraceEvent,
-};
+use crate::execution::CommittedExecutionTrace;
 
 use self::{
     native::{NativeAnalysis, NativeBalances},
@@ -23,9 +20,12 @@ use self::{
         decode_wrapped_native_occurrences_in_scope,
     },
 };
-use super::{EspaceChangesError, EspaceCompleteTransaction, EspaceNativeChangeError};
+use super::{EspaceChangesError, EspaceExecutedTransaction};
 
-pub(crate) use standards::{MetadataReadError, ReadCallOutcome, execute_read_call};
+pub(crate) use standards::{
+    IsolatedReadCallError, MetadataReadError, ReadCallOutcome, execute_isolated_read_call,
+    execute_read_call,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EspaceNativeCurrency {
@@ -145,25 +145,24 @@ pub(crate) struct EspaceChangesAnalysis {
 
 impl EspaceChangesAnalysis {
     pub(crate) fn from_execution(
-        output: &ConfluxExecutionOutput,
-        successful: bool,
+        execution: &EspaceExecutedTransaction,
         wrapped_native_token: Address,
         currency: &EspaceNativeCurrency,
     ) -> Result<Self, EspaceChangesError> {
-        verify_committed_logs(&output.trace, &output.logs)?;
-        if !successful && !output.logs.is_empty() {
+        let successful = execution.is_success();
+        if !successful && !execution.committed_logs().is_empty() {
             return Err(EspaceChangesError::inconsistent_execution(
                 "failed execution returned committed receipt logs",
             ));
         }
 
         let standard_occurrences = if successful {
-            decode_standard_occurrences(&output.trace)
+            decode_standard_occurrences(execution.committed_logs())
         } else {
             Vec::new()
         };
         let wrapped_native_occurrences = if successful {
-            decode_wrapped_native_occurrences(&output.trace, wrapped_native_token)
+            decode_wrapped_native_occurrences(execution.committed_logs(), wrapped_native_token)
         } else {
             Vec::new()
         };
@@ -171,7 +170,8 @@ impl EspaceChangesAnalysis {
         Ok(Self {
             successful,
             currency: currency.clone(),
-            native: NativeAnalysis::from_execution(output)?,
+            native: NativeAnalysis::from_execution(execution)
+                .map_err(|error| EspaceChangesError::resolver("native currency", error))?,
             standard_occurrences,
             wrapped_native_occurrences,
         })
@@ -179,7 +179,7 @@ impl EspaceChangesAnalysis {
 
     pub(crate) fn read_native_balances(
         &self,
-        state: &State,
+        state: &crate::espace::EspaceStateReader,
         operation: &'static str,
     ) -> Result<NativeBalances, EspaceChangesError> {
         self.native.read_balances(state, operation)
@@ -187,10 +187,7 @@ impl EspaceChangesAnalysis {
 
     pub(crate) fn finish(
         self,
-        state: &mut State,
-        machine: &Machine,
-        prepared_execution: &PreparedTransactionExecution,
-        transaction: &EspaceCompleteTransaction,
+        state: &crate::espace::EspaceStateReader,
         before_balances: &NativeBalances,
         after_balances: &NativeBalances,
     ) -> Result<Vec<EspaceChange>, EspaceChangesError> {
@@ -201,17 +198,16 @@ impl EspaceChangesAnalysis {
             standard_occurrences,
             wrapped_native_occurrences,
         } = self;
-        let mut changes = native.verify(before_balances, after_balances, successful, &currency)?;
+        let mut changes = native
+            .verify(before_balances, after_balances, &currency)
+            .map_err(|error| EspaceChangesError::resolver("native currency", error))?;
 
         if !successful {
-            if !changes.is_empty() {
-                return Err(EspaceNativeChangeError::BusinessEffectOnFailedExecution.into());
-            }
             return Ok(Vec::new());
         }
 
         let calls = collect_metadata_calls(&standard_occurrences, &wrapped_native_occurrences);
-        let metadata = load_metadata(state, machine, prepared_execution, transaction, calls)?;
+        let metadata = load_metadata(state, calls)?;
 
         for occurrence in wrapped_native_occurrences {
             let change_metadata = metadata.erc20_metadata(&occurrence.contract_address())?;
@@ -271,46 +267,4 @@ fn collect_metadata_call_occurrences(
 
     calls.sort_by_key(|(position, _)| *position);
     calls
-}
-
-fn verify_committed_logs(
-    trace: &CommittedExecutionTrace,
-    committed_logs: &[primitives::LogEntry],
-) -> Result<(), EspaceChangesError> {
-    let trace_logs = trace.events().iter().filter_map(|event| {
-        let TraceEvent::Log {
-            frame_id,
-            address,
-            topics,
-            data,
-            ..
-        } = event
-        else {
-            return None;
-        };
-        Some((trace.frame(*frame_id).space, address, topics, data))
-    });
-    let trace_log_count = trace_logs.clone().count();
-    if trace_log_count != committed_logs.len() {
-        return Err(EspaceChangesError::inconsistent_execution(format!(
-            "trace contains {trace_log_count} committed logs, executor returned {}",
-            committed_logs.len()
-        )));
-    }
-
-    for (index, ((space, address, topics, data), committed)) in
-        trace_logs.zip(committed_logs).enumerate()
-    {
-        if space != committed.space
-            || *address != committed.address
-            || topics != &committed.topics
-            || data.as_slice() != committed.data.as_slice()
-        {
-            return Err(EspaceChangesError::inconsistent_execution(format!(
-                "trace log {index} does not match the committed executor log"
-            )));
-        }
-    }
-
-    Ok(())
 }

@@ -24,18 +24,14 @@ pub(crate) fn verify_fee_settlement(
         let amount = u256_from_cfx(*value);
 
         match (from, to) {
-            (AddressPocket::Balance(address), AddressPocket::GasPayment)
-                if address.space == Space::Ethereum =>
-            {
+            (fee_payer, AddressPocket::GasPayment) if is_espace_fee_payer(fee_payer) => {
                 precharge = precharge.checked_add(amount).ok_or_else(|| {
                     EspaceResultIntegrationError::invalid_observed_fee_settlement(
                         "gas precharge accumulation overflowed U256",
                     )
                 })?;
             }
-            (AddressPocket::GasPayment, AddressPocket::Balance(address))
-                if address.space == Space::Ethereum =>
-            {
+            (AddressPocket::GasPayment, fee_payer) if is_espace_fee_payer(fee_payer) => {
                 refund = refund.checked_add(amount).ok_or_else(|| {
                     EspaceResultIntegrationError::invalid_observed_fee_settlement(
                         "gas refund accumulation overflowed U256",
@@ -61,4 +57,11 @@ pub(crate) fn verify_fee_settlement(
     }
 
     Ok(())
+}
+
+fn is_espace_fee_payer(pocket: &AddressPocket) -> bool {
+    matches!(
+        pocket,
+        AddressPocket::Balance(address) if address.space == Space::Ethereum
+    ) || matches!(pocket, AddressPocket::SponsorBalanceForGas(_))
 }

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use cfx_executor::{machine::Machine, state::State};
 use cfx_parameters::consensus::TRANSACTION_DEFAULT_EPOCH_BOUND;
 use cfx_statedb::Result as StateDbResult;
@@ -11,10 +13,10 @@ use crate::state::{ConfluxStateSource, new_conflux_state};
 use super::{ExecutionBlockContext, ExecutionBlockContextError};
 
 pub(crate) fn build_conflux_state(
-    source: ConfluxStateSource,
+    source: impl Into<Arc<ConfluxStateSource>>,
     runtime_handle: Handle,
 ) -> StateDbResult<State> {
-    new_conflux_state(source, runtime_handle)
+    new_conflux_state(source.into(), runtime_handle)
 }
 
 pub(crate) fn next_execution_block_number(

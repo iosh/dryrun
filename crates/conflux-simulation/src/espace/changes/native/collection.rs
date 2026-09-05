@@ -1,12 +1,8 @@
 use alloy_primitives::{Address, U256};
-use cfx_executor::executive_observer::AddressPocket;
-use cfx_types::Space;
 
-use super::{NativeOperation, NativeOperations};
-use crate::{
-    espace::EspaceNativeChangeError,
-    execution::{CommittedExecutionTrace, FrameAction, TraceEvent},
-    primitive::{address_from_cfx, u256_from_cfx},
+use super::{NativeOperation, NativeOperations, NativeResolverDiagnostic};
+use crate::espace::{
+    EspaceExecutedTransaction, EspaceExecutionSpace, EspaceFrameAction, EspaceTransferPocket,
 };
 
 #[derive(Debug, Default)]
@@ -15,47 +11,43 @@ struct NativeOperationCollector {
 }
 
 pub(super) fn collect_native_operations(
-    trace: &CommittedExecutionTrace,
-) -> Result<NativeOperations, EspaceNativeChangeError> {
+    execution: &EspaceExecutedTransaction,
+) -> Result<NativeOperations, NativeResolverDiagnostic> {
     let mut collector = NativeOperationCollector::default();
 
-    for event in trace.events() {
-        match event {
-            TraceEvent::FrameStart { position, frame_id } => match &trace.frame(*frame_id).action {
-                FrameAction::Call {
-                    caller,
-                    target,
-                    transferred_value,
-                    ..
-                } if trace.frame(*frame_id).space == Space::Ethereum => collector
-                    .push_account_transfer(
-                        *position,
-                        address_from_cfx(*caller),
-                        address_from_cfx(*target),
-                        u256_from_cfx(*transferred_value),
-                    ),
-                FrameAction::Create {
-                    creator,
-                    created_address,
-                    value,
-                } if trace.frame(*frame_id).space == Space::Ethereum => collector
-                    .push_account_transfer(
-                        *position,
-                        address_from_cfx(*creator),
-                        address_from_cfx(*created_address),
-                        u256_from_cfx(*value),
-                    ),
-                FrameAction::Call { .. } | FrameAction::Create { .. } => {}
-            },
-            TraceEvent::InternalTransfer {
-                position,
-                from,
-                to,
+    for frame in execution.committed_frames() {
+        if frame.space() != EspaceExecutionSpace::Espace {
+            continue;
+        }
+        match frame.action() {
+            EspaceFrameAction::Call {
+                caller,
+                target,
                 value,
                 ..
-            } => collector.collect_internal_transfer(*position, from, to, u256_from_cfx(*value))?,
-            TraceEvent::Log { .. } => {}
+            } => {
+                collector.push_account_transfer(frame.position().index(), *caller, *target, *value)
+            }
+            EspaceFrameAction::Create {
+                creator,
+                actual_address,
+                value,
+                ..
+            } => collector.push_account_transfer(
+                frame.position().index(),
+                *creator,
+                *actual_address,
+                *value,
+            ),
         }
+    }
+    for transfer in execution.internal_transfers() {
+        collector.collect_internal_transfer(
+            transfer.position().index(),
+            transfer.from(),
+            transfer.to(),
+            transfer.value(),
+        )?;
     }
 
     Ok(NativeOperations::from_operations(collector.operations))
@@ -65,10 +57,10 @@ impl NativeOperationCollector {
     fn collect_internal_transfer(
         &mut self,
         position: usize,
-        from: &AddressPocket,
-        to: &AddressPocket,
+        from: EspaceTransferPocket,
+        to: EspaceTransferPocket,
         amount: U256,
-    ) -> Result<(), EspaceNativeChangeError> {
+    ) -> Result<(), NativeResolverDiagnostic> {
         if amount.is_zero() {
             return Ok(());
         }
@@ -77,43 +69,33 @@ impl NativeOperationCollector {
         let destination = espace_balance_account(to);
         match (source, destination, from, to) {
             (Some(from), Some(to), _, _) => self.push_account_transfer(position, from, to, amount),
-            (Some(payer), None, _, AddressPocket::GasPayment) => {
-                self.operations
-                    .push(NativeOperation::GasPrecharge { payer, amount });
+            (Some(payer), None, _, EspaceTransferPocket::GasPayment) => {
+                self.operations.push(NativeOperation::GasPrecharge {
+                    position,
+                    payer,
+                    amount,
+                });
             }
-            (None, Some(recipient), AddressPocket::GasPayment, _) => {
-                self.operations
-                    .push(NativeOperation::GasRefund { recipient, amount });
+            (None, Some(recipient), EspaceTransferPocket::GasPayment, _) => {
+                self.operations.push(NativeOperation::GasRefund {
+                    position,
+                    recipient,
+                    amount,
+                });
             }
-            (Some(contract), None, _, AddressPocket::MintBurn) => {
+            (Some(contract), None, _, EspaceTransferPocket::MintBurn) => {
                 self.operations.push(NativeOperation::SelfDestructBurn {
                     position,
                     contract,
                     amount,
                 });
             }
-            (None, Some(_), AddressPocket::MintBurn, _) => {
-                return Err(EspaceNativeChangeError::UnsupportedBalanceOperation {
-                    details: format!("{} -> {}", from.pocket(), to.pocket()),
-                });
+            (None, None, from, to) if !involves_non_espace_balance(from, to) => {}
+            _ => {
+                return Err(NativeResolverDiagnostic::new(format!(
+                    "native effect {from:?} -> {to:?} is outside the eSpace resolver scope"
+                )));
             }
-            _ if involves_non_espace_balance(from, to) => {
-                return Err(EspaceNativeChangeError::UnsupportedCrossSpaceMovement {
-                    details: format!(
-                        "{}:{} -> {}:{}",
-                        from.space(),
-                        from.pocket(),
-                        to.space(),
-                        to.pocket()
-                    ),
-                });
-            }
-            (Some(_), None, _, _) | (None, Some(_), _, _) => {
-                return Err(EspaceNativeChangeError::UnsupportedBalanceOperation {
-                    details: format!("{} -> {}", from.pocket(), to.pocket()),
-                });
-            }
-            (None, None, _, _) => {}
         }
 
         Ok(())
@@ -131,17 +113,22 @@ impl NativeOperationCollector {
     }
 }
 
-fn espace_balance_account(pocket: &AddressPocket) -> Option<Address> {
+fn espace_balance_account(pocket: EspaceTransferPocket) -> Option<Address> {
     match pocket {
-        AddressPocket::Balance(address) if address.space == Space::Ethereum => {
-            Some(address_from_cfx(address.address))
-        }
+        EspaceTransferPocket::EspaceBalance(address) => Some(address),
         _ => None,
     }
 }
 
-fn involves_non_espace_balance(from: &AddressPocket, to: &AddressPocket) -> bool {
+fn involves_non_espace_balance(from: EspaceTransferPocket, to: EspaceTransferPocket) -> bool {
     [from, to].into_iter().any(|pocket| {
-        matches!(pocket, AddressPocket::Balance(address) if address.space != Space::Ethereum)
+        matches!(
+            pocket,
+            EspaceTransferPocket::CoreBalance(_)
+                | EspaceTransferPocket::StakingBalance(_)
+                | EspaceTransferPocket::StorageCollateral(_)
+                | EspaceTransferPocket::SponsorBalanceForGas(_)
+                | EspaceTransferPocket::SponsorBalanceForStorage(_)
+        )
     })
 }

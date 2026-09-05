@@ -5,12 +5,16 @@ use cfx_types::Space;
 use contract_standards::{DecodedStandardLog, decode_standard_log};
 
 use crate::{
+    espace::{EspaceCommittedLog, EspaceExecutionSpace},
     execution::{CommittedExecutionTrace, FrameId, TraceEvent},
     primitive::{address_from_cfx, b256_from_cfx},
 };
 
 pub(super) use metadata::load_metadata;
-pub(crate) use read_call::{MetadataReadError, ReadCallOutcome, execute_read_call};
+pub(crate) use read_call::{
+    IsolatedReadCallError, MetadataReadError, ReadCallOutcome, execute_isolated_read_call,
+    execute_read_call,
+};
 
 #[derive(Debug)]
 pub(super) struct DecodedStandardOccurrence {
@@ -19,9 +23,19 @@ pub(super) struct DecodedStandardOccurrence {
 }
 
 pub(super) fn decode_standard_occurrences(
-    trace: &CommittedExecutionTrace,
+    logs: &[EspaceCommittedLog],
 ) -> Vec<DecodedStandardOccurrence> {
-    decode_standard_occurrences_in_scope(trace, |_| true)
+    logs.iter()
+        .filter(|log| log.space() == EspaceExecutionSpace::Espace)
+        .filter_map(|log| {
+            decode_standard_log(log.address(), log.topics(), log.data(), |address| address).map(
+                |decoded_log| DecodedStandardOccurrence {
+                    position: log.position().index(),
+                    decoded_log,
+                },
+            )
+        })
+        .collect()
 }
 
 pub(super) fn decode_standard_occurrences_in_scope(

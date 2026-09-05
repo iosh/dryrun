@@ -17,14 +17,20 @@ pub(crate) type TracePosition = usize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct FrameId(usize);
 
-#[derive(Debug, PartialEq)]
+impl FrameId {
+    pub(crate) const fn index(self) -> usize {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TraceFrame {
     pub(crate) parent_id: Option<FrameId>,
     pub(crate) space: Space,
     pub(crate) action: FrameAction,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum FrameAction {
     Call {
         call_type: CallType,
@@ -33,16 +39,19 @@ pub(crate) enum FrameAction {
         code_address: Address,
         transferred_value: U256,
         calldata_len: usize,
+        calldata: Vec<u8>,
         calldata_prefix: Vec<u8>,
     },
     Create {
         creator: Address,
         created_address: Address,
+        actual_created_address: Option<Address>,
         value: U256,
+        init_code: Vec<u8>,
     },
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum TraceEvent {
     FrameStart {
         position: TracePosition,
@@ -82,7 +91,7 @@ impl TraceEvent {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct CommittedExecutionTrace {
     frames_by_id: Vec<Option<TraceFrame>>,
     events: Vec<TraceEvent>,
@@ -97,6 +106,17 @@ impl CommittedExecutionTrace {
         self.frames_by_id[frame_id.0]
             .as_ref()
             .expect("committed trace event references a committed frame")
+    }
+
+    pub(crate) fn try_frame(&self, frame_id: FrameId) -> Option<&TraceFrame> {
+        self.frames_by_id.get(frame_id.0).and_then(Option::as_ref)
+    }
+
+    pub(crate) fn frames(&self) -> impl Iterator<Item = (FrameId, &TraceFrame)> {
+        self.frames_by_id
+            .iter()
+            .enumerate()
+            .filter_map(|(index, frame)| frame.as_ref().map(|frame| (FrameId(index), frame)))
     }
 
     pub(crate) fn frame_is_within(&self, mut frame_id: FrameId, root_id: FrameId) -> bool {
@@ -192,6 +212,7 @@ impl ExecutionTraceJournal {
                 code_address: params.code_address,
                 transferred_value: actual_transfer_value(&params.value),
                 calldata_len: calldata.len(),
+                calldata: calldata.to_vec(),
                 calldata_prefix: calldata
                     .iter()
                     .copied()
@@ -207,13 +228,16 @@ impl ExecutionTraceJournal {
     }
 
     fn enter_create_frame(&mut self, params: &ActionParams) {
+        let init_code = params.data.as_deref().unwrap_or_default();
         let frame = TraceFrame {
             parent_id: self.active_frames.last().map(|frame| frame.id),
             space: params.space,
             action: FrameAction::Create {
                 creator: params.sender,
                 created_address: params.address,
+                actual_created_address: None,
                 value: actual_transfer_value(&params.value),
+                init_code: init_code.to_vec(),
             },
         };
         self.enter_frame(frame, FrameType::Create);
@@ -240,23 +264,40 @@ impl ExecutionTraceJournal {
     }
 
     fn exit_create_frame(&mut self, result: &FrameResult) {
-        self.exit_frame(FrameType::Create, frame_succeeded(result));
+        let successful = frame_succeeded(result);
+        let actual_created_address = result
+            .as_ref()
+            .ok()
+            .and_then(|result| result.create_address);
+        let frame_id = self.exit_frame(FrameType::Create, successful);
+        if successful
+            && let Some(frame_id) = frame_id
+            && let Some(Some(frame)) = self.frames_by_id.get_mut(frame_id.0)
+            && let FrameAction::Create {
+                actual_created_address: recorded,
+                ..
+            } = &mut frame.action
+        {
+            *recorded = actual_created_address;
+        }
     }
 
-    fn exit_frame(&mut self, expected_type: FrameType, success: bool) {
+    fn exit_frame(&mut self, expected_type: FrameType, success: bool) -> Option<FrameId> {
         let Some(frame) = self.active_frames.pop() else {
             self.invalid_sequence = true;
-            return;
+            return None;
         };
 
         if frame.frame_type != expected_type {
             self.invalid_sequence = true;
-            return;
+            return None;
         }
 
         if !success {
             self.rollback_to(frame.rollback_mark);
         }
+
+        Some(frame.id)
     }
 
     fn record_log(&mut self, address: Address, topics: &[H256], data: &[u8]) {
@@ -277,12 +318,16 @@ impl ExecutionTraceJournal {
 
     fn record_internal_transfer(&mut self, from: AddressPocket, to: AddressPocket, value: U256) {
         let frame_id = self.active_frames.last().map(|frame| frame.id);
-        let space = frame_id.map_or(self.transaction_space, |id| {
-            self.frames_by_id[id.0]
-                .as_ref()
-                .expect("active frame has trace metadata")
-                .space
-        });
+        let space = match frame_id {
+            None => self.transaction_space,
+            Some(id) => {
+                let Some(frame) = self.frames_by_id.get(id.0).and_then(Option::as_ref) else {
+                    self.invalid_sequence = true;
+                    return;
+                };
+                frame.space
+            }
+        };
         let position = self.allocate_event_position();
         self.events.push(TraceEvent::InternalTransfer {
             position,
@@ -323,6 +368,10 @@ impl ExecutionTraceJournal {
     }
 
     fn rollback_to(&mut self, mark: JournalMark) {
+        if mark.event_count > self.events.len() || mark.frame_count > self.frames_by_id.len() {
+            self.invalid_sequence = true;
+            return;
+        }
         self.events.truncate(mark.event_count);
         for frame in &mut self.frames_by_id[mark.frame_count..] {
             *frame = None;
@@ -528,7 +577,9 @@ mod tests {
             action: FrameAction::Create {
                 creator: Address::repeat_byte(creator),
                 created_address: Address::repeat_byte(created),
+                actual_created_address: None,
                 value: U256::zero(),
+                init_code: Vec::new(),
             },
         }
     }

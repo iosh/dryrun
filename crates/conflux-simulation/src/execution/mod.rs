@@ -42,6 +42,7 @@ pub(crate) struct TransactionExecutionInput {
     pub(crate) transaction: DryRunTransactionInput,
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct PreparedTransactionExecution {
     pub(crate) transaction: SignedTransaction,
     pub(crate) env: Env,

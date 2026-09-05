@@ -153,7 +153,7 @@ pub(crate) fn load_standard_metadata(
                         target_values.record_output(call, &output);
                     }
                     ReadCallOutcome::Success(_)
-                    | ReadCallOutcome::Reverted
+                    | ReadCallOutcome::Reverted(_)
                     | ReadCallOutcome::Failed => target_values.record_unavailable(call),
                 }
             }

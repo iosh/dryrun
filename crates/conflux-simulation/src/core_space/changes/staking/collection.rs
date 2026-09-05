@@ -85,6 +85,7 @@ pub(crate) fn collect_calls(
             calldata_prefix,
             call_type,
             transferred_value,
+            ..
         } = &frame.action
         else {
             continue;

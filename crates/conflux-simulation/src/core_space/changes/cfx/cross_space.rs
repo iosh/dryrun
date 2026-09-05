@@ -55,6 +55,7 @@ pub(super) fn collect_cross_space_call(
         transferred_value,
         calldata_len,
         calldata_prefix,
+        ..
     } = &frame.action
     else {
         return Ok(None);
@@ -267,6 +268,7 @@ fn unique_matching_create_child(
             creator,
             created_address,
             value,
+            ..
         } = &frame.action
         else {
             return None;

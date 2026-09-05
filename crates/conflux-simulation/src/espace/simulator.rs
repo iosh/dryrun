@@ -1,11 +1,14 @@
+use std::sync::Arc;
+
 use cfx_types::Space;
 use tokio::runtime::Handle;
 
 use super::{
-    EspaceChangesAnalysis, EspaceExecutionError, EspaceExecutionOutcome,
-    EspaceResultIntegrationError, EspaceSimulation, EspaceSimulationError, EspaceSimulationRequest,
-    EspaceStateAccessError, build_executor_transaction, classify_transaction_rejection,
-    complete_transaction, convert_executor_outcome, resolve_espace_context, verify_fee_settlement,
+    EspaceChangesAnalysis, EspaceExecutedTransaction, EspaceExecutionError, EspaceExecutionOutcome,
+    EspaceResultIntegrationError, EspaceSimulation, EspaceSimulationError, EspaceSimulationLimits,
+    EspaceSimulationRequest, EspaceStateAccess, EspaceStateAccessError, build_executor_transaction,
+    classify_transaction_rejection, complete_transaction, convert_executor_outcome,
+    resolve_espace_context,
 };
 use crate::{
     ConfluxSimulationBackend,
@@ -20,11 +23,12 @@ use crate::{
 #[derive(Clone)]
 pub struct EspaceTransactionSimulator {
     backend: ConfluxSimulationBackend,
+    limits: EspaceSimulationLimits,
 }
 
 impl EspaceTransactionSimulator {
-    pub const fn new(backend: ConfluxSimulationBackend) -> Self {
-        Self { backend }
+    pub const fn new(backend: ConfluxSimulationBackend, limits: EspaceSimulationLimits) -> Self {
+        Self { backend, limits }
     }
 
     /// Simulates one eSpace transaction inside the caller's active Tokio runtime.
@@ -86,6 +90,7 @@ impl EspaceTransactionSimulator {
                     })
                 })?;
         let backend = self.backend.clone();
+        let limits = self.limits;
         let blocking_runtime_handle = runtime_handle.clone();
 
         runtime_handle
@@ -95,7 +100,8 @@ impl EspaceTransactionSimulator {
                     blocking_runtime_handle,
                     context,
                     transaction,
-                    state_source,
+                    Arc::new(state_source),
+                    limits,
                 )
             })
             .await
@@ -108,66 +114,82 @@ fn simulate_blocking(
     runtime_handle: Handle,
     context: super::ResolvedEspaceContext,
     transaction: super::EspaceCompleteTransaction,
-    state_source: ConfluxStateSource,
+    state_source: Arc<ConfluxStateSource>,
+    limits: EspaceSimulationLimits,
 ) -> Result<EspaceSimulation, EspaceSimulationError> {
-    let mut state = build_conflux_state(state_source, runtime_handle).map_err(|source| {
-        EspaceExecutionError::StateAccess(EspaceStateAccessError::Initialization { source })
-    })?;
-    let machine = backend.chain_spec().build_machine();
+    // Keep S0 and the mutable execution state independent while sharing only
+    // the anchored, request-local RPC source/cache.
+    let initial_state = build_conflux_state(Arc::clone(&state_source), runtime_handle.clone())
+        .map_err(|source| {
+            EspaceExecutionError::StateAccess(EspaceStateAccessError::Initialization { source })
+        })?;
+    let mut execution_state = build_conflux_state(Arc::clone(&state_source), runtime_handle)
+        .map_err(|source| {
+            EspaceExecutionError::StateAccess(EspaceStateAccessError::Initialization { source })
+        })?;
+    let machine = Arc::new(backend.chain_spec().build_machine());
     let execution_input = TransactionExecutionInput {
         block_context: context.execution_block_context,
         transaction: DryRunTransactionInput::Espace(build_executor_transaction(&transaction)?),
     };
 
-    let state_before_execution = state.save();
-    let execution = ConfluxTransactionExecutor::new(&mut state, &machine)
+    let execution = ConfluxTransactionExecutor::new(&mut execution_state, &machine)
         .execute(
             execution_input,
             ExecutionTraceObserver::new(Space::Ethereum),
         )
         .map_err(classify_executor_error)?;
 
-    let execution_output = match &execution.outcome {
-        ConfluxExecutionOutcome::Success(output) => Some((output, true)),
-        ConfluxExecutionOutcome::Failed { details, .. } => Some((details, false)),
+    let record = match &execution.outcome {
+        ConfluxExecutionOutcome::Success(_) | ConfluxExecutionOutcome::Failed { .. } => {
+            EspaceExecutedTransaction::from_outcome(&execution.outcome)?
+        }
         ConfluxExecutionOutcome::NotExecutedDrop(_)
-        | ConfluxExecutionOutcome::NotExecutedToReconsiderPacking(_) => None,
+        | ConfluxExecutionOutcome::NotExecutedToReconsiderPacking(_) => {
+            let outcome = convert_executor_outcome(
+                execution.outcome,
+                None,
+                &execution.prepared,
+                &transaction,
+                None,
+                backend.core_space_address_network(),
+            )?;
+            return Ok(EspaceSimulation {
+                context: context.public_context,
+                transaction,
+                execution: outcome,
+                changes: Vec::new(),
+            });
+        }
     };
 
-    let changes = if let Some((output, successful)) = execution_output {
-        verify_fee_settlement(output).map_err(EspaceExecutionError::from)?;
-        let analysis = EspaceChangesAnalysis::from_execution(
-            output,
-            successful,
-            backend.chain_spec().espace_wrapped_native_token(),
-            backend.chain_spec().espace_native_currency(),
-        )?;
-        let state_after_execution = state.save();
+    let state = EspaceStateAccess::new(
+        initial_state,
+        execution_state,
+        Arc::clone(&machine),
+        execution.prepared.clone(),
+        transaction.common().from,
+        limits,
+    );
 
-        state.restore(state_before_execution);
-        let before_balances =
-            analysis.read_native_balances(&state, "read pre-execution native balances")?;
-        state.restore(state_after_execution);
-        let after_balances =
-            analysis.read_native_balances(&state, "read post-execution native balances")?;
+    let analysis = EspaceChangesAnalysis::from_execution(
+        &record,
+        backend.chain_spec().espace_wrapped_native_token(),
+        backend.chain_spec().espace_native_currency(),
+    )?;
+    let before_balances =
+        analysis.read_native_balances(state.initial(), "read pre-execution native balances")?;
+    let after_balances =
+        analysis.read_native_balances(state.finalized(), "read post-execution native balances")?;
 
-        analysis.finish(
-            &mut state,
-            &machine,
-            &execution.prepared,
-            &transaction,
-            &before_balances,
-            &after_balances,
-        )?
-    } else {
-        Vec::new()
-    };
+    let changes = analysis.finish(state.finalized(), &before_balances, &after_balances)?;
 
     let outcome = convert_executor_outcome(
         execution.outcome,
+        Some(&record),
         &execution.prepared,
         &transaction,
-        &state,
+        Some(state.finalized()),
         backend.core_space_address_network(),
     )?;
 
@@ -193,14 +215,15 @@ fn classify_executor_error(
             source,
         }
         .into(),
-        TransactionExecutionError::MissingExecutionTrace => {
-            EspaceResultIntegrationError::MissingExecutionTrace.into()
-        }
+        TransactionExecutionError::MissingExecutionTrace => EspaceResultIntegrationError::new(
+            "executed transaction did not produce a committed execution trace",
+        )
+        .into(),
         TransactionExecutionError::GasValueOutOfRange { field, value } => {
-            EspaceResultIntegrationError::GasValueOutOfRange {
-                field,
-                value: crate::primitive::u256_from_cfx(value),
-            }
+            EspaceResultIntegrationError::new(format!(
+                "executor returned {field} value {}, exceeding u64",
+                crate::primitive::u256_from_cfx(value)
+            ))
             .into()
         }
     }

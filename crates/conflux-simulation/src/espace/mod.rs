@@ -2,6 +2,7 @@ mod changes;
 mod completion;
 mod context;
 mod error;
+mod executed_transaction;
 mod execution;
 mod execution_result;
 mod outcome_mapping;
@@ -9,6 +10,7 @@ mod rejection;
 mod result;
 mod settlement;
 mod simulator;
+mod state_access;
 mod transaction;
 mod transaction_adapter;
 
@@ -24,9 +26,14 @@ pub use contract_standards::{
     Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem, StandardChange,
 };
 pub use error::{
-    EspaceChangesError, EspaceExecutionError, EspaceNativeChangeError,
-    EspaceResultIntegrationError, EspaceSimulationError, EspaceStateAccessError,
-    EspaceTransactionCompletionError,
+    EspaceChangesError, EspaceExecutionError, EspaceResultIntegrationError, EspaceSimulationError,
+    EspaceStateAccessError, EspaceTransactionCompletionError,
+};
+pub use executed_transaction::{
+    EspaceCallKind, EspaceCommittedFrame, EspaceCommittedInternalTransfer, EspaceCommittedLog,
+    EspaceContractAddress, EspaceExecutedTransaction, EspaceExecutionPosition,
+    EspaceExecutionSpace, EspaceExecutionStatus, EspaceFrameAction, EspaceFrameId,
+    EspaceStorageChange, EspaceTransferPocket,
 };
 pub use execution::{
     EspaceExecutionFailure, EspaceExecutionOutcome, EspaceLog, EspaceLogAddress,
@@ -36,8 +43,11 @@ pub use execution_result::{EspaceExecutionResult, EspaceFee, EspaceGas};
 pub(crate) use outcome_mapping::convert_executor_outcome;
 pub use rejection::EspaceTransactionRejection;
 pub use result::EspaceSimulation;
-pub(crate) use settlement::verify_fee_settlement;
 pub use simulator::EspaceTransactionSimulator;
+pub use state_access::{
+    EspaceAccountState, EspaceReadCallOutcome, EspaceSimulationLimits, EspaceStateAccess,
+    EspaceStateReadError, EspaceStateReader,
+};
 pub use transaction::{
     AccessListItem, Authorization, EspaceCompleteTransaction, EspacePartialTransaction,
     EspaceTransactionCommon, EspaceTransactionInput, EspaceTransactionInputError,

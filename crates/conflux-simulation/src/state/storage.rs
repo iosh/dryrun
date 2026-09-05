@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use cfx_executor::state::State;
 use cfx_internal_common::StateRootWithAuxInfo;
 use cfx_statedb::{Result as StateDbResult, StateDb};
@@ -11,22 +13,22 @@ use crate::state::{
 };
 
 pub(crate) fn new_conflux_state(
-    source: ConfluxStateSource,
+    source: Arc<ConfluxStateSource>,
     runtime_handle: Handle,
 ) -> StateDbResult<State> {
-    let storage = ConfluxStateStorage::new(source, runtime_handle);
+    let storage = ConfluxStateStorage::new_shared(source, runtime_handle);
     let db = StateDb::new(Box::new(storage));
 
     State::new(db)
 }
 
 pub(crate) struct ConfluxStateStorage {
-    source: ConfluxStateSource,
+    source: Arc<ConfluxStateSource>,
     runtime_handle: Handle,
 }
 
 impl ConfluxStateStorage {
-    fn new(source: ConfluxStateSource, runtime_handle: Handle) -> Self {
+    fn new_shared(source: Arc<ConfluxStateSource>, runtime_handle: Handle) -> Self {
         Self {
             source,
             runtime_handle,

@@ -1,21 +1,18 @@
 use std::collections::BTreeMap;
 
-use alloy_primitives::{Address, U256};
-use cfx_executor::state::State;
-use cfx_types::AddressSpaceUtil;
-
-use super::{NativeOperation, NativeOperations};
+use super::{NativeOperation, NativeOperations, NativeResolverDiagnostic};
 use crate::{
-    espace::{EspaceChange, EspaceChangesError, EspaceNativeChangeError, EspaceNativeCurrency},
-    primitive::{address_to_cfx, u256_from_cfx},
+    espace::EspaceStateReader,
+    espace::{EspaceChange, EspaceChangesError, EspaceNativeCurrency},
 };
+use alloy_primitives::{Address, U256};
 
 use super::super::ChangeOccurrence;
 
 pub(crate) type NativeBalances = BTreeMap<Address, U256>;
 
 pub(super) fn read_native_balances(
-    state: &State,
+    state: &EspaceStateReader,
     operation: &'static str,
     native_operations: &NativeOperations,
 ) -> Result<NativeBalances, EspaceChangesError> {
@@ -23,13 +20,13 @@ pub(super) fn read_native_balances(
         .balance_accounts
         .iter()
         .map(|&address| {
-            let balance = state
-                .balance(&address_to_cfx(address).with_evm_space())
-                .map_err(|error| EspaceChangesError::StateRead {
-                    operation,
-                    source: error,
-                })?;
-            Ok((address, u256_from_cfx(balance)))
+            let balance =
+                state
+                    .native_balance(address)
+                    .map_err(|error| EspaceChangesError::StateAccess {
+                        details: format!("{operation}: {error}"),
+                    })?;
+            Ok((address, balance))
         })
         .collect()
 }
@@ -38,9 +35,8 @@ pub(super) fn verify_native_changes(
     native_operations: &NativeOperations,
     before_balances: &NativeBalances,
     after_balances: &NativeBalances,
-    successful: bool,
     currency: &EspaceNativeCurrency,
-) -> Result<Vec<ChangeOccurrence>, EspaceNativeChangeError> {
+) -> Result<Vec<ChangeOccurrence>, NativeResolverDiagnostic> {
     let mut replayed_balances = before_balances.clone();
     let mut changes = Vec::new();
 
@@ -79,35 +75,25 @@ pub(super) fn verify_native_changes(
                     },
                 ));
             }
-            NativeOperation::GasPrecharge { payer, amount } => {
+            NativeOperation::GasPrecharge { payer, amount, .. } => {
                 decrease_balance(&mut replayed_balances, *payer, *amount)?;
             }
-            NativeOperation::GasRefund { recipient, amount } => {
+            NativeOperation::GasRefund {
+                recipient, amount, ..
+            } => {
                 increase_balance(&mut replayed_balances, *recipient, *amount)?;
             }
         }
     }
 
     for &address in &native_operations.balance_accounts {
-        let replayed = replayed_balances
-            .get(&address)
-            .copied()
-            .ok_or(EspaceNativeChangeError::BalanceMissing { address })?;
-        let actual = after_balances
-            .get(&address)
-            .copied()
-            .ok_or(EspaceNativeChangeError::BalanceMissing { address })?;
+        let replayed = replayed_balances[&address];
+        let actual = after_balances[&address];
         if replayed != actual {
-            return Err(EspaceNativeChangeError::BalanceMismatch {
-                address,
-                replayed,
-                actual,
-            });
+            return Err(NativeResolverDiagnostic::new(format!(
+                "finalized native balance differs from replay for {address}: replayed {replayed}, state {actual}"
+            )));
         }
-    }
-
-    if !successful && !changes.is_empty() {
-        return Err(EspaceNativeChangeError::BusinessEffectOnFailedExecution);
     }
 
     Ok(changes)
@@ -117,18 +103,16 @@ fn decrease_balance(
     balances: &mut NativeBalances,
     address: Address,
     amount: U256,
-) -> Result<(), EspaceNativeChangeError> {
+) -> Result<(), NativeResolverDiagnostic> {
     let balance = balances
         .get_mut(&address)
-        .ok_or(EspaceNativeChangeError::BalanceMissing { address })?;
+        .unwrap_or_else(|| unreachable!("native replay account set is complete"));
     let current = *balance;
-    *balance = current
-        .checked_sub(amount)
-        .ok_or(EspaceNativeChangeError::BalanceUnderflow {
-            address,
-            balance: current,
-            amount,
-        })?;
+    *balance = current.checked_sub(amount).ok_or_else(|| {
+        NativeResolverDiagnostic::new(format!(
+            "native balance replay violated the execution invariant for {address}"
+        ))
+    })?;
     Ok(())
 }
 
@@ -136,18 +120,16 @@ fn increase_balance(
     balances: &mut NativeBalances,
     address: Address,
     amount: U256,
-) -> Result<(), EspaceNativeChangeError> {
+) -> Result<(), NativeResolverDiagnostic> {
     let balance = balances
         .get_mut(&address)
-        .ok_or(EspaceNativeChangeError::BalanceMissing { address })?;
+        .unwrap_or_else(|| unreachable!("native replay account set is complete"));
     let current = *balance;
-    *balance = current
-        .checked_add(amount)
-        .ok_or(EspaceNativeChangeError::BalanceOverflow {
-            address,
-            balance: current,
-            amount,
-        })?;
+    *balance = current.checked_add(amount).ok_or_else(|| {
+        NativeResolverDiagnostic::new(format!(
+            "native balance replay violated the execution invariant for {address}"
+        ))
+    })?;
     Ok(())
 }
 
@@ -158,12 +140,12 @@ mod tests {
     use alloy_primitives::{Address, U256};
 
     use super::verify_native_changes;
-    use crate::espace::{EspaceNativeChangeError, EspaceNativeCurrency};
+    use crate::espace::EspaceNativeCurrency;
 
     use super::super::{NativeOperation, NativeOperations};
 
     #[test]
-    fn rejects_native_balance_mismatch_and_business_effects_on_failure() {
+    fn rejects_native_balance_mismatch() {
         let sender = Address::repeat_byte(1);
         let recipient = Address::repeat_byte(2);
         let operations = NativeOperations::from_operations(vec![
@@ -174,10 +156,12 @@ mod tests {
                 amount: U256::from(10),
             },
             NativeOperation::GasPrecharge {
+                position: 2,
                 payer: sender,
                 amount: U256::from(30),
             },
             NativeOperation::GasRefund {
+                position: 3,
                 recipient: sender,
                 amount: U256::from(7),
             },
@@ -190,19 +174,11 @@ mod tests {
             decimals: 18,
         };
 
-        verify_native_changes(&operations, &before, &after, true, &currency)
+        verify_native_changes(&operations, &before, &after, &currency)
             .expect("complete replay should reconcile");
 
         let mut mismatched = after.clone();
         mismatched.insert(recipient, U256::from(11));
-        assert!(matches!(
-            verify_native_changes(&operations, &before, &mismatched, true, &currency),
-            Err(EspaceNativeChangeError::BalanceMismatch { address, .. })
-                if address == recipient
-        ));
-        assert!(matches!(
-            verify_native_changes(&operations, &before, &after, false, &currency),
-            Err(EspaceNativeChangeError::BusinessEffectOnFailedExecution)
-        ));
+        assert!(verify_native_changes(&operations, &before, &mismatched, &currency).is_err());
     }
 }

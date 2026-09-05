@@ -1,37 +1,41 @@
 use alloy::sol_types::{Panic, Revert, SolError};
 use alloy_primitives::Bytes;
-use cfx_executor::{
-    executive::{ExecutionError, ToRepackError, TxDropError, contract_address},
-    state::State,
-};
-use cfx_types::{AddressSpaceUtil, Space, U256 as CfxU256, U512 as CfxU512};
+use cfx_executor::executive::{ExecutionError, ToRepackError, TxDropError, contract_address};
+use cfx_types::{AddressSpaceUtil, U256 as CfxU256, U512 as CfxU512};
 use cfx_vm_types::{CreateContractAddress, Error as VmError};
 use conflux_provider::Network;
 
 use super::{
-    EspaceCompleteTransaction, EspaceExecutionError, EspaceExecutionFailure,
-    EspaceExecutionOutcome, EspaceExecutionResult, EspaceFee, EspaceGas, EspaceLog,
-    EspaceLogAddress, EspaceResultIntegrationError, EspaceRevertReason, EspaceStateAccessError,
+    EspaceCompleteTransaction, EspaceExecutedTransaction, EspaceExecutionError,
+    EspaceExecutionFailure, EspaceExecutionOutcome, EspaceExecutionResult, EspaceExecutionSpace,
+    EspaceFee, EspaceGas, EspaceLog, EspaceLogAddress, EspaceResultIntegrationError,
+    EspaceRevertReason, EspaceStateAccessError, EspaceStateReadError, EspaceStateReader,
     EspaceSuccessOutput, EspaceTransactionRejection,
 };
 use crate::{
     execution::{ConfluxExecutionOutcome, ConfluxExecutionOutput, PreparedTransactionExecution},
-    primitive::{address_from_cfx, address_to_cfx, b256_from_cfx, u256_from_cfx, u512_from_cfx},
+    primitive::{address_from_cfx, address_to_cfx, u256_from_cfx, u512_from_cfx},
 };
 
 pub(crate) fn convert_executor_outcome(
     outcome: ConfluxExecutionOutcome,
+    execution: Option<&EspaceExecutedTransaction>,
     prepared: &PreparedTransactionExecution,
     transaction: &EspaceCompleteTransaction,
-    state: &State,
+    state: Option<&EspaceStateReader>,
     core_space_network: Network,
 ) -> Result<EspaceExecutionOutcome, EspaceExecutionError> {
     let common = transaction.common();
     match outcome {
         ConfluxExecutionOutcome::Success(output) => {
+            let execution = execution.ok_or_else(|| {
+                EspaceResultIntegrationError::new(
+                    "successful transaction has no finalized executed-transaction data",
+                )
+            })?;
             let result = build_execution_result(&output, common.gas_limit)?;
-            let logs = convert_committed_logs(&output, core_space_network)?;
-            let output = build_success_output(&output, prepared, transaction, state)?;
+            let logs = convert_committed_logs(execution, core_space_network)?;
+            let output = build_success_output(execution, &output, prepared, transaction, state)?;
             Ok(EspaceExecutionOutcome::Success {
                 result,
                 output,
@@ -80,10 +84,11 @@ fn build_execution_result(
 }
 
 fn build_success_output(
+    execution: &EspaceExecutedTransaction,
     output: &ConfluxExecutionOutput,
     prepared: &PreparedTransactionExecution,
     transaction: &EspaceCompleteTransaction,
-    state: &State,
+    state: Option<&EspaceStateReader>,
 ) -> Result<EspaceSuccessOutput, EspaceExecutionError> {
     let common = transaction.common();
     if common.to.is_some() {
@@ -101,52 +106,71 @@ fn build_success_output(
         &nonce,
         common.input.as_ref(),
     );
-    if !output.contracts_created.contains(&created) {
-        return Err(EspaceResultIntegrationError::MissingCreatedContract {
-            address: address_from_cfx(created.address),
-        }
+    let created_address = address_from_cfx(created.address);
+    if !execution.contracts_created().iter().any(|contract| {
+        contract.space() == EspaceExecutionSpace::Espace && contract.address() == created_address
+    }) {
+        return Err(EspaceResultIntegrationError::new(format!(
+            "successful contract creation did not report the expected address {}",
+            created_address
+        ))
         .into());
     }
 
+    let state = state.ok_or_else(|| {
+        EspaceResultIntegrationError::invalid_executor_output(
+            "successful eSpace contract creation has no finalized state reader",
+        )
+    })?;
     let runtime_code = state
-        .code(&created)
-        .map_err(|error| EspaceStateAccessError::Operation {
-            operation: "read created eSpace contract code",
-            source: error,
-        })?
-        .map(|code| Bytes::copy_from_slice(code.as_slice()))
+        .read_account(created_address)
+        .map_err(map_state_read_error)?
+        .code()
+        .cloned()
         .unwrap_or_default();
 
     Ok(EspaceSuccessOutput::Create {
-        address: address_from_cfx(created.address),
+        address: created_address,
         runtime_code,
     })
 }
 
+fn map_state_read_error(error: EspaceStateReadError) -> EspaceExecutionError {
+    match error {
+        EspaceStateReadError::StateAccess(source) => EspaceExecutionError::StateAccess(source),
+        error => EspaceResultIntegrationError::invalid_executor_output(format!(
+            "created eSpace contract code could not be read from finalized state: {error}"
+        ))
+        .into(),
+    }
+}
+
 fn convert_committed_logs(
-    output: &ConfluxExecutionOutput,
+    execution: &EspaceExecutedTransaction,
     core_space_network: Network,
 ) -> Result<Vec<EspaceLog>, EspaceResultIntegrationError> {
-    output
-        .logs
+    execution
+        .committed_logs()
         .iter()
         .map(|log| {
-            let address = match log.space {
-                Space::Ethereum => EspaceLogAddress::Espace(address_from_cfx(log.address)),
-                Space::Native => {
-                    let bytes = *log.address.as_fixed_bytes();
+            let address = match log.space() {
+                EspaceExecutionSpace::Espace => EspaceLogAddress::Espace(log.address()),
+                EspaceExecutionSpace::Core => {
+                    let bytes = log.address().into_array();
                     let address =
                         conflux_provider::CoreAddress::from_bytes(bytes, core_space_network)
-                            .map_err(|source| EspaceResultIntegrationError::InvalidLogAddress {
-                                source,
+                            .map_err(|source| {
+                                EspaceResultIntegrationError::new(format!(
+                                    "failed to represent a committed Conflux log address: {source}"
+                                ))
                             })?;
                     EspaceLogAddress::CoreSpace(address)
                 }
             };
             Ok(EspaceLog {
                 address,
-                topics: log.topics.iter().copied().map(b256_from_cfx).collect(),
-                data: Bytes::copy_from_slice(log.data.as_ref()),
+                topics: log.topics().to_vec(),
+                data: log.data().clone(),
             })
         })
         .collect()

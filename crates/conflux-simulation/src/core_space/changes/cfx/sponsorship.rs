@@ -58,6 +58,7 @@ pub(super) fn collect_sponsorship_call(
         transferred_value,
         calldata_len,
         calldata_prefix,
+        ..
     } = &frame.action
     else {
         return Ok(None);
@@ -182,6 +183,7 @@ pub(super) fn collect_admin_call(
         calldata_len,
         calldata_prefix,
         caller,
+        ..
     } = &frame.action
     else {
         return Ok(None);

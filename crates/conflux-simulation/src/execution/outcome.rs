@@ -15,7 +15,7 @@ use super::{
 use crate::primitive::u256_from_cfx;
 
 /// Conflux execution output owned by this crate rather than by the upstream type map.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ConfluxExecutionDetails {
     pub(crate) gas_used: u64,
     pub(crate) gas_charged: u64,
@@ -24,11 +24,7 @@ pub(crate) struct ConfluxExecutionDetails {
     pub(crate) output: Bytes,
 }
 
-#[derive(Debug)]
-#[expect(
-    dead_code,
-    reason = "some details are carried for the next analysis slices before they have consumers"
-)]
+#[derive(Debug, Clone)]
 pub(crate) struct ConfluxExecutionOutput {
     pub(crate) common: ConfluxExecutionDetails,
     pub(crate) base_gas: u64,
