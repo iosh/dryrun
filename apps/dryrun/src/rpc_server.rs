@@ -8,8 +8,9 @@ use alloy_rpc_client::RpcClient;
 use conflux_provider::ConfluxProvider;
 use conflux_rpc::build_rpc_module as build_conflux_rpc_module;
 use conflux_simulation::{
-    ConfluxSimulationBackend, core_space::CoreSpaceTransactionSimulator,
-    espace::EspaceTransactionSimulator,
+    ConfluxSimulationBackend,
+    core_space::CoreSpaceTransactionSimulator,
+    espace::{EspaceSimulationLimits, EspaceTransactionSimulator},
 };
 use evm_rpc::{DryrunRpcServer, RpcHandler};
 use evm_simulation::{EvmSimulationLimits, EvmTransactionSimulator};
@@ -85,19 +86,19 @@ async fn add_evm_rpc_module(
     simulation_tasks: SimulationTaskSet,
 ) -> io::Result<()> {
     let ethereum_provider = create_ethereum_provider(config, http_client)?.erased();
-    let evm_simulator = EvmTransactionSimulator::ethereum_mainnet(ethereum_provider)
+    let limits = EvmSimulationLimits {
+        max_occurrence_checkpoints: config.limits.max_occurrence_checkpoints,
+        max_retained_state_entries: config.limits.max_retained_state_entries,
+        max_state_reads: config.limits.max_state_reads,
+        max_read_calls: config.limits.max_read_calls,
+        read_call_gas_limit: config.limits.read_call_gas_limit,
+        max_read_call_output_bytes: config.limits.max_read_call_output_bytes,
+    };
+    let evm_simulator = EvmTransactionSimulator::ethereum_mainnet(ethereum_provider, limits)
         .await
         .map_err(|error| {
             startup_error(format!("failed to initialize Ethereum simulation: {error}"))
-        })?
-        .with_limits(EvmSimulationLimits {
-            max_occurrence_checkpoints: config.limits.max_occurrence_checkpoints,
-            max_retained_state_entries: config.limits.max_retained_state_entries,
-            max_state_reads: config.limits.max_state_reads,
-            max_read_calls: config.limits.max_read_calls,
-            read_call_gas_limit: config.limits.read_call_gas_limit,
-            max_read_call_output_bytes: config.limits.max_read_call_output_bytes,
-        });
+        })?;
 
     rpc_module
         .merge(RpcHandler::new(evm_simulator, simulation_tasks).into_rpc())
@@ -117,7 +118,15 @@ async fn add_conflux_rpc_module(
             startup_error(format!("failed to initialize Conflux simulation: {error}"))
         })?;
     let core_space_address_network = backend.core_space_address_network();
-    let espace_simulator = EspaceTransactionSimulator::new(backend.clone());
+    let espace_simulator = EspaceTransactionSimulator::new(
+        backend.clone(),
+        EspaceSimulationLimits {
+            max_state_reads: config.espace_limits.max_state_reads,
+            max_read_calls: config.espace_limits.max_read_calls,
+            read_call_gas_limit: config.espace_limits.read_call_gas_limit,
+            max_read_call_output_bytes: config.espace_limits.max_read_call_output_bytes,
+        },
+    );
     let core_space_simulator = CoreSpaceTransactionSimulator::new(backend);
 
     rpc_module
