@@ -5,6 +5,7 @@ edition = { workspace = true }
 
 [dependencies]
 alloy = { workspace = true }
+alloy-rpc-types = { workspace = true }
 alloy-primitives = { workspace = true }
 alloy-sol-types = { workspace = true }
 conflux-provider = { workspace = true }
@@ -23,8 +24,8 @@ cfx-vm-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry
 cfx-rpc-cfx-types = { workspace = true }
 
 cfx-rpc-eth-types = { workspace = true }
-keccak-hash = "0.5"
-rlp = "0.4"
+keccak-hash = "0.12"
+rlp = "0.6"
 serde = { workspace = true }
 thiserror = { workspace = true }
 typemap = { package = "typemap-ors", version = "1.0" }

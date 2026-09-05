@@ -32,6 +32,7 @@ tokio-util = "0.7"
 
 alloy = "1"
 alloy-json-rpc = "1"
+alloy-rpc-types = "2"
 alloy-serde = "1"
 alloy-rpc-client = { version = "1", default-features = false }
 alloy-transport = { version = "1", default-features = false }

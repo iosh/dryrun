@@ -26,14 +26,12 @@ pub(crate) fn b256_from_cfx(value: CfxH256) -> B256 {
 }
 
 pub(crate) fn u256_from_cfx(value: CfxU256) -> U256 {
-    let mut bytes = [0_u8; 32];
-    value.to_big_endian(&mut bytes);
+    let bytes = value.to_big_endian();
     U256::from_be_bytes(bytes)
 }
 
 pub(crate) fn u512_from_cfx(value: CfxU512) -> U512 {
-    let mut bytes = [0_u8; 64];
-    value.to_big_endian(&mut bytes);
+    let bytes = value.to_big_endian();
     U512::from_be_bytes(bytes)
 }
 

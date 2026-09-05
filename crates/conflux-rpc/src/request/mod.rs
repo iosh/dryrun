@@ -28,7 +28,6 @@ fn cfx_h256_to_alloy(value: H256) -> B256 {
 }
 
 fn cfx_u256_to_alloy(value: U256) -> AlloyU256 {
-    let mut bytes = [0_u8; 32];
-    value.to_big_endian(&mut bytes);
+    let bytes = value.to_big_endian();
     AlloyU256::from_be_bytes(bytes)
 }

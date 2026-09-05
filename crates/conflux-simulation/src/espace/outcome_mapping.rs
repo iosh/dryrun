@@ -1,8 +1,11 @@
 use alloy::sol_types::{Panic, Revert, SolError};
 use alloy_primitives::Bytes;
-use cfx_executor::executive::{ExecutionError, ToRepackError, TxDropError, contract_address};
-use cfx_types::{AddressSpaceUtil, U256 as CfxU256, U512 as CfxU512};
-use cfx_vm_types::{CreateContractAddress, Error as VmError};
+use cfx_executor::executive::{ExecutionError, ToRepackError, TxDropError};
+use cfx_types::{
+    AddressSpaceUtil, CreateContractAddressType, U256 as CfxU256, U512 as CfxU512,
+    cal_contract_address_with_space,
+};
+use cfx_vm_types::Error as VmError;
 use conflux_provider::Network;
 
 use super::{
@@ -86,7 +89,7 @@ fn build_execution_result(
 fn build_success_output(
     execution: &EspaceExecutedTransaction,
     output: &ConfluxExecutionOutput,
-    prepared: &PreparedTransactionExecution,
+    _prepared: &PreparedTransactionExecution,
     transaction: &EspaceCompleteTransaction,
     state: Option<&EspaceStateReader>,
 ) -> Result<EspaceSuccessOutput, EspaceExecutionError> {
@@ -99,9 +102,8 @@ fn build_success_output(
 
     let sender = address_to_cfx(common.from).with_evm_space();
     let nonce = CfxU256::from(common.nonce);
-    let (created, _) = contract_address(
-        CreateContractAddress::FromSenderNonce,
-        prepared.env.number,
+    let (created, _) = cal_contract_address_with_space(
+        CreateContractAddressType::FromSenderNonce,
         &sender,
         &nonce,
         common.input.as_ref(),

@@ -7,8 +7,9 @@ use alloy::{
     eips::BlockId,
     primitives::{Address as AlloyAddress, Bytes as AlloyBytes, U256 as AlloyU256},
     providers::Provider,
-    rpc::{client::NoParams, types::TransactionInput},
+    rpc::client::NoParams,
 };
+use alloy_rpc_types::TransactionInput as AlloyTransactionInput;
 use cfx_rpc_cfx_types::EpochNumber;
 use cfx_rpc_eth_types::TransactionRequest as EspaceRpcTransactionRequest;
 use cfx_types::{U64, U256};
@@ -191,7 +192,7 @@ fn espace_estimate_gas_request(
         from: Some(address_to_cfx(common.from)),
         to: common.to.map(address_to_cfx),
         value: Some(u256_to_cfx(common.value)),
-        input: TransactionInput::new(common.input.clone()),
+        input: AlloyTransactionInput::new(common.input.clone()),
         nonce: Some(U256::from(common.nonce)),
         chain_id: Some(U256::from(common.chain_id)),
         ..Default::default()

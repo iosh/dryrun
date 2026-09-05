@@ -1,10 +1,12 @@
 use alloy::sol_types::{Panic, Revert, SolError};
 use alloy_primitives::Bytes;
 use cfx_executor::{
-    executive::{ExecutionError, ToRepackError, TxDropError, contract_address},
+    executive::{ExecutionError, ToRepackError, TxDropError},
     state::State,
 };
-use cfx_types::{Space, U512 as CfxU512};
+use cfx_types::{
+    CreateContractAddressType, Space, U512 as CfxU512, cal_contract_address_with_space,
+};
 use cfx_vm_types::Error as VmError;
 use conflux_provider::{CoreAddress, Network};
 
@@ -150,9 +152,8 @@ fn build_success_output(
         });
     }
 
-    let (created, _) = contract_address(
-        cfx_vm_types::CreateContractAddress::FromSenderNonceAndCodeHash,
-        prepared.env.number,
+    let (created, _) = cal_contract_address_with_space(
+        CreateContractAddressType::FromSenderNonceAndCodeHash,
         &prepared.transaction.sender(),
         prepared.transaction.nonce(),
         prepared.transaction.data().as_slice(),
