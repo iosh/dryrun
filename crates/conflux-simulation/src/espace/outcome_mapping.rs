@@ -16,14 +16,13 @@ use super::{
     EspaceSuccessOutput, EspaceTransactionRejection,
 };
 use crate::{
-    execution::{ConfluxExecutionOutcome, ConfluxExecutionOutput, PreparedTransactionExecution},
+    execution::{ConfluxExecutionOutcome, ConfluxExecutionOutput},
     primitive::{address_from_cfx, address_to_cfx, u256_from_cfx, u512_from_cfx},
 };
 
 pub(crate) fn convert_executor_outcome(
     outcome: ConfluxExecutionOutcome,
     execution: Option<&EspaceExecutedTransaction>,
-    prepared: &PreparedTransactionExecution,
     transaction: &EspaceCompleteTransaction,
     state: Option<&EspaceStateReader>,
     core_space_network: Network,
@@ -38,7 +37,7 @@ pub(crate) fn convert_executor_outcome(
             })?;
             let result = build_execution_result(&output, common.gas_limit)?;
             let logs = convert_committed_logs(execution, core_space_network)?;
-            let output = build_success_output(execution, &output, prepared, transaction, state)?;
+            let output = build_success_output(execution, &output, transaction, state)?;
             Ok(EspaceExecutionOutcome::Success {
                 result,
                 output,
@@ -89,7 +88,6 @@ fn build_execution_result(
 fn build_success_output(
     execution: &EspaceExecutedTransaction,
     output: &ConfluxExecutionOutput,
-    _prepared: &PreparedTransactionExecution,
     transaction: &EspaceCompleteTransaction,
     state: Option<&EspaceStateReader>,
 ) -> Result<EspaceSuccessOutput, EspaceExecutionError> {

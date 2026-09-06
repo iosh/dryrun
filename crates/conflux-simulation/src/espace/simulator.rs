@@ -143,7 +143,6 @@ fn simulate_blocking(
         let outcome = convert_executor_outcome(
             execution.outcome,
             None,
-            &execution.prepared,
             &transaction,
             None,
             backend.core_space_address_network(),
@@ -183,7 +182,6 @@ fn simulate_blocking(
     let outcome = convert_executor_outcome(
         execution.outcome,
         Some(&record),
-        &execution.prepared,
         &transaction,
         Some(state.finalized()),
         backend.core_space_address_network(),

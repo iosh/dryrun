@@ -1,6 +1,6 @@
 import { formatAmount, formatNativeAmount } from '../../../lib/formatting.ts';
 import { getEnvironment } from '../../environment.ts';
-import type { EvmOutcome } from '../../rpc.ts';
+import type { EspaceOutcome, EvmOutcome } from '../../rpc.ts';
 import {
   normalizeAddress,
   toAssetFlowItemViewModels,
@@ -154,17 +154,11 @@ function executionAnchor(record: SimulationRecord): ExecutionAnchor {
   }
 
   const execution = record.response.execution;
-  return 'block' in execution
-    ? {
-        hash: execution.block.hash,
-        label: 'Block',
-        number: execution.block.number,
-      }
-    : {
-        hash: execution.state.pivotHash,
-        label: 'Epoch',
-        number: execution.state.epochNumber,
-      };
+  return {
+    hash: execution.state.pivotHash,
+    label: 'Epoch',
+    number: execution.state.epochNumber,
+  };
 }
 
 function senderNetImpacts(
@@ -223,27 +217,27 @@ function simulationExecution(record: SimulationRecord): SimulationExecution {
   if ('outcome' in response) {
     const outcome = response.outcome;
     const executed = 'gasUsed' in outcome;
-    const blobGasFee = executed ? outcome.blobGasFee ?? null : null;
+    const blobGasFee = 'blobGasFee' in outcome ? outcome.blobGasFee ?? null : null;
     const gasFee = executed ? outcome.gasFee : null;
     return {
       blobGasFee,
-      blobGasPrice: executed ? outcome.blobGasPrice ?? null : null,
-      blobGasUsed: executed ? outcome.blobGasUsed ?? null : null,
+      blobGasPrice: 'blobGasPrice' in outcome ? outcome.blobGasPrice ?? null : null,
+      blobGasUsed: 'blobGasUsed' in outcome ? outcome.blobGasUsed ?? null : null,
       burntGasFee: executed ? outcome.burntGasFee ?? null : null,
       chainId: response.transaction.chainId,
       contractAddress:
         outcome.status === 'success' && 'contractAddress' in outcome
           ? outcome.contractAddress
           : null,
-      effectiveGasPrice: executed ? outcome.effectiveGasPrice : null,
-      failure: evmFailure(outcome),
+      effectiveGasPrice: 'effectiveGasPrice' in outcome ? outcome.effectiveGasPrice : null,
+      failure: outcomeFailure(outcome),
       gasCharged: null,
       gasCoveredBySponsor: null,
       gasFee,
       gasLimit: response.transaction.gas,
       gasUsed: executed ? outcome.gasUsed : null,
       logsCount: outcome.status === 'success' ? outcome.logs.length : 0,
-      output: evmOutput(outcome),
+      output: outcomeOutput(outcome),
       status: outcome.status,
       storageCoveredBySponsor: null,
       totalFee: gasFee === null ? null : addHexQuantities(gasFee, blobGasFee),
@@ -267,11 +261,8 @@ function simulationExecution(record: SimulationRecord): SimulationExecution {
           message: execution.failure.message,
         }
       : null,
-    gasCharged: 'gasCharged' in execution ? execution.gasCharged : null,
-    gasCoveredBySponsor:
-      'gasCoveredBySponsor' in execution
-        ? execution.gasCoveredBySponsor
-        : null,
+    gasCharged: execution.gasCharged,
+    gasCoveredBySponsor: execution.gasCoveredBySponsor,
     gasFee: execution.fee,
     gasLimit: execution.gasLimit,
     gasUsed: execution.gasUsed,
@@ -283,15 +274,12 @@ function simulationExecution(record: SimulationRecord): SimulationExecution {
         : execution.status === 'FAILED'
           ? 'failed'
           : 'rejected',
-    storageCoveredBySponsor:
-      'storageCoveredBySponsor' in execution
-        ? execution.storageCoveredBySponsor
-        : null,
+    storageCoveredBySponsor: execution.storageCoveredBySponsor,
     totalFee: execution.fee,
   };
 }
 
-function evmFailure(outcome: EvmOutcome) {
+function outcomeFailure(outcome: EvmOutcome | EspaceOutcome) {
   switch (outcome.status) {
     case 'reverted':
       return {
@@ -306,7 +294,7 @@ function evmFailure(outcome: EvmOutcome) {
   }
 }
 
-function evmOutput(outcome: EvmOutcome) {
+function outcomeOutput(outcome: EvmOutcome | EspaceOutcome) {
   if (outcome.status === 'reverted') {
     return { label: 'Revert data', value: outcome.revertData };
   }

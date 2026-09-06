@@ -22,14 +22,10 @@ export function loadSimulationHistory(): SimulationRecord[] {
     const payload = JSON.parse(raw) as StoredHistoryPayload;
     if (payload.version !== 3 || !Array.isArray(payload.records)) return [];
 
-    const records = payload.records
+    return payload.records
       .map(restoreSimulationRecord)
+      .filter((record) => record !== null)
       .slice(0, HISTORY_LIMIT);
-
-    if (records.length !== payload.records.length) {
-      persistSimulationHistory(records);
-    }
-    return records;
   } catch {
     return [];
   }
@@ -55,8 +51,16 @@ export function removeSimulationHistory(
 
 function restoreSimulationRecord(
   record: StoredSimulationRecord,
-): SimulationRecord {
+): SimulationRecord | null {
   const envelope = record.rawResponse as RpcResultEnvelope;
+  if (
+    record.environmentId === 'conflux-espace-mainnet' &&
+    (typeof envelope.result !== 'object' ||
+      envelope.result === null ||
+      !('outcome' in envelope.result))
+  ) {
+    return null;
+  }
   return {
     ...record,
     response: envelope.result as SimulationResponse,

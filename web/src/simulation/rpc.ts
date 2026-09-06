@@ -511,11 +511,6 @@ export interface ExecutionFailure {
   reason?: string | null;
 }
 
-export interface SimulatedBlock {
-  number: string;
-  hash: string;
-}
-
 export interface EvmState {
   blockNumber: string;
   blockHash: string;
@@ -640,18 +635,45 @@ export interface SimulationLog {
   data: string;
 }
 
-export interface EspaceExecution {
-  chainId: string;
-  block: SimulatedBlock;
-  status: ExecutionStatus;
-  gasUsed: string;
-  gasLimit: string;
-  gasCharged: string;
-  fee: string;
-  burntFee: string | null;
-  output: string;
-  failure: ExecutionFailure | null;
+export interface EspaceState {
+  blockNumber: string;
+  blockHash: string;
 }
+
+export type EspaceCompletedTransaction =
+  | EvmLegacyTransaction
+  | EvmEip2930Transaction
+  | EvmEip1559Transaction
+  | EvmEip7702Transaction;
+
+interface EspaceExecutionAccounting {
+  gasUsed: string;
+  gasFee: string;
+  burntGasFee?: string;
+}
+
+export type EspaceOutcome =
+  | (EspaceExecutionAccounting & {
+      status: 'success';
+      returnData: string;
+      logs: SimulationLog[];
+    })
+  | (EspaceExecutionAccounting & {
+      status: 'success';
+      contractAddress: string;
+      runtimeCode: string;
+      logs: SimulationLog[];
+    })
+  | (EspaceExecutionAccounting & {
+      status: 'reverted';
+      revertData: string;
+      reason?: string;
+    })
+  | (EspaceExecutionAccounting & {
+      status: 'failed';
+      error: string;
+    })
+  | { status: 'rejected'; error: string };
 
 export interface CoreExecution {
   chainId: string;
@@ -679,7 +701,9 @@ export interface EthereumResponse {
 }
 
 export interface EspaceResponse {
-  execution: EspaceExecution;
+  state: EspaceState;
+  transaction: EspaceCompletedTransaction;
+  outcome: EspaceOutcome;
   changes: EspaceChange[];
 }
 
