@@ -83,7 +83,7 @@ pub(crate) fn execute_isolated_read_call(
     gas_limit: Option<u64>,
 ) -> Result<ReadCallOutcome, IsolatedReadCallError> {
     // `State::save` commits the cache and asserts that no executor checkpoint
-    // is active.  A read call is only valid on a finalized state point; fail
+    // is active. A read call requires an independent state point; fail
     // explicitly instead of allowing an upstream assertion to panic.
     if !state.no_checkpoint() {
         return Err(IsolatedReadCallError::Execution(
@@ -125,7 +125,7 @@ pub(crate) fn execute_isolated_read_call(
     probe_env.transaction_hash = read_transaction.hash();
 
     // Reading the nonce may populate the cache. Save that cache state so each
-    // probe starts from the same committed S1 and leaves no transition behind.
+    // probe starts from the same retained state point and leaves no transition behind.
     let snapshot = state.save();
     let outcome = ExecutiveContext::new(state, &probe_env, machine, spec)
         .transact(

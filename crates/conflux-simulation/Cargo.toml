@@ -31,3 +31,8 @@ thiserror = { workspace = true }
 typemap = { package = "typemap-ors", version = "1.0" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
 tracing = { workspace = true }
+
+[dev-dependencies]
+alloy-json-rpc = { workspace = true }
+serde_json = { workspace = true }
+tower = "0.5"

@@ -22,10 +22,10 @@ pub(super) struct DecodedStandardOccurrence {
     pub(super) decoded_log: DecodedStandardLog<alloy_primitives::Address>,
 }
 
-pub(super) fn decode_standard_occurrences(
-    logs: &[EspaceCommittedLog],
+pub(super) fn decode_standard_occurrences<'a>(
+    logs: impl IntoIterator<Item = &'a EspaceCommittedLog>,
 ) -> Vec<DecodedStandardOccurrence> {
-    logs.iter()
+    logs.into_iter()
         .filter(|log| log.space() == EspaceExecutionSpace::Espace)
         .filter_map(|log| {
             decode_standard_log(log.address(), log.topics(), log.data(), |address| address).map(

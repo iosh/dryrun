@@ -4,8 +4,9 @@ use cfx_executor::{
         OpcodeTracer, SetAuthTracer, StorageTracer, TracerTrait,
     },
     stack::{FrameResult, FrameReturn},
+    state::{SavedState, State},
 };
-use cfx_types::{Address, H256, Space, U256};
+use cfx_types::{Address, AddressWithSpace, H256, Space, U256};
 use cfx_vm_types::{ActionParams, ActionValue, CallType};
 use typemap::ShareDebugMap;
 
@@ -72,6 +73,13 @@ pub(crate) enum TraceEvent {
         to: AddressPocket,
         value: U256,
     },
+    StorageWrite {
+        position: TracePosition,
+        frame_id: FrameId,
+        address: AddressWithSpace,
+        key: Vec<u8>,
+        value: U256,
+    },
 }
 
 impl TraceEvent {
@@ -79,7 +87,8 @@ impl TraceEvent {
         match self {
             Self::FrameStart { position, .. }
             | Self::Log { position, .. }
-            | Self::InternalTransfer { position, .. } => *position,
+            | Self::InternalTransfer { position, .. }
+            | Self::StorageWrite { position, .. } => *position,
         }
     }
 
@@ -87,19 +96,47 @@ impl TraceEvent {
         match self {
             Self::FrameStart { frame_id, .. } | Self::Log { frame_id, .. } => Some(*frame_id),
             Self::InternalTransfer { frame_id, .. } => *frame_id,
+            Self::StorageWrite { frame_id, .. } => Some(*frame_id),
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct CommittedExecutionTrace {
     frames_by_id: Vec<Option<TraceFrame>>,
     events: Vec<TraceEvent>,
+    snapshots: Option<CommittedStateSnapshots>,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct CommittedStateSnapshots {
+    pub(crate) entries: Vec<(TracePosition, SavedState)>,
+    pub(crate) limit_exceeded: Option<usize>,
+}
+
+/// Log locations whose state is needed by the space's change analysis.
+#[derive(Debug)]
+pub(crate) struct LogCheckpoint {
+    pub(crate) space: Space,
+    pub(crate) address: Option<Address>,
+    pub(crate) topic0: H256,
+}
+
+impl LogCheckpoint {
+    fn matches(&self, space: Space, address: Address, topic0: H256) -> bool {
+        self.space == space
+            && self.address.is_none_or(|expected| expected == address)
+            && self.topic0 == topic0
+    }
 }
 
 impl CommittedExecutionTrace {
     pub(crate) fn events(&self) -> &[TraceEvent] {
         &self.events
+    }
+
+    pub(crate) fn take_snapshots(&mut self) -> Option<CommittedStateSnapshots> {
+        self.snapshots.take()
     }
 
     pub(crate) fn frame(&self, frame_id: FrameId) -> &TraceFrame {
@@ -157,6 +194,8 @@ enum FrameType {
 struct JournalMark {
     frame_count: usize,
     event_count: usize,
+    snapshot_count: usize,
+    snapshot_limit_exceeded: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -170,6 +209,7 @@ struct ActiveFrame {
 struct ExecutionTraceJournal {
     frames_by_id: Vec<Option<TraceFrame>>,
     events: Vec<TraceEvent>,
+    snapshots: CommittedStateSnapshots,
     active_frames: Vec<ActiveFrame>,
     checkpoints: Vec<JournalMark>,
     next_event_position: TracePosition,
@@ -182,6 +222,7 @@ impl ExecutionTraceJournal {
         Self {
             frames_by_id: Vec::new(),
             events: Vec::new(),
+            snapshots: CommittedStateSnapshots::default(),
             active_frames: Vec::new(),
             checkpoints: Vec::new(),
             next_event_position: 0,
@@ -228,7 +269,7 @@ impl ExecutionTraceJournal {
     }
 
     fn enter_create_frame(&mut self, params: &ActionParams) {
-        let init_code = params.data.as_deref().unwrap_or_default();
+        let init_code = params.code.as_deref().map(Vec::as_slice).unwrap_or_default();
         let frame = TraceFrame {
             parent_id: self.active_frames.last().map(|frame| frame.id),
             space: params.space,
@@ -300,11 +341,21 @@ impl ExecutionTraceJournal {
         Some(frame.id)
     }
 
-    fn record_log(&mut self, address: Address, topics: &[H256], data: &[u8]) {
+    fn record_log(
+        &mut self,
+        address: Address,
+        topics: &[H256],
+        data: &[u8],
+    ) -> Option<(TracePosition, Space)> {
         let Some(frame_id) = self.active_frames.last().map(|frame| frame.id) else {
             self.invalid_sequence = true;
-            return;
+            return None;
         };
+        let Some(frame) = self.frames_by_id.get(frame_id.0).and_then(Option::as_ref) else {
+            self.invalid_sequence = true;
+            return None;
+        };
+        let space = frame.space;
 
         let position = self.allocate_event_position();
         self.events.push(TraceEvent::Log {
@@ -314,6 +365,18 @@ impl ExecutionTraceJournal {
             topics: topics.to_vec(),
             data: data.to_vec(),
         });
+        Some((position, space))
+    }
+
+    fn snapshot(&mut self, position: TracePosition, state: &State, limit: usize) {
+        if self.snapshots.limit_exceeded.is_some() {
+            return;
+        }
+        if self.snapshots.entries.len() >= limit {
+            self.snapshots.limit_exceeded = Some(limit);
+            return;
+        }
+        self.snapshots.entries.push((position, state.snapshot()));
     }
 
     fn record_internal_transfer(&mut self, from: AddressPocket, to: AddressPocket, value: U256) {
@@ -335,6 +398,21 @@ impl ExecutionTraceJournal {
             space,
             from,
             to,
+            value,
+        });
+    }
+
+    fn record_storage_write(&mut self, address: AddressWithSpace, key: &[u8], value: U256) {
+        let Some(frame_id) = self.active_frames.last().map(|frame| frame.id) else {
+            self.invalid_sequence = true;
+            return;
+        };
+        let position = self.allocate_event_position();
+        self.events.push(TraceEvent::StorageWrite {
+            position,
+            frame_id,
+            address,
+            key: key.to_vec(),
             value,
         });
     }
@@ -364,15 +442,22 @@ impl ExecutionTraceJournal {
         JournalMark {
             frame_count: self.frames_by_id.len(),
             event_count: self.events.len(),
+            snapshot_count: self.snapshots.entries.len(),
+            snapshot_limit_exceeded: self.snapshots.limit_exceeded,
         }
     }
 
     fn rollback_to(&mut self, mark: JournalMark) {
-        if mark.event_count > self.events.len() || mark.frame_count > self.frames_by_id.len() {
+        if mark.event_count > self.events.len()
+            || mark.frame_count > self.frames_by_id.len()
+            || mark.snapshot_count > self.snapshots.entries.len()
+        {
             self.invalid_sequence = true;
             return;
         }
         self.events.truncate(mark.event_count);
+        self.snapshots.entries.truncate(mark.snapshot_count);
+        self.snapshots.limit_exceeded = mark.snapshot_limit_exceeded;
         for frame in &mut self.frames_by_id[mark.frame_count..] {
             *frame = None;
         }
@@ -385,6 +470,7 @@ impl ExecutionTraceJournal {
         (!self.invalid_sequence).then_some(CommittedExecutionTrace {
             frames_by_id: self.frames_by_id,
             events: self.events,
+            snapshots: Some(self.snapshots),
         })
     }
 }
@@ -426,13 +512,27 @@ fn calldata_bytes_to_capture(space: Space, target: Address, code_address: Addres
 #[derive(Debug)]
 pub(crate) struct ExecutionTraceObserver {
     journal: ExecutionTraceJournal,
+    log_checkpoints: Vec<LogCheckpoint>,
+    max_snapshots: usize,
 }
 
 impl ExecutionTraceObserver {
     pub(crate) fn new(transaction_space: Space) -> Self {
         Self {
             journal: ExecutionTraceJournal::new(transaction_space),
+            log_checkpoints: Vec::new(),
+            max_snapshots: 0,
         }
+    }
+
+    pub(crate) fn with_log_checkpoints(
+        mut self,
+        log_checkpoints: Vec<LogCheckpoint>,
+        max_snapshots: usize,
+    ) -> Self {
+        self.log_checkpoints = log_checkpoints;
+        self.max_snapshots = max_snapshots;
+        self
     }
 }
 
@@ -495,13 +595,26 @@ impl InternalTransferTracer for ExecutionTraceObserver {
 }
 
 impl OpcodeTracer for ExecutionTraceObserver {
-    fn log(&mut self, address: &Address, topics: &Vec<H256>, data: &[u8]) {
-        self.journal.record_log(*address, topics, data);
+    fn log(&mut self, address: &Address, topics: &Vec<H256>, data: &[u8], state: &State) {
+        let Some((position, space)) = self.journal.record_log(*address, topics, data) else {
+            return;
+        };
+        if topics.first().is_some_and(|topic0| {
+            self.log_checkpoints
+                .iter()
+                .any(|checkpoint| checkpoint.matches(space, *address, *topic0))
+        }) {
+            self.journal.snapshot(position, state, self.max_snapshots);
+        }
     }
 }
 
 impl SetAuthTracer for ExecutionTraceObserver {}
-impl StorageTracer for ExecutionTraceObserver {}
+impl StorageTracer for ExecutionTraceObserver {
+    fn trace_storage_write(&mut self, address: AddressWithSpace, key: &[u8], value: U256) {
+        self.journal.record_storage_write(address, key, value);
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -514,9 +627,9 @@ mod tests {
     fn rolls_back_failed_frames_and_transaction_checkpoints_without_reusing_positions() {
         let mut journal = ExecutionTraceJournal::new(Space::Ethereum);
         journal.enter_frame(create_frame(None, 1, 2), FrameType::Create);
-        journal.record_log(Address::repeat_byte(2), &[H256::repeat_byte(3)], &[4]);
+        let _ = journal.record_log(Address::repeat_byte(2), &[H256::repeat_byte(3)], &[4]);
         journal.enter_frame(create_frame(Some(FrameId(0)), 2, 5), FrameType::Create);
-        journal.record_log(Address::repeat_byte(5), &[H256::repeat_byte(6)], &[7]);
+        let _ = journal.record_log(Address::repeat_byte(5), &[H256::repeat_byte(6)], &[7]);
         journal.exit_frame(FrameType::Create, false);
         journal.record_internal_transfer(
             AddressPocket::GasPayment,

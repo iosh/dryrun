@@ -121,6 +121,7 @@ async fn add_conflux_rpc_module(
     let espace_simulator = EspaceTransactionSimulator::new(
         backend.clone(),
         EspaceSimulationLimits {
+            max_occurrence_checkpoints: config.espace_limits.max_occurrence_checkpoints,
             max_state_reads: config.espace_limits.max_state_reads,
             max_read_calls: config.espace_limits.max_read_calls,
             read_call_gas_limit: config.espace_limits.read_call_gas_limit,

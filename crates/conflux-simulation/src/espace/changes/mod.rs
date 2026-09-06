@@ -7,7 +7,10 @@ use std::collections::HashSet;
 use alloy_primitives::{Address, U256};
 use contract_standards::{Erc20Metadata, MetadataCall, StandardChange, metadata_calls};
 
-use crate::execution::CommittedExecutionTrace;
+use crate::{
+    execution::{CommittedExecutionTrace, LogCheckpoint},
+    primitive::b256_to_cfx,
+};
 
 use self::{
     native::{NativeAnalysis, NativeBalances},
@@ -144,6 +147,18 @@ pub(crate) struct EspaceChangesAnalysis {
 }
 
 impl EspaceChangesAnalysis {
+    pub(crate) fn log_checkpoints(wrapped_native_token: Address) -> Vec<LogCheckpoint> {
+        contract_standards::supported_event_topics()
+            .iter()
+            .map(|topic0| LogCheckpoint {
+                space: cfx_types::Space::Ethereum,
+                address: None,
+                topic0: b256_to_cfx(*topic0),
+            })
+            .chain(wrapped_native::log_checkpoints(wrapped_native_token))
+            .collect()
+    }
+
     pub(crate) fn from_execution(
         execution: &EspaceExecutedTransaction,
         wrapped_native_token: Address,
@@ -155,14 +170,18 @@ impl EspaceChangesAnalysis {
                 "failed execution returned committed receipt logs",
             ));
         }
+        let logs = execution
+            .semantic_log_occurrences()
+            .map_err(|error| EspaceChangesError::resolver("standard tokens", error))?
+            .map(|occurrence| occurrence.log());
 
         let standard_occurrences = if successful {
-            decode_standard_occurrences(execution.committed_logs())
+            decode_standard_occurrences(logs.clone())
         } else {
             Vec::new()
         };
         let wrapped_native_occurrences = if successful {
-            decode_wrapped_native_occurrences(execution.committed_logs(), wrapped_native_token)
+            decode_wrapped_native_occurrences(logs, wrapped_native_token)
         } else {
             Vec::new()
         };

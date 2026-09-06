@@ -24,7 +24,7 @@ pub(crate) struct ConfluxExecutionDetails {
     pub(crate) output: Bytes,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct ConfluxExecutionOutput {
     pub(crate) common: ConfluxExecutionDetails,
     pub(crate) base_gas: u64,

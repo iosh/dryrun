@@ -117,14 +117,8 @@ fn simulate_blocking(
     state_source: Arc<ConfluxStateSource>,
     limits: EspaceSimulationLimits,
 ) -> Result<EspaceSimulation, EspaceSimulationError> {
-    // Keep S0 and the mutable execution state independent while sharing only
-    // the anchored, request-local RPC source/cache.
-    let initial_state = build_conflux_state(Arc::clone(&state_source), runtime_handle.clone())
-        .map_err(|source| {
-            EspaceExecutionError::StateAccess(EspaceStateAccessError::Initialization { source })
-        })?;
-    let mut execution_state = build_conflux_state(Arc::clone(&state_source), runtime_handle)
-        .map_err(|source| {
+    let mut execution_state =
+        build_conflux_state(Arc::clone(&state_source), runtime_handle.clone()).map_err(|source| {
             EspaceExecutionError::StateAccess(EspaceStateAccessError::Initialization { source })
         })?;
     let machine = Arc::new(backend.chain_spec().build_machine());
@@ -133,44 +127,46 @@ fn simulate_blocking(
         transaction: DryRunTransactionInput::Espace(build_executor_transaction(&transaction)?),
     };
 
-    let execution = ConfluxTransactionExecutor::new(&mut execution_state, &machine)
-        .execute(
-            execution_input,
-            ExecutionTraceObserver::new(Space::Ethereum),
-        )
+    let observer = ExecutionTraceObserver::new(Space::Ethereum).with_log_checkpoints(
+        EspaceChangesAnalysis::log_checkpoints(backend.chain_spec().espace_wrapped_native_token()),
+        limits.max_occurrence_checkpoints,
+    );
+    let mut execution = ConfluxTransactionExecutor::new(&mut execution_state, &machine)
+        .execute(execution_input, observer)
         .map_err(classify_executor_error)?;
 
-    let record = match &execution.outcome {
-        ConfluxExecutionOutcome::Success(_) | ConfluxExecutionOutcome::Failed { .. } => {
-            EspaceExecutedTransaction::from_outcome(&execution.outcome)?
-        }
+    if matches!(
+        &execution.outcome,
         ConfluxExecutionOutcome::NotExecutedDrop(_)
-        | ConfluxExecutionOutcome::NotExecutedToReconsiderPacking(_) => {
-            let outcome = convert_executor_outcome(
-                execution.outcome,
-                None,
-                &execution.prepared,
-                &transaction,
-                None,
-                backend.core_space_address_network(),
-            )?;
-            return Ok(EspaceSimulation {
-                context: context.public_context,
-                transaction,
-                execution: outcome,
-                changes: Vec::new(),
-            });
-        }
-    };
+            | ConfluxExecutionOutcome::NotExecutedToReconsiderPacking(_)
+    ) {
+        let outcome = convert_executor_outcome(
+            execution.outcome,
+            None,
+            &execution.prepared,
+            &transaction,
+            None,
+            backend.core_space_address_network(),
+        )?;
+        return Ok(EspaceSimulation {
+            context: context.public_context,
+            transaction,
+            execution: outcome,
+            changes: Vec::new(),
+        });
+    }
 
-    let state = EspaceStateAccess::new(
-        initial_state,
+    let mut state = EspaceStateAccess::new(
+        state_source,
+        runtime_handle,
         execution_state,
         Arc::clone(&machine),
-        execution.prepared.clone(),
+        &execution.prepared,
         transaction.common().from,
         limits,
-    );
+    )
+    .map_err(EspaceExecutionError::from)?;
+    let record = EspaceExecutedTransaction::from_outcome(&mut execution.outcome, &mut state)?;
 
     let analysis = EspaceChangesAnalysis::from_execution(
         &record,

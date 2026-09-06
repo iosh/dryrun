@@ -8,8 +8,8 @@ use contract_standards::Erc20Metadata;
 
 use crate::{
     espace::{EspaceCommittedLog, EspaceExecutionSpace},
-    execution::{CommittedExecutionTrace, FrameId, TraceEvent},
-    primitive::{address_from_cfx, b256_from_cfx},
+    execution::{CommittedExecutionTrace, FrameId, LogCheckpoint, TraceEvent},
+    primitive::{address_from_cfx, address_to_cfx, b256_from_cfx, b256_to_cfx},
 };
 
 use super::{ChangeOccurrence, EspaceChange};
@@ -66,11 +66,19 @@ impl WrappedNativeOccurrence {
     }
 }
 
-pub(super) fn decode_wrapped_native_occurrences(
-    logs: &[EspaceCommittedLog],
+pub(super) fn log_checkpoints(contract_address: Address) -> [LogCheckpoint; 2] {
+    [Deposit::SIGNATURE_HASH, Withdrawal::SIGNATURE_HASH].map(|topic0| LogCheckpoint {
+        space: Space::Ethereum,
+        address: Some(address_to_cfx(contract_address)),
+        topic0: b256_to_cfx(topic0),
+    })
+}
+
+pub(super) fn decode_wrapped_native_occurrences<'a>(
+    logs: impl IntoIterator<Item = &'a EspaceCommittedLog>,
     contract_address: Address,
 ) -> Vec<WrappedNativeOccurrence> {
-    logs.iter()
+    logs.into_iter()
         .filter(|log| {
             log.space() == EspaceExecutionSpace::Espace && log.address() == contract_address
         })

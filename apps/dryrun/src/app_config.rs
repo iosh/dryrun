@@ -81,6 +81,8 @@ pub struct ConfluxConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct EspaceSimulationLimitsConfig {
+    #[serde(default = "default_max_occurrence_checkpoints")]
+    pub max_occurrence_checkpoints: usize,
     #[serde(default = "default_max_state_reads")]
     pub max_state_reads: usize,
     #[serde(default = "default_max_read_calls")]
@@ -94,6 +96,7 @@ pub struct EspaceSimulationLimitsConfig {
 impl Default for EspaceSimulationLimitsConfig {
     fn default() -> Self {
         Self {
+            max_occurrence_checkpoints: default_max_occurrence_checkpoints(),
             max_state_reads: default_max_state_reads(),
             max_read_calls: default_max_read_calls(),
             read_call_gas_limit: default_read_call_gas_limit(),

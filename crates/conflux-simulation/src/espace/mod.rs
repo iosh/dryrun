@@ -31,9 +31,10 @@ pub use error::{
 };
 pub use executed_transaction::{
     EspaceCallKind, EspaceCommittedFrame, EspaceCommittedInternalTransfer, EspaceCommittedLog,
-    EspaceContractAddress, EspaceExecutedTransaction, EspaceExecutionPosition,
-    EspaceExecutionSpace, EspaceExecutionStatus, EspaceFrameAction, EspaceFrameId,
-    EspaceStorageChange, EspaceTransferPocket,
+    EspaceCommittedStorageWrite, EspaceContractAddress, EspaceExecutedTransaction,
+    EspaceExecutionPosition, EspaceExecutionSpace, EspaceExecutionStatus, EspaceFrameAction,
+    EspaceFrameId, EspaceObservationError, EspaceSemanticLogOccurrence, EspaceStorageChange,
+    EspaceTransferPocket,
 };
 pub use execution::{
     EspaceExecutionFailure, EspaceExecutionOutcome, EspaceLog, EspaceLogAddress,
@@ -45,8 +46,8 @@ pub use rejection::EspaceTransactionRejection;
 pub use result::EspaceSimulation;
 pub use simulator::EspaceTransactionSimulator;
 pub use state_access::{
-    EspaceAccountState, EspaceReadCallOutcome, EspaceSimulationLimits, EspaceStateAccess,
-    EspaceStateReadError, EspaceStateReader,
+    EspaceAccountState, EspaceOccurrenceHandle, EspaceOccurrenceStateReaders, EspaceReadCallOutcome,
+    EspaceSimulationLimits, EspaceStateAccess, EspaceStateReadError, EspaceStateReader,
 };
 pub use transaction::{
     AccessListItem, Authorization, EspaceCompleteTransaction, EspacePartialTransaction,

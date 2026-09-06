@@ -262,6 +262,7 @@ pub(crate) fn collect_cfx_operations(
                 }
                 claim_trace_positions(&mut claimed_positions, claimed_transfer_positions)?;
             }
+            TraceEvent::StorageWrite { .. } => {}
             TraceEvent::Log { frame_id, .. } => {
                 if trace.frame(*frame_id).space == Space::Ethereum
                     && !collector.includes_espace_frame(trace, *frame_id)

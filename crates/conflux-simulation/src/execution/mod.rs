@@ -27,7 +27,8 @@ pub(crate) use env::{
     next_execution_epoch_height,
 };
 pub(crate) use observer::{
-    CommittedExecutionTrace, ExecutionTraceObserver, FrameAction, FrameId, TraceEvent,
+    CommittedExecutionTrace, ExecutionTraceObserver, FrameAction, FrameId, LogCheckpoint,
+    TraceEvent,
 };
 pub(crate) use outcome::{
     ConfluxExecutionOutcome, ConfluxExecutionOutput, TransactionExecutionError,
