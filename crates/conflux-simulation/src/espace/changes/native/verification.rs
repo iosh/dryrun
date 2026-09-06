@@ -9,7 +9,7 @@ use alloy_primitives::{Address, U256};
 
 use super::super::ChangeOccurrence;
 
-pub(crate) type NativeBalances = BTreeMap<Address, U256>;
+pub(super) type NativeBalances = BTreeMap<Address, U256>;
 
 pub(super) fn read_native_balances(
     state: &EspaceStateReader,
@@ -148,24 +148,27 @@ mod tests {
     fn rejects_native_balance_mismatch() {
         let sender = Address::repeat_byte(1);
         let recipient = Address::repeat_byte(2);
-        let operations = NativeOperations::from_operations(vec![
-            NativeOperation::AccountTransfer {
-                position: 1,
-                from: sender,
-                to: recipient,
-                amount: U256::from(10),
-            },
-            NativeOperation::GasPrecharge {
-                position: 2,
-                payer: sender,
-                amount: U256::from(30),
-            },
-            NativeOperation::GasRefund {
-                position: 3,
-                recipient: sender,
-                amount: U256::from(7),
-            },
-        ]);
+        let operations = NativeOperations::from_operations(
+            vec![
+                NativeOperation::AccountTransfer {
+                    position: 1,
+                    from: sender,
+                    to: recipient,
+                    amount: U256::from(10),
+                },
+                NativeOperation::GasPrecharge {
+                    position: 2,
+                    payer: sender,
+                    amount: U256::from(30),
+                },
+                NativeOperation::GasRefund {
+                    position: 3,
+                    recipient: sender,
+                    amount: U256::from(7),
+                },
+            ],
+            &[],
+        );
         let before = BTreeMap::from([(sender, U256::from(100)), (recipient, U256::ZERO)]);
         let after = BTreeMap::from([(sender, U256::from(67)), (recipient, U256::from(10))]);
         let currency = EspaceNativeCurrency {

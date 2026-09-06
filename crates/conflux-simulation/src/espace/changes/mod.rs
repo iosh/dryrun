@@ -13,7 +13,6 @@ use crate::{
 };
 
 use self::{
-    native::{NativeAnalysis, NativeBalances},
     standards::{
         DecodedStandardOccurrence, decode_standard_occurrences,
         decode_standard_occurrences_in_scope, load_metadata,
@@ -23,7 +22,7 @@ use self::{
         decode_wrapped_native_occurrences_in_scope,
     },
 };
-use super::{EspaceChangesError, EspaceExecutedTransaction};
+use super::{EspaceChangesError, EspaceExecutedTransaction, EspaceStateAccess};
 
 pub(crate) use standards::{
     IsolatedReadCallError, MetadataReadError, ReadCallOutcome, execute_isolated_read_call,
@@ -138,114 +137,72 @@ impl NestedEspaceEffects {
     }
 }
 
-pub(crate) struct EspaceChangesAnalysis {
-    successful: bool,
-    currency: EspaceNativeCurrency,
-    native: NativeAnalysis,
-    standard_occurrences: Vec<DecodedStandardOccurrence>,
-    wrapped_native_occurrences: Vec<WrappedNativeOccurrence>,
+pub(crate) fn log_checkpoints(wrapped_native_token: Address) -> Vec<LogCheckpoint> {
+    contract_standards::supported_event_topics()
+        .iter()
+        .map(|topic0| LogCheckpoint {
+            space: cfx_types::Space::Ethereum,
+            address: None,
+            topic0: b256_to_cfx(*topic0),
+        })
+        .chain(wrapped_native::log_checkpoints(wrapped_native_token))
+        .collect()
 }
 
-impl EspaceChangesAnalysis {
-    pub(crate) fn log_checkpoints(wrapped_native_token: Address) -> Vec<LogCheckpoint> {
-        contract_standards::supported_event_topics()
-            .iter()
-            .map(|topic0| LogCheckpoint {
-                space: cfx_types::Space::Ethereum,
-                address: None,
-                topic0: b256_to_cfx(*topic0),
-            })
-            .chain(wrapped_native::log_checkpoints(wrapped_native_token))
-            .collect()
+pub(crate) fn from_execution(
+    execution: &EspaceExecutedTransaction,
+    state: &EspaceStateAccess,
+    wrapped_native_token: Address,
+    currency: &EspaceNativeCurrency,
+) -> Result<Vec<EspaceChange>, EspaceChangesError> {
+    let successful = execution.is_success();
+    if !successful && !execution.committed_logs().is_empty() {
+        return Err(EspaceChangesError::inconsistent_execution(
+            "failed execution returned committed receipt logs",
+        ));
+    }
+    let logs = execution
+        .semantic_log_occurrences()
+        .map_err(|error| EspaceChangesError::resolver("standard tokens", error))?
+        .map(|occurrence| occurrence.log());
+
+    let standard_occurrences = if successful {
+        decode_standard_occurrences(logs.clone())
+    } else {
+        Vec::new()
+    };
+    let wrapped_native_occurrences = if successful {
+        decode_wrapped_native_occurrences(logs, wrapped_native_token)
+    } else {
+        Vec::new()
+    };
+
+    let mut changes = native::from_execution(execution, state, currency)?;
+
+    if !successful {
+        return Ok(Vec::new());
     }
 
-    pub(crate) fn from_execution(
-        execution: &EspaceExecutedTransaction,
-        wrapped_native_token: Address,
-        currency: &EspaceNativeCurrency,
-    ) -> Result<Self, EspaceChangesError> {
-        let successful = execution.is_success();
-        if !successful && !execution.committed_logs().is_empty() {
-            return Err(EspaceChangesError::inconsistent_execution(
-                "failed execution returned committed receipt logs",
-            ));
-        }
-        let logs = execution
-            .semantic_log_occurrences()
-            .map_err(|error| EspaceChangesError::resolver("standard tokens", error))?
-            .map(|occurrence| occurrence.log());
+    let calls = collect_metadata_calls(&standard_occurrences, &wrapped_native_occurrences);
+    let metadata = load_metadata(state.finalized(), calls)?;
 
-        let standard_occurrences = if successful {
-            decode_standard_occurrences(logs.clone())
-        } else {
-            Vec::new()
-        };
-        let wrapped_native_occurrences = if successful {
-            decode_wrapped_native_occurrences(logs, wrapped_native_token)
-        } else {
-            Vec::new()
-        };
-
-        Ok(Self {
-            successful,
-            currency: currency.clone(),
-            native: NativeAnalysis::from_execution(execution)
-                .map_err(|error| EspaceChangesError::resolver("native currency", error))?,
-            standard_occurrences,
-            wrapped_native_occurrences,
-        })
+    for occurrence in wrapped_native_occurrences {
+        let change_metadata = metadata.erc20_metadata(&occurrence.contract_address())?;
+        changes.push(occurrence.into_change(change_metadata));
+    }
+    for occurrence in standard_occurrences {
+        let change = occurrence.decoded_log.into_change(&metadata)?;
+        changes.push(ChangeOccurrence::new(
+            occurrence.position,
+            EspaceChange::Standard(change),
+        ));
     }
 
-    pub(crate) fn read_native_balances(
-        &self,
-        state: &crate::espace::EspaceStateReader,
-        operation: &'static str,
-    ) -> Result<NativeBalances, EspaceChangesError> {
-        self.native.read_balances(state, operation)
-    }
-
-    pub(crate) fn finish(
-        self,
-        state: &crate::espace::EspaceStateReader,
-        before_balances: &NativeBalances,
-        after_balances: &NativeBalances,
-    ) -> Result<Vec<EspaceChange>, EspaceChangesError> {
-        let Self {
-            successful,
-            currency,
-            native,
-            standard_occurrences,
-            wrapped_native_occurrences,
-        } = self;
-        let mut changes = native
-            .verify(before_balances, after_balances, &currency)
-            .map_err(|error| EspaceChangesError::resolver("native currency", error))?;
-
-        if !successful {
-            return Ok(Vec::new());
-        }
-
-        let calls = collect_metadata_calls(&standard_occurrences, &wrapped_native_occurrences);
-        let metadata = load_metadata(state, calls)?;
-
-        for occurrence in wrapped_native_occurrences {
-            let change_metadata = metadata.erc20_metadata(&occurrence.contract_address())?;
-            changes.push(occurrence.into_change(change_metadata));
-        }
-        for occurrence in standard_occurrences {
-            let change = occurrence.decoded_log.into_change(&metadata)?;
-            changes.push(ChangeOccurrence::new(
-                occurrence.position,
-                EspaceChange::Standard(change),
-            ));
-        }
-
-        changes.sort_by_key(|occurrence| occurrence.position);
-        Ok(changes
-            .into_iter()
-            .map(|occurrence| occurrence.change)
-            .collect())
-    }
+    changes.sort_by_key(|occurrence| occurrence.position);
+    Ok(changes
+        .into_iter()
+        .map(|occurrence| occurrence.change)
+        .collect())
 }
 
 fn collect_metadata_calls(

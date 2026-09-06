@@ -13,7 +13,7 @@ use cfx_executor::{
     machine::Machine,
     state::{SavedState, State},
 };
-use cfx_types::AddressSpaceUtil;
+use cfx_types::{AddressSpaceUtil, Space};
 use cfx_vm_types::{Env, Spec};
 use thiserror::Error;
 use tokio::runtime::Handle;
@@ -93,6 +93,7 @@ pub struct EspaceStateAccess {
     initial: EspaceStateReader,
     occurrences: Vec<EspaceStateReader>,
     finalized: EspaceStateReader,
+    written_accounts: Vec<Address>,
 }
 
 impl fmt::Debug for EspaceStateAccess {
@@ -122,6 +123,7 @@ impl EspaceStateAccess {
             caller,
             budget: EspaceStateReadBudget::new(limits),
         });
+        let written_accounts = collect_written_accounts(&finalized_state);
 
         Ok(Self {
             identity: Arc::new(EspaceExecutionIdentity),
@@ -130,6 +132,7 @@ impl EspaceStateAccess {
             initial: EspaceStateReader::new(initial_state, Arc::clone(&context)),
             occurrences: Vec::new(),
             finalized: EspaceStateReader::new(finalized_state, context),
+            written_accounts,
         })
     }
 
@@ -137,9 +140,8 @@ impl EspaceStateAccess {
         &mut self,
         snapshot: SavedState,
     ) -> Result<EspaceOccurrenceHandle, EspaceStateAccessError> {
-        let mut state =
-            build_conflux_state(Arc::clone(&self.source), self.runtime_handle.clone())
-                .map_err(|source| EspaceStateAccessError::Initialization { source })?;
+        let mut state = build_conflux_state(Arc::clone(&self.source), self.runtime_handle.clone())
+            .map_err(|source| EspaceStateAccessError::Initialization { source })?;
         state.restore(snapshot);
         let checkpoint_index = self.occurrences.len();
         self.occurrences.push(EspaceStateReader::new(
@@ -158,6 +160,10 @@ impl EspaceStateAccess {
 
     pub const fn finalized(&self) -> &EspaceStateReader {
         &self.finalized
+    }
+
+    pub(crate) fn written_accounts(&self) -> &[Address] {
+        &self.written_accounts
     }
 
     pub fn at(
@@ -526,6 +532,26 @@ impl From<EspaceStateReadError> for EspaceChangesError {
             details: error.to_string(),
         }
     }
+}
+
+fn collect_written_accounts(state: &State) -> Vec<Address> {
+    let cache = state.cache.read();
+    // The active cache overrides the committed cache, including restored entries
+    // after a frame rollback. Freeze the set before any analysis read-call.
+    let mut accounts: Vec<_> = cache
+        .iter()
+        .map(|(address, entry)| (address, &entry.entry))
+        .chain(
+            state
+                .committed_cache
+                .iter()
+                .filter(|(address, _)| !cache.contains_key(address)),
+        )
+        .filter(|(address, entry)| address.space == Space::Ethereum && entry.is_dirty())
+        .map(|(address, _)| address_to_alloy(*address))
+        .collect();
+    accounts.sort_unstable();
+    accounts
 }
 
 fn address_to_alloy(address: cfx_types::AddressWithSpace) -> Address {

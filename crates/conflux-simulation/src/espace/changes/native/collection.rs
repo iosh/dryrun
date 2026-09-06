@@ -2,7 +2,8 @@ use alloy_primitives::{Address, U256};
 
 use super::{NativeOperation, NativeOperations, NativeResolverDiagnostic};
 use crate::espace::{
-    EspaceExecutedTransaction, EspaceExecutionSpace, EspaceFrameAction, EspaceTransferPocket,
+    EspaceCallKind, EspaceExecutedTransaction, EspaceExecutionSpace, EspaceFrameAction,
+    EspaceTransferPocket,
 };
 
 #[derive(Debug, Default)]
@@ -12,6 +13,7 @@ struct NativeOperationCollector {
 
 pub(super) fn collect_native_operations(
     execution: &EspaceExecutedTransaction,
+    written_accounts: &[Address],
 ) -> Result<NativeOperations, NativeResolverDiagnostic> {
     let mut collector = NativeOperationCollector::default();
 
@@ -21,6 +23,7 @@ pub(super) fn collect_native_operations(
         }
         match frame.action() {
             EspaceFrameAction::Call {
+                kind: EspaceCallKind::Call,
                 caller,
                 target,
                 value,
@@ -39,6 +42,7 @@ pub(super) fn collect_native_operations(
                 *actual_address,
                 *value,
             ),
+            EspaceFrameAction::Call { .. } => {}
         }
     }
     for transfer in execution.internal_transfers() {
@@ -50,7 +54,10 @@ pub(super) fn collect_native_operations(
         )?;
     }
 
-    Ok(NativeOperations::from_operations(collector.operations))
+    Ok(NativeOperations::from_operations(
+        collector.operations,
+        written_accounts,
+    ))
 }
 
 impl NativeOperationCollector {

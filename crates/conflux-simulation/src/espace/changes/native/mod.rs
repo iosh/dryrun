@@ -7,9 +7,7 @@ use alloy_primitives::{Address, U256};
 use thiserror::Error;
 
 use super::{ChangeOccurrence, EspaceNativeCurrency};
-use crate::espace::{EspaceChangesError, EspaceExecutedTransaction};
-
-pub(super) use verification::NativeBalances;
+use crate::espace::{EspaceChangesError, EspaceExecutedTransaction, EspaceStateAccess};
 
 #[derive(Debug, Error)]
 #[error("{details}")]
@@ -25,40 +23,26 @@ impl NativeResolverDiagnostic {
     }
 }
 
-pub(super) struct NativeAnalysis {
-    operations: NativeOperations,
-}
+pub(super) fn from_execution(
+    execution: &EspaceExecutedTransaction,
+    state: &EspaceStateAccess,
+    currency: &EspaceNativeCurrency,
+) -> Result<Vec<ChangeOccurrence>, EspaceChangesError> {
+    let operations = collection::collect_native_operations(execution, state.written_accounts())
+        .map_err(|error| EspaceChangesError::resolver("native currency", error))?;
+    let before_balances = verification::read_native_balances(
+        state.initial(),
+        "read pre-execution native balances",
+        &operations,
+    )?;
+    let after_balances = verification::read_native_balances(
+        state.finalized(),
+        "read post-execution native balances",
+        &operations,
+    )?;
 
-impl NativeAnalysis {
-    pub(super) fn from_execution(
-        execution: &EspaceExecutedTransaction,
-    ) -> Result<Self, NativeResolverDiagnostic> {
-        Ok(Self {
-            operations: collection::collect_native_operations(execution)?,
-        })
-    }
-
-    pub(super) fn read_balances(
-        &self,
-        state: &crate::espace::EspaceStateReader,
-        operation: &'static str,
-    ) -> Result<NativeBalances, EspaceChangesError> {
-        verification::read_native_balances(state, operation, &self.operations)
-    }
-
-    pub(super) fn verify(
-        &self,
-        before_balances: &NativeBalances,
-        after_balances: &NativeBalances,
-        currency: &EspaceNativeCurrency,
-    ) -> Result<Vec<ChangeOccurrence>, NativeResolverDiagnostic> {
-        verification::verify_native_changes(
-            &self.operations,
-            before_balances,
-            after_balances,
-            currency,
-        )
-    }
+    verification::verify_native_changes(&operations, &before_balances, &after_balances, currency)
+        .map_err(|error| EspaceChangesError::resolver("native currency", error))
 }
 
 #[derive(Debug)]
@@ -68,10 +52,10 @@ struct NativeOperations {
 }
 
 impl NativeOperations {
-    fn from_operations(mut operations: Vec<NativeOperation>) -> Self {
+    fn from_operations(mut operations: Vec<NativeOperation>, written_accounts: &[Address]) -> Self {
         operations.sort_by_key(NativeOperation::position);
 
-        let mut balance_accounts = BTreeSet::new();
+        let mut balance_accounts: BTreeSet<_> = written_accounts.iter().copied().collect();
         for operation in &operations {
             match operation {
                 NativeOperation::AccountTransfer { from, to, .. } => {

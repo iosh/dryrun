@@ -4,10 +4,10 @@ use cfx_types::Space;
 use tokio::runtime::Handle;
 
 use super::{
-    EspaceChangesAnalysis, EspaceExecutedTransaction, EspaceExecutionError, EspaceExecutionOutcome,
+    EspaceExecutedTransaction, EspaceExecutionError, EspaceExecutionOutcome,
     EspaceResultIntegrationError, EspaceSimulation, EspaceSimulationError, EspaceSimulationLimits,
     EspaceSimulationRequest, EspaceStateAccess, EspaceStateAccessError, build_executor_transaction,
-    classify_transaction_rejection, complete_transaction, convert_executor_outcome,
+    changes, classify_transaction_rejection, complete_transaction, convert_executor_outcome,
     resolve_espace_context,
 };
 use crate::{
@@ -118,9 +118,11 @@ fn simulate_blocking(
     limits: EspaceSimulationLimits,
 ) -> Result<EspaceSimulation, EspaceSimulationError> {
     let mut execution_state =
-        build_conflux_state(Arc::clone(&state_source), runtime_handle.clone()).map_err(|source| {
-            EspaceExecutionError::StateAccess(EspaceStateAccessError::Initialization { source })
-        })?;
+        build_conflux_state(Arc::clone(&state_source), runtime_handle.clone()).map_err(
+            |source| {
+                EspaceExecutionError::StateAccess(EspaceStateAccessError::Initialization { source })
+            },
+        )?;
     let machine = Arc::new(backend.chain_spec().build_machine());
     let execution_input = TransactionExecutionInput {
         block_context: context.execution_block_context,
@@ -128,7 +130,7 @@ fn simulate_blocking(
     };
 
     let observer = ExecutionTraceObserver::new(Space::Ethereum).with_log_checkpoints(
-        EspaceChangesAnalysis::log_checkpoints(backend.chain_spec().espace_wrapped_native_token()),
+        changes::log_checkpoints(backend.chain_spec().espace_wrapped_native_token()),
         limits.max_occurrence_checkpoints,
     );
     let mut execution = ConfluxTransactionExecutor::new(&mut execution_state, &machine)
@@ -167,17 +169,12 @@ fn simulate_blocking(
     .map_err(EspaceExecutionError::from)?;
     let record = EspaceExecutedTransaction::from_outcome(&mut execution.outcome, &mut state)?;
 
-    let analysis = EspaceChangesAnalysis::from_execution(
+    let changes = changes::from_execution(
         &record,
+        &state,
         backend.chain_spec().espace_wrapped_native_token(),
         backend.chain_spec().espace_native_currency(),
     )?;
-    let before_balances =
-        analysis.read_native_balances(state.initial(), "read pre-execution native balances")?;
-    let after_balances =
-        analysis.read_native_balances(state.finalized(), "read post-execution native balances")?;
-
-    let changes = analysis.finish(state.finalized(), &before_balances, &after_balances)?;
 
     let outcome = convert_executor_outcome(
         execution.outcome,

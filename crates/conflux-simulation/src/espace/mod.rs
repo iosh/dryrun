@@ -16,8 +16,7 @@ mod transaction_adapter;
 
 pub use changes::{EspaceChange, EspaceNativeCurrency};
 pub(crate) use changes::{
-    EspaceChangesAnalysis, MetadataReadError, NestedEspaceEffects, ReadCallOutcome,
-    execute_read_call,
+    MetadataReadError, NestedEspaceEffects, ReadCallOutcome, execute_read_call,
 };
 pub(crate) use completion::complete_transaction;
 pub use context::{EspaceBlockContext, EspaceBlockSelector, EspaceContextError};
@@ -46,8 +45,9 @@ pub use rejection::EspaceTransactionRejection;
 pub use result::EspaceSimulation;
 pub use simulator::EspaceTransactionSimulator;
 pub use state_access::{
-    EspaceAccountState, EspaceOccurrenceHandle, EspaceOccurrenceStateReaders, EspaceReadCallOutcome,
-    EspaceSimulationLimits, EspaceStateAccess, EspaceStateReadError, EspaceStateReader,
+    EspaceAccountState, EspaceOccurrenceHandle, EspaceOccurrenceStateReaders,
+    EspaceReadCallOutcome, EspaceSimulationLimits, EspaceStateAccess, EspaceStateReadError,
+    EspaceStateReader,
 };
 pub use transaction::{
     AccessListItem, Authorization, EspaceCompleteTransaction, EspacePartialTransaction,
