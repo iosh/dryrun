@@ -1,7 +1,6 @@
 use alloy_primitives::U256;
 use cfx_statedb::Error as StateDbError;
 use cfx_storage::Error as StorageError;
-use contract_standards::MissingMetadataOutcome;
 use thiserror::Error;
 use tokio::task::JoinError;
 
@@ -117,16 +116,11 @@ pub enum EspaceExecutionError {
 pub enum EspaceChangesError {
     #[error("eSpace execution is inconsistent with change analysis: {details}")]
     InconsistentExecution { details: String },
-    #[error("{resolver} resolver could not produce complete eSpace changes: {source}")]
-    Resolver {
-        resolver: &'static str,
+    #[error("{domain} changes could not be derived: {source}")]
+    Derivation {
+        domain: &'static str,
         #[source]
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-    #[error("a decoded standard change is missing a required metadata outcome")]
-    MissingMetadataOutcome {
-        #[from]
-        source: MissingMetadataOutcome,
     },
     #[error("eSpace state access failed: {details}")]
     StateAccess { details: String },
@@ -139,12 +133,12 @@ impl EspaceChangesError {
         }
     }
 
-    pub(crate) fn resolver(
-        resolver: &'static str,
+    pub(crate) fn derivation(
+        domain: &'static str,
         source: impl std::error::Error + Send + Sync + 'static,
     ) -> Self {
-        Self::Resolver {
-            resolver,
+        Self::Derivation {
+            domain,
             source: Box::new(source),
         }
     }

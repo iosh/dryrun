@@ -48,6 +48,7 @@ fn standard_log(
     data: &[u8],
 ) -> DecodedStandardLog<Address> {
     decode_standard_log(contract, &topics(signature, indexed), data, |value| value)
+        .expect("standard log should be well formed")
         .expect("standard log should decode")
 }
 
@@ -320,7 +321,10 @@ fn ignores_unknown_and_malformed_logs() {
 
     for (name, topics, data) in cases {
         assert!(
-            decode_standard_log(contract, &topics, &data, |value| value).is_none(),
+            decode_standard_log(contract, &topics, &data, |value| value)
+                .ok()
+                .flatten()
+                .is_none(),
             "{name}"
         );
     }

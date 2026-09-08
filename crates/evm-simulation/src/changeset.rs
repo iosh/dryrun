@@ -9,7 +9,7 @@ use contract_standards::{Erc20Metadata, Erc721CollectionMetadata, Erc1155Transfe
 use thiserror::Error;
 
 use crate::{
-    EvmObservationRequirements, EvmStandardChangeResolver,
+    EvmObservationRequirements, EvmTokenChangeRules,
     execution::{
         EvmCallKind, EvmExecutionPosition, EvmFrameAction, EvmObservationError,
         EvmTransactionExecution,
@@ -43,7 +43,7 @@ impl EvmChangeSet {
         self.items.is_empty()
     }
 
-    fn merge(self, other: Self) -> Result<Self, EvmChangeResolutionError> {
+    fn merge(self, other: Self) -> Result<Self, EvmChangeDerivationError> {
         let mut builder = EvmChangeSetBuilder::new();
         for entry in self.entries.into_iter().chain(other.entries) {
             builder.insert_entry(entry)?;
@@ -359,7 +359,7 @@ enum StandardChangeKey {
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum EvmChangeResolutionError {
+pub enum EvmChangeDerivationError {
     #[error(transparent)]
     Observation(#[from] EvmObservationError),
 
@@ -369,18 +369,21 @@ pub enum EvmChangeResolutionError {
     #[error("conflicting changes: {details}")]
     Conflict { details: String },
 
-    #[error("{resolver} resolver could not produce complete changes: {source}")]
-    Resolver {
-        resolver: &'static str,
+    #[error("{rules} change rules could not derive complete changes: {source}")]
+    RuleFailure {
+        rules: &'static str,
         #[source]
         source: Box<dyn StdError + Send + Sync + 'static>,
     },
 }
 
-impl EvmChangeResolutionError {
-    pub fn resolver(resolver: &'static str, source: impl StdError + Send + Sync + 'static) -> Self {
-        Self::Resolver {
-            resolver,
+impl EvmChangeDerivationError {
+    pub fn rule_failure(
+        rules: &'static str,
+        source: impl StdError + Send + Sync + 'static,
+    ) -> Self {
+        Self::RuleFailure {
+            rules,
             source: Box::new(source),
         }
     }
@@ -406,7 +409,7 @@ impl EvmChangeSetBuilder {
         &mut self,
         position: EvmChangePosition,
         item: EvmStateChange,
-    ) -> Result<(), EvmChangeResolutionError> {
+    ) -> Result<(), EvmChangeDerivationError> {
         self.insert_entry(EvmChangeEntry {
             position,
             change: item,
@@ -414,7 +417,7 @@ impl EvmChangeSetBuilder {
         })
     }
 
-    fn insert_entry(&mut self, entry: EvmChangeEntry) -> Result<(), EvmChangeResolutionError> {
+    fn insert_entry(&mut self, entry: EvmChangeEntry) -> Result<(), EvmChangeDerivationError> {
         let key = entry.change.key();
         let position = entry.position;
         let map_key = (position, key.clone());
@@ -431,7 +434,7 @@ impl EvmChangeSetBuilder {
                     position.index()
                 ),
             };
-            return Err(EvmChangeResolutionError::conflict(details));
+            return Err(EvmChangeDerivationError::conflict(details));
         }
         if matches!(position, EvmChangePosition::Execution(_))
             && self
@@ -439,7 +442,7 @@ impl EvmChangeSetBuilder {
                 .keys()
                 .any(|(existing_position, _)| *existing_position == position)
         {
-            return Err(EvmChangeResolutionError::conflict(format!(
+            return Err(EvmChangeDerivationError::conflict(format!(
                 "multiple semantic changes at execution position {}",
                 position.index()
             )));
@@ -455,7 +458,7 @@ impl EvmChangeSetBuilder {
         to: Address,
         raw_amount: U256,
         currency: EvmNativeCurrency,
-    ) -> Result<(), EvmChangeResolutionError> {
+    ) -> Result<(), EvmChangeDerivationError> {
         if raw_amount.is_zero() || from == to {
             return Ok(());
         }
@@ -476,7 +479,7 @@ impl EvmChangeSetBuilder {
         contract_address: Address,
         raw_amount: U256,
         currency: EvmNativeCurrency,
-    ) -> Result<(), EvmChangeResolutionError> {
+    ) -> Result<(), EvmChangeDerivationError> {
         if raw_amount.is_zero() {
             return Ok(());
         }
@@ -495,7 +498,7 @@ impl EvmChangeSetBuilder {
         account: Address,
         before: EvmAccountDelegation,
         after: EvmAccountDelegation,
-    ) -> Result<(), EvmChangeResolutionError> {
+    ) -> Result<(), EvmChangeDerivationError> {
         if before != after {
             self.insert_at(
                 EvmChangePosition::PreExecution(0),
@@ -513,7 +516,7 @@ impl EvmChangeSetBuilder {
         &mut self,
         position: EvmExecutionPosition,
         change: EvmStandardChange,
-    ) -> Result<(), EvmChangeResolutionError> {
+    ) -> Result<(), EvmChangeDerivationError> {
         self.insert_at(
             EvmChangePosition::Execution(position),
             EvmStateChange::Standard(change),
@@ -524,7 +527,7 @@ impl EvmChangeSetBuilder {
         &mut self,
         position: EvmExecutionPosition,
         change: EvmWrappedNativeDepositChange,
-    ) -> Result<(), EvmChangeResolutionError> {
+    ) -> Result<(), EvmChangeDerivationError> {
         self.insert_at(
             EvmChangePosition::Execution(position),
             EvmStateChange::WrappedNativeDeposit(change),
@@ -535,7 +538,7 @@ impl EvmChangeSetBuilder {
         &mut self,
         position: EvmExecutionPosition,
         change: EvmWrappedNativeWithdrawalChange,
-    ) -> Result<(), EvmChangeResolutionError> {
+    ) -> Result<(), EvmChangeDerivationError> {
         self.insert_at(
             EvmChangePosition::Execution(position),
             EvmStateChange::WrappedNativeWithdrawal(change),
@@ -957,32 +960,32 @@ impl EvmChangePosition {
     }
 }
 
-pub trait EvmChangeResolver: Send + Sync + 'static {
-    fn observation_requirements(&self) -> EvmObservationRequirements;
+pub trait EvmChangeRules: Send + Sync + 'static {
+    fn required_observations(&self) -> EvmObservationRequirements;
 
-    fn resolve(
+    fn derive_changes(
         &self,
         execution: &EvmTransactionExecution,
         state: &EvmStateAccess,
-    ) -> Result<EvmChangeSet, EvmChangeResolutionError>;
+    ) -> Result<EvmChangeSet, EvmChangeDerivationError>;
 
-    fn combine<R>(self, other: R) -> CombinedEvmChangeResolver<Self, R>
+    fn combine<R>(self, other: R) -> CombinedEvmChangeRules<Self, R>
     where
         Self: Sized,
-        R: EvmChangeResolver,
+        R: EvmChangeRules,
     {
-        CombinedEvmChangeResolver::new(self, other)
+        CombinedEvmChangeRules::new(self, other)
     }
 }
 
 #[derive(Debug)]
 pub enum EvmChanges {
     Complete(EvmChangeSet),
-    Unavailable(EvmChangeResolutionError),
+    Unavailable(EvmChangeDerivationError),
 }
 
-impl From<Result<EvmChangeSet, EvmChangeResolutionError>> for EvmChanges {
-    fn from(result: Result<EvmChangeSet, EvmChangeResolutionError>) -> Self {
+impl From<Result<EvmChangeSet, EvmChangeDerivationError>> for EvmChanges {
+    fn from(result: Result<EvmChangeSet, EvmChangeDerivationError>) -> Self {
         match result {
             Ok(changes) => Self::Complete(changes),
             Err(error) => Self::Unavailable(error),
@@ -1007,11 +1010,11 @@ enum EvmNativeOperation {
 
 #[derive(Debug, Error)]
 #[error("{details}")]
-struct NativeResolverDiagnostic {
+struct NativeAssetChangeError {
     details: String,
 }
 
-impl NativeResolverDiagnostic {
+impl NativeAssetChangeError {
     fn new(details: impl Into<String>) -> Self {
         Self {
             details: details.into(),
@@ -1019,31 +1022,31 @@ impl NativeResolverDiagnostic {
     }
 }
 
-fn native_resolution_error(details: impl Into<String>) -> EvmChangeResolutionError {
-    EvmChangeResolutionError::resolver("native currency", NativeResolverDiagnostic::new(details))
+fn native_asset_error(details: impl Into<String>) -> EvmChangeDerivationError {
+    EvmChangeDerivationError::rule_failure("native asset", NativeAssetChangeError::new(details))
 }
 
 #[derive(Debug, Clone)]
-pub struct EvmNativeChangeResolver {
+pub struct EvmNativeAssetChangeRules {
     currency: EvmNativeCurrency,
 }
 
-impl EvmNativeChangeResolver {
+impl EvmNativeAssetChangeRules {
     pub fn new(currency: EvmNativeCurrency) -> Self {
         Self { currency }
     }
 }
 
-impl EvmChangeResolver for EvmNativeChangeResolver {
-    fn observation_requirements(&self) -> EvmObservationRequirements {
+impl EvmChangeRules for EvmNativeAssetChangeRules {
+    fn required_observations(&self) -> EvmObservationRequirements {
         EvmObservationRequirements::new()
     }
 
-    fn resolve(
+    fn derive_changes(
         &self,
         execution: &EvmTransactionExecution,
         state: &EvmStateAccess,
-    ) -> Result<EvmChangeSet, EvmChangeResolutionError> {
+    ) -> Result<EvmChangeSet, EvmChangeDerivationError> {
         let operations = collect_native_operations(execution);
         replay_native_balances(execution, state, &operations)?;
 
@@ -1146,7 +1149,7 @@ fn replay_native_balances(
     execution: &EvmTransactionExecution,
     state: &EvmStateAccess,
     operations: &[EvmNativeOperation],
-) -> Result<(), EvmChangeResolutionError> {
+) -> Result<(), EvmChangeDerivationError> {
     let mut addresses = BTreeSet::new();
     addresses.insert(execution.fee_payer());
     addresses.insert(execution.block_beneficiary());
@@ -1199,7 +1202,7 @@ fn replay_native_balances(
     for (&address, &replayed_balance) in &replayed {
         let actual = state.finalized().read_account(address)?.balance();
         if replayed_balance != actual {
-            return Err(native_resolution_error(format!(
+            return Err(native_asset_error(format!(
                 "finalized native balance differs from replay for {address}: replayed {replayed_balance}, state {actual}"
             )));
         }
@@ -1212,13 +1215,13 @@ fn decrease_native_balance(
     balances: &mut BTreeMap<Address, U256>,
     address: Address,
     amount: U256,
-) -> Result<(), EvmChangeResolutionError> {
+) -> Result<(), EvmChangeDerivationError> {
     let balance = balances.get_mut(&address).unwrap_or_else(|| {
         unreachable!("native replay address set must contain every operation account")
     });
     let current = *balance;
     *balance = current.checked_sub(amount).ok_or_else(|| {
-        native_resolution_error(format!(
+        native_asset_error(format!(
             "native balance replay violated the execution invariant for {address}"
         ))
     })?;
@@ -1229,13 +1232,13 @@ fn increase_native_balance(
     balances: &mut BTreeMap<Address, U256>,
     address: Address,
     amount: U256,
-) -> Result<(), EvmChangeResolutionError> {
+) -> Result<(), EvmChangeDerivationError> {
     let balance = balances.get_mut(&address).unwrap_or_else(|| {
         unreachable!("native replay address set must contain every operation account")
     });
     let current = *balance;
     *balance = current.checked_add(amount).ok_or_else(|| {
-        native_resolution_error(format!(
+        native_asset_error(format!(
             "native balance replay violated the execution invariant for {address}"
         ))
     })?;
@@ -1243,18 +1246,18 @@ fn increase_native_balance(
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct EvmAccountDelegationResolver;
+pub struct EvmAccountDelegationChangeRules;
 
-impl EvmChangeResolver for EvmAccountDelegationResolver {
-    fn observation_requirements(&self) -> EvmObservationRequirements {
+impl EvmChangeRules for EvmAccountDelegationChangeRules {
+    fn required_observations(&self) -> EvmObservationRequirements {
         EvmObservationRequirements::new()
     }
 
-    fn resolve(
+    fn derive_changes(
         &self,
         execution: &EvmTransactionExecution,
         state: &EvmStateAccess,
-    ) -> Result<EvmChangeSet, EvmChangeResolutionError> {
+    ) -> Result<EvmChangeSet, EvmChangeDerivationError> {
         let mut builder = EvmChangeSetBuilder::new();
         for &account in execution.applied_authorization_accounts() {
             let before = state.initial().read_account(account)?;
@@ -1276,14 +1279,14 @@ impl EvmChangeResolver for EvmAccountDelegationResolver {
 }
 
 #[derive(Debug, Clone)]
-pub struct StandardEvmChangeResolver {
-    components: CombinedEvmChangeResolver<
-        CombinedEvmChangeResolver<EvmNativeChangeResolver, EvmAccountDelegationResolver>,
-        EvmStandardChangeResolver,
+pub struct DefaultEvmChangeRules {
+    components: CombinedEvmChangeRules<
+        CombinedEvmChangeRules<EvmNativeAssetChangeRules, EvmAccountDelegationChangeRules>,
+        EvmTokenChangeRules,
     >,
 }
 
-impl StandardEvmChangeResolver {
+impl DefaultEvmChangeRules {
     pub fn new(currency: EvmNativeCurrency) -> Self {
         Self::with_wrapped_native_token(currency, None)
     }
@@ -1293,38 +1296,38 @@ impl StandardEvmChangeResolver {
         wrapped_native_token: Option<Address>,
     ) -> Self {
         Self {
-            components: CombinedEvmChangeResolver::new(
-                CombinedEvmChangeResolver::new(
-                    EvmNativeChangeResolver::new(currency),
-                    EvmAccountDelegationResolver,
+            components: CombinedEvmChangeRules::new(
+                CombinedEvmChangeRules::new(
+                    EvmNativeAssetChangeRules::new(currency),
+                    EvmAccountDelegationChangeRules,
                 ),
-                EvmStandardChangeResolver::new(wrapped_native_token),
+                EvmTokenChangeRules::new(wrapped_native_token),
             ),
         }
     }
 }
 
-impl EvmChangeResolver for StandardEvmChangeResolver {
-    fn observation_requirements(&self) -> EvmObservationRequirements {
-        self.components.observation_requirements()
+impl EvmChangeRules for DefaultEvmChangeRules {
+    fn required_observations(&self) -> EvmObservationRequirements {
+        self.components.required_observations()
     }
 
-    fn resolve(
+    fn derive_changes(
         &self,
         execution: &EvmTransactionExecution,
         state: &EvmStateAccess,
-    ) -> Result<EvmChangeSet, EvmChangeResolutionError> {
-        self.components.resolve(execution, state)
+    ) -> Result<EvmChangeSet, EvmChangeDerivationError> {
+        self.components.derive_changes(execution, state)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct CombinedEvmChangeResolver<A, B> {
+pub struct CombinedEvmChangeRules<A, B> {
     first: Arc<A>,
     second: Arc<B>,
 }
 
-impl<A, B> CombinedEvmChangeResolver<A, B> {
+impl<A, B> CombinedEvmChangeRules<A, B> {
     pub fn new(first: A, second: B) -> Self {
         Self {
             first: Arc::new(first),
@@ -1340,24 +1343,24 @@ impl<A, B> CombinedEvmChangeResolver<A, B> {
     }
 }
 
-impl<A, B> EvmChangeResolver for CombinedEvmChangeResolver<A, B>
+impl<A, B> EvmChangeRules for CombinedEvmChangeRules<A, B>
 where
-    A: EvmChangeResolver,
-    B: EvmChangeResolver,
+    A: EvmChangeRules,
+    B: EvmChangeRules,
 {
-    fn observation_requirements(&self) -> EvmObservationRequirements {
+    fn required_observations(&self) -> EvmObservationRequirements {
         self.first
-            .observation_requirements()
-            .merge(&self.second.observation_requirements())
+            .required_observations()
+            .merge(&self.second.required_observations())
     }
 
-    fn resolve(
+    fn derive_changes(
         &self,
         execution: &EvmTransactionExecution,
         state: &EvmStateAccess,
-    ) -> Result<EvmChangeSet, EvmChangeResolutionError> {
-        let first = self.first.resolve(execution, state)?;
-        let second = self.second.resolve(execution, state)?;
+    ) -> Result<EvmChangeSet, EvmChangeDerivationError> {
+        let first = self.first.derive_changes(execution, state)?;
+        let second = self.second.derive_changes(execution, state)?;
         first.merge(second)
     }
 }

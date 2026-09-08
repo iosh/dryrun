@@ -13,17 +13,17 @@ mod outcome;
 mod rejection;
 mod simulation;
 mod simulator;
-mod standard_resolver;
 mod state;
+mod token_changes;
 mod transaction;
 
 pub(crate) use chain_spec::{EthereumChainSpec, EthereumExecutionSpec};
 pub use changeset::{
-    CombinedEvmChangeResolver, EvmAccountDelegation, EvmAccountDelegationChange,
-    EvmAccountDelegationResolver, EvmChangeResolutionError, EvmChangeResolver, EvmChangeSet,
-    EvmChangeSetBuilder, EvmChanges, EvmNativeChangeResolver, EvmNativeCurrency,
-    EvmNativeTransferChange, EvmSelfDestructBurnChange, EvmStandardChange, EvmStateChange,
-    EvmWrappedNativeDepositChange, EvmWrappedNativeWithdrawalChange, StandardEvmChangeResolver,
+    CombinedEvmChangeRules, DefaultEvmChangeRules, EvmAccountDelegation,
+    EvmAccountDelegationChange, EvmAccountDelegationChangeRules, EvmChangeDerivationError,
+    EvmChangeRules, EvmChangeSet, EvmChangeSetBuilder, EvmChanges, EvmNativeAssetChangeRules,
+    EvmNativeCurrency, EvmNativeTransferChange, EvmSelfDestructBurnChange, EvmStandardChange,
+    EvmStateChange, EvmWrappedNativeDepositChange, EvmWrappedNativeWithdrawalChange,
 };
 pub(crate) use completion::complete_transaction;
 pub(crate) use context::resolve_block;
@@ -50,11 +50,11 @@ pub use outcome::{
 pub use rejection::EvmTransactionRejection;
 pub use simulation::{EvmBlockContext, EvmSimulation};
 pub use simulator::EvmTransactionSimulator;
-pub(crate) use standard_resolver::EvmStandardChangeResolver;
 pub use state::{
     EvmAccountState, EvmOccurrenceHandle, EvmOccurrenceStateReaders, EvmReadCallOutcome,
     EvmStateAccess, EvmStateReadError, EvmStateReader,
 };
+pub(crate) use token_changes::EvmTokenChangeRules;
 pub use transaction::{
     AccessListItem, Authorization, CompleteTransaction, PartialTransaction, SignedAuthorization,
     TransactionCommon, TransactionInput, TransactionInputError, TxType,

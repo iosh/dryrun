@@ -7,7 +7,6 @@ use cfx_types::Space;
 use contract_standards::Erc20Metadata;
 
 use crate::{
-    espace::{EspaceCommittedLog, EspaceExecutionSpace},
     execution::{CommittedExecutionTrace, FrameId, LogCheckpoint, TraceEvent},
     primitive::{address_from_cfx, address_to_cfx, b256_from_cfx, b256_to_cfx},
 };
@@ -26,8 +25,8 @@ pub(super) struct WrappedNativeOccurrence {
     event: WrappedNativeEvent,
 }
 
-#[derive(Debug)]
-enum WrappedNativeEvent {
+#[derive(Debug, Clone, Copy)]
+pub(super) enum WrappedNativeEvent {
     Deposit { account: Address, raw_amount: U256 },
     Withdrawal { account: Address, raw_amount: U256 },
 }
@@ -74,26 +73,6 @@ pub(super) fn log_checkpoints(contract_address: Address) -> [LogCheckpoint; 2] {
     })
 }
 
-pub(super) fn decode_wrapped_native_occurrences<'a>(
-    logs: impl IntoIterator<Item = &'a EspaceCommittedLog>,
-    contract_address: Address,
-) -> Vec<WrappedNativeOccurrence> {
-    logs.into_iter()
-        .filter(|log| {
-            log.space() == EspaceExecutionSpace::Espace && log.address() == contract_address
-        })
-        .filter_map(|log| {
-            decode_wrapped_native_log(log.topics(), log.data()).map(|event| {
-                WrappedNativeOccurrence {
-                    position: log.position().index(),
-                    contract_address,
-                    event,
-                }
-            })
-        })
-        .collect()
-}
-
 pub(super) fn decode_wrapped_native_occurrences_in_scope(
     trace: &CommittedExecutionTrace,
     contract_address: Address,
@@ -130,7 +109,7 @@ pub(super) fn decode_wrapped_native_occurrences_in_scope(
                 .copied()
                 .map(b256_from_cfx)
                 .collect::<Vec<_>>();
-            let event = decode_wrapped_native_log(&topics, data)?;
+            let event = decode_wrapped_native_log(&topics, data).ok().flatten()?;
 
             Some(WrappedNativeOccurrence {
                 position: *position,
@@ -141,26 +120,32 @@ pub(super) fn decode_wrapped_native_occurrences_in_scope(
         .collect()
 }
 
-fn decode_wrapped_native_log(
+pub(super) fn decode_wrapped_native_log(
     topics: &[alloy::primitives::B256],
     data: &[u8],
-) -> Option<WrappedNativeEvent> {
-    if topics.len() != 2 || data.len() != 32 {
-        return None;
+) -> Result<Option<WrappedNativeEvent>, &'static str> {
+    let Some(topic0) = topics.first() else {
+        return Ok(None);
+    };
+    if *topic0 != Deposit::SIGNATURE_HASH && *topic0 != Withdrawal::SIGNATURE_HASH {
+        return Ok(None);
     }
-    if topics[0] == Deposit::SIGNATURE_HASH {
-        let event = Deposit::decode_raw_log_validate(topics.iter().copied(), data).ok()?;
-        Some(WrappedNativeEvent::Deposit {
+    if topics.len() != 2 || data.len() != 32 {
+        return Err("malformed wrapped-native event");
+    }
+    if *topic0 == Deposit::SIGNATURE_HASH {
+        let event = Deposit::decode_raw_log_validate(topics.iter().copied(), data)
+            .map_err(|_| "malformed wrapped-native Deposit event")?;
+        Ok(Some(WrappedNativeEvent::Deposit {
             account: event.account,
             raw_amount: event.amount,
-        })
-    } else if topics[0] == Withdrawal::SIGNATURE_HASH {
-        let event = Withdrawal::decode_raw_log_validate(topics.iter().copied(), data).ok()?;
-        Some(WrappedNativeEvent::Withdrawal {
-            account: event.account,
-            raw_amount: event.amount,
-        })
+        }))
     } else {
-        None
+        let event = Withdrawal::decode_raw_log_validate(topics.iter().copied(), data)
+            .map_err(|_| "malformed wrapped-native Withdrawal event")?;
+        Ok(Some(WrappedNativeEvent::Withdrawal {
+            account: event.account,
+            raw_amount: event.amount,
+        }))
     }
 }

@@ -27,7 +27,7 @@ impl EvmLogCheckpoint {
     }
 }
 
-/// State retention requested by a change resolver before execution starts.
+/// State retention required by change-derivation rules before execution starts.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EvmObservationRequirements {
     log_checkpoints: Vec<EvmLogCheckpoint>,

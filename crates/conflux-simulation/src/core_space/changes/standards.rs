@@ -47,9 +47,12 @@ pub(crate) fn collect_standard_changes(
                 .copied()
                 .map(b256_from_cfx)
                 .collect::<Vec<_>>();
-            decode_standard_log(address, &topics, data, |value| value).map(|change| {
-                PositionedCoreSpaceChange::standard(ChangePosition::new(*position, 0), change)
-            })
+            decode_standard_log(address, &topics, data, |value| value)
+                .ok()
+                .flatten()
+                .map(|change| {
+                    PositionedCoreSpaceChange::standard(ChangePosition::new(*position, 0), change)
+                })
         })
         .collect()
 }

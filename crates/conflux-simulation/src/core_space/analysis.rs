@@ -304,12 +304,7 @@ impl CoreSpaceChangeAnalysis {
         )?;
         let nested_changes = analysis_input
             .nested_espace_effects
-            .into_changes(&metadata.espace)
-            .map_err(|_| {
-                CoreSpaceChangesError::inconsistent_execution(
-                    "a decoded nested eSpace change is missing metadata",
-                )
-            })?;
+            .into_changes(&metadata.espace);
         positioned_core_changes.extend(nested_changes.into_iter().map(|occurrence| {
             let (position, change) = occurrence.into_parts();
             PositionedCoreSpaceChange::espace(ChangePosition::new(position, 0), change)

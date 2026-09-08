@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::{NativeOperation, NativeOperations, NativeResolverDiagnostic};
+use super::{NativeChangeError, NativeOperation, NativeOperations};
 use crate::{
     espace::EspaceStateReader,
     espace::{EspaceChange, EspaceChangesError, EspaceNativeCurrency},
@@ -36,7 +36,7 @@ pub(super) fn verify_native_changes(
     before_balances: &NativeBalances,
     after_balances: &NativeBalances,
     currency: &EspaceNativeCurrency,
-) -> Result<Vec<ChangeOccurrence>, NativeResolverDiagnostic> {
+) -> Result<Vec<ChangeOccurrence>, NativeChangeError> {
     let mut replayed_balances = before_balances.clone();
     let mut changes = Vec::new();
 
@@ -90,7 +90,7 @@ pub(super) fn verify_native_changes(
         let replayed = replayed_balances[&address];
         let actual = after_balances[&address];
         if replayed != actual {
-            return Err(NativeResolverDiagnostic::new(format!(
+            return Err(NativeChangeError::new(format!(
                 "finalized native balance differs from replay for {address}: replayed {replayed}, state {actual}"
             )));
         }
@@ -103,13 +103,13 @@ fn decrease_balance(
     balances: &mut NativeBalances,
     address: Address,
     amount: U256,
-) -> Result<(), NativeResolverDiagnostic> {
+) -> Result<(), NativeChangeError> {
     let balance = balances
         .get_mut(&address)
         .unwrap_or_else(|| unreachable!("native replay account set is complete"));
     let current = *balance;
     *balance = current.checked_sub(amount).ok_or_else(|| {
-        NativeResolverDiagnostic::new(format!(
+        NativeChangeError::new(format!(
             "native balance replay violated the execution invariant for {address}"
         ))
     })?;
@@ -120,13 +120,13 @@ fn increase_balance(
     balances: &mut NativeBalances,
     address: Address,
     amount: U256,
-) -> Result<(), NativeResolverDiagnostic> {
+) -> Result<(), NativeChangeError> {
     let balance = balances
         .get_mut(&address)
         .unwrap_or_else(|| unreachable!("native replay account set is complete"));
     let current = *balance;
     *balance = current.checked_add(amount).ok_or_else(|| {
-        NativeResolverDiagnostic::new(format!(
+        NativeChangeError::new(format!(
             "native balance replay violated the execution invariant for {address}"
         ))
     })?;

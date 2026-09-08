@@ -360,7 +360,7 @@ pub(crate) fn finish_core_space_changes(
         if adjacent[0].position == adjacent[1].position {
             let ChangePosition { index, item_index } = adjacent[0].position;
             return Err(CoreSpaceChangesError::inconsistent_execution(format!(
-                "Core Space change position {index}:{item_index} was produced by multiple analyzers"
+                "Core Space change position {index}:{item_index} was produced more than once"
             )));
         }
     }
@@ -369,11 +369,9 @@ pub(crate) fn finish_core_space_changes(
         .map(|positioned| match positioned.change {
             PendingChange::CoreSpace(change) => resolve_change(change, network, currency),
             PendingChange::Standard(change) => {
-                let change = change.into_change(metadata).map_err(|_| {
-                    CoreSpaceChangesError::inconsistent_execution(
-                        "a decoded Core Space standard change is missing metadata",
-                    )
-                })?;
+                let change = change.into_change(metadata).unwrap_or_else(|_| {
+                    unreachable!("Core Space metadata collection records every outcome")
+                });
                 Ok(CoreSpaceChange::Standard(resolve_standard_change(
                     change, network,
                 )?))

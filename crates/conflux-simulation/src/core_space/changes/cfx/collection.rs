@@ -36,7 +36,7 @@ fn claim_trace_positions(
     for position in positions {
         if !claimed_positions.insert(position) {
             return Err(CoreSpaceChangesError::inconsistent_execution(format!(
-                "Core Space trace position {position} was claimed by multiple analyzers"
+                "Core Space trace position {position} was claimed by multiple change producers"
             )));
         }
     }

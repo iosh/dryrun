@@ -2,8 +2,6 @@ mod native;
 mod standards;
 mod wrapped_native;
 
-use std::collections::HashSet;
-
 use alloy_primitives::{Address, U256};
 use contract_standards::{Erc20Metadata, MetadataCall, StandardChange, metadata_calls};
 
@@ -13,14 +11,8 @@ use crate::{
 };
 
 use self::{
-    standards::{
-        DecodedStandardOccurrence, decode_standard_occurrences,
-        decode_standard_occurrences_in_scope, load_metadata,
-    },
-    wrapped_native::{
-        WrappedNativeOccurrence, decode_wrapped_native_occurrences,
-        decode_wrapped_native_occurrences_in_scope,
-    },
+    standards::{DecodedStandardOccurrence, decode_standard_occurrences_in_scope},
+    wrapped_native::{WrappedNativeOccurrence, decode_wrapped_native_occurrences_in_scope},
 };
 use super::{EspaceChangesError, EspaceExecutedTransaction, EspaceStateAccess};
 
@@ -120,20 +112,29 @@ impl NestedEspaceEffects {
     pub(crate) fn into_changes(
         self,
         metadata: &contract_standards::MetadataValues<Address>,
-    ) -> Result<Vec<ChangeOccurrence>, contract_standards::MissingMetadataOutcome> {
+    ) -> Vec<ChangeOccurrence> {
         let mut changes = Vec::new();
         for occurrence in self.wrapped_native_occurrences {
-            let change_metadata = metadata.erc20_metadata(&occurrence.contract_address())?;
+            let change_metadata = metadata
+                .erc20_metadata(&occurrence.contract_address())
+                .unwrap_or_else(|_| {
+                    unreachable!("nested eSpace metadata collection records every outcome")
+                });
             changes.push(occurrence.into_change(change_metadata));
         }
         for occurrence in self.standard_occurrences {
-            let change = occurrence.decoded_log.into_change(metadata)?;
+            let change = occurrence
+                .decoded_log
+                .into_change(metadata)
+                .unwrap_or_else(|_| {
+                    unreachable!("nested eSpace metadata collection records every outcome")
+                });
             changes.push(ChangeOccurrence::new(
                 occurrence.position,
                 EspaceChange::Standard(change),
             ));
         }
-        Ok(changes)
+        changes
     }
 }
 
@@ -149,7 +150,7 @@ pub(crate) fn log_checkpoints(wrapped_native_token: Address) -> Vec<LogCheckpoin
         .collect()
 }
 
-pub(crate) fn from_execution(
+pub(crate) fn derive_changes(
     execution: &EspaceExecutedTransaction,
     state: &EspaceStateAccess,
     wrapped_native_token: Address,
@@ -161,61 +162,22 @@ pub(crate) fn from_execution(
             "failed execution returned committed receipt logs",
         ));
     }
-    let logs = execution
-        .semantic_log_occurrences()
-        .map_err(|error| EspaceChangesError::resolver("standard tokens", error))?
-        .map(|occurrence| occurrence.log());
-
-    let standard_occurrences = if successful {
-        decode_standard_occurrences(logs.clone())
-    } else {
-        Vec::new()
-    };
-    let wrapped_native_occurrences = if successful {
-        decode_wrapped_native_occurrences(logs, wrapped_native_token)
-    } else {
-        Vec::new()
-    };
-
-    let mut changes = native::from_execution(execution, state, currency)?;
+    let mut changes = native::derive_changes(execution, state, currency)?;
 
     if !successful {
         return Ok(Vec::new());
     }
-
-    let calls = collect_metadata_calls(&standard_occurrences, &wrapped_native_occurrences);
-    let metadata = load_metadata(state.finalized(), calls)?;
-
-    for occurrence in wrapped_native_occurrences {
-        let change_metadata = metadata.erc20_metadata(&occurrence.contract_address())?;
-        changes.push(occurrence.into_change(change_metadata));
-    }
-    for occurrence in standard_occurrences {
-        let change = occurrence.decoded_log.into_change(&metadata)?;
-        changes.push(ChangeOccurrence::new(
-            occurrence.position,
-            EspaceChange::Standard(change),
-        ));
-    }
+    changes.extend(standards::derive_changes(
+        execution,
+        state,
+        wrapped_native_token,
+    )?);
 
     changes.sort_by_key(|occurrence| occurrence.position);
     Ok(changes
         .into_iter()
         .map(|occurrence| occurrence.change)
         .collect())
-}
-
-fn collect_metadata_calls(
-    standard_occurrences: &[DecodedStandardOccurrence],
-    wrapped_native_occurrences: &[WrappedNativeOccurrence],
-) -> Vec<MetadataCall<Address>> {
-    let calls = collect_metadata_call_occurrences(standard_occurrences, wrapped_native_occurrences);
-
-    let mut seen = HashSet::new();
-    calls
-        .into_iter()
-        .filter_map(|(_, call)| seen.insert(call.clone()).then_some(call))
-        .collect()
 }
 
 fn collect_metadata_call_occurrences(

@@ -4,21 +4,21 @@ use alloy_primitives::{Address, B256, U256};
 
 use crate::{
     Erc1155TransferItem, StandardChange,
-    event_codec::{DecodedEvent, decode_log},
+    event_codec::{DecodedEvent, StandardEventDecodeError, decode_log},
     metadata::{MetadataValues, MissingMetadataOutcome},
 };
 
-/// A successfully decoded standard log that has not yet been enriched.
+/// A successfully decoded standard-log candidate that has not yet been enriched.
 ///
-/// Its fields stay private so callers cannot publish a partially constructed
-/// [`StandardChange`] before recording all required metadata call outcomes.
+/// The decoded event is readable for chain-specific verification. Conversion
+/// into [`StandardChange`] still requires all metadata call outcomes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedStandardLog<A> {
     pub(crate) event: DecodedStandardEvent<A>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DecodedStandardEvent<A> {
+pub enum DecodedStandardEvent<A> {
     Erc20Transfer {
         token: A,
         from: A,
@@ -66,17 +66,20 @@ pub(crate) enum DecodedStandardEvent<A> {
     },
 }
 
-/// Decodes one committed standard log into an opaque intermediate value.
+/// Decodes one committed standard log into a chain-neutral candidate.
 ///
-/// Unknown and malformed logs return `None`. The caller owns execution
-/// position and can map the raw EVM address into its chain-specific type.
+/// Unknown topics return `Ok(None)`. A supported topic with malformed fields
+/// returns an error. The caller owns execution position and can map the raw
+/// EVM address into its chain-specific type.
 pub fn decode_standard_log<A>(
     contract_address: Address,
     topics: &[B256],
     data: &[u8],
     map_address: impl Fn(Address) -> A,
-) -> Option<DecodedStandardLog<A>> {
-    let event = decode_log(contract_address, topics, data).ok().flatten()?;
+) -> Result<Option<DecodedStandardLog<A>>, StandardEventDecodeError> {
+    let Some(event) = decode_log(contract_address, topics, data)? else {
+        return Ok(None);
+    };
 
     let event = match event {
         DecodedEvent::Erc20Transfer {
@@ -165,7 +168,13 @@ pub fn decode_standard_log<A>(
         },
     };
 
-    Some(DecodedStandardLog { event })
+    Ok(Some(DecodedStandardLog { event }))
+}
+
+impl<A> DecodedStandardLog<A> {
+    pub const fn event(&self) -> &DecodedStandardEvent<A> {
+        &self.event
+    }
 }
 
 impl<A> DecodedStandardLog<A>

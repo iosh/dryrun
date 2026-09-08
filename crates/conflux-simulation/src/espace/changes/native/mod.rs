@@ -11,11 +11,11 @@ use crate::espace::{EspaceChangesError, EspaceExecutedTransaction, EspaceStateAc
 
 #[derive(Debug, Error)]
 #[error("{details}")]
-pub(super) struct NativeResolverDiagnostic {
+pub(super) struct NativeChangeError {
     details: String,
 }
 
-impl NativeResolverDiagnostic {
+impl NativeChangeError {
     pub(super) fn new(details: impl Into<String>) -> Self {
         Self {
             details: details.into(),
@@ -23,13 +23,13 @@ impl NativeResolverDiagnostic {
     }
 }
 
-pub(super) fn from_execution(
+pub(super) fn derive_changes(
     execution: &EspaceExecutedTransaction,
     state: &EspaceStateAccess,
     currency: &EspaceNativeCurrency,
 ) -> Result<Vec<ChangeOccurrence>, EspaceChangesError> {
     let operations = collection::collect_native_operations(execution, state.written_accounts())
-        .map_err(|error| EspaceChangesError::resolver("native currency", error))?;
+        .map_err(|error| EspaceChangesError::derivation("native asset", error))?;
     let before_balances = verification::read_native_balances(
         state.initial(),
         "read pre-execution native balances",
@@ -42,7 +42,7 @@ pub(super) fn from_execution(
     )?;
 
     verification::verify_native_changes(&operations, &before_balances, &after_balances, currency)
-        .map_err(|error| EspaceChangesError::resolver("native currency", error))
+        .map_err(|error| EspaceChangesError::derivation("native asset", error))
 }
 
 #[derive(Debug)]

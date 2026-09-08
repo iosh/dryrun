@@ -42,7 +42,7 @@ pub(crate) fn decode_log(
     contract_address: Address,
     topics: &[B256],
     data: &[u8],
-) -> Result<Option<DecodedEvent>, EventCodecError> {
+) -> Result<Option<DecodedEvent>, StandardEventDecodeError> {
     let Some(topic0) = topics.first() else {
         return Ok(None);
     };
@@ -136,12 +136,12 @@ impl fmt::Display for SupportedEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("malformed {event} event: {reason}")]
-pub(crate) struct EventCodecError {
+pub struct StandardEventDecodeError {
     event: SupportedEvent,
     reason: &'static str,
 }
 
-impl EventCodecError {
+impl StandardEventDecodeError {
     pub(crate) const fn malformed(event: SupportedEvent, reason: &'static str) -> Self {
         Self { event, reason }
     }
@@ -151,7 +151,7 @@ fn decode_transfer_event(
     contract_address: Address,
     topics: &[B256],
     data: &[u8],
-) -> Result<DecodedEvent, EventCodecError> {
+) -> Result<DecodedEvent, StandardEventDecodeError> {
     let event = SupportedEvent::Transfer;
 
     match (topics.len(), data.len()) {
@@ -167,15 +167,18 @@ fn decode_transfer_event(
             to: indexed_address(&topics[2], event)?,
             token_id: U256::from_be_slice(topics[3].as_slice()),
         }),
-        _ => Err(EventCodecError::malformed(
+        _ => Err(StandardEventDecodeError::malformed(
             event,
             "expected ERC-20 or ERC-721 Transfer shape",
         )),
     }
 }
 
-fn indexed_address(topic: &B256, event: SupportedEvent) -> Result<Address, EventCodecError> {
-    canonical_indexed_address(topic).ok_or(EventCodecError::malformed(
+fn indexed_address(
+    topic: &B256,
+    event: SupportedEvent,
+) -> Result<Address, StandardEventDecodeError> {
+    canonical_indexed_address(topic).ok_or(StandardEventDecodeError::malformed(
         event,
         "indexed address is not zero padded",
     ))
@@ -193,7 +196,7 @@ fn decode_approval_event(
     contract_address: Address,
     topics: &[B256],
     data: &[u8],
-) -> Result<DecodedEvent, EventCodecError> {
+) -> Result<DecodedEvent, StandardEventDecodeError> {
     let event = SupportedEvent::Approval;
 
     match (topics.len(), data.len()) {
@@ -209,7 +212,7 @@ fn decode_approval_event(
             approved_address: indexed_address(&topics[2], event)?,
             token_id: U256::from_be_slice(topics[3].as_slice()),
         }),
-        _ => Err(EventCodecError::malformed(
+        _ => Err(StandardEventDecodeError::malformed(
             event,
             "expected ERC-20 or ERC-721 Approval shape",
         )),
@@ -220,11 +223,11 @@ fn decode_approval_for_all_event(
     contract_address: Address,
     topics: &[B256],
     data: &[u8],
-) -> Result<DecodedEvent, EventCodecError> {
+) -> Result<DecodedEvent, StandardEventDecodeError> {
     let event = SupportedEvent::ApprovalForAll;
 
     if topics.len() != 3 || data.len() != 32 {
-        return Err(EventCodecError::malformed(
+        return Err(StandardEventDecodeError::malformed(
             event,
             "expected 3 topics and 32 data bytes",
         ));
@@ -234,7 +237,7 @@ fn decode_approval_for_all_event(
         value if value.is_zero() => false,
         value if value == U256::from(1_u8) => true,
         _ => {
-            return Err(EventCodecError::malformed(
+            return Err(StandardEventDecodeError::malformed(
                 event,
                 "approved value is not a canonical bool",
             ));
@@ -253,11 +256,11 @@ fn decode_transfer_single_event(
     contract_address: Address,
     topics: &[B256],
     data: &[u8],
-) -> Result<DecodedEvent, EventCodecError> {
+) -> Result<DecodedEvent, StandardEventDecodeError> {
     let event = SupportedEvent::TransferSingle;
 
     if topics.len() != 4 || data.len() != 64 {
-        return Err(EventCodecError::malformed(
+        return Err(StandardEventDecodeError::malformed(
             event,
             "expected 4 topics and 64 data bytes",
         ));
@@ -267,9 +270,10 @@ fn decode_transfer_single_event(
     let from = indexed_address(&topics[2], event)?;
     let to = indexed_address(&topics[3], event)?;
 
-    let (token_id, amount) = <(U256, U256)>::abi_decode_sequence_validate(data).map_err(|_| {
-        EventCodecError::malformed(event, "data is not a canonical (uint256,uint256) tuple")
-    })?;
+    // Both fields occupy one full ABI word, so the exact-length check above
+    // already establishes the complete encoding shape.
+    let token_id = U256::from_be_slice(&data[..32]);
+    let amount = U256::from_be_slice(&data[32..]);
 
     Ok(DecodedEvent::Erc1155TransferSingle {
         collection: contract_address,
@@ -285,11 +289,14 @@ fn decode_transfer_batch_event(
     contract_address: Address,
     topics: &[B256],
     data: &[u8],
-) -> Result<DecodedEvent, EventCodecError> {
+) -> Result<DecodedEvent, StandardEventDecodeError> {
     let event = SupportedEvent::TransferBatch;
 
     if topics.len() != 4 {
-        return Err(EventCodecError::malformed(event, "expected 4 topics"));
+        return Err(StandardEventDecodeError::malformed(
+            event,
+            "expected 4 topics",
+        ));
     }
 
     let operator = indexed_address(&topics[1], event)?;
@@ -298,18 +305,21 @@ fn decode_transfer_batch_event(
 
     let (token_ids, amounts) = <(Vec<U256>, Vec<U256>)>::abi_decode_sequence_validate(data)
         .map_err(|_| {
-            EventCodecError::malformed(event, "data is not a canonical (uint256[],uint256[]) tuple")
+            StandardEventDecodeError::malformed(
+                event,
+                "data is not a canonical (uint256[],uint256[]) tuple",
+            )
         })?;
 
     if (token_ids.as_slice(), amounts.as_slice()).abi_encode_sequence() != data {
-        return Err(EventCodecError::malformed(
+        return Err(StandardEventDecodeError::malformed(
             event,
             "data is not a canonical (uint256[],uint256[]) tuple",
         ));
     }
 
     if token_ids.len() != amounts.len() {
-        return Err(EventCodecError::malformed(
+        return Err(StandardEventDecodeError::malformed(
             event,
             "token ID and amount arrays have different lengths",
         ));
