@@ -158,6 +158,10 @@ impl EspaceStateAccess {
         &self.initial
     }
 
+    pub(crate) fn caller(&self) -> Address {
+        self.finalized.context.caller
+    }
+
     pub const fn finalized(&self) -> &EspaceStateReader {
         &self.finalized
     }
@@ -432,6 +436,13 @@ impl EspaceAccountState {
 
     pub fn code(&self) -> Option<&Bytes> {
         self.code.as_ref()
+    }
+
+    /// Returns the EIP-7702 delegation target encoded in the account code.
+    pub fn delegation(&self) -> Option<Address> {
+        let code = self.code.as_ref()?;
+        let payload = code.as_ref().strip_prefix(primitives::CODE_PREFIX_7702)?;
+        (payload.len() == 20).then(|| Address::from_slice(payload))
     }
 }
 

@@ -15,6 +15,7 @@ primitives = { workspace = true }
 cfx-storage = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-statedb = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-internal-common = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+cfx-parity-trace-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-parameters = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-addr = { workspace = true }
 

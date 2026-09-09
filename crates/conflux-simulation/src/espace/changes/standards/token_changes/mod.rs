@@ -4,6 +4,7 @@ mod event_verification;
 mod events;
 mod sequence_verification;
 mod state_queries;
+mod verified_changes;
 
 use std::collections::HashMap;
 
@@ -11,22 +12,37 @@ use alloy::primitives::Address;
 
 use crate::espace::{EspaceChangesError, EspaceExecutedTransaction, EspaceStateAccess};
 
-use super::{
-    super::{ChangeOccurrence, EspaceChange},
-    load_metadata,
-};
+use super::{super::EspaceStandardChange, load_metadata};
 
 use self::{
     error::state_mismatch_at,
-    events::{ObservedTokenEvent, WrappedOperation, collect_token_events, required_metadata_calls},
+    events::{ObservedTokenEvent, collect_token_events, required_metadata_calls},
     sequence_verification::{verify_event, verify_final_state},
+    verified_changes::VerifiedTokenChange,
 };
 
-pub(crate) fn derive_changes(
+pub(crate) use events::WrappedOperation;
+
+pub(crate) enum VerifiedChange {
+    Standard {
+        position: usize,
+        change: EspaceStandardChange,
+    },
+    Wrapped {
+        position: usize,
+        contract: Address,
+        account: Address,
+        amount: alloy::primitives::U256,
+        direction: WrappedOperation,
+        metadata: contract_standards::Erc20Metadata,
+    },
+}
+
+pub(crate) fn derive_verified_changes(
     execution: &EspaceExecutedTransaction,
     state: &EspaceStateAccess,
     wrapped_native_token: Address,
-) -> Result<Vec<ChangeOccurrence>, EspaceChangesError> {
+) -> Result<Vec<VerifiedChange>, EspaceChangesError> {
     let sequence = collect_token_events(execution, wrapped_native_token)?;
     let events = sequence.events;
     if events.is_empty() {
@@ -35,8 +51,9 @@ pub(crate) fn derive_changes(
 
     let mut final_state_expectations = HashMap::new();
     let mut wrapped_pair_proofs = HashMap::new();
+    let mut verified_events = Vec::with_capacity(events.len());
     for (event_index, event) in events.iter().enumerate() {
-        verify_event(
+        verified_events.push(verify_event(
             event_index,
             event,
             execution,
@@ -44,7 +61,7 @@ pub(crate) fn derive_changes(
             &sequence.pairs,
             &mut wrapped_pair_proofs,
             &mut final_state_expectations,
-        )?;
+        )?);
     }
     for (pair_index, pair) in sequence.pairs.iter().enumerate() {
         if !wrapped_pair_proofs
@@ -61,39 +78,36 @@ pub(crate) fn derive_changes(
 
     let metadata_values = load_metadata(state.finalized(), required_metadata_calls(&events))?;
     let mut changes = Vec::with_capacity(events.len());
-    for event in events {
-        match event {
-            ObservedTokenEvent::Standard {
-                occurrence,
-                decoded,
-            } => changes.push(ChangeOccurrence::new(
-                occurrence.position().index(),
-                EspaceChange::Standard(metadata_values.standard_change(decoded)),
-            )),
-            ObservedTokenEvent::Wrapped {
-                occurrence,
-                contract,
-                account,
-                amount,
-                direction,
-            } => {
+    for (event, verified) in events.into_iter().zip(verified_events) {
+        match (event, verified) {
+            (
+                ObservedTokenEvent::Standard { occurrence, .. },
+                VerifiedTokenChange::Standard(verified),
+            ) => changes.push(VerifiedChange::Standard {
+                position: occurrence.position().index(),
+                change: verified.into_change(&metadata_values),
+            }),
+            (
+                ObservedTokenEvent::Wrapped {
+                    occurrence,
+                    contract,
+                    account,
+                    amount,
+                    direction,
+                },
+                VerifiedTokenChange::Wrapped,
+            ) => {
                 let token_metadata = metadata_values.erc20(&contract);
-                let change = match direction {
-                    WrappedOperation::Deposit => EspaceChange::WrappedNativeDeposit {
-                        contract_address: contract,
-                        account,
-                        raw_amount: amount,
-                        metadata: token_metadata,
-                    },
-                    WrappedOperation::Withdrawal => EspaceChange::WrappedNativeWithdrawal {
-                        contract_address: contract,
-                        account,
-                        raw_amount: amount,
-                        metadata: token_metadata,
-                    },
-                };
-                changes.push(ChangeOccurrence::new(occurrence.position().index(), change));
+                changes.push(VerifiedChange::Wrapped {
+                    position: occurrence.position().index(),
+                    contract,
+                    account,
+                    amount,
+                    direction,
+                    metadata: token_metadata,
+                });
             }
+            _ => unreachable!("verification preserves the observed token event kind"),
         }
     }
     Ok(changes)

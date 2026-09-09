@@ -47,7 +47,9 @@ async fn log_snapshots_preserve_state_and_follow_nested_and_transaction_rollback
     let child_code = hex!("6002600055600160006000a1600760005260206000f3");
     let mut parent_code = Vec::new();
     append_call(&mut parent_code, CHILD, 0);
-    parent_code.extend(hex!("6003600055600160006000a16004600055600160006000a160206000fd"));
+    parent_code.extend(hex!(
+        "6003600055600160006000a16004600055600160006000a160206000fd"
+    ));
 
     for revert_transaction in [false, true] {
         // The constructor logs slot 0 at 1 and 9, then changes it to 11.
@@ -92,7 +94,10 @@ async fn log_snapshots_preserve_state_and_follow_nested_and_transaction_rollback
 
         tokio::task::spawn_blocking(move || {
             let (record, state) = execute(source, Action::Create, init_code.clone());
-            let occurrences = record.semantic_log_occurrences().unwrap().collect::<Vec<_>>();
+            let occurrences = record
+                .semantic_log_occurrences()
+                .unwrap()
+                .collect::<Vec<_>>();
 
             if revert_transaction {
                 assert_eq!(record.status(), EspaceExecutionStatus::Reverted);
@@ -192,7 +197,10 @@ async fn anchored_read_calls_leave_storage_balances_and_nonce_unchanged() {
     tokio::task::spawn_blocking(move || {
         let (record, state) = execute(source, Action::Call(address_to_cfx(CONTRACT)), Vec::new());
         assert_eq!(record.status(), EspaceExecutionStatus::Success);
-        let occurrences = record.semantic_log_occurrences().unwrap().collect::<Vec<_>>();
+        let occurrences = record
+            .semantic_log_occurrences()
+            .unwrap()
+            .collect::<Vec<_>>();
         assert_eq!(occurrences.len(), 1);
         let at_log = state.at(occurrences[0].handle()).unwrap();
 
@@ -223,7 +231,9 @@ async fn anchored_read_calls_leave_storage_balances_and_nonce_unchanged() {
             // probe; both executions must start from the same state point.
             for input in [1, 2] {
                 assert_eq!(
-                    reader.read_call(CONTRACT, Bytes::from(vec![input])).unwrap(),
+                    reader
+                        .read_call(CONTRACT, Bytes::from(vec![input]))
+                        .unwrap(),
                     EspaceReadCallOutcome::Success(Bytes::copy_from_slice(
                         word(expected_storage).as_slice(),
                     )),
@@ -312,13 +322,16 @@ fn execute(
         LIMITS,
     )
     .unwrap();
-    let record = EspaceExecutedTransaction::from_outcome(&mut execution.outcome, &mut state).unwrap();
+    let record =
+        EspaceExecutedTransaction::from_outcome(&mut execution.outcome, &mut state).unwrap();
     (record, state)
 }
 
 // CALL with no input and a 32-byte return buffer at memory offset zero.
 fn append_call(code: &mut Vec<u8>, target: Address, value: u8) {
-    code.extend([0x60, 0x20, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, value, 0x73]);
+    code.extend([
+        0x60, 0x20, 0x60, 0x00, 0x60, 0x00, 0x60, 0x00, 0x60, value, 0x73,
+    ]);
     code.extend_from_slice(target.as_slice());
     code.extend([0x5a, 0xf1, 0x50]); // GAS, CALL, POP
 }
@@ -383,7 +396,10 @@ impl StateRpc {
                     "wrong anchor for {method}",
                 );
                 let address: Address = serde_json::from_value(args[0].clone()).unwrap();
-                let account = self.accounts.get(&address).expect("unexpected eSpace account read");
+                let account = self
+                    .accounts
+                    .get(&address)
+                    .expect("unexpected eSpace account read");
                 if method == "eth_getStorageAt" {
                     assert_eq!(args.len(), 3);
                     let slot: U256 = serde_json::from_value(args[1].clone()).unwrap();

@@ -29,7 +29,7 @@ pub(super) enum ObservedTokenEvent<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum WrappedOperation {
+pub(crate) enum WrappedOperation {
     Deposit,
     Withdrawal,
 }
@@ -120,8 +120,7 @@ pub(super) fn collect_token_events<'a>(
 
         let Some(decoded) =
             decode_standard_log(log.address(), log.topics(), log.data(), |address| address)
-                .ok()
-                .flatten()
+                .map_err(|error| token_change_error_at(occurrence.position(), error.to_string()))?
         else {
             continue;
         };

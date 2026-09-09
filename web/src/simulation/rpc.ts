@@ -209,26 +209,54 @@ export type EvmChanges =
   | { status: 'complete'; items: EvmChange[] }
   | { status: 'unavailable'; error: string };
 
-interface EspaceNativeCurrency {
+/** Standalone eSpace changes use the same verified wallet wire as EVM. */
+export type EspaceNativeTransferChange = EvmNativeTransferChange;
+export type EspaceSelfDestructBurnChange = EvmSelfDestructBurnChange;
+export type EspaceAccountDelegationChange = EvmAccountDelegationChange;
+export type EspaceWrappedNativeDepositChange = EvmWrappedNativeDepositChange;
+export type EspaceWrappedNativeWithdrawalChange = EvmWrappedNativeWithdrawalChange;
+export type EspaceErc20TransferChange = EvmErc20TransferChange;
+export type EspaceErc20MintChange = EvmErc20MintChange;
+export type EspaceErc20BurnChange = EvmErc20BurnChange;
+export type EspaceErc20ApprovalChange = EvmErc20ApprovalChange;
+export type EspaceErc721TransferChange = EvmErc721TransferChange;
+export type EspaceErc721MintChange = EvmErc721MintChange;
+export type EspaceErc721BurnChange = EvmErc721BurnChange;
+export type EspaceErc721ApprovalChange = EvmErc721ApprovalChange;
+export type EspaceOperatorApprovalChange = EvmOperatorApprovalChange;
+export type EspaceErc1155TransferSingleChange = EvmErc1155TransferSingleChange;
+export type EspaceErc1155MintSingleChange = EvmErc1155MintSingleChange;
+export type EspaceErc1155BurnSingleChange = EvmErc1155BurnSingleChange;
+export type EspaceErc1155TransferBatchChange = EvmErc1155TransferBatchChange;
+export type EspaceErc1155MintBatchChange = EvmErc1155MintBatchChange;
+export type EspaceErc1155BurnBatchChange = EvmErc1155BurnBatchChange;
+
+export type EspaceChange = EvmChange;
+export type EspaceChanges = EvmChanges;
+
+// Core Space nested eSpace changes retain their existing legacy wire.
+interface LegacyEspaceNativeCurrency {
   name: string;
   symbol: string;
   decimals: number;
 }
 
-export interface EspaceNativeTransferChange extends EspaceNativeCurrency {
+export interface EspaceNativeTransferChangeLegacy
+  extends LegacyEspaceNativeCurrency {
   changeType: 'NATIVE_TRANSFER';
   from: string;
   to: string;
   rawAmount: string;
 }
 
-export interface EspaceSelfDestructBurnChange extends EspaceNativeCurrency {
+export interface EspaceSelfDestructBurnChangeLegacy
+  extends LegacyEspaceNativeCurrency {
   changeType: 'SELF_DESTRUCT_BURN';
   contractAddress: string;
   rawAmount: string;
 }
 
-export interface EspaceWrappedNativeDepositChange
+export interface EspaceWrappedNativeDepositChangeLegacy
   extends FungibleAssetMetadata {
   changeType: 'WRAPPED_NATIVE_DEPOSIT';
   contractAddress: string;
@@ -236,7 +264,7 @@ export interface EspaceWrappedNativeDepositChange
   rawAmount: string;
 }
 
-export interface EspaceWrappedNativeWithdrawalChange
+export interface EspaceWrappedNativeWithdrawalChangeLegacy
   extends FungibleAssetMetadata {
   changeType: 'WRAPPED_NATIVE_WITHDRAWAL';
   contractAddress: string;
@@ -303,11 +331,11 @@ export interface Erc1155TransferBatchChange {
   items: Erc1155TransferItem[];
 }
 
-export type EspaceChange =
-  | EspaceNativeTransferChange
-  | EspaceSelfDestructBurnChange
-  | EspaceWrappedNativeDepositChange
-  | EspaceWrappedNativeWithdrawalChange
+export type LegacyEspaceChange =
+  | EspaceNativeTransferChangeLegacy
+  | EspaceSelfDestructBurnChangeLegacy
+  | EspaceWrappedNativeDepositChangeLegacy
+  | EspaceWrappedNativeWithdrawalChangeLegacy
   | Erc20TransferChange
   | Erc20ApprovalChange
   | Erc721TransferChange
@@ -475,7 +503,7 @@ export interface CrossSpaceNativeTransferChange {
 
 export interface NestedEspaceChange {
   changeType: 'ESPACE';
-  change: EspaceChange;
+  change: LegacyEspaceChange;
 }
 
 export type CoreChange =
@@ -704,7 +732,7 @@ export interface EspaceResponse {
   state: EspaceState;
   transaction: EspaceCompletedTransaction;
   outcome: EspaceOutcome;
-  changes: EspaceChange[];
+  changes: EspaceChanges;
 }
 
 export interface CoreResponse {

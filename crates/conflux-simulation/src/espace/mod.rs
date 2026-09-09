@@ -14,7 +14,14 @@ mod state_access;
 mod transaction;
 mod transaction_adapter;
 
-pub use changes::{EspaceChange, EspaceNativeCurrency};
+pub use changes::{
+    CombinedEspaceChangeRules, DefaultEspaceChangeRules, EspaceAccountDelegation,
+    EspaceAccountDelegationChange, EspaceAccountDelegationChangeRules, EspaceChange,
+    EspaceChangeDerivationError, EspaceChangeRules, EspaceChangeSet, EspaceChangeSetBuilder,
+    EspaceChanges, EspaceNativeAssetChangeRules, EspaceNativeCurrency, EspaceNativeTransferChange,
+    EspaceObservationRequirements, EspaceSelfDestructBurnChange, EspaceStandardChange,
+    EspaceStateChange, EspaceWrappedNativeDepositChange, EspaceWrappedNativeWithdrawalChange,
+};
 pub(crate) use changes::{
     MetadataReadError, NestedEspaceEffects, ReadCallOutcome, execute_read_call,
 };
@@ -29,11 +36,11 @@ pub use error::{
     EspaceStateAccessError, EspaceTransactionCompletionError,
 };
 pub use executed_transaction::{
-    EspaceCallKind, EspaceCommittedFrame, EspaceCommittedInternalTransfer, EspaceCommittedLog,
-    EspaceCommittedStorageWrite, EspaceContractAddress, EspaceExecutedTransaction,
-    EspaceExecutionPosition, EspaceExecutionSpace, EspaceExecutionStatus, EspaceFrameAction,
-    EspaceFrameId, EspaceObservationError, EspaceSemanticLogOccurrence, EspaceStorageChange,
-    EspaceTransferPocket,
+    EspaceAppliedAuthorization, EspaceCallKind, EspaceCommittedFrame,
+    EspaceCommittedInternalTransfer, EspaceCommittedLog, EspaceCommittedStorageWrite,
+    EspaceContractAddress, EspaceExecutedTransaction, EspaceExecutionPosition,
+    EspaceExecutionSpace, EspaceExecutionStatus, EspaceFrameAction, EspaceFrameId,
+    EspaceObservationError, EspaceSemanticLogOccurrence, EspaceStorageChange, EspaceTransferPocket,
 };
 pub use execution::{
     EspaceExecutionFailure, EspaceExecutionOutcome, EspaceLog, EspaceLogAddress,

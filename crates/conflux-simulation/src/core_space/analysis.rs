@@ -83,7 +83,12 @@ impl CoreSpaceAnalysisInput {
             &details.trace,
             cfx.espace_root_frame_ids(),
             wrapped_native_token,
-        );
+        )
+        .map_err(|error| {
+            CoreSpaceChangesError::inconsistent_execution(format!(
+                "nested eSpace standard log could not be decoded: {error}"
+            ))
+        })?;
 
         Ok(Self {
             cfx,

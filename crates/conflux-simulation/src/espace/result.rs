@@ -1,9 +1,9 @@
-use super::{EspaceBlockContext, EspaceChange, EspaceCompleteTransaction, EspaceExecutionOutcome};
+use super::{EspaceBlockContext, EspaceChanges, EspaceCompleteTransaction, EspaceExecutionOutcome};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct EspaceSimulation {
     pub context: EspaceBlockContext,
     pub transaction: EspaceCompleteTransaction,
     pub execution: EspaceExecutionOutcome,
-    pub changes: Vec<EspaceChange>,
+    pub changes: EspaceChanges,
 }

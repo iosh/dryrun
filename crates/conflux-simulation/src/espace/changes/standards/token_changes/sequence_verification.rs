@@ -23,6 +23,7 @@ use super::{
         read_erc721_approval_optional, read_erc721_owner, read_erc1155_balance,
         read_operator_approval,
     },
+    verified_changes::VerifiedTokenChange,
 };
 
 pub(super) fn verify_event(
@@ -33,7 +34,7 @@ pub(super) fn verify_event(
     pairs: &[WrappedEventPair],
     wrapped_pair_proofs: &mut HashMap<usize, WrappedPairProof>,
     final_state_expectations: &mut HashMap<FinalStateQuery, ExpectedFinalValue>,
-) -> Result<(), EspaceChangesError> {
+) -> Result<VerifiedTokenChange, EspaceChangesError> {
     let pair = pairs.iter().enumerate().find_map(|(index, pair)| {
         (pair.transfer_event_index == event_index || pair.wrapped_event_index == event_index)
             .then_some((index, *pair))
@@ -90,7 +91,7 @@ pub(super) fn verify_event(
                 },
                 ExpectedFinalValue::Amount(total_supply_after),
             );
-            Ok(())
+            Ok(VerifiedTokenChange::Wrapped)
         }
     }
 }

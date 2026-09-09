@@ -2333,6 +2333,7 @@ dependencies = [
  "cfx-executor",
  "cfx-internal-common",
  "cfx-parameters",
+ "cfx-parity-trace-types",
  "cfx-rpc-cfx-types",
  "cfx-rpc-eth-types",
  "cfx-statedb",

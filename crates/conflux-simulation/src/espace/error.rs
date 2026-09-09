@@ -127,12 +127,6 @@ pub enum EspaceChangesError {
 }
 
 impl EspaceChangesError {
-    pub(crate) fn inconsistent_execution(details: impl Into<String>) -> Self {
-        Self::InconsistentExecution {
-            details: details.into(),
-        }
-    }
-
     pub(crate) fn derivation(
         domain: &'static str,
         source: impl std::error::Error + Send + Sync + 'static,
@@ -155,8 +149,6 @@ pub enum EspaceSimulationError {
     Completion(EspaceTransactionCompletionError),
     #[error(transparent)]
     Execution(#[from] EspaceExecutionError),
-    #[error(transparent)]
-    Changes(#[from] EspaceChangesError),
     #[error("eSpace simulation requires an active Tokio runtime")]
     RuntimeUnavailable,
     #[error("blocking eSpace simulation task terminated unexpectedly: {source}")]

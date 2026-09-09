@@ -26,6 +26,10 @@ impl EspaceExecutionPosition {
     pub const fn index(self) -> usize {
         self.0
     }
+
+    pub(crate) const fn from_index(index: usize) -> Self {
+        Self(index)
+    }
 }
 
 /// A stable identifier for a committed eSpace frame.
@@ -260,6 +264,27 @@ pub struct EspaceStorageChange {
     collaterals: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EspaceAppliedAuthorization {
+    account: Address,
+    delegate: Address,
+    nonce: u64,
+}
+
+impl EspaceAppliedAuthorization {
+    pub const fn account(self) -> Address {
+        self.account
+    }
+
+    pub const fn delegate(self) -> Address {
+        self.delegate
+    }
+
+    pub const fn nonce(self) -> u64 {
+        self.nonce
+    }
+}
+
 impl EspaceStorageChange {
     pub const fn address(&self) -> Address {
         self.address
@@ -297,6 +322,7 @@ pub enum EspaceExecutionStatus {
 /// execution boundary. It contains no mutable State or provider handle.
 #[derive(Debug)]
 pub struct EspaceExecutedTransaction {
+    transaction_sender: Address,
     status: EspaceExecutionStatus,
     committed_frames: Vec<EspaceCommittedFrame>,
     committed_logs: Vec<EspaceCommittedLog>,
@@ -305,8 +331,8 @@ pub struct EspaceExecutedTransaction {
     storage_collateralized: Vec<EspaceStorageChange>,
     storage_released: Vec<EspaceStorageChange>,
     contracts_created: Vec<EspaceContractAddress>,
-    semantic_log_occurrences:
-        Result<Vec<(usize, EspaceOccurrenceHandle)>, EspaceObservationError>,
+    applied_authorizations: Vec<EspaceAppliedAuthorization>,
+    semantic_log_occurrences: Result<Vec<(usize, EspaceOccurrenceHandle)>, EspaceObservationError>,
 }
 
 impl EspaceExecutedTransaction {
@@ -342,12 +368,23 @@ impl EspaceExecutedTransaction {
         status: EspaceExecutionStatus,
         state: &mut EspaceStateAccess,
     ) -> Result<Self, EspaceExecutionError> {
+        let transaction_sender = state.caller();
         verify_committed_logs(&output.trace, &output.logs)?;
         let committed_frames = convert_frames(&output.trace)?;
         let (committed_logs, internal_transfers) =
             convert_events(&output.trace, &committed_frames)?;
         let storage_writes = convert_storage_writes(&output.trace, &committed_frames)?;
         let contracts_created = convert_created_contracts(output, &committed_frames)?;
+        let applied_authorizations = output
+            .trace
+            .applied_authorizations()
+            .iter()
+            .map(|authorization| EspaceAppliedAuthorization {
+                account: address_from_cfx(authorization.account()),
+                delegate: address_from_cfx(authorization.delegate()),
+                nonce: authorization.nonce(),
+            })
+            .collect();
         let storage_collateralized = output
             .storage_collateralized
             .iter()
@@ -389,6 +426,7 @@ impl EspaceExecutedTransaction {
         };
 
         Ok(Self {
+            transaction_sender,
             status,
             committed_frames,
             committed_logs,
@@ -397,12 +435,17 @@ impl EspaceExecutedTransaction {
             storage_collateralized,
             storage_released,
             contracts_created,
+            applied_authorizations,
             semantic_log_occurrences,
         })
     }
 
     pub fn status(&self) -> EspaceExecutionStatus {
         self.status
+    }
+
+    pub(crate) const fn transaction_sender(&self) -> Address {
+        self.transaction_sender
     }
 
     pub fn is_success(&self) -> bool {
@@ -419,10 +462,8 @@ impl EspaceExecutedTransaction {
 
     pub fn semantic_log_occurrences(
         &self,
-    ) -> Result<
-        impl Iterator<Item = EspaceSemanticLogOccurrence<'_>> + Clone,
-        EspaceObservationError,
-    > {
+    ) -> Result<impl Iterator<Item = EspaceSemanticLogOccurrence<'_>> + Clone, EspaceObservationError>
+    {
         let occurrences = self
             .semantic_log_occurrences
             .as_ref()
@@ -453,6 +494,10 @@ impl EspaceExecutedTransaction {
 
     pub fn contracts_created(&self) -> &[EspaceContractAddress] {
         &self.contracts_created
+    }
+
+    pub fn applied_authorizations(&self) -> &[EspaceAppliedAuthorization] {
+        &self.applied_authorizations
     }
 }
 

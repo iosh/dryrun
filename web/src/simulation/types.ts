@@ -2,6 +2,7 @@ import type { EnvironmentId } from './environment.ts';
 import type {
   CoreChange,
   EspaceChange,
+  LegacyEspaceChange,
   EvmChange,
   RpcSimulationResponse,
 } from './rpc.ts';
@@ -76,7 +77,11 @@ export type SimulationRequest = HexSimulationRequest | CoreSimulationRequest;
 
 export type SimulationResponse = RpcSimulationResponse;
 
-export type SimulationChange = EvmChange | EspaceChange | CoreChange;
+export type SimulationChange =
+  | EvmChange
+  | EspaceChange
+  | LegacyEspaceChange
+  | CoreChange;
 
 export interface SimulationChanges {
   items: readonly SimulationChange[];

@@ -7,7 +7,7 @@ use super::{
     EspaceExecutedTransaction, EspaceExecutionError, EspaceExecutionOutcome,
     EspaceResultIntegrationError, EspaceSimulation, EspaceSimulationError, EspaceSimulationLimits,
     EspaceSimulationRequest, EspaceStateAccess, EspaceStateAccessError, build_executor_transaction,
-    changes, classify_transaction_rejection, complete_transaction, convert_executor_outcome,
+    classify_transaction_rejection, complete_transaction, convert_executor_outcome,
     resolve_espace_context,
 };
 use crate::{
@@ -20,17 +20,71 @@ use crate::{
     state::ConfluxStateSource,
 };
 
-#[derive(Clone)]
-pub struct EspaceTransactionSimulator {
+pub struct EspaceTransactionSimulator<R = super::DefaultEspaceChangeRules> {
     backend: ConfluxSimulationBackend,
     limits: EspaceSimulationLimits,
+    change_rules: Arc<R>,
 }
 
-impl EspaceTransactionSimulator {
-    pub const fn new(backend: ConfluxSimulationBackend, limits: EspaceSimulationLimits) -> Self {
-        Self { backend, limits }
+impl<R> Clone for EspaceTransactionSimulator<R> {
+    fn clone(&self) -> Self {
+        Self {
+            backend: self.backend.clone(),
+            limits: self.limits,
+            change_rules: Arc::clone(&self.change_rules),
+        }
+    }
+}
+
+impl EspaceTransactionSimulator<super::DefaultEspaceChangeRules> {
+    pub fn new(backend: ConfluxSimulationBackend, limits: EspaceSimulationLimits) -> Self {
+        let change_rules = super::DefaultEspaceChangeRules::new(
+            backend.chain_spec().espace_native_currency().clone(),
+            backend.chain_spec().espace_wrapped_native_token(),
+        );
+        Self {
+            backend,
+            limits,
+            change_rules: Arc::new(change_rules),
+        }
+    }
+}
+
+impl<R> EspaceTransactionSimulator<R> {
+    pub fn with_change_rules<N>(self, change_rules: N) -> EspaceTransactionSimulator<N>
+    where
+        N: super::EspaceChangeRules,
+    {
+        EspaceTransactionSimulator {
+            backend: self.backend,
+            limits: self.limits,
+            change_rules: Arc::new(change_rules),
+        }
     }
 
+    pub fn with_additional_change_rules<N>(
+        self,
+        change_rules: N,
+    ) -> EspaceTransactionSimulator<super::CombinedEspaceChangeRules<R, N>>
+    where
+        R: super::EspaceChangeRules,
+        N: super::EspaceChangeRules,
+    {
+        EspaceTransactionSimulator {
+            backend: self.backend,
+            limits: self.limits,
+            change_rules: Arc::new(super::CombinedEspaceChangeRules::from_shared(
+                self.change_rules,
+                change_rules,
+            )),
+        }
+    }
+}
+
+impl<R> EspaceTransactionSimulator<R>
+where
+    R: super::EspaceChangeRules,
+{
     /// Simulates one eSpace transaction inside the caller's active Tokio runtime.
     pub async fn simulate(
         &self,
@@ -77,7 +131,7 @@ impl EspaceTransactionSimulator {
                 context: context.public_context,
                 transaction,
                 execution: EspaceExecutionOutcome::NotExecuted(rejection),
-                changes: Vec::new(),
+                changes: super::EspaceChanges::Complete(super::EspaceChangeSet::default()),
             });
         }
 
@@ -91,6 +145,7 @@ impl EspaceTransactionSimulator {
                 })?;
         let backend = self.backend.clone();
         let limits = self.limits;
+        let change_rules = Arc::clone(&self.change_rules);
         let blocking_runtime_handle = runtime_handle.clone();
 
         runtime_handle
@@ -102,6 +157,7 @@ impl EspaceTransactionSimulator {
                     transaction,
                     Arc::new(state_source),
                     limits,
+                    change_rules,
                 )
             })
             .await
@@ -109,14 +165,18 @@ impl EspaceTransactionSimulator {
     }
 }
 
-fn simulate_blocking(
+fn simulate_blocking<R>(
     backend: ConfluxSimulationBackend,
     runtime_handle: Handle,
     context: super::ResolvedEspaceContext,
     transaction: super::EspaceCompleteTransaction,
     state_source: Arc<ConfluxStateSource>,
     limits: EspaceSimulationLimits,
-) -> Result<EspaceSimulation, EspaceSimulationError> {
+    change_rules: Arc<R>,
+) -> Result<EspaceSimulation, EspaceSimulationError>
+where
+    R: super::EspaceChangeRules,
+{
     let mut execution_state =
         build_conflux_state(Arc::clone(&state_source), runtime_handle.clone()).map_err(
             |source| {
@@ -130,7 +190,7 @@ fn simulate_blocking(
     };
 
     let observer = ExecutionTraceObserver::new(Space::Ethereum).with_log_checkpoints(
-        changes::log_checkpoints(backend.chain_spec().espace_wrapped_native_token()),
+        change_rules.required_observations().into_log_checkpoints(),
         limits.max_occurrence_checkpoints,
     );
     let mut execution = ConfluxTransactionExecutor::new(&mut execution_state, &machine)
@@ -153,7 +213,7 @@ fn simulate_blocking(
             context: context.public_context,
             transaction,
             execution: outcome,
-            changes: Vec::new(),
+            changes: super::EspaceChanges::Complete(super::EspaceChangeSet::default()),
         });
     }
 
@@ -169,13 +229,6 @@ fn simulate_blocking(
     .map_err(EspaceExecutionError::from)?;
     let record = EspaceExecutedTransaction::from_outcome(&mut execution.outcome, &mut state)?;
 
-    let changes = changes::derive_changes(
-        &record,
-        &state,
-        backend.chain_spec().espace_wrapped_native_token(),
-        backend.chain_spec().espace_native_currency(),
-    )?;
-
     let outcome = convert_executor_outcome(
         execution.outcome,
         Some(&record),
@@ -183,6 +236,7 @@ fn simulate_blocking(
         Some(state.finalized()),
         backend.core_space_address_network(),
     )?;
+    let changes = super::EspaceChanges::from(change_rules.derive_changes(&record, &state));
 
     Ok(EspaceSimulation {
         context: context.public_context,

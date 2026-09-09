@@ -24,6 +24,7 @@ use super::{
         read_erc721_approval_optional, read_erc721_owner, read_erc1155_balance,
         read_operator_approval,
     },
+    verified_changes::{VerifiedStandardChange, VerifiedTokenChange},
 };
 
 pub(super) struct TokenEventVerification<'a> {
@@ -41,14 +42,22 @@ impl TokenEventVerification<'_> {
     pub(super) fn verify_standard_event(
         &mut self,
         event: &DecodedStandardEvent<Address>,
-    ) -> Result<(), EspaceChangesError> {
-        match event {
+    ) -> Result<VerifiedTokenChange, EspaceChangesError> {
+        let change = match event {
             DecodedStandardEvent::Erc20Transfer {
                 token,
                 from,
                 to,
                 amount,
-            } => self.verify_erc20_transfer(*token, *from, *to, *amount),
+            } => {
+                self.verify_erc20_transfer(*token, *from, *to, *amount)?;
+                VerifiedTokenChange::Standard(VerifiedStandardChange::Erc20Transfer {
+                    contract: *token,
+                    from: *from,
+                    to: *to,
+                    amount: *amount,
+                })
+            }
             DecodedStandardEvent::Erc20Approval {
                 token,
                 owner,
@@ -82,14 +91,28 @@ impl TokenEventVerification<'_> {
                     },
                     ExpectedFinalValue::Amount(after),
                 );
-                Ok(())
+                VerifiedTokenChange::Standard(VerifiedStandardChange::Erc20Approval {
+                    contract: *token,
+                    owner: *owner,
+                    spender: *spender,
+                    before,
+                    after,
+                })
             }
             DecodedStandardEvent::Erc721Transfer {
                 collection,
                 from,
                 to,
                 token_id,
-            } => self.verify_erc721_transfer(*collection, *from, *to, *token_id),
+            } => {
+                self.verify_erc721_transfer(*collection, *from, *to, *token_id)?;
+                VerifiedTokenChange::Standard(VerifiedStandardChange::Erc721Transfer {
+                    contract: *collection,
+                    from: *from,
+                    to: *to,
+                    token_id: *token_id,
+                })
+            }
             DecodedStandardEvent::Erc721Approval {
                 collection,
                 owner,
@@ -129,7 +152,13 @@ impl TokenEventVerification<'_> {
                     },
                     ExpectedFinalValue::Owner(after),
                 );
-                Ok(())
+                VerifiedTokenChange::Standard(VerifiedStandardChange::Erc721Approval {
+                    contract: *collection,
+                    owner: *owner,
+                    before,
+                    after,
+                    token_id: *token_id,
+                })
             }
             DecodedStandardEvent::OperatorApproval {
                 collection,
@@ -164,7 +193,13 @@ impl TokenEventVerification<'_> {
                     },
                     ExpectedFinalValue::Bool(after),
                 );
-                Ok(())
+                VerifiedTokenChange::Standard(VerifiedStandardChange::OperatorApproval {
+                    contract: *collection,
+                    owner: *owner,
+                    operator: *operator,
+                    before,
+                    after,
+                })
             }
             DecodedStandardEvent::Erc1155TransferSingle {
                 collection,
@@ -172,19 +207,26 @@ impl TokenEventVerification<'_> {
                 to,
                 token_id,
                 amount,
+                operator,
                 ..
-            } => self.verify_erc1155_transfer(
-                *collection,
-                *from,
-                *to,
-                &[(*token_id, *amount)],
-                false,
-            ),
+            } => self
+                .verify_erc1155_transfer(*collection, *from, *to, &[(*token_id, *amount)], false)
+                .map(|()| {
+                    VerifiedTokenChange::Standard(VerifiedStandardChange::Erc1155TransferSingle {
+                        contract: *collection,
+                        operator: *operator,
+                        from: *from,
+                        to: *to,
+                        token_id: *token_id,
+                        amount: *amount,
+                    })
+                })?,
             DecodedStandardEvent::Erc1155TransferBatch {
                 collection,
                 from,
                 to,
                 items,
+                operator,
                 ..
             } => {
                 let items = items
@@ -192,8 +234,20 @@ impl TokenEventVerification<'_> {
                     .map(|item| (item.token_id, item.raw_amount))
                     .collect::<Vec<_>>();
                 self.verify_erc1155_transfer(*collection, *from, *to, &items, true)
+                    .map(|()| {
+                        VerifiedTokenChange::Standard(
+                            VerifiedStandardChange::Erc1155TransferBatch {
+                                contract: *collection,
+                                operator: *operator,
+                                from: *from,
+                                to: *to,
+                                items,
+                            },
+                        )
+                    })?
             }
-        }
+        };
+        Ok(change)
     }
 
     fn verify_erc721_transfer(

@@ -6,6 +6,7 @@ use cfx_executor::{
     stack::{FrameResult, FrameReturn},
     state::{SavedState, State},
 };
+use cfx_parity_trace_types::{SetAuth, SetAuthOutcome};
 use cfx_types::{Address, AddressWithSpace, H256, Space, U256};
 use cfx_vm_types::{ActionParams, ActionValue, CallType};
 use typemap::ShareDebugMap;
@@ -106,6 +107,28 @@ pub(crate) struct CommittedExecutionTrace {
     frames_by_id: Vec<Option<TraceFrame>>,
     events: Vec<TraceEvent>,
     snapshots: Option<CommittedStateSnapshots>,
+    applied_authorizations: Vec<CommittedAuthorization>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CommittedAuthorization {
+    account: Address,
+    delegate: Address,
+    nonce: u64,
+}
+
+impl CommittedAuthorization {
+    pub(crate) const fn account(self) -> Address {
+        self.account
+    }
+
+    pub(crate) const fn delegate(self) -> Address {
+        self.delegate
+    }
+
+    pub(crate) const fn nonce(self) -> u64 {
+        self.nonce
+    }
 }
 
 #[derive(Debug, Default)]
@@ -133,6 +156,10 @@ impl LogCheckpoint {
 impl CommittedExecutionTrace {
     pub(crate) fn events(&self) -> &[TraceEvent] {
         &self.events
+    }
+
+    pub(crate) fn applied_authorizations(&self) -> &[CommittedAuthorization] {
+        &self.applied_authorizations
     }
 
     pub(crate) fn take_snapshots(&mut self) -> Option<CommittedStateSnapshots> {
@@ -215,6 +242,7 @@ struct ExecutionTraceJournal {
     next_event_position: TracePosition,
     invalid_sequence: bool,
     transaction_space: Space,
+    applied_authorizations: Vec<CommittedAuthorization>,
 }
 
 impl ExecutionTraceJournal {
@@ -228,7 +256,32 @@ impl ExecutionTraceJournal {
             next_event_position: 0,
             invalid_sequence: false,
             transaction_space,
+            applied_authorizations: Vec::new(),
         }
+    }
+
+    fn record_set_auth(&mut self, action: SetAuth) {
+        // CIP-7702 authorization processing is transaction-level and is only
+        // meaningful for an Ethereum/eSpace transaction.
+        if self.transaction_space != Space::Ethereum || action.space != Space::Ethereum {
+            return;
+        }
+        if action.outcome != SetAuthOutcome::Success {
+            return;
+        }
+        let Some(account) = action.author else {
+            self.invalid_sequence = true;
+            return;
+        };
+        let Some(nonce) = u64::try_from(action.nonce).ok() else {
+            self.invalid_sequence = true;
+            return;
+        };
+        self.applied_authorizations.push(CommittedAuthorization {
+            account,
+            delegate: action.address,
+            nonce,
+        });
     }
 
     fn allocate_event_position(&mut self) -> TracePosition {
@@ -269,7 +322,11 @@ impl ExecutionTraceJournal {
     }
 
     fn enter_create_frame(&mut self, params: &ActionParams) {
-        let init_code = params.code.as_deref().map(Vec::as_slice).unwrap_or_default();
+        let init_code = params
+            .code
+            .as_deref()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         let frame = TraceFrame {
             parent_id: self.active_frames.last().map(|frame| frame.id),
             space: params.space,
@@ -471,6 +528,7 @@ impl ExecutionTraceJournal {
             frames_by_id: self.frames_by_id,
             events: self.events,
             snapshots: Some(self.snapshots),
+            applied_authorizations: self.applied_authorizations,
         })
     }
 }
@@ -609,7 +667,11 @@ impl OpcodeTracer for ExecutionTraceObserver {
     }
 }
 
-impl SetAuthTracer for ExecutionTraceObserver {}
+impl SetAuthTracer for ExecutionTraceObserver {
+    fn record_set_auth(&mut self, set_auth_action: SetAuth) {
+        self.journal.record_set_auth(set_auth_action);
+    }
+}
 impl StorageTracer for ExecutionTraceObserver {
     fn trace_storage_write(&mut self, address: AddressWithSpace, key: &[u8], value: U256) {
         self.journal.record_storage_write(address, key, value);

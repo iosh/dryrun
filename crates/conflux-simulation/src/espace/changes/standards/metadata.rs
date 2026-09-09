@@ -1,7 +1,5 @@
 use alloy_primitives::Address;
-use contract_standards::{
-    DecodedStandardLog, Erc20Metadata, MetadataCall, MetadataValues, StandardChange,
-};
+use contract_standards::{Erc20Metadata, MetadataCall, MetadataValues};
 
 use crate::espace::{EspaceChangesError, EspaceReadCallOutcome, EspaceStateReader};
 
@@ -19,12 +17,12 @@ impl TokenMetadataOutcomes {
             .unwrap_or_else(|_| unreachable!("token metadata collection records every outcome"))
     }
 
-    pub(super) fn standard_change(
+    pub(super) fn erc721(
         &self,
-        decoded: DecodedStandardLog<Address>,
-    ) -> StandardChange<Address> {
-        decoded
-            .into_change(&self.values)
+        contract: &Address,
+    ) -> contract_standards::Erc721CollectionMetadata {
+        self.values
+            .erc721_collection_metadata(contract)
             .unwrap_or_else(|_| unreachable!("token metadata collection records every outcome"))
     }
 }
