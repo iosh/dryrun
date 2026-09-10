@@ -34,6 +34,10 @@ pub enum CoreSpaceStateAccessError {
         #[source]
         source: StateDbError,
     },
+    #[error("Core Space read call failed: {details}")]
+    ReadCall { details: String },
+    #[error("Core Space state reader is unavailable after a read-call failure")]
+    Unavailable,
 }
 
 #[derive(Debug, Error)]
