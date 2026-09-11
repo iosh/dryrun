@@ -72,7 +72,7 @@ pub fn build_rpc_module(
                         .map_err(simulation_task_error_response)?
                         .map_err(core_space_error_response)?;
 
-                    SimulateCoreSpaceTransactionResponse::try_from_output(output, rpc_network)
+                    SimulateCoreSpaceTransactionResponse::try_from_simulation(output, rpc_network)
                         .map_err(|error| core_space_response_error(error.to_string()))
                 }
             },
