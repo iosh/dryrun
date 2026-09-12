@@ -20,9 +20,10 @@ pub(crate) use transaction::{ResolvedStorageSponsorship, resolve_storage_sponsor
 pub use changes::{
     CombinedCoreSpaceChangeRules, CoreSpaceChange, CoreSpaceChangeDerivationError,
     CoreSpaceChangeRules, CoreSpaceChangeSet, CoreSpaceChangeSetBuilder,
-    CoreSpaceNativeAndStakingChangeRules, CoreSpaceNativeCurrency, CrossSpaceAddress,
-    DefaultCoreSpaceChangeRules, GovernanceParameter, GovernanceVote, SponsoredResource,
-    SponsorshipAccessRuleScope, SponsorshipFundingTerms, SponsorshipReplacement, VoteAllocation,
+    CoreSpaceNativeAndStakingChangeRules, CoreSpaceNativeCurrency, CoreSpacePoSChangeRules,
+    CrossSpaceAddress, DefaultCoreSpaceChangeRules, GovernanceParameter, GovernanceVote,
+    SponsoredResource, SponsorshipAccessRuleScope, SponsorshipFundingTerms, SponsorshipReplacement,
+    VoteAllocation,
 };
 pub use conflux_provider::CoreAddress;
 pub use context::{CoreSpaceBlockContext, CoreSpaceBlockSelector, CoreSpaceContextError};
@@ -49,7 +50,8 @@ pub use request::CoreSpaceSimulationRequest;
 pub use result::{CoreSpaceChanges, CoreSpaceSimulation};
 pub use simulator::CoreSpaceTransactionSimulator;
 pub use state_access::{
-    CoreSpaceDepositLot, CoreSpaceStateAccess, CoreSpaceStateReader, CoreSpaceVoteLockInfo,
+    CoreSpaceDepositLot, CoreSpacePoSRegistrationState, CoreSpaceStateAccess, CoreSpaceStateReader,
+    CoreSpaceVoteLockInfo,
 };
 pub use transaction::{
     CoreSpaceAccessListItem, CoreSpaceCompleteTransaction, CoreSpacePartialTransaction,

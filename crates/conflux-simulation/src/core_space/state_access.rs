@@ -1,22 +1,23 @@
 use std::{cell::RefCell, sync::Arc};
 
-use alloy_primitives::{Bytes, U256 as AlloyU256};
+use alloy_primitives::{B256, Bytes, U256 as AlloyU256};
 use cfx_executor::{
     executive::{
         ChargeCollateral, ExecutionError, ExecutionOutcome, ExecutiveContext, TransactOptions,
         TransactSettings,
     },
+    internal_contract::pos_internal_entries::{address_entry, identifier_entry, index_entry},
     machine::Machine,
     state::State,
 };
-use cfx_types::{Address, AddressSpaceUtil, AddressWithSpace, Space, U256};
+use cfx_types::{Address, AddressSpaceUtil, AddressWithSpace, BigEndianHash, H256, Space, U256};
 use conflux_provider::{CoreAddress, Network};
 use primitives::transaction::{Action, NativeTransaction, TypedNativeTransaction};
 use tokio::runtime::Handle;
 
 use crate::{
     execution::{PreparedTransactionExecution, build_conflux_state},
-    primitive::u256_from_cfx,
+    primitive::{b256_from_cfx, b256_to_cfx, u256_from_cfx},
     state::ConfluxStateSource,
 };
 
@@ -275,6 +276,59 @@ impl CoreSpaceStateReader {
         self.with_state(|state| Ok(u256_from_cfx(state.total_staking_tokens())))
     }
 
+    pub fn pos_identifier_for_account(
+        &self,
+        account: CoreAddress,
+    ) -> Result<Option<B256>, CoreSpaceStateAccessError> {
+        let account = self.validate_address(account)?;
+        self.with_state(|state| {
+            let contract =
+                cfx_parameters::internal_contract_addresses::POS_REGISTER_CONTRACT_ADDRESS
+                    .with_native_space();
+            let value = state
+                .storage_at(&contract, &identifier_entry(&account))
+                .map_err(|source| operation("read Core Space PoS account mapping", source))?;
+            let identifier = b256_from_cfx(H256::from_uint(&value));
+            Ok((!identifier.is_zero()).then_some(identifier))
+        })
+    }
+
+    pub fn pos_registration_for_identifier(
+        &self,
+        identifier: B256,
+    ) -> Result<CoreSpacePoSRegistrationState, CoreSpaceStateAccessError> {
+        self.with_state(|state| {
+            let contract =
+                cfx_parameters::internal_contract_addresses::POS_REGISTER_CONTRACT_ADDRESS
+                    .with_native_space();
+            let identifier = b256_to_cfx(identifier);
+            let account_word = state
+                .storage_at(&contract, &address_entry(&identifier))
+                .map_err(|source| operation("read Core Space PoS reverse mapping", source))?;
+            let status_word = state
+                .storage_at(&contract, &index_entry(&identifier))
+                .map_err(|source| operation("read Core Space PoS registration", source))?;
+            let account = Address::from(H256::from_uint(&account_word));
+            let account = if account == Address::zero() {
+                None
+            } else {
+                Some(
+                    CoreAddress::from_bytes(account.0, self.context.address_network)
+                        .expect("Core Space state reader retains a validated network"),
+                )
+            };
+            Ok(CoreSpacePoSRegistrationState {
+                account,
+                registered_vote_count: status_word.0[0],
+                unlocked_vote_count: status_word.0[1],
+            })
+        })
+    }
+
+    pub fn total_pos_staking(&self) -> Result<AlloyU256, CoreSpaceStateAccessError> {
+        self.with_state(|state| Ok(u256_from_cfx(state.total_pos_staking_tokens())))
+    }
+
     pub(crate) fn deposit_list_length_raw(
         &self,
         address: Address,
@@ -512,6 +566,27 @@ impl CoreSpaceVoteLockInfo {
 
     pub const fn unlock_block_number(self) -> AlloyU256 {
         self.unlock_block_number
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoreSpacePoSRegistrationState {
+    account: Option<CoreAddress>,
+    registered_vote_count: u64,
+    unlocked_vote_count: u64,
+}
+
+impl CoreSpacePoSRegistrationState {
+    pub const fn account(self) -> Option<CoreAddress> {
+        self.account
+    }
+
+    pub const fn registered_vote_count(self) -> u64 {
+        self.registered_vote_count
+    }
+
+    pub const fn unlocked_vote_count(self) -> u64 {
+        self.unlocked_vote_count
     }
 }
 

@@ -1,4 +1,5 @@
 mod native_staking;
+mod pos;
 
 use std::{collections::BTreeMap, error::Error as StdError, sync::Arc};
 
@@ -310,6 +311,69 @@ impl CoreSpaceChangeSetBuilder {
         )
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the builder mirrors the public PoS registration change payload"
+    )]
+    pub fn pos_registration(
+        &mut self,
+        position: CoreSpaceExecutionPosition,
+        account: CoreAddress,
+        identifier: B256,
+        bls_public_key: Bytes,
+        vrf_public_key: Bytes,
+        initial_vote_count: u64,
+        locked_amount: U256,
+    ) -> Result<(), CoreSpaceChangeDerivationError> {
+        self.insert(
+            position,
+            CoreSpaceChange::PoSRegistration {
+                account,
+                identifier,
+                bls_public_key,
+                vrf_public_key,
+                initial_vote_count,
+                locked_amount,
+            },
+        )
+    }
+
+    pub fn pos_stake_increase(
+        &mut self,
+        position: CoreSpaceExecutionPosition,
+        account: CoreAddress,
+        identifier: B256,
+        added_vote_count: u64,
+        added_locked_amount: U256,
+    ) -> Result<(), CoreSpaceChangeDerivationError> {
+        self.insert(
+            position,
+            CoreSpaceChange::PoSStakeIncrease {
+                account,
+                identifier,
+                added_vote_count,
+                added_locked_amount,
+            },
+        )
+    }
+
+    pub fn pos_retirement_request(
+        &mut self,
+        position: CoreSpaceExecutionPosition,
+        account: CoreAddress,
+        identifier: B256,
+        requested_vote_count: u64,
+    ) -> Result<(), CoreSpaceChangeDerivationError> {
+        self.insert(
+            position,
+            CoreSpaceChange::PoSRetirementRequest {
+                account,
+                identifier,
+                requested_vote_count,
+            },
+        )
+    }
+
     pub fn finish(self) -> CoreSpaceChangeSet {
         let entries = self.entries.into_iter().collect::<Vec<_>>();
         let items = entries.iter().map(|(_, change)| change.clone()).collect();
@@ -419,15 +483,36 @@ impl CoreSpaceChangeRules for CoreSpaceNativeAndStakingChangeRules {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CoreSpacePoSChangeRules;
+
+impl CoreSpacePoSChangeRules {
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl CoreSpaceChangeRules for CoreSpacePoSChangeRules {
+    fn derive_changes(
+        &self,
+        execution: &CoreSpaceExecutedTransaction,
+        state: &CoreSpaceStateAccess,
+    ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
+        pos::derive_changes(execution, state).map_err(Into::into)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DefaultCoreSpaceChangeRules {
-    component: CoreSpaceNativeAndStakingChangeRules,
+    native_and_staking: CoreSpaceNativeAndStakingChangeRules,
+    pos: CoreSpacePoSChangeRules,
 }
 
 impl DefaultCoreSpaceChangeRules {
     pub fn new(currency: CoreSpaceNativeCurrency) -> Self {
         Self {
-            component: CoreSpaceNativeAndStakingChangeRules::new(currency),
+            native_and_staking: CoreSpaceNativeAndStakingChangeRules::new(currency),
+            pos: CoreSpacePoSChangeRules,
         }
     }
 }
@@ -438,6 +523,8 @@ impl CoreSpaceChangeRules for DefaultCoreSpaceChangeRules {
         execution: &CoreSpaceExecutedTransaction,
         state: &CoreSpaceStateAccess,
     ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
-        self.component.derive_changes(execution, state)
+        let native_and_staking = self.native_and_staking.derive_changes(execution, state)?;
+        let pos = self.pos.derive_changes(execution, state)?;
+        native_and_staking.merge(pos)
     }
 }
