@@ -1,6 +1,7 @@
 mod governance;
 mod native_staking;
 mod pos;
+mod sponsorship;
 
 use std::{collections::BTreeMap, error::Error as StdError, sync::Arc};
 
@@ -72,6 +73,22 @@ pub enum CoreSpaceChange {
         round: u64,
         votes: Vec<GovernanceVote>,
     },
+    GasSponsorship {
+        contract_address: CoreAddress,
+        sponsor: Option<CoreAddress>,
+        balance: U256,
+        gas_fee_upper_bound: U256,
+    },
+    StorageSponsorship {
+        contract_address: CoreAddress,
+        sponsor: Option<CoreAddress>,
+        balance: U256,
+        storage_points: Option<StoragePoints>,
+    },
+    StorageCollateral {
+        contract_address: CoreAddress,
+        raw_amount: U256,
+    },
     SponsorshipFunding {
         resource: SponsoredResource,
         contract_address: CoreAddress,
@@ -115,6 +132,12 @@ pub struct GovernanceVote {
     pub parameter: GovernanceParameter,
     pub allocation: VoteAllocation,
     pub replaced_allocation: Option<VoteAllocation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoragePoints {
+    pub unused: U256,
+    pub used: U256,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -395,6 +418,59 @@ impl CoreSpaceChangeSetBuilder {
         )
     }
 
+    pub fn gas_sponsorship(
+        &mut self,
+        position: CoreSpaceExecutionPosition,
+        contract_address: CoreAddress,
+        sponsor: Option<CoreAddress>,
+        balance: U256,
+        gas_fee_upper_bound: U256,
+    ) -> Result<(), CoreSpaceChangeDerivationError> {
+        self.insert(
+            position,
+            CoreSpaceChange::GasSponsorship {
+                contract_address,
+                sponsor,
+                balance,
+                gas_fee_upper_bound,
+            },
+        )
+    }
+
+    pub fn storage_sponsorship(
+        &mut self,
+        position: CoreSpaceExecutionPosition,
+        contract_address: CoreAddress,
+        sponsor: Option<CoreAddress>,
+        balance: U256,
+        storage_points: Option<StoragePoints>,
+    ) -> Result<(), CoreSpaceChangeDerivationError> {
+        self.insert(
+            position,
+            CoreSpaceChange::StorageSponsorship {
+                contract_address,
+                sponsor,
+                balance,
+                storage_points,
+            },
+        )
+    }
+
+    pub fn storage_collateral(
+        &mut self,
+        position: CoreSpaceExecutionPosition,
+        contract_address: CoreAddress,
+        raw_amount: U256,
+    ) -> Result<(), CoreSpaceChangeDerivationError> {
+        self.insert(
+            position,
+            CoreSpaceChange::StorageCollateral {
+                contract_address,
+                raw_amount,
+            },
+        )
+    }
+
     pub fn finish(self) -> CoreSpaceChangeSet {
         let entries = self.entries.into_iter().collect::<Vec<_>>();
         let items = entries.iter().map(|(_, change)| change.clone()).collect();
@@ -547,6 +623,7 @@ pub struct DefaultCoreSpaceChangeRules {
     native_and_staking: CoreSpaceNativeAndStakingChangeRules,
     pos: CoreSpacePoSChangeRules,
     governance: CoreSpaceGovernanceChangeRules,
+    sponsorship: CoreSpaceSponsorshipChangeRules,
 }
 
 impl DefaultCoreSpaceChangeRules {
@@ -555,6 +632,7 @@ impl DefaultCoreSpaceChangeRules {
             native_and_staking: CoreSpaceNativeAndStakingChangeRules::new(currency),
             pos: CoreSpacePoSChangeRules,
             governance: CoreSpaceGovernanceChangeRules,
+            sponsorship: CoreSpaceSponsorshipChangeRules,
         }
     }
 }
@@ -568,6 +646,29 @@ impl CoreSpaceChangeRules for DefaultCoreSpaceChangeRules {
         let native_and_staking = self.native_and_staking.derive_changes(execution, state)?;
         let pos = self.pos.derive_changes(execution, state)?;
         let governance = self.governance.derive_changes(execution, state)?;
-        native_and_staking.merge(pos)?.merge(governance)
+        let sponsorship = self.sponsorship.derive_changes(execution, state)?;
+        native_and_staking
+            .merge(pos)?
+            .merge(governance)?
+            .merge(sponsorship)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CoreSpaceSponsorshipChangeRules;
+
+impl CoreSpaceSponsorshipChangeRules {
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl CoreSpaceChangeRules for CoreSpaceSponsorshipChangeRules {
+    fn derive_changes(
+        &self,
+        execution: &CoreSpaceExecutedTransaction,
+        state: &CoreSpaceStateAccess,
+    ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
+        sponsorship::derive_changes(execution, state).map_err(Into::into)
     }
 }

@@ -473,6 +473,17 @@ impl CoreSpaceStateReader {
         Ok(Address::from(address.bytes()))
     }
 
+    pub(super) fn core_address(
+        &self,
+        address: Address,
+    ) -> Result<CoreAddress, CoreSpaceStateAccessError> {
+        CoreAddress::from_bytes(address.0, self.context.address_network).map_err(|_| {
+            CoreSpaceStateAccessError::ReadCall {
+                details: "failed to represent Core Space address".to_owned(),
+            }
+        })
+    }
+
     pub(super) fn staking(
         &self,
         address: Address,
@@ -532,7 +543,6 @@ impl CoreSpaceStateReader {
     pub(super) fn sponsorship(
         &self,
         contract: Address,
-        account: Address,
     ) -> Result<CoreSpaceSponsorshipState, CoreSpaceStateAccessError> {
         self.with_state(|state| {
             Ok(CoreSpaceSponsorshipState {
@@ -551,11 +561,17 @@ impl CoreSpaceStateReader {
                 storage_balance: state.sponsor_balance_for_collateral(&contract).map_err(
                     |source| operation("read Core Space storage sponsor balance", source),
                 )?,
-                account_is_eligible: state
-                    .check_contract_whitelist(&contract, &account)
-                    .map_err(|source| {
-                        operation("read Core Space sponsorship access rule", source)
-                    })?,
+                storage_points: state
+                    .sponsor_info(&contract)
+                    .map_err(|source| operation("read Core Space storage points", source))?
+                    .and_then(|info| info.storage_points)
+                    .map(|points| CoreSpaceStoragePoints {
+                        unused: points.unused,
+                        used: points.used,
+                    }),
+                storage_collateral: state
+                    .token_collateral_for_storage(&contract)
+                    .map_err(|source| operation("read Core Space storage collateral", source))?,
             })
         })
     }
@@ -721,7 +737,14 @@ pub(super) struct CoreSpaceSponsorshipState {
     pub(super) gas_bound: U256,
     pub(super) storage_sponsor: Option<Address>,
     pub(super) storage_balance: U256,
-    pub(super) account_is_eligible: bool,
+    pub(super) storage_points: Option<CoreSpaceStoragePoints>,
+    pub(super) storage_collateral: U256,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct CoreSpaceStoragePoints {
+    pub(super) unused: U256,
+    pub(super) used: U256,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

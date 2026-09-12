@@ -126,6 +126,22 @@ pub(super) enum Change {
         round: U64,
         votes: Vec<GovernanceVote>,
     },
+    GasSponsorship {
+        contract_address: RpcAddress,
+        sponsor: Option<RpcAddress>,
+        balance_raw_amount: U256,
+        gas_fee_upper_bound_raw_amount: U256,
+    },
+    StorageSponsorship {
+        contract_address: RpcAddress,
+        sponsor: Option<RpcAddress>,
+        balance_raw_amount: U256,
+        storage_points: Option<StoragePoints>,
+    },
+    StorageCollateral {
+        contract_address: RpcAddress,
+        raw_amount: U256,
+    },
     SponsorshipFunding {
         contract_address: RpcAddress,
         sponsor: RpcAddress,
@@ -165,6 +181,13 @@ pub(super) struct NativeCurrency {
     name: String,
     symbol: String,
     decimals: u8,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct StoragePoints {
+    unused_raw_amount: U256,
+    used_raw_amount: U256,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -346,6 +369,38 @@ fn try_map_change(
             voter: map_address(voter, network, field, "voter")?,
             round: round.into(),
             votes: votes.into_iter().map(Into::into).collect(),
+        },
+        Source::GasSponsorship {
+            contract_address,
+            sponsor,
+            balance,
+            gas_fee_upper_bound,
+        } => Change::GasSponsorship {
+            contract_address: map_address(contract_address, network, field, "contractAddress")?,
+            sponsor: try_map_optional_address(sponsor, network, field, "sponsor")?,
+            balance_raw_amount: u256_to_wire(balance),
+            gas_fee_upper_bound_raw_amount: u256_to_wire(gas_fee_upper_bound),
+        },
+        Source::StorageSponsorship {
+            contract_address,
+            sponsor,
+            balance,
+            storage_points,
+        } => Change::StorageSponsorship {
+            contract_address: map_address(contract_address, network, field, "contractAddress")?,
+            sponsor: try_map_optional_address(sponsor, network, field, "sponsor")?,
+            balance_raw_amount: u256_to_wire(balance),
+            storage_points: storage_points.map(|points| StoragePoints {
+                unused_raw_amount: u256_to_wire(points.unused),
+                used_raw_amount: u256_to_wire(points.used),
+            }),
+        },
+        Source::StorageCollateral {
+            contract_address,
+            raw_amount,
+        } => Change::StorageCollateral {
+            contract_address: map_address(contract_address, network, field, "contractAddress")?,
+            raw_amount: u256_to_wire(raw_amount),
         },
         Source::SponsorshipFunding {
             resource: _,

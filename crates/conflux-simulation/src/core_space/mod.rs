@@ -21,9 +21,10 @@ pub use changes::{
     CombinedCoreSpaceChangeRules, CoreSpaceChange, CoreSpaceChangeDerivationError,
     CoreSpaceChangeRules, CoreSpaceChangeSet, CoreSpaceChangeSetBuilder,
     CoreSpaceGovernanceChangeRules, CoreSpaceNativeAndStakingChangeRules, CoreSpaceNativeCurrency,
-    CoreSpacePoSChangeRules, CrossSpaceAddress, DefaultCoreSpaceChangeRules, GovernanceParameter,
-    GovernanceVote, SponsoredResource, SponsorshipAccessRuleScope, SponsorshipFundingTerms,
-    SponsorshipReplacement, VoteAllocation,
+    CoreSpacePoSChangeRules, CoreSpaceSponsorshipChangeRules, CrossSpaceAddress,
+    DefaultCoreSpaceChangeRules, GovernanceParameter, GovernanceVote, SponsoredResource,
+    SponsorshipAccessRuleScope, SponsorshipFundingTerms, SponsorshipReplacement, StoragePoints,
+    VoteAllocation,
 };
 pub use conflux_provider::CoreAddress;
 pub use context::{CoreSpaceBlockContext, CoreSpaceBlockSelector, CoreSpaceContextError};
