@@ -531,13 +531,9 @@ export type CoreChange =
   | CrossSpaceNativeTransferChange
   | NestedEspaceChange;
 
-export type ExecutionStatus = 'SUCCESS' | 'FAILED' | 'NOT_EXECUTED';
-
-export interface ExecutionFailure {
-  code: string;
-  message: string;
-  reason?: string | null;
-}
+export type CoreChanges =
+  | { status: 'complete'; items: CoreChange[] }
+  | { status: 'unavailable'; error: string };
 
 export interface EvmState {
   blockNumber: string;
@@ -703,23 +699,87 @@ export type EspaceOutcome =
     })
   | { status: 'rejected'; error: string };
 
-export interface CoreExecution {
-  chainId: string;
-  state: {
-    epochNumber: string;
-    pivotHash: string;
-  };
-  status: ExecutionStatus;
-  gasUsed: string;
-  gasLimit: string;
-  gasCharged: string;
-  fee: string;
-  burntFee: string | null;
-  gasCoveredBySponsor: boolean;
-  storageCoveredBySponsor: boolean;
-  output: string;
-  failure: ExecutionFailure | null;
+export interface CoreState {
+  epochNumber: string;
+  pivotHash: string;
 }
+
+export interface CoreAccessListItem {
+  address: string;
+  storageKeys: string[];
+}
+
+interface CoreCompletedTransactionBase {
+  type: string;
+  chainId: string;
+  from: string;
+  to: string | null;
+  nonce: string;
+  gas: string;
+  value: string;
+  data: string;
+  storageLimit: string;
+  epochHeight: string;
+}
+
+export interface CoreCip155Transaction
+  extends CoreCompletedTransactionBase {
+  type: '0x0';
+  gasPrice: string;
+}
+
+export interface CoreCip2930Transaction
+  extends CoreCompletedTransactionBase {
+  type: '0x1';
+  gasPrice: string;
+  accessList: CoreAccessListItem[];
+}
+
+export interface CoreCip1559Transaction
+  extends CoreCompletedTransactionBase {
+  type: '0x2';
+  maxFeePerGas: string;
+  maxPriorityFeePerGas: string;
+  accessList: CoreAccessListItem[];
+}
+
+export type CoreCompletedTransaction =
+  | CoreCip155Transaction
+  | CoreCip2930Transaction
+  | CoreCip1559Transaction;
+
+interface CoreExecutionAccounting {
+  gasUsed: string;
+  gasFee: string;
+  burntGasFee?: string;
+  effectiveGasPrice: string;
+  gasCoveredBySponsor: boolean;
+  storageCollateralized: string;
+  storageCoveredBySponsor: boolean;
+}
+
+export type CoreOutcome =
+  | (CoreExecutionAccounting & {
+      status: 'success';
+      returnData: string;
+      logs: SimulationLog[];
+    })
+  | (CoreExecutionAccounting & {
+      status: 'success';
+      contractAddress: string;
+      runtimeCode: string;
+      logs: SimulationLog[];
+    })
+  | (CoreExecutionAccounting & {
+      status: 'reverted';
+      revertData: string;
+      reason?: string;
+    })
+  | (CoreExecutionAccounting & {
+      status: 'failed';
+      error: string;
+    })
+  | { status: 'rejected'; error: string };
 
 export interface EthereumResponse {
   state: EvmState;
@@ -736,8 +796,10 @@ export interface EspaceResponse {
 }
 
 export interface CoreResponse {
-  execution: CoreExecution;
-  changes: CoreChange[];
+  state: CoreState;
+  transaction: CoreCompletedTransaction;
+  outcome: CoreOutcome;
+  changes: CoreChanges;
 }
 
 export type RpcSimulationResponse =

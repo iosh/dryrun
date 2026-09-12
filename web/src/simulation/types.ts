@@ -92,10 +92,6 @@ export function simulationChanges(
   response: RpcSimulationResponse,
 ): SimulationChanges {
   const changes = response.changes;
-  if (Array.isArray(changes)) {
-    return { items: changes, error: null };
-  }
-
   if (changes.status === 'unavailable') {
     return { items: [], error: changes.error };
   }

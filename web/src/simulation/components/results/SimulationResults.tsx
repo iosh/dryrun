@@ -106,11 +106,9 @@ function SimulationResult({ record }: Readonly<{ record: SimulationRecord }>) {
         nativeSymbol={viewModel.environment.nativeSymbol}
       />
 
-      {'transaction' in record.response ? (
-        <RawJsonDetails label="Completed transaction" value={record.response.transaction} />
-      ) : null}
+      <RawJsonDetails label="Completed transaction" value={record.response.transaction} />
 
-      {'outcome' in record.response && record.response.outcome.status === 'success' ? (
+      {record.response.outcome.status === 'success' ? (
         <RawJsonDetails label="Committed logs" value={record.response.outcome.logs} />
       ) : null}
 

@@ -1,36 +1,40 @@
-use super::{
-    CoreSpaceBlockContext, CoreSpaceCompleteTransaction, CoreSpaceExecution,
-    changes::CoreSpaceChange,
-};
+use super::{CoreSpaceBlockContext, CoreSpaceCompleteTransaction, CoreSpaceExecutionOutcome};
+
+/// Availability of verified Core Space state changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoreSpaceChanges {
+    Complete(Vec<super::changes::CoreSpaceChange>),
+    Unavailable { error: String },
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreSpaceSimulation {
     pub context: CoreSpaceBlockContext,
     pub transaction: CoreSpaceCompleteTransaction,
-    execution: CoreSpaceExecution,
-    changes: Vec<CoreSpaceChange>,
+    outcome: CoreSpaceExecutionOutcome,
+    changes: CoreSpaceChanges,
 }
 
 impl CoreSpaceSimulation {
     pub(crate) fn new(
         context: CoreSpaceBlockContext,
         transaction: CoreSpaceCompleteTransaction,
-        execution: CoreSpaceExecution,
-        changes: Vec<CoreSpaceChange>,
+        outcome: CoreSpaceExecutionOutcome,
+        changes: CoreSpaceChanges,
     ) -> Self {
         Self {
             context,
             transaction,
-            execution,
+            outcome,
             changes,
         }
     }
 
-    pub fn execution(&self) -> &CoreSpaceExecution {
-        &self.execution
+    pub fn outcome(&self) -> &CoreSpaceExecutionOutcome {
+        &self.outcome
     }
 
-    pub fn changes(&self) -> &[CoreSpaceChange] {
+    pub fn changes(&self) -> &CoreSpaceChanges {
         &self.changes
     }
 
@@ -39,9 +43,9 @@ impl CoreSpaceSimulation {
     ) -> (
         CoreSpaceBlockContext,
         CoreSpaceCompleteTransaction,
-        CoreSpaceExecution,
-        Vec<CoreSpaceChange>,
+        CoreSpaceExecutionOutcome,
+        CoreSpaceChanges,
     ) {
-        (self.context, self.transaction, self.execution, self.changes)
+        (self.context, self.transaction, self.outcome, self.changes)
     }
 }

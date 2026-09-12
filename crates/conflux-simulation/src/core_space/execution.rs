@@ -4,7 +4,7 @@ use alloy::sol_types::Panic;
 use alloy_primitives::{Address, B256, Bytes, U256, U512};
 use conflux_provider::CoreAddress;
 
-use super::{CoreSpaceBlockContext, CoreSpaceExecutionResult, CoreSpaceTransactionRejection};
+use super::{CoreSpaceExecutionResult, CoreSpaceTransactionRejection};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreSpaceLogAddress {
@@ -195,12 +195,4 @@ pub enum CoreSpaceExecutionOutcome {
         failure: CoreSpaceExecutionFailure,
     },
     NotExecuted(CoreSpaceTransactionRejection),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoreSpaceExecution {
-    pub chain_id: u64,
-    pub context: CoreSpaceBlockContext,
-    pub gas_limit: U256,
-    pub outcome: CoreSpaceExecutionOutcome,
 }

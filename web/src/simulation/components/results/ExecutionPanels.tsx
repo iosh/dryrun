@@ -140,12 +140,6 @@ export function ExecutionDetails({
             value={formatHexQuantity(execution.effectiveGasPrice)}
           />
         ) : null}
-        {execution.gasCharged ? (
-          <DetailItem
-            label="Gas charged"
-            value={formatHexQuantity(execution.gasCharged)}
-          />
-        ) : null}
         {execution.gasFee ? (
           <DetailItem
             label="Gas fee"
@@ -196,6 +190,10 @@ export function ExecutionDetails({
             <DetailItem
               label="Storage sponsored"
               value={execution.storageCoveredBySponsor ? 'Yes' : 'No'}
+            />
+            <DetailItem
+              label="Storage collateralized"
+              value={formatHexQuantity(execution.storageCollateralized ?? '0x0')}
             />
           </>
         ) : null}

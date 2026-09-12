@@ -1,8 +1,8 @@
-mod analysis;
 mod changes;
 mod completion;
 mod context;
 mod error;
+mod executed_transaction;
 mod execution;
 mod execution_result;
 mod outcome;
@@ -11,12 +11,10 @@ mod request;
 mod result;
 mod session;
 mod simulator;
+mod state_access;
 mod transaction;
 
 pub(crate) use completion::complete_transaction;
-pub(crate) use outcome::{
-    build_core_space_execution, build_core_space_not_executed, convert_executor_outcome,
-};
 pub(crate) use transaction::{ResolvedStorageSponsorship, resolve_storage_sponsorship};
 
 pub use changes::{
@@ -35,16 +33,16 @@ pub use error::{
     CoreSpaceSimulationError, CoreSpaceStateAccessError,
 };
 pub use execution::{
-    CoreSpaceExecution, CoreSpaceExecutionFailure, CoreSpaceExecutionOutcome, CoreSpaceLog,
-    CoreSpaceLogAddress, CoreSpaceRevertReason, CoreSpaceSuccessOutput,
+    CoreSpaceExecutionFailure, CoreSpaceExecutionOutcome, CoreSpaceLog, CoreSpaceLogAddress,
+    CoreSpaceRevertReason, CoreSpaceSuccessOutput,
 };
 pub use execution_result::{CoreSpaceExecutionResult, CoreSpaceGas};
 pub use rejection::CoreSpaceTransactionRejection;
 pub use request::CoreSpaceSimulationRequest;
-pub use result::CoreSpaceSimulation;
+pub use result::{CoreSpaceChanges, CoreSpaceSimulation};
 pub use simulator::CoreSpaceTransactionSimulator;
 pub use transaction::{
-    CoreSpaceAccessListItem, CoreSpaceCompleteTransaction, CoreSpaceCompleteTransactionVariant,
-    CoreSpacePartialTransaction, CoreSpacePartialTransactionVariant,
+    CoreSpaceAccessListItem, CoreSpaceCompleteTransaction, CoreSpacePartialTransaction,
+    CoreSpacePartialTransactionCommon, CoreSpaceTransactionCommon,
     CoreSpaceTransactionCompletionError, CoreSpaceTransactionInput, CoreSpaceTransactionInputError,
 };

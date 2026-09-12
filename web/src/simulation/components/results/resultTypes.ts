@@ -77,7 +77,6 @@ export interface SimulationExecution {
   contractAddress: string | null;
   effectiveGasPrice: string | null;
   failure: SimulationExecutionFailure | null;
-  gasCharged: string | null;
   gasCoveredBySponsor: boolean | null;
   gasFee: string | null;
   gasLimit: string;
@@ -85,6 +84,7 @@ export interface SimulationExecution {
   logsCount: number;
   output: { label: string; value: string } | null;
   status: SimulationExecutionStatus;
+  storageCollateralized: string | null;
   storageCoveredBySponsor: boolean | null;
   totalFee: string | null;
 }

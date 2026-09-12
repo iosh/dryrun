@@ -185,14 +185,7 @@ function HistoryEntry({
 }>) {
   const environment = getEnvironment(record.environmentId);
   const transaction = record.request.transaction;
-  const status =
-    'outcome' in record.response
-      ? record.response.outcome.status
-      : record.response.execution.status === 'SUCCESS'
-        ? 'success'
-        : record.response.execution.status === 'FAILED'
-          ? 'failed'
-          : 'rejected';
+  const status = record.response.outcome.status;
   const changes = simulationChanges(record.response);
 
   return (

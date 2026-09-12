@@ -1,11 +1,11 @@
 use crate::{
-    core_space::{CoreSpaceAccessListItem, CoreSpaceCompleteTransactionVariant},
+    core_space::{CoreSpaceAccessListItem, CoreSpaceCompleteTransaction},
     espace::EspaceCompleteTransaction,
     primitive::{access_list_to_cfx, address_to_cfx, alloy_u256_from_u64, u256_to_cfx},
 };
 use alloy::{
     eips::BlockId,
-    primitives::{Address as AlloyAddress, Bytes as AlloyBytes, U256 as AlloyU256},
+    primitives::{Address as AlloyAddress, U256 as AlloyU256},
     providers::Provider,
     rpc::client::NoParams,
 };
@@ -33,14 +33,7 @@ pub(crate) struct EspaceEstimateTransaction<'a> {
 }
 
 pub(crate) struct CoreSpaceEstimateTransaction<'a> {
-    pub(crate) from: CoreAddress,
-    pub(crate) to: Option<CoreAddress>,
-    pub(crate) nonce: AlloyU256,
-    pub(crate) value: AlloyU256,
-    pub(crate) data: &'a AlloyBytes,
-    pub(crate) chain_id: u32,
-    pub(crate) variant: &'a CoreSpaceCompleteTransactionVariant,
-    pub(crate) epoch_height: u64,
+    pub(crate) transaction: &'a CoreSpaceCompleteTransaction,
     pub(crate) gas_limit: Option<AlloyU256>,
     pub(crate) storage_limit: Option<u64>,
 }
@@ -269,39 +262,43 @@ fn core_space_estimate_request(
             })
             .collect::<Vec<_>>()
     };
+    let complete = transaction.transaction;
+    let common = complete.common();
     let mut request = EstimateGasAndCollateralRequest {
-        from: transaction.from,
-        to: transaction.to,
+        from: common.from,
+        to: common.to,
         gas_price: None,
         max_fee_per_gas: None,
         max_priority_fee_per_gas: None,
         gas: transaction.gas_limit,
-        value: transaction.value,
-        data: transaction.data.clone(),
-        nonce: transaction.nonce,
+        value: common.value,
+        data: common.data.clone(),
+        nonce: common.nonce,
         storage_limit: transaction.storage_limit.map(alloy_u256_from_u64),
         access_list: None,
         transaction_type: CoreTransactionType::Legacy,
-        chain_id: AlloyU256::from(transaction.chain_id),
-        epoch_height: Some(alloy_u256_from_u64(transaction.epoch_height)),
+        chain_id: AlloyU256::from(common.chain_id),
+        epoch_height: Some(alloy_u256_from_u64(common.epoch_height)),
     };
 
-    match transaction.variant {
-        CoreSpaceCompleteTransactionVariant::Cip155 { gas_price } => {
+    match complete {
+        CoreSpaceCompleteTransaction::Cip155 { gas_price, .. } => {
             request.gas_price = Some(*gas_price);
         }
-        CoreSpaceCompleteTransactionVariant::Cip2930 {
+        CoreSpaceCompleteTransaction::Cip2930 {
             gas_price,
             access_list,
+            ..
         } => {
             request.gas_price = Some(*gas_price);
             request.access_list = Some(core_access_list(access_list));
             request.transaction_type = CoreTransactionType::AccessList;
         }
-        CoreSpaceCompleteTransactionVariant::Cip1559 {
+        CoreSpaceCompleteTransaction::Cip1559 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             access_list,
+            ..
         } => {
             request.max_fee_per_gas = Some(*max_fee_per_gas);
             request.max_priority_fee_per_gas = Some(*max_priority_fee_per_gas);

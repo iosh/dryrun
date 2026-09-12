@@ -20,7 +20,7 @@ use crate::{
     primitive::{address_from_cfx, address_to_cfx, u256_from_cfx, u512_from_cfx},
 };
 
-pub(crate) fn convert_executor_outcome(
+pub(crate) fn map_executor_outcome(
     outcome: ConfluxExecutionOutcome,
     execution: Option<&EspaceExecutedTransaction>,
     transaction: &EspaceCompleteTransaction,
@@ -36,7 +36,7 @@ pub(crate) fn convert_executor_outcome(
                 )
             })?;
             let result = build_execution_result(&output, common.gas_limit)?;
-            let logs = convert_committed_logs(execution, core_space_network)?;
+            let logs = map_committed_logs(execution, core_space_network)?;
             let output = build_success_output(execution, &output, transaction, state)?;
             Ok(EspaceExecutionOutcome::Success {
                 result,
@@ -58,15 +58,15 @@ pub(crate) fn convert_executor_outcome(
                 }
                 error => Ok(EspaceExecutionOutcome::Failed {
                     result,
-                    failure: classify_execution_failure(error)?,
+                    failure: map_execution_failure(error)?,
                 }),
             }
         }
-        ConfluxExecutionOutcome::NotExecutedDrop(error) => Ok(EspaceExecutionOutcome::NotExecuted(
-            classify_drop_rejection(error)?,
-        )),
+        ConfluxExecutionOutcome::NotExecutedDrop(error) => {
+            Ok(EspaceExecutionOutcome::NotExecuted(map_drop_error(error)?))
+        }
         ConfluxExecutionOutcome::NotExecutedToReconsiderPacking(error) => Ok(
-            EspaceExecutionOutcome::NotExecuted(classify_repack_rejection(error)?),
+            EspaceExecutionOutcome::NotExecuted(map_reconsider_packing_error(error)?),
         ),
     }
 }
@@ -145,7 +145,7 @@ fn map_state_read_error(error: EspaceStateReadError) -> EspaceExecutionError {
     }
 }
 
-fn convert_committed_logs(
+fn map_committed_logs(
     execution: &EspaceExecutedTransaction,
     core_space_network: Network,
 ) -> Result<Vec<EspaceLog>, EspaceResultIntegrationError> {
@@ -176,9 +176,7 @@ fn convert_committed_logs(
         .collect()
 }
 
-fn classify_drop_rejection(
-    error: TxDropError,
-) -> Result<EspaceTransactionRejection, EspaceExecutionError> {
+fn map_drop_error(error: TxDropError) -> Result<EspaceTransactionRejection, EspaceExecutionError> {
     match error {
         TxDropError::OldNonce(expected, got) => Ok(EspaceTransactionRejection::NonceTooLow {
             transaction_nonce: u256_from_cfx(got),
@@ -202,7 +200,7 @@ fn classify_drop_rejection(
     }
 }
 
-fn classify_repack_rejection(
+fn map_reconsider_packing_error(
     error: ToRepackError,
 ) -> Result<EspaceTransactionRejection, EspaceExecutionError> {
     match error {
@@ -247,7 +245,7 @@ fn classify_repack_rejection(
     }
 }
 
-fn classify_execution_failure(
+fn map_execution_failure(
     error: ExecutionError,
 ) -> Result<EspaceExecutionFailure, EspaceExecutionError> {
     match error {
@@ -265,11 +263,11 @@ fn classify_execution_failure(
         ExecutionError::NonceOverflow(address) => Ok(EspaceExecutionFailure::NonceOverflow {
             address: address_from_cfx(address),
         }),
-        ExecutionError::VmError(error) => classify_vm_failure(error),
+        ExecutionError::VmError(error) => map_vm_failure(error),
     }
 }
 
-fn classify_vm_failure(error: VmError) -> Result<EspaceExecutionFailure, EspaceExecutionError> {
+fn map_vm_failure(error: VmError) -> Result<EspaceExecutionFailure, EspaceExecutionError> {
     match error {
         VmError::OutOfGas => Ok(EspaceExecutionFailure::OutOfGas),
         VmError::BadJumpDestination { destination } => {

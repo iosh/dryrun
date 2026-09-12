@@ -97,14 +97,30 @@ fn map_core_space_transaction(
 
     let from = require_core_space_field(from, "transaction.from")?;
     let chain_id = require_core_space_field(chain_id, "transaction.chainId")?;
-    let variant = match transaction_type {
+    let common = simulation_core_space::CoreSpacePartialTransactionCommon {
+        from: map_core_space_address(from)?,
+        to: to.map(map_core_space_address).transpose()?,
+        nonce: nonce.map(cfx_u256_to_alloy),
+        gas_limit: gas.map(cfx_u256_to_alloy),
+        value: value.map(cfx_u256_to_alloy),
+        data: data.map(|data| Bytes::from(data.into_vec())),
+        chain_id: Some(u32_param(chain_id, "transaction.chainId")?),
+        storage_limit: storage_limit.map(|value| value.as_u64()),
+        epoch_height: epoch_height
+            .map(|value| u64_param(value, "transaction.epochHeight"))
+            .transpose()?,
+    };
+
+    let transaction = match transaction_type {
         CoreSpaceTransactionType::Cip155 => {
-            simulation_core_space::CoreSpacePartialTransactionVariant::Cip155 {
+            simulation_core_space::CoreSpacePartialTransaction::Cip155 {
+                common,
                 gas_price: gas_price.map(cfx_u256_to_alloy),
             }
         }
         CoreSpaceTransactionType::Cip2930 => {
-            simulation_core_space::CoreSpacePartialTransactionVariant::Cip2930 {
+            simulation_core_space::CoreSpacePartialTransaction::Cip2930 {
+                common,
                 gas_price: gas_price.map(cfx_u256_to_alloy),
                 access_list: access_list
                     .map(map_core_space_access_list)
@@ -113,7 +129,8 @@ fn map_core_space_transaction(
             }
         }
         CoreSpaceTransactionType::Cip1559 => {
-            simulation_core_space::CoreSpacePartialTransactionVariant::Cip1559 {
+            simulation_core_space::CoreSpacePartialTransaction::Cip1559 {
+                common,
                 max_fee_per_gas: max_fee_per_gas.map(cfx_u256_to_alloy),
                 max_priority_fee_per_gas: max_priority_fee_per_gas.map(cfx_u256_to_alloy),
                 access_list: access_list
@@ -125,20 +142,7 @@ fn map_core_space_transaction(
     };
 
     Ok(simulation_core_space::CoreSpaceTransactionInput::Partial(
-        simulation_core_space::CoreSpacePartialTransaction {
-            from: map_core_space_address(from)?,
-            to: to.map(map_core_space_address).transpose()?,
-            nonce: nonce.map(cfx_u256_to_alloy),
-            gas_limit: gas.map(cfx_u256_to_alloy),
-            value: value.map(cfx_u256_to_alloy),
-            data: data.map(|data| Bytes::from(data.into_vec())),
-            chain_id: Some(u32_param(chain_id, "transaction.chainId")?),
-            variant,
-            storage_limit: storage_limit.map(|value| value.as_u64()),
-            epoch_height: epoch_height
-                .map(|value| u64_param(value, "transaction.epochHeight"))
-                .transpose()?,
-        },
+        transaction,
     ))
 }
 

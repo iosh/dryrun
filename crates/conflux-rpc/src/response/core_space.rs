@@ -1,3 +1,4 @@
+use alloy_primitives::Address as EspaceAddress;
 use cfx_addr::Network;
 use cfx_rpc_cfx_types::RpcAddress;
 use cfx_rpc_primitives::Bytes as CoreSpaceRpcBytes;
@@ -6,7 +7,7 @@ use conflux_provider::CoreAddress;
 use conflux_simulation::core_space as simulation_core_space;
 use serde::Serialize;
 
-use super::{core_space_change, u256_to_wire};
+use super::{b256_to_wire, core_space_change, u256_to_wire};
 
 #[derive(Debug, thiserror::Error)]
 #[error("failed to encode `{field}` as a Core Space address: {message}")]
@@ -18,302 +19,363 @@ pub(crate) struct ResponseMappingError {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SimulateCoreSpaceTransactionResponse {
-    execution: CoreSpaceExecution,
-    changes: Vec<core_space_change::Change>,
+    state: State,
+    transaction: CompletedTransaction,
+    outcome: Outcome,
+    changes: Changes,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct CoreSpaceExecution {
-    chain_id: U64,
-    state: CoreSpaceStateAnchor,
-    status: CoreSpaceExecutionStatus,
-    gas_used: U256,
-    gas_limit: U256,
-    gas_charged: U256,
-    fee: U256,
-    burnt_fee: Option<U256>,
-    gas_covered_by_sponsor: bool,
-    storage_covered_by_sponsor: bool,
-    output: CoreSpaceRpcBytes,
-    failure: Option<CoreSpaceExecutionFailure>,
-}
-
-struct ExecutedWireFields {
-    gas_used: U256,
-    gas_charged: U256,
-    fee: U256,
-    burnt_fee: Option<U256>,
-    gas_covered_by_sponsor: bool,
-    storage_covered_by_sponsor: bool,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct CoreSpaceStateAnchor {
+struct State {
     epoch_number: U64,
     pivot_hash: H256,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum CoreSpaceExecutionStatus {
-    Success,
-    Failed,
-    NotExecuted,
+#[serde(tag = "type", rename_all_fields = "camelCase")]
+enum CompletedTransaction {
+    #[serde(rename = "0x0")]
+    Cip155 {
+        #[serde(flatten)]
+        common: TransactionCommon,
+        gas_price: U256,
+    },
+    #[serde(rename = "0x1")]
+    Cip2930 {
+        #[serde(flatten)]
+        common: TransactionCommon,
+        gas_price: U256,
+        access_list: Vec<AccessListItem>,
+    },
+    #[serde(rename = "0x2")]
+    Cip1559 {
+        #[serde(flatten)]
+        common: TransactionCommon,
+        max_fee_per_gas: U256,
+        max_priority_fee_per_gas: U256,
+        access_list: Vec<AccessListItem>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-struct CoreSpaceExecutionFailure {
-    code: CoreSpaceExecutionFailureCode,
-    message: String,
-    reason: Option<String>,
+struct TransactionCommon {
+    chain_id: U64,
+    from: RpcAddress,
+    to: Option<RpcAddress>,
+    nonce: U256,
+    gas: U256,
+    value: U256,
+    data: CoreSpaceRpcBytes,
+    storage_limit: U64,
+    epoch_height: U64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum CoreSpaceExecutionFailureCode {
-    ChainIdMismatch,
-    ZeroGasPrice,
-    PriorityFeeExceedsMaxFee,
-    TransactionTypeNotActivated,
-    NonceTooLow,
-    NonceTooHigh,
-    EpochHeightOutOfBound,
-    FeeBelowBaseFee,
-    IntrinsicGasTooLow,
-    InvalidRecipient,
-    SenderWithCode,
-    SenderDoesNotExist,
-    InsufficientFunds,
-    SponsorBalanceInsufficient,
-    Revert,
-    OutOfGas,
-    StorageBalanceInsufficient,
-    StorageLimitExceeded,
-    NonceOverflow,
-    VmError,
+#[serde(rename_all = "camelCase")]
+struct AccessListItem {
+    address: RpcAddress,
+    storage_keys: Vec<H256>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(
+    tag = "status",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase"
+)]
+enum Outcome {
+    Success {
+        #[serde(flatten)]
+        accounting: ExecutionAccounting,
+        #[serde(flatten)]
+        output: SuccessOutput,
+        logs: Vec<SimulationLog>,
+    },
+    Reverted {
+        #[serde(flatten)]
+        accounting: ExecutionAccounting,
+        revert_data: CoreSpaceRpcBytes,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+    Failed {
+        #[serde(flatten)]
+        accounting: ExecutionAccounting,
+        error: String,
+    },
+    Rejected {
+        error: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ExecutionAccounting {
+    gas_used: U64,
+    gas_fee: U256,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    burnt_gas_fee: Option<U256>,
+    effective_gas_price: U256,
+    gas_covered_by_sponsor: bool,
+    storage_collateralized: U64,
+    storage_covered_by_sponsor: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(untagged, rename_all_fields = "camelCase")]
+enum SuccessOutput {
+    Call {
+        return_data: CoreSpaceRpcBytes,
+    },
+    Create {
+        contract_address: RpcAddress,
+        runtime_code: CoreSpaceRpcBytes,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct SimulationLog {
+    address: LogAddress,
+    topics: Vec<H256>,
+    data: CoreSpaceRpcBytes,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+enum LogAddress {
+    CoreSpace(RpcAddress),
+    Espace(EspaceAddress),
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "status", rename_all = "lowercase")]
+enum Changes {
+    Complete {
+        items: Vec<core_space_change::Change>,
+    },
+    Unavailable {
+        error: String,
+    },
 }
 
 impl SimulateCoreSpaceTransactionResponse {
-    pub(crate) fn try_from_output(
+    pub(crate) fn try_from_simulation(
         simulation: simulation_core_space::CoreSpaceSimulation,
         network: Network,
     ) -> Result<Self, ResponseMappingError> {
-        let (_, _, execution, changes) = simulation.into_parts();
+        let (context, transaction, outcome, changes) = simulation.into_parts();
         Ok(Self {
-            execution: CoreSpaceExecution::from_simulation(execution),
-            changes: core_space_change::try_map_changes(changes, network)?,
+            state: context.into(),
+            transaction: CompletedTransaction::try_from_simulation(transaction, network)?,
+            outcome: Outcome::try_from_simulation(outcome, network)?,
+            changes: Changes::try_from_simulation(changes, network)?,
         })
     }
 }
 
-impl CoreSpaceExecution {
-    fn from_simulation(execution: simulation_core_space::CoreSpaceExecution) -> Self {
-        let simulation_core_space::CoreSpaceExecution {
-            chain_id,
-            context: state,
-            gas_limit,
-            outcome,
-        } = execution;
-        let (
-            status,
-            gas_used,
-            gas_charged,
-            fee,
-            burnt_fee,
-            gas_covered_by_sponsor,
-            storage_covered_by_sponsor,
-            output,
-            failure,
-        ) = match outcome {
-            simulation_core_space::CoreSpaceExecutionOutcome::Success {
-                result, output, ..
-            } => {
-                let fields = ExecutedWireFields::from_simulation(&result);
-                let output = match output {
-                    simulation_core_space::CoreSpaceSuccessOutput::Call { return_data } => {
-                        return_data
-                    }
-                    simulation_core_space::CoreSpaceSuccessOutput::Create {
-                        runtime_code, ..
-                    } => runtime_code,
-                };
-                (
-                    CoreSpaceExecutionStatus::Success,
-                    fields.gas_used,
-                    fields.gas_charged,
-                    fields.fee,
-                    fields.burnt_fee,
-                    fields.gas_covered_by_sponsor,
-                    fields.storage_covered_by_sponsor,
-                    CoreSpaceRpcBytes::from(output.to_vec()),
-                    None,
-                )
-            }
-            simulation_core_space::CoreSpaceExecutionOutcome::Reverted {
-                result,
-                revert_data,
-                reason,
-            } => {
-                let fields = ExecutedWireFields::from_simulation(&result);
-                (
-                    CoreSpaceExecutionStatus::Failed,
-                    fields.gas_used,
-                    fields.gas_charged,
-                    fields.fee,
-                    fields.burnt_fee,
-                    fields.gas_covered_by_sponsor,
-                    fields.storage_covered_by_sponsor,
-                    CoreSpaceRpcBytes::from(revert_data.to_vec()),
-                    Some(CoreSpaceExecutionFailure {
-                        code: CoreSpaceExecutionFailureCode::Revert,
-                        message: "execution reverted".to_string(),
-                        reason: reason.map(|reason| reason.to_string()),
-                    }),
-                )
-            }
-            simulation_core_space::CoreSpaceExecutionOutcome::Failed { result, failure } => {
-                let fields = ExecutedWireFields::from_simulation(&result);
-                (
-                    CoreSpaceExecutionStatus::Failed,
-                    fields.gas_used,
-                    fields.gas_charged,
-                    fields.fee,
-                    fields.burnt_fee,
-                    fields.gas_covered_by_sponsor,
-                    fields.storage_covered_by_sponsor,
-                    CoreSpaceRpcBytes::default(),
-                    Some(CoreSpaceExecutionFailure {
-                        code: wire_failure_code_for_execution_failure(&failure),
-                        message: failure.to_string(),
-                        reason: None,
-                    }),
-                )
-            }
-            simulation_core_space::CoreSpaceExecutionOutcome::NotExecuted(rejection) => (
-                CoreSpaceExecutionStatus::NotExecuted,
-                U256::zero(),
-                U256::zero(),
-                U256::zero(),
-                Some(U256::zero()),
-                false,
-                false,
-                CoreSpaceRpcBytes::default(),
-                Some(CoreSpaceExecutionFailure {
-                    code: wire_failure_code_for_rejection(&rejection),
-                    message: rejection.to_string(),
-                    reason: None,
-                }),
-            ),
-        };
-
+impl From<simulation_core_space::CoreSpaceBlockContext> for State {
+    fn from(context: simulation_core_space::CoreSpaceBlockContext) -> Self {
         Self {
-            chain_id: chain_id.into(),
-            state: state.into(),
-            status,
-            gas_used,
-            gas_limit: u256_to_wire(gas_limit),
-            gas_charged,
-            fee,
-            burnt_fee,
-            gas_covered_by_sponsor,
-            storage_covered_by_sponsor,
-            output,
-            failure,
+            epoch_number: context.epoch_number.into(),
+            pivot_hash: b256_to_wire(context.pivot_hash),
         }
     }
 }
 
-impl ExecutedWireFields {
-    fn from_simulation(result: &simulation_core_space::CoreSpaceExecutionResult) -> Self {
+impl CompletedTransaction {
+    fn try_from_simulation(
+        transaction: simulation_core_space::CoreSpaceCompleteTransaction,
+        network: Network,
+    ) -> Result<Self, ResponseMappingError> {
+        let common = transaction.common();
+        let common = TransactionCommon {
+            chain_id: u64::from(common.chain_id).into(),
+            from: map_core_address(common.from, network, "transaction.from".to_owned())?,
+            to: common
+                .to
+                .map(|address| map_core_address(address, network, "transaction.to".to_owned()))
+                .transpose()?,
+            nonce: u256_to_wire(common.nonce),
+            gas: u256_to_wire(common.gas_limit),
+            value: u256_to_wire(common.value),
+            data: CoreSpaceRpcBytes::from(common.data.to_vec()),
+            storage_limit: common.storage_limit.into(),
+            epoch_height: common.epoch_height.into(),
+        };
+
+        match transaction {
+            simulation_core_space::CoreSpaceCompleteTransaction::Cip155 { gas_price, .. } => {
+                Ok(Self::Cip155 {
+                    common,
+                    gas_price: u256_to_wire(gas_price),
+                })
+            }
+            simulation_core_space::CoreSpaceCompleteTransaction::Cip2930 {
+                gas_price,
+                access_list,
+                ..
+            } => Ok(Self::Cip2930 {
+                common,
+                gas_price: u256_to_wire(gas_price),
+                access_list: map_access_list(access_list, network)?,
+            }),
+            simulation_core_space::CoreSpaceCompleteTransaction::Cip1559 {
+                max_fee_per_gas,
+                max_priority_fee_per_gas,
+                access_list,
+                ..
+            } => Ok(Self::Cip1559 {
+                common,
+                max_fee_per_gas: u256_to_wire(max_fee_per_gas),
+                max_priority_fee_per_gas: u256_to_wire(max_priority_fee_per_gas),
+                access_list: map_access_list(access_list, network)?,
+            }),
+        }
+    }
+}
+
+fn map_access_list(
+    access_list: Vec<simulation_core_space::CoreSpaceAccessListItem>,
+    network: Network,
+) -> Result<Vec<AccessListItem>, ResponseMappingError> {
+    access_list
+        .into_iter()
+        .enumerate()
+        .map(|(index, item)| {
+            Ok(AccessListItem {
+                address: map_core_address(
+                    item.address,
+                    network,
+                    format!("transaction.accessList[{index}].address"),
+                )?,
+                storage_keys: item.storage_keys.into_iter().map(b256_to_wire).collect(),
+            })
+        })
+        .collect()
+}
+
+impl Outcome {
+    fn try_from_simulation(
+        outcome: simulation_core_space::CoreSpaceExecutionOutcome,
+        network: Network,
+    ) -> Result<Self, ResponseMappingError> {
+        match outcome {
+            simulation_core_space::CoreSpaceExecutionOutcome::Success {
+                result,
+                output,
+                logs,
+            } => Ok(Self::Success {
+                accounting: result.into(),
+                output: SuccessOutput::try_from_simulation(output, network)?,
+                logs: logs
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, log)| SimulationLog::try_from_simulation(log, network, index))
+                    .collect::<Result<_, _>>()?,
+            }),
+            simulation_core_space::CoreSpaceExecutionOutcome::Reverted {
+                result,
+                revert_data,
+                reason,
+            } => Ok(Self::Reverted {
+                accounting: result.into(),
+                revert_data: CoreSpaceRpcBytes::from(revert_data.to_vec()),
+                reason: reason.map(|reason| reason.to_string()),
+            }),
+            simulation_core_space::CoreSpaceExecutionOutcome::Failed { result, failure } => {
+                Ok(Self::Failed {
+                    accounting: result.into(),
+                    error: failure.to_string(),
+                })
+            }
+            simulation_core_space::CoreSpaceExecutionOutcome::NotExecuted(rejection) => {
+                Ok(Self::Rejected {
+                    error: rejection.to_string(),
+                })
+            }
+        }
+    }
+}
+
+impl From<simulation_core_space::CoreSpaceExecutionResult> for ExecutionAccounting {
+    fn from(result: simulation_core_space::CoreSpaceExecutionResult) -> Self {
         Self {
             gas_used: result.gas().gas_used().into(),
-            gas_charged: result.gas().gas_charged().into(),
-            fee: u256_to_wire(result.gas_fee()),
-            burnt_fee: result.burnt_gas_fee().map(u256_to_wire),
+            gas_fee: u256_to_wire(result.gas_fee()),
+            burnt_gas_fee: result.burnt_gas_fee().map(u256_to_wire),
+            effective_gas_price: u256_to_wire(result.effective_gas_price()),
             gas_covered_by_sponsor: result.gas_covered_by_sponsor(),
+            storage_collateralized: result.storage_collateralized().into(),
             storage_covered_by_sponsor: result.storage_covered_by_sponsor(),
         }
     }
 }
 
-impl From<simulation_core_space::CoreSpaceBlockContext> for CoreSpaceStateAnchor {
-    fn from(state: simulation_core_space::CoreSpaceBlockContext) -> Self {
-        Self {
-            epoch_number: state.epoch_number.into(),
-            pivot_hash: H256::from_slice(state.pivot_hash.as_slice()),
+impl SuccessOutput {
+    fn try_from_simulation(
+        output: simulation_core_space::CoreSpaceSuccessOutput,
+        network: Network,
+    ) -> Result<Self, ResponseMappingError> {
+        match output {
+            simulation_core_space::CoreSpaceSuccessOutput::Call { return_data } => Ok(Self::Call {
+                return_data: CoreSpaceRpcBytes::from(return_data.to_vec()),
+            }),
+            simulation_core_space::CoreSpaceSuccessOutput::Create {
+                address,
+                runtime_code,
+            } => Ok(Self::Create {
+                contract_address: map_core_address(
+                    address,
+                    network,
+                    "outcome.contractAddress".to_owned(),
+                )?,
+                runtime_code: CoreSpaceRpcBytes::from(runtime_code.to_vec()),
+            }),
         }
     }
 }
 
-fn wire_failure_code_for_rejection(
-    rejection: &simulation_core_space::CoreSpaceTransactionRejection,
-) -> CoreSpaceExecutionFailureCode {
-    use simulation_core_space::CoreSpaceTransactionRejection as Rejection;
-
-    match rejection {
-        Rejection::InvalidChainId { .. } => CoreSpaceExecutionFailureCode::ChainIdMismatch,
-        Rejection::ZeroGasPrice | Rejection::ZeroMaxFeePerGas => {
-            CoreSpaceExecutionFailureCode::ZeroGasPrice
-        }
-        Rejection::PriorityFeeGreaterThanMaxFee { .. } => {
-            CoreSpaceExecutionFailureCode::PriorityFeeExceedsMaxFee
-        }
-        Rejection::Cip2930NotActivated | Rejection::Cip1559NotActivated => {
-            CoreSpaceExecutionFailureCode::TransactionTypeNotActivated
-        }
-        Rejection::NonceTooLow { .. } => CoreSpaceExecutionFailureCode::NonceTooLow,
-        Rejection::NonceTooHigh { .. } => CoreSpaceExecutionFailureCode::NonceTooHigh,
-        Rejection::EpochHeightOutOfBounds { .. } => {
-            CoreSpaceExecutionFailureCode::EpochHeightOutOfBound
-        }
-        Rejection::IntrinsicGasExceedsGasLimit { .. } => {
-            CoreSpaceExecutionFailureCode::IntrinsicGasTooLow
-        }
-        Rejection::InvalidRecipient { .. } => CoreSpaceExecutionFailureCode::InvalidRecipient,
-        Rejection::SenderHasCode { .. } => CoreSpaceExecutionFailureCode::SenderWithCode,
-        Rejection::SenderDoesNotExist => CoreSpaceExecutionFailureCode::SenderDoesNotExist,
-        Rejection::GasPriceBelowBaseFee { .. } => CoreSpaceExecutionFailureCode::FeeBelowBaseFee,
-        Rejection::InsufficientFunds { .. } => CoreSpaceExecutionFailureCode::InsufficientFunds,
-        Rejection::SponsorBalanceInsufficient { .. } => {
-            CoreSpaceExecutionFailureCode::SponsorBalanceInsufficient
-        }
-        _ => CoreSpaceExecutionFailureCode::VmError,
+impl SimulationLog {
+    fn try_from_simulation(
+        log: simulation_core_space::CoreSpaceLog,
+        network: Network,
+        index: usize,
+    ) -> Result<Self, ResponseMappingError> {
+        let address = match log.address {
+            simulation_core_space::CoreSpaceLogAddress::CoreSpace(address) => {
+                LogAddress::CoreSpace(map_core_address(
+                    address,
+                    network,
+                    format!("outcome.logs[{index}].address"),
+                )?)
+            }
+            simulation_core_space::CoreSpaceLogAddress::Espace(address) => {
+                LogAddress::Espace(address)
+            }
+        };
+        Ok(Self {
+            address,
+            topics: log.topics.into_iter().map(b256_to_wire).collect(),
+            data: CoreSpaceRpcBytes::from(log.data.to_vec()),
+        })
     }
 }
 
-fn wire_failure_code_for_execution_failure(
-    failure: &simulation_core_space::CoreSpaceExecutionFailure,
-) -> CoreSpaceExecutionFailureCode {
-    use simulation_core_space::CoreSpaceExecutionFailure as Failure;
-
-    match failure {
-        Failure::InsufficientFunds { .. } => CoreSpaceExecutionFailureCode::InsufficientFunds,
-        Failure::OutOfGas => CoreSpaceExecutionFailureCode::OutOfGas,
-        Failure::StorageBalanceInsufficient { .. } => {
-            CoreSpaceExecutionFailureCode::StorageBalanceInsufficient
+impl Changes {
+    fn try_from_simulation(
+        changes: simulation_core_space::CoreSpaceChanges,
+        network: Network,
+    ) -> Result<Self, ResponseMappingError> {
+        match changes {
+            simulation_core_space::CoreSpaceChanges::Complete(items) => Ok(Self::Complete {
+                items: core_space_change::try_map_changes(items, network)?,
+            }),
+            simulation_core_space::CoreSpaceChanges::Unavailable { error } => {
+                Ok(Self::Unavailable { error })
+            }
         }
-        Failure::StorageLimitExceeded => CoreSpaceExecutionFailureCode::StorageLimitExceeded,
-        Failure::NonceOverflow { .. } => CoreSpaceExecutionFailureCode::NonceOverflow,
-        Failure::InvalidJump { .. }
-        | Failure::InvalidInstruction { .. }
-        | Failure::StackUnderflow { .. }
-        | Failure::StackOverflow { .. }
-        | Failure::SubroutineStackUnderflow { .. }
-        | Failure::SubroutineStackOverflow { .. }
-        | Failure::InvalidSubroutineEntry
-        | Failure::BuiltInContract { .. }
-        | Failure::InternalContract { .. }
-        | Failure::StateChangeDuringStaticCall
-        | Failure::CreateInitCodeSizeLimit
-        | Failure::Wasm { .. }
-        | Failure::ReturnDataOutOfBounds
-        | Failure::InvalidAddress { .. }
-        | Failure::CreateCollision { .. }
-        | Failure::CreateContractStartingWithEf => CoreSpaceExecutionFailureCode::VmError,
-        _ => CoreSpaceExecutionFailureCode::VmError,
     }
 }
 

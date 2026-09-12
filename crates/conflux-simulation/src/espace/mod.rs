@@ -47,7 +47,7 @@ pub use execution::{
     EspaceRevertReason, EspaceSuccessOutput,
 };
 pub use execution_result::{EspaceExecutionResult, EspaceFee, EspaceGas};
-pub(crate) use outcome_mapping::convert_executor_outcome;
+pub(crate) use outcome_mapping::map_executor_outcome;
 pub use rejection::EspaceTransactionRejection;
 pub use result::EspaceSimulation;
 pub use simulator::EspaceTransactionSimulator;
@@ -61,7 +61,9 @@ pub use transaction::{
     EspaceTransactionCommon, EspaceTransactionInput, EspaceTransactionInputError,
     SignedAuthorization, TxType,
 };
-pub(crate) use transaction_adapter::{build_executor_transaction, classify_transaction_rejection};
+pub(crate) use transaction_adapter::{
+    build_executor_transaction, validate_transaction_for_execution,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EspaceSimulationRequest {

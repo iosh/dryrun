@@ -7,8 +7,8 @@ use super::{
     EspaceExecutedTransaction, EspaceExecutionError, EspaceExecutionOutcome,
     EspaceResultIntegrationError, EspaceSimulation, EspaceSimulationError, EspaceSimulationLimits,
     EspaceSimulationRequest, EspaceStateAccess, EspaceStateAccessError, build_executor_transaction,
-    classify_transaction_rejection, complete_transaction, convert_executor_outcome,
-    resolve_espace_context,
+    complete_transaction, map_executor_outcome, resolve_espace_context,
+    validate_transaction_for_execution,
 };
 use crate::{
     ConfluxSimulationBackend,
@@ -126,7 +126,7 @@ where
             .backend
             .chain_spec()
             .espace_transaction_validation_rules(execution_block_number, execution_epoch_height);
-        if let Some(rejection) = classify_transaction_rejection(&transaction, chain_id, rules) {
+        if let Some(rejection) = validate_transaction_for_execution(&transaction, chain_id, rules) {
             return Ok(EspaceSimulation {
                 context: context.public_context,
                 transaction,
@@ -195,14 +195,14 @@ where
     );
     let mut execution = ConfluxTransactionExecutor::new(&mut execution_state, &machine)
         .execute(execution_input, observer)
-        .map_err(classify_executor_error)?;
+        .map_err(map_execution_error)?;
 
     if matches!(
         &execution.outcome,
         ConfluxExecutionOutcome::NotExecutedDrop(_)
             | ConfluxExecutionOutcome::NotExecutedToReconsiderPacking(_)
     ) {
-        let outcome = convert_executor_outcome(
+        let outcome = map_executor_outcome(
             execution.outcome,
             None,
             &transaction,
@@ -229,7 +229,7 @@ where
     .map_err(EspaceExecutionError::from)?;
     let record = EspaceExecutedTransaction::from_outcome(&mut execution.outcome, &mut state)?;
 
-    let outcome = convert_executor_outcome(
+    let outcome = map_executor_outcome(
         execution.outcome,
         Some(&record),
         &transaction,
@@ -246,7 +246,7 @@ where
     })
 }
 
-fn classify_executor_error(
+fn map_execution_error(
     error: crate::execution::TransactionExecutionError,
 ) -> super::EspaceExecutionError {
     use crate::execution::TransactionExecutionError;

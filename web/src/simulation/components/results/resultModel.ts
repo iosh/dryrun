@@ -1,6 +1,6 @@
 import { formatAmount, formatNativeAmount } from '../../../lib/formatting.ts';
 import { getEnvironment } from '../../environment.ts';
-import type { EspaceOutcome, EvmOutcome } from '../../rpc.ts';
+import type { CoreOutcome, EspaceOutcome, EvmOutcome } from '../../rpc.ts';
 import {
   normalizeAddress,
   toAssetFlowItemViewModels,
@@ -145,7 +145,7 @@ export function changeAddressLabel(
 }
 
 function executionAnchor(record: SimulationRecord): ExecutionAnchor {
-  if ('outcome' in record.response) {
+  if ('blockHash' in record.response.state) {
     return {
       hash: record.response.state.blockHash,
       label: 'Block',
@@ -153,11 +153,10 @@ function executionAnchor(record: SimulationRecord): ExecutionAnchor {
     };
   }
 
-  const execution = record.response.execution;
   return {
-    hash: execution.state.pivotHash,
+    hash: record.response.state.pivotHash,
     label: 'Epoch',
-    number: execution.state.epochNumber,
+    number: record.response.state.epochNumber,
   };
 }
 
@@ -214,72 +213,44 @@ function senderNetImpacts(
 
 function simulationExecution(record: SimulationRecord): SimulationExecution {
   const response = record.response;
-  if ('outcome' in response) {
-    const outcome = response.outcome;
-    const executed = 'gasUsed' in outcome;
-    const blobGasFee = 'blobGasFee' in outcome ? outcome.blobGasFee ?? null : null;
-    const gasFee = executed ? outcome.gasFee : null;
-    return {
-      blobGasFee,
-      blobGasPrice: 'blobGasPrice' in outcome ? outcome.blobGasPrice ?? null : null,
-      blobGasUsed: 'blobGasUsed' in outcome ? outcome.blobGasUsed ?? null : null,
-      burntGasFee: executed ? outcome.burntGasFee ?? null : null,
-      chainId: response.transaction.chainId,
-      contractAddress:
-        outcome.status === 'success' && 'contractAddress' in outcome
-          ? outcome.contractAddress
-          : null,
-      effectiveGasPrice: 'effectiveGasPrice' in outcome ? outcome.effectiveGasPrice : null,
-      failure: outcomeFailure(outcome),
-      gasCharged: null,
-      gasCoveredBySponsor: null,
-      gasFee,
-      gasLimit: response.transaction.gas,
-      gasUsed: executed ? outcome.gasUsed : null,
-      logsCount: outcome.status === 'success' ? outcome.logs.length : 0,
-      output: outcomeOutput(outcome),
-      status: outcome.status,
-      storageCoveredBySponsor: null,
-      totalFee: gasFee === null ? null : addHexQuantities(gasFee, blobGasFee),
-    };
-  }
-
-  const execution = response.execution;
+  const outcome = response.outcome;
+  const executed = 'gasUsed' in outcome;
+  const blobGasFee = 'blobGasFee' in outcome ? outcome.blobGasFee ?? null : null;
+  const gasFee = executed ? outcome.gasFee : null;
   return {
-    blobGasFee: null,
-    blobGasPrice: null,
-    blobGasUsed: null,
-    burntGasFee: execution.burntFee,
-    chainId: execution.chainId,
-    contractAddress: null,
-    effectiveGasPrice: null,
-    failure: execution.failure
-      ? {
-          detail: [execution.failure.code, execution.failure.reason]
-            .filter(Boolean)
-            .join(' / '),
-          message: execution.failure.message,
-        }
-      : null,
-    gasCharged: execution.gasCharged,
-    gasCoveredBySponsor: execution.gasCoveredBySponsor,
-    gasFee: execution.fee,
-    gasLimit: execution.gasLimit,
-    gasUsed: execution.gasUsed,
-    logsCount: 0,
-    output: { label: 'Output', value: execution.output },
-    status:
-      execution.status === 'SUCCESS'
-        ? 'success'
-        : execution.status === 'FAILED'
-          ? 'failed'
-          : 'rejected',
-    storageCoveredBySponsor: execution.storageCoveredBySponsor,
-    totalFee: execution.fee,
+    blobGasFee,
+    blobGasPrice: 'blobGasPrice' in outcome ? outcome.blobGasPrice ?? null : null,
+    blobGasUsed: 'blobGasUsed' in outcome ? outcome.blobGasUsed ?? null : null,
+    burntGasFee: executed ? outcome.burntGasFee ?? null : null,
+    chainId: response.transaction.chainId,
+    contractAddress:
+      outcome.status === 'success' && 'contractAddress' in outcome
+        ? outcome.contractAddress
+        : null,
+    effectiveGasPrice:
+      'effectiveGasPrice' in outcome ? outcome.effectiveGasPrice : null,
+    failure: outcomeFailure(outcome),
+    gasCoveredBySponsor:
+      'gasCoveredBySponsor' in outcome ? outcome.gasCoveredBySponsor : null,
+    gasFee,
+    gasLimit: response.transaction.gas,
+    gasUsed: executed ? outcome.gasUsed : null,
+    logsCount: outcome.status === 'success' ? outcome.logs.length : 0,
+    output: outcomeOutput(outcome),
+    status: outcome.status,
+    storageCollateralized:
+      'storageCollateralized' in outcome
+        ? outcome.storageCollateralized
+        : null,
+    storageCoveredBySponsor:
+      'storageCoveredBySponsor' in outcome
+        ? outcome.storageCoveredBySponsor
+        : null,
+    totalFee: gasFee === null ? null : addHexQuantities(gasFee, blobGasFee),
   };
 }
 
-function outcomeFailure(outcome: EvmOutcome | EspaceOutcome) {
+function outcomeFailure(outcome: EvmOutcome | EspaceOutcome | CoreOutcome) {
   switch (outcome.status) {
     case 'reverted':
       return {
@@ -294,7 +265,7 @@ function outcomeFailure(outcome: EvmOutcome | EspaceOutcome) {
   }
 }
 
-function outcomeOutput(outcome: EvmOutcome | EspaceOutcome) {
+function outcomeOutput(outcome: EvmOutcome | EspaceOutcome | CoreOutcome) {
   if (outcome.status === 'reverted') {
     return { label: 'Revert data', value: outcome.revertData };
   }

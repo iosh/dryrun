@@ -1,43 +1,38 @@
+use std::sync::Arc;
+
 use cfx_executor::{machine::Machine, state::State};
 use cfx_types::Space;
-use conflux_provider::Network;
 use tokio::runtime::Handle;
 
 use crate::{
     ConfluxSimulationBackend,
-    espace::EspaceNativeCurrency,
     execution::{
-        ConfluxExecutionOutcome, ConfluxTransactionExecutor, DryRunTransactionInput,
-        ExecutionBlockContext, ExecutionTraceObserver, TransactionExecutionInput,
-        build_conflux_state,
+        ConfluxTransactionExecutor, DryRunTransactionInput, ExecutionBlockContext,
+        ExecutionTraceObserver, TransactionExecutionInput, build_conflux_state,
     },
     state::ConfluxStateSource,
 };
 
 use super::{
-    CoreSpaceChange, CoreSpaceCompleteTransaction, CoreSpaceExecutionError,
-    CoreSpaceExecutionOutcome, CoreSpaceNativeCurrency, CoreSpaceSimulationError,
-    CoreSpaceStateAccessError, ResolvedStorageSponsorship,
-    analysis::{CoreSpaceAnalysisData, CoreSpaceChangeAnalysis},
-    changes::StatePhase,
-    convert_executor_outcome,
+    CoreSpaceChanges, CoreSpaceCompleteTransaction, CoreSpaceExecutionError,
+    CoreSpaceExecutionOutcome, CoreSpaceSimulationError, CoreSpaceStateAccessError,
+    ResolvedStorageSponsorship,
+    executed_transaction::CoreSpaceExecutedTransaction,
+    outcome::{build_execution_outcome, map_drop_error, map_reconsider_packing_error},
     transaction::build_core_space_transaction_input,
 };
 
 pub(super) struct CoreSpaceExecutionSession {
     state: State,
-    machine: Machine,
+    machine: Arc<Machine>,
     chain_id: u32,
-    network: Network,
-    currency: CoreSpaceNativeCurrency,
-    espace_currency: EspaceNativeCurrency,
-    espace_wrapped_native_token: alloy_primitives::Address,
-    analysis_data: CoreSpaceAnalysisData,
+    state_source: Arc<ConfluxStateSource>,
+    runtime_handle: Handle,
 }
 
 pub(super) struct CoreSpaceExecutionSessionResult {
     pub(super) outcome: CoreSpaceExecutionOutcome,
-    pub(super) changes: Vec<CoreSpaceChange>,
+    pub(super) changes: CoreSpaceChanges,
 }
 
 impl CoreSpaceExecutionSession {
@@ -46,22 +41,20 @@ impl CoreSpaceExecutionSession {
         state_source: ConfluxStateSource,
         runtime_handle: Handle,
     ) -> Result<Self, CoreSpaceExecutionError> {
-        let analysis_data = CoreSpaceAnalysisData::from_state_source(&state_source);
-        let state = build_conflux_state(state_source, runtime_handle).map_err(|source| {
-            CoreSpaceExecutionError::StateAccess(CoreSpaceStateAccessError::Initialization {
-                source,
-            })
-        })?;
+        let state_source = Arc::new(state_source);
+        let state = build_conflux_state(Arc::clone(&state_source), runtime_handle.clone())
+            .map_err(|source| {
+                CoreSpaceExecutionError::StateAccess(CoreSpaceStateAccessError::Initialization {
+                    source,
+                })
+            })?;
 
         Ok(Self {
             state,
-            machine: backend.chain_spec().build_machine(),
+            machine: Arc::new(backend.chain_spec().build_machine()),
             chain_id: backend.chain_spec().core_space_chain_id(),
-            network: backend.core_space_address_network(),
-            currency: backend.chain_spec().core_space_native_currency().clone(),
-            espace_currency: backend.chain_spec().espace_native_currency().clone(),
-            espace_wrapped_native_token: backend.chain_spec().espace_wrapped_native_token(),
-            analysis_data,
+            state_source,
+            runtime_handle,
         })
     }
 
@@ -78,55 +71,52 @@ impl CoreSpaceExecutionSession {
                 self.chain_id,
             )),
         };
-        let state_before_execution = self.state.save();
         let execution = ConfluxTransactionExecutor::new(&mut self.state, &self.machine)
             .execute(execution_input, ExecutionTraceObserver::new(Space::Native))
-            .map_err(classify_transaction_execution_error)?;
+            .map_err(map_execution_error)?;
 
-        let changes = if matches!(&execution.outcome, ConfluxExecutionOutcome::Success(_)) {
-            let mut analysis = CoreSpaceChangeAnalysis::from_execution(
-                &execution,
-                &self.machine,
-                self.analysis_data,
-                self.network,
-                &self.currency,
-                &self.espace_currency,
-                self.espace_wrapped_native_token,
-            )?;
-            let state_after_execution = self.state.save();
-
-            self.state.restore(state_before_execution);
-            let before = analysis.read_state(&mut self.state, StatePhase::Before)?;
-            self.state.restore(state_after_execution);
-
-            let state_before_after_reads = self.state.save();
-            let after = analysis.read_state(&mut self.state, StatePhase::After)?;
-            self.state.restore(state_before_after_reads);
-
-            analysis.analyze(
-                &mut self.state,
-                &self.machine,
-                &execution.prepared,
-                before,
-                after,
-            )?
-        } else {
-            Vec::new()
+        let prepared = execution.prepared;
+        let outcome = match execution.outcome {
+            crate::execution::ConfluxExecutionOutcome::NotExecutedDrop(error) => {
+                CoreSpaceExecutionOutcome::NotExecuted(
+                    map_drop_error(error, transaction.common().from.network())
+                        .map_err(CoreSpaceExecutionError::from)?,
+                )
+            }
+            crate::execution::ConfluxExecutionOutcome::NotExecutedToReconsiderPacking(error) => {
+                CoreSpaceExecutionOutcome::NotExecuted(
+                    map_reconsider_packing_error(error).map_err(CoreSpaceExecutionError::from)?,
+                )
+            }
+            executor_outcome => {
+                let executed =
+                    CoreSpaceExecutedTransaction::from_outcome(executor_outcome, &prepared)?;
+                let state_access = super::state_access::CoreSpaceStateAccess::new(
+                    Arc::clone(&self.state_source),
+                    self.runtime_handle,
+                    self.state,
+                    Arc::clone(&self.machine),
+                    &prepared,
+                )
+                .map_err(CoreSpaceExecutionError::from)?;
+                build_execution_outcome(executed, transaction, &state_access, storage_sponsorship)?
+            }
         };
 
-        let outcome = convert_executor_outcome(
-            execution.outcome,
-            &execution.prepared,
-            transaction,
-            &self.state,
-            storage_sponsorship,
-        )?;
+        let changes = match &outcome {
+            CoreSpaceExecutionOutcome::NotExecuted(_) => CoreSpaceChanges::Complete(Vec::new()),
+            CoreSpaceExecutionOutcome::Success { .. }
+            | CoreSpaceExecutionOutcome::Reverted { .. }
+            | CoreSpaceExecutionOutcome::Failed { .. } => CoreSpaceChanges::Unavailable {
+                error: "verified Core Space changes are unavailable".to_owned(),
+            },
+        };
 
         Ok(CoreSpaceExecutionSessionResult { outcome, changes })
     }
 }
 
-fn classify_transaction_execution_error(
+fn map_execution_error(
     error: crate::execution::TransactionExecutionError,
 ) -> CoreSpaceExecutionError {
     use crate::execution::TransactionExecutionError;

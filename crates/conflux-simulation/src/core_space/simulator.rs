@@ -8,11 +8,11 @@ use crate::{
 };
 
 use super::{
-    CoreSpaceCompleteTransaction, CoreSpaceCompleteTransactionVariant, CoreSpaceExecutionError,
-    CoreSpaceSimulation, CoreSpaceSimulationError, CoreSpaceSimulationRequest,
-    CoreSpaceStateAccessError, CoreSpaceTransactionRejection, build_core_space_execution,
-    build_core_space_not_executed, complete_transaction, resolve_core_space_context,
-    resolve_storage_sponsorship, session::CoreSpaceExecutionSession,
+    CoreSpaceChanges, CoreSpaceCompleteTransaction, CoreSpaceExecutionError,
+    CoreSpaceExecutionOutcome, CoreSpaceSimulation, CoreSpaceSimulationError,
+    CoreSpaceSimulationRequest, CoreSpaceStateAccessError, CoreSpaceTransactionRejection,
+    complete_transaction, resolve_core_space_context, resolve_storage_sponsorship,
+    session::CoreSpaceExecutionSession,
 };
 
 #[derive(Clone)]
@@ -38,7 +38,6 @@ impl CoreSpaceTransactionSimulator {
         let chain_id = self.backend.chain_spec().core_space_chain_id();
         let transaction =
             complete_transaction(transaction, self.backend.provider(), &context, chain_id).await?;
-        let gas_limit = transaction.gas_limit;
         let execution_block_number =
             next_execution_block_number(context.execution_block_context.pivot_block_number)
                 .map_err(|source| CoreSpaceExecutionError::Context { source })?;
@@ -53,18 +52,12 @@ impl CoreSpaceTransactionSimulator {
                 execution_epoch_height,
             );
 
-        if let Some(rejection) = classify_transaction_rejection(&transaction, chain_id, rules) {
-            let execution = build_core_space_not_executed(
-                chain_id,
-                context.public_context,
-                gas_limit,
-                rejection,
-            );
+        if let Some(rejection) = validate_transaction_for_execution(&transaction, chain_id, rules) {
             return Ok(CoreSpaceSimulation::new(
                 context.public_context,
                 transaction,
-                execution,
-                Vec::new(),
+                CoreSpaceExecutionOutcome::NotExecuted(rejection),
+                CoreSpaceChanges::Complete(Vec::new()),
             ));
         }
 
@@ -101,7 +94,6 @@ impl CoreSpaceTransactionSimulator {
                 simulate_blocking(
                     backend,
                     blocking_runtime_handle,
-                    chain_id,
                     context,
                     transaction,
                     storage_sponsorship,
@@ -116,7 +108,6 @@ impl CoreSpaceTransactionSimulator {
 fn simulate_blocking(
     backend: ConfluxSimulationBackend,
     runtime_handle: Handle,
-    chain_id: u32,
     context: super::ResolvedCoreSpaceContext,
     transaction: CoreSpaceCompleteTransaction,
     storage_sponsorship: Option<super::ResolvedStorageSponsorship>,
@@ -128,53 +119,47 @@ fn simulate_blocking(
         context.execution_block_context,
         storage_sponsorship,
     )?;
-    let execution = build_core_space_execution(
-        chain_id,
-        context.public_context,
-        transaction.gas_limit,
-        session_result.outcome,
-    );
-
     Ok(CoreSpaceSimulation::new(
         context.public_context,
         transaction,
-        execution,
+        session_result.outcome,
         session_result.changes,
     ))
 }
 
-fn classify_transaction_rejection(
+fn validate_transaction_for_execution(
     transaction: &CoreSpaceCompleteTransaction,
     expected_chain_id: u32,
     rules: CoreSpaceTransactionValidationRules,
 ) -> Option<CoreSpaceTransactionRejection> {
-    if transaction.chain_id != expected_chain_id {
+    let common = transaction.common();
+    if common.chain_id != expected_chain_id {
         return Some(CoreSpaceTransactionRejection::InvalidChainId {
-            transaction_chain_id: transaction.chain_id,
+            transaction_chain_id: common.chain_id,
             expected_chain_id,
         });
     }
 
     if !rules.typed_transactions_active {
-        match &transaction.variant {
-            CoreSpaceCompleteTransactionVariant::Cip155 { .. } => {}
-            CoreSpaceCompleteTransactionVariant::Cip2930 { .. } => {
+        match transaction {
+            CoreSpaceCompleteTransaction::Cip155 { .. } => {}
+            CoreSpaceCompleteTransaction::Cip2930 { .. } => {
                 return Some(CoreSpaceTransactionRejection::Cip2930NotActivated);
             }
-            CoreSpaceCompleteTransactionVariant::Cip1559 { .. } => {
+            CoreSpaceCompleteTransaction::Cip1559 { .. } => {
                 return Some(CoreSpaceTransactionRejection::Cip1559NotActivated);
             }
         }
     }
 
-    match &transaction.variant {
-        CoreSpaceCompleteTransactionVariant::Cip155 { gas_price }
-        | CoreSpaceCompleteTransactionVariant::Cip2930 { gas_price, .. } => {
+    match transaction {
+        CoreSpaceCompleteTransaction::Cip155 { gas_price, .. }
+        | CoreSpaceCompleteTransaction::Cip2930 { gas_price, .. } => {
             if gas_price.is_zero() {
                 return Some(CoreSpaceTransactionRejection::ZeroGasPrice);
             }
         }
-        CoreSpaceCompleteTransactionVariant::Cip1559 {
+        CoreSpaceCompleteTransaction::Cip1559 {
             max_fee_per_gas,
             max_priority_fee_per_gas,
             ..

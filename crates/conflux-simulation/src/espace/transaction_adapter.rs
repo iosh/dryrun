@@ -13,7 +13,7 @@ use crate::{
     primitive::{access_list_to_cfx, address_to_cfx, u256_to_cfx},
 };
 
-pub(crate) fn classify_transaction_rejection(
+pub(crate) fn validate_transaction_for_execution(
     transaction: &EspaceCompleteTransaction,
     expected_chain_id: u64,
     rules: EspaceTransactionValidationRules,
@@ -49,7 +49,7 @@ pub(crate) fn classify_transaction_rejection(
             max_fee_per_gas,
             max_priority_fee_per_gas,
             ..
-        } => classify_dynamic_fee_rejection(
+        } => validate_dynamic_fee(
             *max_fee_per_gas,
             *max_priority_fee_per_gas,
             rules.typed_transactions_active,
@@ -64,7 +64,7 @@ pub(crate) fn classify_transaction_rejection(
             if !rules.typed_transactions_active || !rules.eip7702_transactions_active {
                 Some(EspaceTransactionRejection::Eip7702NotActivated)
             } else {
-                classify_dynamic_fee_rejection(
+                validate_dynamic_fee(
                     *max_fee_per_gas,
                     *max_priority_fee_per_gas,
                     true,
@@ -102,7 +102,7 @@ pub(crate) fn classify_transaction_rejection(
     None
 }
 
-fn classify_dynamic_fee_rejection(
+fn validate_dynamic_fee(
     max_fee_per_gas: alloy_primitives::U256,
     max_priority_fee_per_gas: alloy_primitives::U256,
     active: bool,
@@ -224,7 +224,7 @@ pub(crate) fn build_executor_transaction(
 mod tests {
     use alloy_primitives::{Address, Bytes, U256};
 
-    use super::classify_transaction_rejection;
+    use super::validate_transaction_for_execution;
     use crate::{
         chain_spec::ConfluxChainSpec,
         espace::{EspaceCompleteTransaction, EspaceTransactionCommon, EspaceTransactionRejection},
@@ -242,13 +242,13 @@ mod tests {
         let before_activation =
             chain_spec.espace_transaction_validation_rules(250_000_000, CIP645_HEIGHT - 1);
         assert_eq!(
-            classify_transaction_rejection(&transaction, 1030, before_activation),
+            validate_transaction_for_execution(&transaction, 1030, before_activation),
             None
         );
 
         let active = chain_spec.espace_transaction_validation_rules(250_000_000, CIP645_HEIGHT);
         assert!(matches!(
-            classify_transaction_rejection(&transaction, 1030, active),
+            validate_transaction_for_execution(&transaction, 1030, active),
             Some(EspaceTransactionRejection::PriorityFeeGreaterThanMaxFee {
                 max_priority_fee_per_gas,
                 max_fee_per_gas,
@@ -269,13 +269,13 @@ mod tests {
         transaction.common_mut().gas_limit = 10_000_000;
 
         assert_eq!(
-            classify_transaction_rejection(&transaction, 1030, rules),
+            validate_transaction_for_execution(&transaction, 1030, rules),
             None
         );
 
         transaction.common_mut().input = Bytes::from(vec![0_u8; EIP3860_MAX_INITCODE_SIZE + 1]);
         assert!(matches!(
-            classify_transaction_rejection(&transaction, 1030, rules),
+            validate_transaction_for_execution(&transaction, 1030, rules),
             Some(EspaceTransactionRejection::CreateInitCodeSizeLimit { size, limit })
                 if size == EIP3860_MAX_INITCODE_SIZE + 1
                     && limit == EIP3860_MAX_INITCODE_SIZE

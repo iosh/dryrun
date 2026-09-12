@@ -6,7 +6,6 @@ use super::CoreSpaceResultIntegrationError;
 pub struct CoreSpaceGas {
     intrinsic_gas: u64,
     gas_used: u64,
-    gas_charged: u64,
 }
 
 impl CoreSpaceGas {
@@ -31,7 +30,6 @@ impl CoreSpaceGas {
         Ok(Self {
             intrinsic_gas,
             gas_used,
-            gas_charged,
         })
     }
 
@@ -42,10 +40,6 @@ impl CoreSpaceGas {
     pub const fn gas_used(&self) -> u64 {
         self.gas_used
     }
-
-    pub const fn gas_charged(&self) -> u64 {
-        self.gas_charged
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +47,9 @@ pub struct CoreSpaceExecutionResult {
     gas: CoreSpaceGas,
     gas_fee: U256,
     burnt_gas_fee: Option<U256>,
+    effective_gas_price: U256,
     gas_covered_by_sponsor: bool,
+    storage_collateralized: u64,
     storage_covered_by_sponsor: bool,
 }
 
@@ -62,14 +58,18 @@ impl CoreSpaceExecutionResult {
         gas: CoreSpaceGas,
         gas_fee: U256,
         burnt_gas_fee: Option<U256>,
+        effective_gas_price: U256,
         gas_covered_by_sponsor: bool,
+        storage_collateralized: u64,
         storage_covered_by_sponsor: bool,
     ) -> Self {
         Self {
             gas,
             gas_fee,
             burnt_gas_fee,
+            effective_gas_price,
             gas_covered_by_sponsor,
+            storage_collateralized,
             storage_covered_by_sponsor,
         }
     }
@@ -86,8 +86,16 @@ impl CoreSpaceExecutionResult {
         self.burnt_gas_fee
     }
 
+    pub const fn effective_gas_price(&self) -> U256 {
+        self.effective_gas_price
+    }
+
     pub const fn gas_covered_by_sponsor(&self) -> bool {
         self.gas_covered_by_sponsor
+    }
+
+    pub const fn storage_collateralized(&self) -> u64 {
+        self.storage_collateralized
     }
 
     pub const fn storage_covered_by_sponsor(&self) -> bool {
