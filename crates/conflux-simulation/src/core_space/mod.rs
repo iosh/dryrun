@@ -18,9 +18,11 @@ pub(crate) use completion::complete_transaction;
 pub(crate) use transaction::{ResolvedStorageSponsorship, resolve_storage_sponsorship};
 
 pub use changes::{
-    CoreSpaceChange, CoreSpaceNativeCurrency, CrossSpaceAddress, GovernanceParameter,
-    GovernanceVote, SponsoredResource, SponsorshipAccessRuleScope, SponsorshipFundingTerms,
-    SponsorshipReplacement, VoteAllocation,
+    CombinedCoreSpaceChangeRules, CoreSpaceChange, CoreSpaceChangeDerivationError,
+    CoreSpaceChangeRules, CoreSpaceChangeSet, CoreSpaceChangeSetBuilder,
+    CoreSpaceNativeAndStakingChangeRules, CoreSpaceNativeCurrency, CrossSpaceAddress,
+    DefaultCoreSpaceChangeRules, GovernanceParameter, GovernanceVote, SponsoredResource,
+    SponsorshipAccessRuleScope, SponsorshipFundingTerms, SponsorshipReplacement, VoteAllocation,
 };
 pub use conflux_provider::CoreAddress;
 pub use context::{CoreSpaceBlockContext, CoreSpaceBlockSelector, CoreSpaceContextError};
@@ -32,6 +34,11 @@ pub use error::{
     CoreSpaceChangesError, CoreSpaceExecutionError, CoreSpaceResultIntegrationError,
     CoreSpaceSimulationError, CoreSpaceStateAccessError,
 };
+pub use executed_transaction::{
+    CoreSpaceCallKind, CoreSpaceCommittedFrame, CoreSpaceCommittedInternalTransfer,
+    CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition, CoreSpaceExecutionSpace,
+    CoreSpaceExecutionStatus, CoreSpaceFrameAction, CoreSpaceFrameId, CoreSpaceTransferPocket,
+};
 pub use execution::{
     CoreSpaceExecutionFailure, CoreSpaceExecutionOutcome, CoreSpaceLog, CoreSpaceLogAddress,
     CoreSpaceRevertReason, CoreSpaceSuccessOutput,
@@ -41,6 +48,9 @@ pub use rejection::CoreSpaceTransactionRejection;
 pub use request::CoreSpaceSimulationRequest;
 pub use result::{CoreSpaceChanges, CoreSpaceSimulation};
 pub use simulator::CoreSpaceTransactionSimulator;
+pub use state_access::{
+    CoreSpaceDepositLot, CoreSpaceStateAccess, CoreSpaceStateReader, CoreSpaceVoteLockInfo,
+};
 pub use transaction::{
     CoreSpaceAccessListItem, CoreSpaceCompleteTransaction, CoreSpacePartialTransaction,
     CoreSpacePartialTransactionCommon, CoreSpaceTransactionCommon,

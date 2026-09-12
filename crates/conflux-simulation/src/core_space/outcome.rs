@@ -22,14 +22,14 @@ use crate::primitive::{
 };
 
 pub(crate) fn build_execution_outcome(
-    executed: CoreSpaceExecutedTransaction,
+    executed: &CoreSpaceExecutedTransaction,
     transaction: &CoreSpaceCompleteTransaction,
     state: &CoreSpaceStateAccess,
     storage_sponsorship: Option<ResolvedStorageSponsorship>,
 ) -> Result<CoreSpaceExecutionOutcome, CoreSpaceExecutionError> {
     let common = transaction.common();
     let network = common.from.network();
-    let storage_outcome = match executed.status {
+    let storage_outcome = match &executed.status {
         CoreSpaceFinalStatus::Success => StorageCoverageOutcome::Success,
         CoreSpaceFinalStatus::Reverted => StorageCoverageOutcome::Reverted,
         CoreSpaceFinalStatus::Failed(_) => StorageCoverageOutcome::FullyChargedFailure,
@@ -43,7 +43,7 @@ pub(crate) fn build_execution_outcome(
     )?;
     let result = build_execution_result(&executed, common.gas_limit, storage_covered_by_sponsor)?;
 
-    match executed.status {
+    match &executed.status {
         CoreSpaceFinalStatus::Success => {
             let logs = map_committed_logs(&executed.committed_logs, network)?;
             let output = build_success_output(&executed, transaction, state, network)?;
@@ -57,13 +57,13 @@ pub(crate) fn build_execution_outcome(
             let reason = decode_revert_reason(&executed.output);
             Ok(CoreSpaceExecutionOutcome::Reverted {
                 result,
-                revert_data: executed.output,
+                revert_data: executed.output.clone(),
                 reason,
             })
         }
         CoreSpaceFinalStatus::Failed(failure) => Ok(CoreSpaceExecutionOutcome::Failed {
             result,
-            failure: map_execution_failure(failure, network)?,
+            failure: failure.clone(),
         }),
     }
 }
@@ -230,7 +230,7 @@ pub(crate) fn map_reconsider_packing_error(
     }
 }
 
-fn map_execution_failure(
+pub(super) fn map_execution_failure(
     error: ExecutionError,
     network: Network,
 ) -> Result<CoreSpaceExecutionFailure, CoreSpaceExecutionError> {

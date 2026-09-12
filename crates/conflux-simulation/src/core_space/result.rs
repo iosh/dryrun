@@ -1,13 +1,25 @@
-use super::{CoreSpaceBlockContext, CoreSpaceCompleteTransaction, CoreSpaceExecutionOutcome};
+use super::{
+    CoreSpaceBlockContext, CoreSpaceChangeDerivationError, CoreSpaceChangeSet,
+    CoreSpaceCompleteTransaction, CoreSpaceExecutionOutcome,
+};
 
 /// Availability of verified Core Space state changes.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum CoreSpaceChanges {
-    Complete(Vec<super::changes::CoreSpaceChange>),
-    Unavailable { error: String },
+    Complete(CoreSpaceChangeSet),
+    Unavailable(CoreSpaceChangeDerivationError),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl From<Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError>> for CoreSpaceChanges {
+    fn from(result: Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError>) -> Self {
+        match result {
+            Ok(changes) => Self::Complete(changes),
+            Err(error) => Self::Unavailable(error),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct CoreSpaceSimulation {
     pub context: CoreSpaceBlockContext,
     pub transaction: CoreSpaceCompleteTransaction,

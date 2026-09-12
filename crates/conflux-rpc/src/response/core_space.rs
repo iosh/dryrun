@@ -369,12 +369,12 @@ impl Changes {
         network: Network,
     ) -> Result<Self, ResponseMappingError> {
         match changes {
-            simulation_core_space::CoreSpaceChanges::Complete(items) => Ok(Self::Complete {
-                items: core_space_change::try_map_changes(items, network)?,
+            simulation_core_space::CoreSpaceChanges::Complete(changes) => Ok(Self::Complete {
+                items: core_space_change::try_map_changes(changes.into_items(), network)?,
             }),
-            simulation_core_space::CoreSpaceChanges::Unavailable { error } => {
-                Ok(Self::Unavailable { error })
-            }
+            simulation_core_space::CoreSpaceChanges::Unavailable(error) => Ok(Self::Unavailable {
+                error: error.to_string(),
+            }),
         }
     }
 }

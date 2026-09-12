@@ -1,6 +1,6 @@
 use std::{cell::RefCell, sync::Arc};
 
-use alloy_primitives::Bytes;
+use alloy_primitives::{Bytes, U256 as AlloyU256};
 use cfx_executor::{
     executive::{
         ChargeCollateral, ExecutionError, ExecutionOutcome, ExecutiveContext, TransactOptions,
@@ -10,11 +10,13 @@ use cfx_executor::{
     state::State,
 };
 use cfx_types::{Address, AddressSpaceUtil, AddressWithSpace, Space, U256};
+use conflux_provider::{CoreAddress, Network};
 use primitives::transaction::{Action, NativeTransaction, TypedNativeTransaction};
 use tokio::runtime::Handle;
 
 use crate::{
     execution::{PreparedTransactionExecution, build_conflux_state},
+    primitive::u256_from_cfx,
     state::ConfluxStateSource,
 };
 
@@ -22,7 +24,8 @@ use super::CoreSpaceStateAccessError;
 
 const READ_CALL_GAS_LIMIT: u64 = 100_000;
 
-pub(crate) struct CoreSpaceStateAccess {
+pub struct CoreSpaceStateAccess {
+    source: Arc<ConfluxStateSource>,
     initial: CoreSpaceStateReader,
     finalized: CoreSpaceStateReader,
 }
@@ -34,27 +37,97 @@ impl CoreSpaceStateAccess {
         finalized_state: State,
         machine: Arc<Machine>,
         prepared: &PreparedTransactionExecution,
+        address_network: Network,
     ) -> Result<Self, CoreSpaceStateAccessError> {
-        let initial_state = build_conflux_state(source, runtime_handle)
+        let initial_state = build_conflux_state(Arc::clone(&source), runtime_handle)
             .map_err(|source| CoreSpaceStateAccessError::Initialization { source })?;
         let context = Arc::new(CoreSpaceReadContext {
             machine,
             env: prepared.env.clone(),
             spec: prepared.spec.clone(),
             caller: prepared.transaction.sender().address,
+            address_network,
         });
         Ok(Self {
+            source,
             initial: CoreSpaceStateReader::new(initial_state, Arc::clone(&context)),
             finalized: CoreSpaceStateReader::new(finalized_state, context),
         })
     }
 
-    pub(super) const fn initial(&self) -> &CoreSpaceStateReader {
+    pub const fn initial(&self) -> &CoreSpaceStateReader {
         &self.initial
     }
 
-    pub(super) const fn finalized(&self) -> &CoreSpaceStateReader {
+    pub const fn finalized(&self) -> &CoreSpaceStateReader {
         &self.finalized
+    }
+
+    pub fn initial_deposit_lots(
+        &self,
+        address: CoreAddress,
+    ) -> Result<Vec<CoreSpaceDepositLot>, CoreSpaceStateAccessError> {
+        let address = self.initial.validate_address(address)?;
+        self.initial_deposit_list(address).map(|deposits| {
+            deposits
+                .into_iter()
+                .map(|deposit| CoreSpaceDepositLot {
+                    principal_amount: u256_from_cfx(deposit.amount),
+                    deposit_block_number: u256_from_cfx(deposit.deposit_time),
+                    accumulated_interest_rate: u256_from_cfx(deposit.accumulated_interest_rate),
+                })
+                .collect()
+        })
+    }
+
+    pub fn initial_vote_locks(
+        &self,
+        address: CoreAddress,
+    ) -> Result<Vec<CoreSpaceVoteLockInfo>, CoreSpaceStateAccessError> {
+        let address = self.initial.validate_address(address)?;
+        self.initial_vote_list(address).map(|votes| {
+            votes
+                .into_iter()
+                .map(|vote| CoreSpaceVoteLockInfo {
+                    locked_amount: u256_from_cfx(vote.amount),
+                    unlock_block_number: u256_from_cfx(vote.unlock_block_number),
+                })
+                .collect()
+        })
+    }
+
+    pub fn accumulated_interest_rate(&self) -> AlloyU256 {
+        u256_from_cfx(self.source.accumulated_interest_rate())
+    }
+
+    pub(crate) fn initial_deposit_list(
+        &self,
+        address: Address,
+    ) -> Result<Vec<primitives::DepositInfo>, CoreSpaceStateAccessError> {
+        self.source
+            .deposit_lists()
+            .for_account(address)
+            .map_err(|source| CoreSpaceStateAccessError::RecordedState {
+                operation: "read the request-local initial Core Space deposit list",
+                source,
+            })
+    }
+
+    pub(crate) fn initial_vote_list(
+        &self,
+        address: Address,
+    ) -> Result<Vec<primitives::VoteStakeInfo>, CoreSpaceStateAccessError> {
+        self.source
+            .vote_lists()
+            .for_account(address)
+            .map_err(|source| CoreSpaceStateAccessError::RecordedState {
+                operation: "read the request-local initial Core Space vote list",
+                source,
+            })
+    }
+
+    pub(crate) fn raw_accumulated_interest_rate(&self) -> U256 {
+        self.source.accumulated_interest_rate()
     }
 }
 
@@ -63,9 +136,10 @@ struct CoreSpaceReadContext {
     env: cfx_vm_types::Env,
     spec: cfx_vm_types::Spec,
     caller: Address,
+    address_network: Network,
 }
 
-pub(super) struct CoreSpaceStateReader {
+pub struct CoreSpaceStateReader {
     state: RefCell<Option<State>>,
     context: Arc<CoreSpaceReadContext>,
 }
@@ -112,6 +186,137 @@ impl CoreSpaceStateReader {
                 code,
             })
         })
+    }
+
+    pub fn native_balance(
+        &self,
+        address: CoreAddress,
+    ) -> Result<AlloyU256, CoreSpaceStateAccessError> {
+        self.core_balance_raw(self.validate_address(address)?)
+    }
+
+    pub fn staking_balance(
+        &self,
+        address: CoreAddress,
+    ) -> Result<AlloyU256, CoreSpaceStateAccessError> {
+        self.staking_balance_raw(self.validate_address(address)?)
+    }
+
+    pub fn gas_sponsor_balance(
+        &self,
+        contract: CoreAddress,
+    ) -> Result<AlloyU256, CoreSpaceStateAccessError> {
+        self.gas_sponsor_balance_raw(self.validate_address(contract)?)
+    }
+
+    pub fn deposit_list_length(
+        &self,
+        address: CoreAddress,
+    ) -> Result<usize, CoreSpaceStateAccessError> {
+        self.deposit_list_length_raw(self.validate_address(address)?)
+    }
+
+    pub fn vote_lock_count(
+        &self,
+        address: CoreAddress,
+    ) -> Result<usize, CoreSpaceStateAccessError> {
+        self.vote_list_length_raw(self.validate_address(address)?)
+    }
+
+    pub fn locked_staking_balance_at(
+        &self,
+        address: CoreAddress,
+        block_number: u64,
+    ) -> Result<AlloyU256, CoreSpaceStateAccessError> {
+        self.locked_staking_balance_at_raw(self.validate_address(address)?, block_number)
+    }
+
+    pub(crate) fn core_balance_raw(
+        &self,
+        address: Address,
+    ) -> Result<AlloyU256, CoreSpaceStateAccessError> {
+        self.with_state(|state| {
+            state
+                .balance(&address.with_native_space())
+                .map(u256_from_cfx)
+                .map_err(|source| operation("read Core Space account balance", source))
+        })
+    }
+
+    pub(crate) fn staking_balance_raw(
+        &self,
+        address: Address,
+    ) -> Result<AlloyU256, CoreSpaceStateAccessError> {
+        self.with_state(|state| {
+            state
+                .staking_balance(&address)
+                .map(u256_from_cfx)
+                .map_err(|source| operation("read Core Space staking balance", source))
+        })
+    }
+
+    pub(crate) fn gas_sponsor_balance_raw(
+        &self,
+        contract: Address,
+    ) -> Result<AlloyU256, CoreSpaceStateAccessError> {
+        self.with_state(|state| {
+            state
+                .sponsor_balance_for_gas(&contract)
+                .map(u256_from_cfx)
+                .map_err(|source| operation("read Core Space gas sponsor balance", source))
+        })
+    }
+
+    pub fn total_issued(&self) -> Result<AlloyU256, CoreSpaceStateAccessError> {
+        self.with_state(|state| Ok(u256_from_cfx(state.total_issued_tokens())))
+    }
+
+    pub fn total_staking(&self) -> Result<AlloyU256, CoreSpaceStateAccessError> {
+        self.with_state(|state| Ok(u256_from_cfx(state.total_staking_tokens())))
+    }
+
+    pub(crate) fn deposit_list_length_raw(
+        &self,
+        address: Address,
+    ) -> Result<usize, CoreSpaceStateAccessError> {
+        self.with_state(|state| {
+            state
+                .deposit_list_length(&address)
+                .map_err(|source| operation("read Core Space deposit-list length", source))
+        })
+    }
+
+    pub(crate) fn vote_list_length_raw(
+        &self,
+        address: Address,
+    ) -> Result<usize, CoreSpaceStateAccessError> {
+        self.with_state(|state| {
+            state
+                .vote_stake_list_length(&address)
+                .map_err(|source| operation("read Core Space vote-list length", source))
+        })
+    }
+
+    pub(crate) fn locked_staking_balance_at_raw(
+        &self,
+        address: Address,
+        block_number: u64,
+    ) -> Result<AlloyU256, CoreSpaceStateAccessError> {
+        self.with_state(|state| {
+            state
+                .locked_staking_balance_at_block_number(&address, block_number)
+                .map(u256_from_cfx)
+                .map_err(|source| operation("read Core Space vote-lock balance", source))
+        })
+    }
+
+    fn validate_address(&self, address: CoreAddress) -> Result<Address, CoreSpaceStateAccessError> {
+        let actual = address.network();
+        let expected = self.context.address_network;
+        if actual != expected {
+            return Err(CoreSpaceStateAccessError::AddressNetworkMismatch { expected, actual });
+        }
+        Ok(Address::from(address.bytes()))
     }
 
     pub(super) fn staking(
@@ -270,6 +475,43 @@ impl CoreSpaceStateReader {
             .as_ref()
             .ok_or(CoreSpaceStateAccessError::Unavailable)?;
         read(state)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoreSpaceDepositLot {
+    principal_amount: AlloyU256,
+    deposit_block_number: AlloyU256,
+    accumulated_interest_rate: AlloyU256,
+}
+
+impl CoreSpaceDepositLot {
+    pub const fn principal_amount(self) -> AlloyU256 {
+        self.principal_amount
+    }
+
+    pub const fn deposit_block_number(self) -> AlloyU256 {
+        self.deposit_block_number
+    }
+
+    pub const fn accumulated_interest_rate(self) -> AlloyU256 {
+        self.accumulated_interest_rate
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoreSpaceVoteLockInfo {
+    locked_amount: AlloyU256,
+    unlock_block_number: AlloyU256,
+}
+
+impl CoreSpaceVoteLockInfo {
+    pub const fn locked_amount(self) -> AlloyU256 {
+        self.locked_amount
+    }
+
+    pub const fn unlock_block_number(self) -> AlloyU256 {
+        self.unlock_block_number
     }
 }
 

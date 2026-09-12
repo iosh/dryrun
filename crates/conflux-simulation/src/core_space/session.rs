@@ -63,6 +63,7 @@ impl CoreSpaceExecutionSession {
         transaction: &CoreSpaceCompleteTransaction,
         block_context: ExecutionBlockContext,
         storage_sponsorship: Option<ResolvedStorageSponsorship>,
+        change_rules: &impl super::CoreSpaceChangeRules,
     ) -> Result<CoreSpaceExecutionSessionResult, CoreSpaceSimulationError> {
         let execution_input = TransactionExecutionInput {
             block_context,
@@ -76,40 +77,47 @@ impl CoreSpaceExecutionSession {
             .map_err(map_execution_error)?;
 
         let prepared = execution.prepared;
-        let outcome = match execution.outcome {
-            crate::execution::ConfluxExecutionOutcome::NotExecutedDrop(error) => {
+        let (outcome, changes) = match execution.outcome {
+            crate::execution::ConfluxExecutionOutcome::NotExecutedDrop(error) => (
                 CoreSpaceExecutionOutcome::NotExecuted(
                     map_drop_error(error, transaction.common().from.network())
                         .map_err(CoreSpaceExecutionError::from)?,
-                )
-            }
-            crate::execution::ConfluxExecutionOutcome::NotExecutedToReconsiderPacking(error) => {
+                ),
+                CoreSpaceChanges::Complete(super::CoreSpaceChangeSet::default()),
+            ),
+            crate::execution::ConfluxExecutionOutcome::NotExecutedToReconsiderPacking(error) => (
                 CoreSpaceExecutionOutcome::NotExecuted(
                     map_reconsider_packing_error(error).map_err(CoreSpaceExecutionError::from)?,
-                )
-            }
+                ),
+                CoreSpaceChanges::Complete(super::CoreSpaceChangeSet::default()),
+            ),
             executor_outcome => {
-                let executed =
-                    CoreSpaceExecutedTransaction::from_outcome(executor_outcome, &prepared)?;
+                let executed = CoreSpaceExecutedTransaction::from_outcome(
+                    executor_outcome,
+                    &prepared,
+                    &self.machine,
+                    transaction.common().from,
+                    transaction.common().to,
+                )?;
                 let state_access = super::state_access::CoreSpaceStateAccess::new(
                     Arc::clone(&self.state_source),
                     self.runtime_handle,
                     self.state,
                     Arc::clone(&self.machine),
                     &prepared,
+                    transaction.common().from.network(),
                 )
                 .map_err(CoreSpaceExecutionError::from)?;
-                build_execution_outcome(executed, transaction, &state_access, storage_sponsorship)?
+                let outcome = build_execution_outcome(
+                    &executed,
+                    transaction,
+                    &state_access,
+                    storage_sponsorship,
+                )?;
+                let changes =
+                    CoreSpaceChanges::from(change_rules.derive_changes(&executed, &state_access));
+                (outcome, changes)
             }
-        };
-
-        let changes = match &outcome {
-            CoreSpaceExecutionOutcome::NotExecuted(_) => CoreSpaceChanges::Complete(Vec::new()),
-            CoreSpaceExecutionOutcome::Success { .. }
-            | CoreSpaceExecutionOutcome::Reverted { .. }
-            | CoreSpaceExecutionOutcome::Failed { .. } => CoreSpaceChanges::Unavailable {
-                error: "verified Core Space changes are unavailable".to_owned(),
-            },
         };
 
         Ok(CoreSpaceExecutionSessionResult { outcome, changes })

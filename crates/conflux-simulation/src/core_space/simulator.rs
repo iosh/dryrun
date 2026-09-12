@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tokio::runtime::Handle;
 
 use crate::{
@@ -15,16 +17,65 @@ use super::{
     session::CoreSpaceExecutionSession,
 };
 
-#[derive(Clone)]
-pub struct CoreSpaceTransactionSimulator {
+pub struct CoreSpaceTransactionSimulator<R = super::DefaultCoreSpaceChangeRules> {
     backend: ConfluxSimulationBackend,
+    change_rules: Arc<R>,
 }
 
-impl CoreSpaceTransactionSimulator {
-    pub const fn new(backend: ConfluxSimulationBackend) -> Self {
-        Self { backend }
+impl<R> Clone for CoreSpaceTransactionSimulator<R> {
+    fn clone(&self) -> Self {
+        Self {
+            backend: self.backend.clone(),
+            change_rules: Arc::clone(&self.change_rules),
+        }
+    }
+}
+
+impl CoreSpaceTransactionSimulator<super::DefaultCoreSpaceChangeRules> {
+    pub fn new(backend: ConfluxSimulationBackend) -> Self {
+        let change_rules = super::DefaultCoreSpaceChangeRules::new(
+            backend.chain_spec().core_space_native_currency().clone(),
+        );
+        Self {
+            backend,
+            change_rules: Arc::new(change_rules),
+        }
+    }
+}
+
+impl<R> CoreSpaceTransactionSimulator<R> {
+    pub fn with_change_rules<N>(self, change_rules: N) -> CoreSpaceTransactionSimulator<N>
+    where
+        N: super::CoreSpaceChangeRules,
+    {
+        CoreSpaceTransactionSimulator {
+            backend: self.backend,
+            change_rules: Arc::new(change_rules),
+        }
     }
 
+    pub fn with_additional_change_rules<N>(
+        self,
+        change_rules: N,
+    ) -> CoreSpaceTransactionSimulator<super::CombinedCoreSpaceChangeRules<R, N>>
+    where
+        R: super::CoreSpaceChangeRules,
+        N: super::CoreSpaceChangeRules,
+    {
+        CoreSpaceTransactionSimulator {
+            backend: self.backend,
+            change_rules: Arc::new(super::CombinedCoreSpaceChangeRules::from_shared(
+                self.change_rules,
+                change_rules,
+            )),
+        }
+    }
+}
+
+impl<R> CoreSpaceTransactionSimulator<R>
+where
+    R: super::CoreSpaceChangeRules,
+{
     /// Simulates one Core Space transaction inside the caller's active Tokio runtime.
     pub async fn simulate(
         &self,
@@ -57,7 +108,7 @@ impl CoreSpaceTransactionSimulator {
                 context.public_context,
                 transaction,
                 CoreSpaceExecutionOutcome::NotExecuted(rejection),
-                CoreSpaceChanges::Complete(Vec::new()),
+                CoreSpaceChanges::Complete(super::CoreSpaceChangeSet::default()),
             ));
         }
 
@@ -87,6 +138,7 @@ impl CoreSpaceTransactionSimulator {
                     })
                 })?;
         let backend = self.backend.clone();
+        let change_rules = Arc::clone(&self.change_rules);
         let blocking_runtime_handle = runtime_handle.clone();
 
         runtime_handle
@@ -98,6 +150,7 @@ impl CoreSpaceTransactionSimulator {
                     transaction,
                     storage_sponsorship,
                     state_source,
+                    change_rules,
                 )
             })
             .await
@@ -105,19 +158,24 @@ impl CoreSpaceTransactionSimulator {
     }
 }
 
-fn simulate_blocking(
+fn simulate_blocking<R>(
     backend: ConfluxSimulationBackend,
     runtime_handle: Handle,
     context: super::ResolvedCoreSpaceContext,
     transaction: CoreSpaceCompleteTransaction,
     storage_sponsorship: Option<super::ResolvedStorageSponsorship>,
     state_source: ConfluxStateSource,
-) -> Result<CoreSpaceSimulation, CoreSpaceSimulationError> {
+    change_rules: Arc<R>,
+) -> Result<CoreSpaceSimulation, CoreSpaceSimulationError>
+where
+    R: super::CoreSpaceChangeRules,
+{
     let session = CoreSpaceExecutionSession::new(&backend, state_source, runtime_handle)?;
     let session_result = session.execute(
         &transaction,
         context.execution_block_context,
         storage_sponsorship,
+        change_rules.as_ref(),
     )?;
     Ok(CoreSpaceSimulation::new(
         context.public_context,

@@ -1,7 +1,7 @@
 use alloy_primitives::U256;
 use cfx_statedb::Error as StateDbError;
 use cfx_storage::Error as StorageError;
-use conflux_provider::CoreAddress;
+use conflux_provider::{CoreAddress, Network};
 use thiserror::Error;
 use tokio::task::JoinError;
 
@@ -34,6 +34,14 @@ pub enum CoreSpaceStateAccessError {
         #[source]
         source: StateDbError,
     },
+    #[error("failed to access {operation}: {source}")]
+    RecordedState {
+        operation: &'static str,
+        #[source]
+        source: StorageError,
+    },
+    #[error("Core Space state address uses network {actual}, expected {expected}")]
+    AddressNetworkMismatch { expected: Network, actual: Network },
     #[error("Core Space read call failed: {details}")]
     ReadCall { details: String },
     #[error("Core Space state reader is unavailable after a read-call failure")]
@@ -43,44 +51,21 @@ pub enum CoreSpaceStateAccessError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum CoreSpaceChangesError {
-    #[error("Core Space change analysis failed to read state during {operation}: {source}")]
-    StateRead {
-        operation: String,
+    #[error("Core Space changes could not access required state during {operation}: {source}")]
+    StateAccess {
+        operation: &'static str,
         #[source]
-        source: StateDbError,
-    },
-    #[error(
-        "Core Space change analysis failed to access state recorded during execution while attempting to {operation}: {source}"
-    )]
-    RecordedStateAccess {
-        operation: String,
-        #[source]
-        source: StorageError,
+        source: CoreSpaceStateAccessError,
     },
     #[error("Core Space execution is inconsistent with change analysis: {details}")]
     InconsistentExecution { details: String },
     #[error("Core Space change analysis does not support this operation: {details}")]
     UnsupportedOperation { details: String },
-    #[error("Core Space change analysis violated an internal invariant: {details}")]
-    InternalInvariant { details: String },
 }
 
 impl CoreSpaceChangesError {
-    pub(crate) fn state_read(operation: impl Into<String>, source: StateDbError) -> Self {
-        Self::StateRead {
-            operation: operation.into(),
-            source,
-        }
-    }
-
-    pub(crate) fn recorded_state_access(
-        operation: impl Into<String>,
-        source: StorageError,
-    ) -> Self {
-        Self::RecordedStateAccess {
-            operation: operation.into(),
-            source,
-        }
+    pub(crate) fn state_access(operation: &'static str, source: CoreSpaceStateAccessError) -> Self {
+        Self::StateAccess { operation, source }
     }
 
     pub(crate) fn inconsistent_execution(details: impl Into<String>) -> Self {
@@ -91,12 +76,6 @@ impl CoreSpaceChangesError {
 
     pub(crate) fn unsupported_operation(details: impl Into<String>) -> Self {
         Self::UnsupportedOperation {
-            details: details.into(),
-        }
-    }
-
-    pub(crate) fn internal_invariant(details: impl Into<String>) -> Self {
-        Self::InternalInvariant {
             details: details.into(),
         }
     }
