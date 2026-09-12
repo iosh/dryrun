@@ -6,7 +6,9 @@ use cfx_parameters::internal_contract_addresses::SPONSOR_WHITELIST_CONTROL_CONTR
 use cfx_types::{Address, Space};
 use cfx_vm_types::CallType;
 
-use super::{CoreSpaceChangeSet, CoreSpaceChangeSetBuilder, StoragePoints};
+use super::{
+    CoreSpaceChangeSet, CoreSpaceChangeSetBuilder, SPONSORSHIP_POSITION_BASE, StoragePoints,
+};
 use crate::core_space::{
     CoreSpaceChangesError, CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition,
     CoreSpaceStateAccess,
@@ -93,9 +95,8 @@ pub(super) fn derive_changes(
 
     let mut builder = CoreSpaceChangeSetBuilder::new();
     // Sponsorship is a net state projection, so it has no one-to-one execution
-    // position. Allocate deterministic positions after committed execution events
-    // while retaining candidate order for stable composition with other rules.
-    let mut next_position = max_position.saturating_add(1);
+    // position. Keep its synthetic range disjoint from other protocol resolvers.
+    let mut next_position = SPONSORSHIP_POSITION_BASE;
     let mut candidates = candidates.into_iter().collect::<Vec<_>>();
     candidates.sort_by_key(|(contract, candidate)| (candidate.position, *contract));
     for (contract, _) in candidates {

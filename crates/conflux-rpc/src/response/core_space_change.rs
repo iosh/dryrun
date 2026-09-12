@@ -142,6 +142,15 @@ pub(super) enum Change {
         contract_address: RpcAddress,
         raw_amount: U256,
     },
+    ContractAdmin {
+        contract_address: RpcAddress,
+        state: Option<ContractAdminState>,
+    },
+    SponsorshipAccessRule {
+        contract_address: RpcAddress,
+        scope: SponsorshipAccessRuleScope,
+        enabled: bool,
+    },
     SponsorshipFunding {
         contract_address: RpcAddress,
         sponsor: RpcAddress,
@@ -188,6 +197,12 @@ pub(super) struct NativeCurrency {
 pub(super) struct StoragePoints {
     unused_raw_amount: U256,
     used_raw_amount: U256,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ContractAdminState {
+    admin: Option<RpcAddress>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -401,6 +416,28 @@ fn try_map_change(
         } => Change::StorageCollateral {
             contract_address: map_address(contract_address, network, field, "contractAddress")?,
             raw_amount: u256_to_wire(raw_amount),
+        },
+        Source::ContractAdmin {
+            contract_address,
+            state,
+        } => Change::ContractAdmin {
+            contract_address: map_address(contract_address, network, field, "contractAddress")?,
+            state: state
+                .map(|state| {
+                    Ok(ContractAdminState {
+                        admin: try_map_optional_address(state.admin, network, field, "admin")?,
+                    })
+                })
+                .transpose()?,
+        },
+        Source::SponsorshipAccessRule {
+            contract_address,
+            scope,
+            enabled,
+        } => Change::SponsorshipAccessRule {
+            contract_address: map_address(contract_address, network, field, "contractAddress")?,
+            scope: try_map_access_rule_scope(scope, network, field)?,
+            enabled,
         },
         Source::SponsorshipFunding {
             resource: _,

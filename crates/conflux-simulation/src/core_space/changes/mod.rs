@@ -1,7 +1,13 @@
+mod access;
+mod admin;
 mod governance;
 mod native_staking;
 mod pos;
 mod sponsorship;
+
+pub(super) const SPONSORSHIP_POSITION_BASE: usize = usize::MAX / 4;
+pub(super) const ADMIN_POSITION_BASE: usize = usize::MAX / 2;
+pub(super) const ACCESS_RULE_POSITION_BASE: usize = usize::MAX / 4 * 3;
 
 use std::{collections::BTreeMap, error::Error as StdError, sync::Arc};
 
@@ -89,6 +95,15 @@ pub enum CoreSpaceChange {
         contract_address: CoreAddress,
         raw_amount: U256,
     },
+    ContractAdmin {
+        contract_address: CoreAddress,
+        state: Option<ContractAdminState>,
+    },
+    SponsorshipAccessRule {
+        contract_address: CoreAddress,
+        scope: SponsorshipAccessRuleScope,
+        enabled: bool,
+    },
     SponsorshipFunding {
         resource: SponsoredResource,
         contract_address: CoreAddress,
@@ -138,6 +153,11 @@ pub struct GovernanceVote {
 pub struct StoragePoints {
     pub unused: U256,
     pub used: U256,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContractAdminState {
+    pub admin: Option<CoreAddress>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -471,6 +491,38 @@ impl CoreSpaceChangeSetBuilder {
         )
     }
 
+    pub fn contract_admin(
+        &mut self,
+        position: CoreSpaceExecutionPosition,
+        contract_address: CoreAddress,
+        state: Option<ContractAdminState>,
+    ) -> Result<(), CoreSpaceChangeDerivationError> {
+        self.insert(
+            position,
+            CoreSpaceChange::ContractAdmin {
+                contract_address,
+                state,
+            },
+        )
+    }
+
+    pub fn sponsorship_access_rule(
+        &mut self,
+        position: CoreSpaceExecutionPosition,
+        contract_address: CoreAddress,
+        scope: SponsorshipAccessRuleScope,
+        enabled: bool,
+    ) -> Result<(), CoreSpaceChangeDerivationError> {
+        self.insert(
+            position,
+            CoreSpaceChange::SponsorshipAccessRule {
+                contract_address,
+                scope,
+                enabled,
+            },
+        )
+    }
+
     pub fn finish(self) -> CoreSpaceChangeSet {
         let entries = self.entries.into_iter().collect::<Vec<_>>();
         let items = entries.iter().map(|(_, change)| change.clone()).collect();
@@ -624,6 +676,8 @@ pub struct DefaultCoreSpaceChangeRules {
     pos: CoreSpacePoSChangeRules,
     governance: CoreSpaceGovernanceChangeRules,
     sponsorship: CoreSpaceSponsorshipChangeRules,
+    admin: CoreSpaceContractChangeRules,
+    access: CoreSpaceAccessRuleChangeRules,
 }
 
 impl DefaultCoreSpaceChangeRules {
@@ -633,6 +687,8 @@ impl DefaultCoreSpaceChangeRules {
             pos: CoreSpacePoSChangeRules,
             governance: CoreSpaceGovernanceChangeRules,
             sponsorship: CoreSpaceSponsorshipChangeRules,
+            admin: CoreSpaceContractChangeRules,
+            access: CoreSpaceAccessRuleChangeRules,
         }
     }
 }
@@ -647,10 +703,14 @@ impl CoreSpaceChangeRules for DefaultCoreSpaceChangeRules {
         let pos = self.pos.derive_changes(execution, state)?;
         let governance = self.governance.derive_changes(execution, state)?;
         let sponsorship = self.sponsorship.derive_changes(execution, state)?;
+        let admin = self.admin.derive_changes(execution, state)?;
+        let access = self.access.derive_changes(execution, state)?;
         native_and_staking
             .merge(pos)?
             .merge(governance)?
-            .merge(sponsorship)
+            .merge(sponsorship)?
+            .merge(admin)?
+            .merge(access)
     }
 }
 
@@ -670,5 +730,43 @@ impl CoreSpaceChangeRules for CoreSpaceSponsorshipChangeRules {
         state: &CoreSpaceStateAccess,
     ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
         sponsorship::derive_changes(execution, state).map_err(Into::into)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CoreSpaceContractChangeRules;
+
+impl CoreSpaceContractChangeRules {
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl CoreSpaceChangeRules for CoreSpaceContractChangeRules {
+    fn derive_changes(
+        &self,
+        execution: &CoreSpaceExecutedTransaction,
+        state: &CoreSpaceStateAccess,
+    ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
+        admin::derive_changes(execution, state).map_err(Into::into)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CoreSpaceAccessRuleChangeRules;
+
+impl CoreSpaceAccessRuleChangeRules {
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl CoreSpaceChangeRules for CoreSpaceAccessRuleChangeRules {
+    fn derive_changes(
+        &self,
+        execution: &CoreSpaceExecutedTransaction,
+        state: &CoreSpaceStateAccess,
+    ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
+        access::derive_changes(execution, state).map_err(Into::into)
     }
 }

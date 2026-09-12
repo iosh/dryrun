@@ -18,13 +18,13 @@ pub(crate) use completion::complete_transaction;
 pub(crate) use transaction::{ResolvedStorageSponsorship, resolve_storage_sponsorship};
 
 pub use changes::{
-    CombinedCoreSpaceChangeRules, CoreSpaceChange, CoreSpaceChangeDerivationError,
-    CoreSpaceChangeRules, CoreSpaceChangeSet, CoreSpaceChangeSetBuilder,
-    CoreSpaceGovernanceChangeRules, CoreSpaceNativeAndStakingChangeRules, CoreSpaceNativeCurrency,
-    CoreSpacePoSChangeRules, CoreSpaceSponsorshipChangeRules, CrossSpaceAddress,
-    DefaultCoreSpaceChangeRules, GovernanceParameter, GovernanceVote, SponsoredResource,
-    SponsorshipAccessRuleScope, SponsorshipFundingTerms, SponsorshipReplacement, StoragePoints,
-    VoteAllocation,
+    CombinedCoreSpaceChangeRules, ContractAdminState, CoreSpaceAccessRuleChangeRules,
+    CoreSpaceChange, CoreSpaceChangeDerivationError, CoreSpaceChangeRules, CoreSpaceChangeSet,
+    CoreSpaceChangeSetBuilder, CoreSpaceContractChangeRules, CoreSpaceGovernanceChangeRules,
+    CoreSpaceNativeAndStakingChangeRules, CoreSpaceNativeCurrency, CoreSpacePoSChangeRules,
+    CoreSpaceSponsorshipChangeRules, CrossSpaceAddress, DefaultCoreSpaceChangeRules,
+    GovernanceParameter, GovernanceVote, SponsoredResource, SponsorshipAccessRuleScope,
+    SponsorshipFundingTerms, SponsorshipReplacement, StoragePoints, VoteAllocation,
 };
 pub use conflux_provider::CoreAddress;
 pub use context::{CoreSpaceBlockContext, CoreSpaceBlockSelector, CoreSpaceContextError};

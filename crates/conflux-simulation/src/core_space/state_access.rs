@@ -16,6 +16,7 @@ use conflux_provider::{CoreAddress, Network};
 use primitives::transaction::{Action, NativeTransaction, TypedNativeTransaction};
 use tokio::runtime::Handle;
 
+use crate::state::SponsorWhitelistStorageKey;
 use crate::{
     execution::{PreparedTransactionExecution, build_conflux_state},
     primitive::{b256_from_cfx, b256_to_cfx, u256_from_cfx},
@@ -141,6 +142,19 @@ impl CoreSpaceStateAccess {
 
     pub(crate) fn raw_accumulated_interest_rate(&self) -> U256 {
         self.source.accumulated_interest_rate()
+    }
+
+    pub(crate) fn masked_whitelist_keys(
+        &self,
+    ) -> Result<std::collections::HashSet<SponsorWhitelistStorageKey>, CoreSpaceStateAccessError>
+    {
+        self.source
+            .masked_whitelist_keys()
+            .snapshot()
+            .map_err(|source| CoreSpaceStateAccessError::RecordedState {
+                operation: "snapshot request-local Core Space sponsor whitelist state",
+                source,
+            })
     }
 }
 
@@ -540,6 +554,45 @@ impl CoreSpaceStateReader {
         })
     }
 
+    pub(super) fn contract_admin(
+        &self,
+        address: Address,
+    ) -> Result<CoreSpaceContractAdminState, CoreSpaceStateAccessError> {
+        self.with_state(|state| {
+            let exists = state
+                .exists(&address.with_native_space())
+                .map_err(|source| operation("read Core Space contract existence", source))?;
+            if !exists {
+                return Ok(CoreSpaceContractAdminState {
+                    exists: false,
+                    admin: None,
+                });
+            }
+            let admin = state
+                .admin(&address)
+                .map_err(|source| operation("read Core Space contract admin", source))?;
+            Ok(CoreSpaceContractAdminState {
+                exists: true,
+                admin: (!admin.is_zero()).then_some(admin),
+            })
+        })
+    }
+
+    pub(super) fn sponsorship_access_rule(
+        &self,
+        key: SponsorWhitelistStorageKey,
+    ) -> Result<bool, CoreSpaceStateAccessError> {
+        self.with_state(|state| {
+            state
+                .storage_at(
+                    &key.control_contract_address().with_native_space(),
+                    &key.raw_storage_key(),
+                )
+                .map(|value| !value.is_zero())
+                .map_err(|source| operation("read Core Space sponsorship access rule", source))
+        })
+    }
+
     pub(super) fn sponsorship(
         &self,
         contract: Address,
@@ -728,6 +781,12 @@ pub(super) struct CoreSpaceContractState {
     pub(super) exists: bool,
     pub(super) admin: Option<Address>,
     pub(super) code: Option<Bytes>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct CoreSpaceContractAdminState {
+    pub(super) exists: bool,
+    pub(super) admin: Option<Address>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
