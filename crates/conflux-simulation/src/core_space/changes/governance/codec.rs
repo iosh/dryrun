@@ -1,4 +1,4 @@
-use alloy_sol_types::{SolEvent, sol};
+use alloy_sol_types::{SolCall, SolEvent, sol};
 
 use super::VoteEvent;
 use crate::{
@@ -7,6 +7,13 @@ use crate::{
 };
 
 sol! {
+    interface ParamsControl {
+        struct VoteInput {
+            uint16 index;
+            uint256[3] votes;
+        }
+        function castVote(uint64 version, VoteInput[] votes);
+    }
     event Vote(
         uint64 indexed round,
         address indexed voter,
@@ -19,6 +26,43 @@ sol! {
         uint16 indexed parameter,
         uint256[3] allocation
     );
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct CastVoteCall {
+    pub(super) round: u64,
+    pub(super) votes: Vec<(u16, VoteAllocation)>,
+}
+
+pub(super) fn decode_cast_vote(data: &[u8]) -> Result<Option<CastVoteCall>, CoreSpaceChangesError> {
+    let Some(selector) = data.get(..4) else {
+        return Ok(None);
+    };
+    if selector != ParamsControl::castVoteCall::SELECTOR {
+        return Ok(None);
+    }
+    let call = ParamsControl::castVoteCall::abi_decode_validate(data).map_err(|error| {
+        CoreSpaceChangesError::inconsistent_execution(format!(
+            "Core Space governance castVote call has invalid ABI data: {error}"
+        ))
+    })?;
+    Ok(Some(CastVoteCall {
+        round: call.version,
+        votes: call
+            .votes
+            .into_iter()
+            .map(|vote| {
+                (
+                    vote.index,
+                    VoteAllocation {
+                        unchanged: vote.votes[0],
+                        increase: vote.votes[1],
+                        decrease: vote.votes[2],
+                    },
+                )
+            })
+            .collect(),
+    }))
 }
 
 pub(super) fn decode_vote_event(

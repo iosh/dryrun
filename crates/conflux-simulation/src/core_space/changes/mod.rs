@@ -1,3 +1,4 @@
+mod governance;
 mod native_staking;
 mod pos;
 
@@ -374,6 +375,26 @@ impl CoreSpaceChangeSetBuilder {
         )
     }
 
+    pub fn governance_vote(
+        &mut self,
+        position: CoreSpaceExecutionPosition,
+        voter: CoreAddress,
+        round: u64,
+        votes: Vec<GovernanceVote>,
+    ) -> Result<(), CoreSpaceChangeDerivationError> {
+        if votes.is_empty() {
+            return Ok(());
+        }
+        self.insert(
+            position,
+            CoreSpaceChange::GovernanceVoteCast {
+                voter,
+                round,
+                votes,
+            },
+        )
+    }
+
     pub fn finish(self) -> CoreSpaceChangeSet {
         let entries = self.entries.into_iter().collect::<Vec<_>>();
         let items = entries.iter().map(|(_, change)| change.clone()).collect();
@@ -492,6 +513,25 @@ impl CoreSpacePoSChangeRules {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CoreSpaceGovernanceChangeRules;
+
+impl CoreSpaceGovernanceChangeRules {
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl CoreSpaceChangeRules for CoreSpaceGovernanceChangeRules {
+    fn derive_changes(
+        &self,
+        execution: &CoreSpaceExecutedTransaction,
+        state: &CoreSpaceStateAccess,
+    ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
+        governance::derive_changes(execution, state).map_err(Into::into)
+    }
+}
+
 impl CoreSpaceChangeRules for CoreSpacePoSChangeRules {
     fn derive_changes(
         &self,
@@ -506,6 +546,7 @@ impl CoreSpaceChangeRules for CoreSpacePoSChangeRules {
 pub struct DefaultCoreSpaceChangeRules {
     native_and_staking: CoreSpaceNativeAndStakingChangeRules,
     pos: CoreSpacePoSChangeRules,
+    governance: CoreSpaceGovernanceChangeRules,
 }
 
 impl DefaultCoreSpaceChangeRules {
@@ -513,6 +554,7 @@ impl DefaultCoreSpaceChangeRules {
         Self {
             native_and_staking: CoreSpaceNativeAndStakingChangeRules::new(currency),
             pos: CoreSpacePoSChangeRules,
+            governance: CoreSpaceGovernanceChangeRules,
         }
     }
 }
@@ -525,6 +567,7 @@ impl CoreSpaceChangeRules for DefaultCoreSpaceChangeRules {
     ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
         let native_and_staking = self.native_and_staking.derive_changes(execution, state)?;
         let pos = self.pos.derive_changes(execution, state)?;
-        native_and_staking.merge(pos)
+        let governance = self.governance.derive_changes(execution, state)?;
+        native_and_staking.merge(pos)?.merge(governance)
     }
 }

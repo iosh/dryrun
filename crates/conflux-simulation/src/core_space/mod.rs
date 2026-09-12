@@ -20,10 +20,10 @@ pub(crate) use transaction::{ResolvedStorageSponsorship, resolve_storage_sponsor
 pub use changes::{
     CombinedCoreSpaceChangeRules, CoreSpaceChange, CoreSpaceChangeDerivationError,
     CoreSpaceChangeRules, CoreSpaceChangeSet, CoreSpaceChangeSetBuilder,
-    CoreSpaceNativeAndStakingChangeRules, CoreSpaceNativeCurrency, CoreSpacePoSChangeRules,
-    CrossSpaceAddress, DefaultCoreSpaceChangeRules, GovernanceParameter, GovernanceVote,
-    SponsoredResource, SponsorshipAccessRuleScope, SponsorshipFundingTerms, SponsorshipReplacement,
-    VoteAllocation,
+    CoreSpaceGovernanceChangeRules, CoreSpaceNativeAndStakingChangeRules, CoreSpaceNativeCurrency,
+    CoreSpacePoSChangeRules, CrossSpaceAddress, DefaultCoreSpaceChangeRules, GovernanceParameter,
+    GovernanceVote, SponsoredResource, SponsorshipAccessRuleScope, SponsorshipFundingTerms,
+    SponsorshipReplacement, VoteAllocation,
 };
 pub use conflux_provider::CoreAddress;
 pub use context::{CoreSpaceBlockContext, CoreSpaceBlockSelector, CoreSpaceContextError};

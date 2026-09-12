@@ -314,6 +314,10 @@ impl CoreSpaceExecutedTransaction {
         self.execution_block_number
     }
 
+    pub(crate) const fn address_network(&self) -> Network {
+        self.address_network
+    }
+
     pub const fn gas_fee(&self) -> U256 {
         self.gas_fee
     }

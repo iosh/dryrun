@@ -2,16 +2,8 @@ mod analysis;
 mod codec;
 mod collection;
 
-pub(crate) use analysis::analyze_governance_changes;
-pub(crate) use collection::GovernanceAnalysisInput;
-
-use super::{ChangePosition, VoteAllocation};
-
-#[derive(Debug, Clone)]
-pub(super) struct VoteLogs {
-    position: ChangePosition,
-    events: Vec<VoteEvent>,
-}
+use super::VoteAllocation;
+pub(crate) use analysis::derive_changes;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum VoteEvent {
@@ -27,18 +19,4 @@ pub(super) enum VoteEvent {
         parameter: u16,
         allocation: VoteAllocation,
     },
-}
-
-impl VoteEvent {
-    const fn round(self) -> u64 {
-        match self {
-            Self::Revoke { round, .. } | Self::Vote { round, .. } => round,
-        }
-    }
-
-    const fn voter(self) -> alloy_primitives::Address {
-        match self {
-            Self::Revoke { voter, .. } | Self::Vote { voter, .. } => voter,
-        }
-    }
 }

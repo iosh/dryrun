@@ -1,6 +1,7 @@
 use std::{cell::RefCell, sync::Arc};
 
-use alloy_primitives::{B256, Bytes, U256 as AlloyU256};
+use alloy_primitives::{Address as AlloyAddress, B256, Bytes, U256 as AlloyU256};
+use alloy_sol_types::{SolCall, sol};
 use cfx_executor::{
     executive::{
         ChargeCollateral, ExecutionError, ExecutionOutcome, ExecutiveContext, TransactOptions,
@@ -24,6 +25,17 @@ use crate::{
 use super::CoreSpaceStateAccessError;
 
 const READ_CALL_GAS_LIMIT: u64 = 100_000;
+
+sol! {
+    interface ParamsControlView {
+        function currentRound() external view returns (uint64);
+        function readVote(address voter) external view returns (Vote[]);
+        struct Vote {
+            uint16 index;
+            uint256[3] votes;
+        }
+    }
+}
 
 pub struct CoreSpaceStateAccess {
     source: Arc<ConfluxStateSource>,
@@ -327,6 +339,94 @@ impl CoreSpaceStateReader {
 
     pub fn total_pos_staking(&self) -> Result<AlloyU256, CoreSpaceStateAccessError> {
         self.with_state(|state| Ok(u256_from_cfx(state.total_pos_staking_tokens())))
+    }
+
+    pub(crate) fn governance_state(
+        &self,
+        voter: Address,
+    ) -> Result<CoreSpaceGovernanceState, CoreSpaceStateAccessError> {
+        let params = cfx_parameters::internal_contract_addresses::PARAMS_CONTROL_CONTRACT_ADDRESS;
+        let current_round = match self.read_call(
+            params,
+            ParamsControlView::currentRoundCall {}.abi_encode().into(),
+        )? {
+            CoreSpaceReadCallOutcome::Success(output) => {
+                ParamsControlView::currentRoundCall::abi_decode_returns_validate(&output).map_err(
+                    |error| CoreSpaceStateAccessError::ReadCall {
+                        details: format!("invalid currentRound return data: {error}"),
+                    },
+                )?
+            }
+            CoreSpaceReadCallOutcome::Reverted(_) => {
+                return Err(CoreSpaceStateAccessError::ReadCall {
+                    details: "currentRound reverted".to_owned(),
+                });
+            }
+            CoreSpaceReadCallOutcome::Failed => {
+                return Err(CoreSpaceStateAccessError::ReadCall {
+                    details: "currentRound failed".to_owned(),
+                });
+            }
+        };
+        let version = self.with_state(|state| {
+            let key = governance_version_key(voter);
+            state
+                .storage_at(&params.with_native_space(), &key)
+                .map(|value| value.as_u64())
+                .map_err(|source| operation("read Core Space governance vote version", source))
+        })?;
+        let votes = match self.read_call(
+            params,
+            ParamsControlView::readVoteCall {
+                voter: AlloyAddress::from(voter.0),
+            }
+            .abi_encode()
+            .into(),
+        )? {
+            CoreSpaceReadCallOutcome::Success(output) => {
+                ParamsControlView::readVoteCall::abi_decode_returns_validate(&output).map_err(
+                    |error| CoreSpaceStateAccessError::ReadCall {
+                        details: format!("invalid readVote return data: {error}"),
+                    },
+                )?
+            }
+            CoreSpaceReadCallOutcome::Reverted(_) => {
+                return Err(CoreSpaceStateAccessError::ReadCall {
+                    details: "readVote reverted".to_owned(),
+                });
+            }
+            CoreSpaceReadCallOutcome::Failed => {
+                return Err(CoreSpaceStateAccessError::ReadCall {
+                    details: "readVote failed".to_owned(),
+                });
+            }
+        };
+        let parameter_count = votes.len();
+        let mut allocations = [crate::core_space::VoteAllocation::default(); 4];
+        for (expected_index, vote) in votes.into_iter().enumerate() {
+            let index = usize::from(vote.index);
+            if index != expected_index {
+                return Err(CoreSpaceStateAccessError::ReadCall {
+                    details: "readVote returned non-contiguous parameter indexes".to_owned(),
+                });
+            }
+            let Some(allocation) = allocations.get_mut(index) else {
+                return Err(CoreSpaceStateAccessError::ReadCall {
+                    details: format!("readVote returned unknown parameter {}", vote.index),
+                });
+            };
+            *allocation = crate::core_space::VoteAllocation {
+                unchanged: vote.votes[0],
+                increase: vote.votes[1],
+                decrease: vote.votes[2],
+            };
+        }
+        Ok(CoreSpaceGovernanceState {
+            current_round,
+            version,
+            allocations,
+            parameter_count,
+        })
     }
 
     pub(crate) fn deposit_list_length_raw(
@@ -639,6 +739,14 @@ pub(super) struct CoreSpaceGlobalState {
     pub(super) base_fee_share_proportion: U256,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CoreSpaceGovernanceState {
+    pub(crate) current_round: u64,
+    pub(crate) version: u64,
+    pub(crate) allocations: [crate::core_space::VoteAllocation; 4],
+    pub(crate) parameter_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum CoreSpaceReadCallOutcome {
     Success(Bytes),
@@ -732,4 +840,10 @@ fn execute_isolated_read_call(
 
 fn operation(operation: &'static str, source: cfx_statedb::Error) -> CoreSpaceStateAccessError {
     CoreSpaceStateAccessError::Operation { operation, source }
+}
+
+fn governance_version_key(address: Address) -> [u8; 32] {
+    let mut input = [0_u8; 64];
+    input[12..32].copy_from_slice(address.as_bytes());
+    alloy_primitives::keccak256(input).0
 }
