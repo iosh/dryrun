@@ -179,9 +179,28 @@ pub(super) enum Change {
         to: CrossSpaceAddress,
         raw_amount: U256,
     },
-    Espace {
-        change: EspaceChange,
-    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(super) enum ChangeSpace {
+    Core,
+    Espace,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub(super) enum WireChange {
+    Core(Change),
+    Espace(EspaceChange),
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct WireChangeItem {
+    pub(super) space: ChangeSpace,
+    #[serde(flatten)]
+    pub(super) change: WireChange,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -282,11 +301,23 @@ pub(super) enum CrossSpaceAddress {
 pub(super) fn try_map_changes(
     changes: Vec<simulation_core_space::CoreSpaceChange>,
     network: Network,
-) -> Result<Vec<Change>, ResponseMappingError> {
+) -> Result<Vec<WireChangeItem>, ResponseMappingError> {
     changes
         .into_iter()
         .enumerate()
-        .map(|(index, change)| try_map_change(change, network, &format!("changes[{index}]")))
+        .map(|(index, change)| {
+            let field = format!("changes[{index}]");
+            match change {
+                simulation_core_space::CoreSpaceChange::Espace(change) => Ok(WireChangeItem {
+                    space: ChangeSpace::Espace,
+                    change: WireChange::Espace(change.into()),
+                }),
+                change => Ok(WireChangeItem {
+                    space: ChangeSpace::Core,
+                    change: WireChange::Core(try_map_change(change, network, &field)?),
+                }),
+            }
+        })
         .collect()
 }
 
@@ -522,9 +553,12 @@ fn try_map_change(
             to: try_map_cross_space_address(to, network, field, "to")?,
             raw_amount: u256_to_wire(raw_amount),
         },
-        Source::Espace(change) => Change::Espace {
-            change: change.into(),
-        },
+        Source::Espace(_) => {
+            return Err(ResponseMappingError::new(
+                field,
+                "nested eSpace change was routed to the Core mapper",
+            ));
+        }
     })
 }
 

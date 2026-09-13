@@ -16,6 +16,15 @@ pub(crate) struct ResponseMappingError {
     message: String,
 }
 
+impl ResponseMappingError {
+    pub(super) fn new(field: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            field: field.into(),
+            message: message.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SimulateCoreSpaceTransactionResponse {
@@ -153,7 +162,7 @@ enum LogAddress {
 #[serde(tag = "status", rename_all = "lowercase")]
 enum Changes {
     Complete {
-        items: Vec<core_space_change::Change>,
+        items: Vec<core_space_change::WireChangeItem>,
     },
     Unavailable {
         error: String,
