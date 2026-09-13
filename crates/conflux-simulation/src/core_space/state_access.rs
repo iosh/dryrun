@@ -215,6 +215,17 @@ impl CoreSpaceStateReader {
         })
     }
 
+    pub(super) fn espace_balance(
+        &self,
+        address: Address,
+    ) -> Result<U256, CoreSpaceStateAccessError> {
+        self.with_state(|state| {
+            state
+                .balance(&address.with_evm_space())
+                .map_err(|source| operation("read eSpace account balance", source))
+        })
+    }
+
     pub fn native_balance(
         &self,
         address: CoreAddress,

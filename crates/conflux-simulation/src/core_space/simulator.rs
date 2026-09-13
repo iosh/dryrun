@@ -33,8 +33,10 @@ impl<R> Clone for CoreSpaceTransactionSimulator<R> {
 
 impl CoreSpaceTransactionSimulator<super::DefaultCoreSpaceChangeRules> {
     pub fn new(backend: ConfluxSimulationBackend) -> Self {
-        let change_rules = super::DefaultCoreSpaceChangeRules::new(
+        let change_rules = super::DefaultCoreSpaceChangeRules::new_with_espace(
             backend.chain_spec().core_space_native_currency().clone(),
+            backend.chain_spec().espace_native_currency().clone(),
+            backend.chain_spec().espace_wrapped_native_token(),
         );
         Self {
             backend,

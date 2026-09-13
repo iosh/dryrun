@@ -195,6 +195,8 @@ pub struct CoreSpaceExecutedTransaction {
     pub(super) execution_block_number: u64,
     pub(super) address_network: Network,
     pub(super) transaction_recipient: Option<Address>,
+    /// Root frames of committed nested eSpace scopes, fixed at integration.
+    nested_espace_scope_roots: Vec<FrameId>,
     active_internal_contracts: BTreeSet<Address>,
 }
 
@@ -233,6 +235,13 @@ impl CoreSpaceExecutedTransaction {
         verify_committed_logs(&output.trace, &output.logs)?;
         verify_created_contracts(&output.trace, &output.contracts_created)?;
         verify_fee_settlement(&output)?;
+        // Validate nested eSpace ownership while the finalized execution
+        // record is assembled.  Change rules then consume only committed
+        // scopes and cannot re-pair bridge logs or child frames themselves.
+        let nested_espace_scope_roots =
+            super::cross_space_scope::collect_committed_espace_scope_roots(&output.trace).map_err(
+                |error| CoreSpaceResultIntegrationError::invalid_executor_output(error.to_string()),
+            )?;
 
         let storage_collateralized =
             match output.storage_collateralized.as_slice() {
@@ -286,6 +295,7 @@ impl CoreSpaceExecutedTransaction {
             address_network: transaction_sender.network(),
             transaction_recipient: transaction_recipient
                 .map(|address| Address::from(address.bytes())),
+            nested_espace_scope_roots,
             active_internal_contracts,
         })
     }
@@ -383,6 +393,19 @@ impl CoreSpaceExecutedTransaction {
 
     pub(crate) const fn trace(&self) -> &CommittedExecutionTrace {
         &self.committed_trace
+    }
+
+    pub(crate) fn nested_espace_scope_roots(&self) -> &[FrameId] {
+        &self.nested_espace_scope_roots
+    }
+
+    pub(crate) fn is_cross_space_scope_parent(&self, frame_id: FrameId) -> bool {
+        self.nested_espace_scope_roots.iter().any(|root| {
+            self.committed_trace
+                .frame(*root)
+                .parent_id
+                .is_some_and(|parent| parent == frame_id)
+        })
     }
 
     pub(crate) fn is_active_internal_contract(&self, address: Address) -> bool {

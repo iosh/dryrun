@@ -432,6 +432,9 @@ fn collect_native_operations(
                     }
                     continue;
                 }
+                if execution.is_cross_space_scope_parent(*frame_id) {
+                    continue;
+                }
                 collect_frame_value_transfer(
                     execution,
                     trace,
@@ -442,19 +445,24 @@ fn collect_native_operations(
             }
             TraceEvent::InternalTransfer {
                 position,
+                frame_id,
                 space,
                 from,
                 to,
                 value,
-                ..
-            } => collect_internal_transfer(
-                *position,
-                *space,
-                *from,
-                *to,
-                u256_from_cfx(*value),
-                &mut operations,
-            )?,
+            } => {
+                if frame_id.is_some_and(|id| execution.is_cross_space_scope_parent(id)) {
+                    continue;
+                }
+                collect_internal_transfer(
+                    *position,
+                    *space,
+                    *from,
+                    *to,
+                    u256_from_cfx(*value),
+                    &mut operations,
+                )?
+            }
             TraceEvent::Log { .. } | TraceEvent::StorageWrite { .. } => {}
         }
     }
@@ -470,9 +478,7 @@ fn collect_frame_value_transfer(
 ) -> Result<(), CoreSpaceChangesError> {
     let frame = trace.frame(frame_id);
     if frame.space != Space::Native {
-        return Err(CoreSpaceChangesError::unsupported_operation(
-            "nested eSpace execution is outside the current Core Space change rules",
-        ));
+        return Ok(());
     }
     let (from, to, amount) = match &frame.action {
         FrameAction::Call {
@@ -535,9 +541,7 @@ fn collect_internal_transfer(
         return Ok(());
     }
     if space != Space::Native {
-        return Err(CoreSpaceChangesError::unsupported_operation(
-            "eSpace balance movement is outside the current Core Space change rules",
-        ));
+        return Ok(());
     }
     let operation = match (from, to) {
         (AddressPocket::Balance(from), AddressPocket::Balance(to))

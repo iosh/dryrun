@@ -1,6 +1,7 @@
 mod changes;
 mod completion;
 mod context;
+mod cross_space_scope;
 mod error;
 mod executed_transaction;
 mod execution;

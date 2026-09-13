@@ -2,6 +2,7 @@ mod access;
 mod admin;
 mod governance;
 mod native_staking;
+mod nested_espace;
 mod pos;
 mod sponsorship;
 
@@ -523,6 +524,14 @@ impl CoreSpaceChangeSetBuilder {
         )
     }
 
+    pub(crate) fn espace(
+        &mut self,
+        position: CoreSpaceExecutionPosition,
+        change: crate::espace::EspaceChange,
+    ) -> Result<(), CoreSpaceChangeDerivationError> {
+        self.insert(position, CoreSpaceChange::Espace(change))
+    }
+
     pub fn finish(self) -> CoreSpaceChangeSet {
         let entries = self.entries.into_iter().collect::<Vec<_>>();
         let items = entries.iter().map(|(_, change)| change.clone()).collect();
@@ -678,10 +687,31 @@ pub struct DefaultCoreSpaceChangeRules {
     sponsorship: CoreSpaceSponsorshipChangeRules,
     admin: CoreSpaceContractChangeRules,
     access: CoreSpaceAccessRuleChangeRules,
+    espace_native_currency: crate::espace::EspaceNativeCurrency,
+    espace_wrapped_native_token: alloy_primitives::Address,
+    espace_change_rules_enabled: bool,
 }
 
 impl DefaultCoreSpaceChangeRules {
     pub fn new(currency: CoreSpaceNativeCurrency) -> Self {
+        let mut rules = Self::new_with_espace(
+            currency,
+            crate::espace::EspaceNativeCurrency {
+                name: "eSpace native currency".to_owned(),
+                symbol: "CFX".to_owned(),
+                decimals: 18,
+            },
+            alloy_primitives::Address::ZERO,
+        );
+        rules.espace_change_rules_enabled = false;
+        rules
+    }
+
+    pub fn new_with_espace(
+        currency: CoreSpaceNativeCurrency,
+        espace_native_currency: crate::espace::EspaceNativeCurrency,
+        espace_wrapped_native_token: alloy_primitives::Address,
+    ) -> Self {
         Self {
             native_and_staking: CoreSpaceNativeAndStakingChangeRules::new(currency),
             pos: CoreSpacePoSChangeRules,
@@ -689,6 +719,9 @@ impl DefaultCoreSpaceChangeRules {
             sponsorship: CoreSpaceSponsorshipChangeRules,
             admin: CoreSpaceContractChangeRules,
             access: CoreSpaceAccessRuleChangeRules,
+            espace_native_currency,
+            espace_wrapped_native_token,
+            espace_change_rules_enabled: true,
         }
     }
 }
@@ -705,12 +738,29 @@ impl CoreSpaceChangeRules for DefaultCoreSpaceChangeRules {
         let sponsorship = self.sponsorship.derive_changes(execution, state)?;
         let admin = self.admin.derive_changes(execution, state)?;
         let access = self.access.derive_changes(execution, state)?;
+        let nested_espace = if execution.nested_espace_scope_roots().is_empty() {
+            CoreSpaceChangeSet::default()
+        } else if !self.espace_change_rules_enabled {
+            return Err(CoreSpaceChangeDerivationError::Existing(
+                CoreSpaceChangesError::unsupported_operation(
+                    "nested eSpace changes require eSpace chain configuration",
+                ),
+            ));
+        } else {
+            nested_espace::derive_native_changes(
+                execution,
+                state,
+                &self.espace_native_currency,
+                self.espace_wrapped_native_token,
+            )?
+        };
         native_and_staking
             .merge(pos)?
             .merge(governance)?
             .merge(sponsorship)?
             .merge(admin)?
-            .merge(access)
+            .merge(access)?
+            .merge(nested_espace)
     }
 }
 
