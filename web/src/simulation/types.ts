@@ -1,8 +1,8 @@
 import type { EnvironmentId } from './environment.ts';
 import type {
   CoreChange,
+  CoreEspaceChange,
   EspaceChange,
-  LegacyEspaceChange,
   EvmChange,
   RpcSimulationResponse,
 } from './rpc.ts';
@@ -80,7 +80,7 @@ export type SimulationResponse = RpcSimulationResponse;
 export type SimulationChange =
   | EvmChange
   | EspaceChange
-  | LegacyEspaceChange
+  | CoreEspaceChange
   | CoreChange;
 
 export interface SimulationChanges {

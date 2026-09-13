@@ -11,6 +11,9 @@ use tracing::{error, warn};
 
 const CONTEXT_NOT_FOUND_CODE: i32 = -32001;
 const TRANSACTION_COMPLETION_FAILED_CODE: i32 = -32002;
+const SIMULATION_CLOSED_CODE: i32 = -32005;
+const SIMULATION_TIMEOUT_CODE: i32 = -32006;
+const SIMULATION_CANCELLED_CODE: i32 = -32007;
 
 #[derive(Debug, thiserror::Error)]
 pub(super) enum ValidationError {
@@ -123,6 +126,34 @@ fn transaction_completion_message(error: &EspaceTransactionCompletionError) -> &
 }
 
 pub(super) fn simulation_task_error_response(error: SimulationTaskError) -> ErrorObjectOwned {
-    error!(error = ?error, "Conflux simulation task failed");
-    internal_error()
+    match error {
+        SimulationTaskError::Closed => {
+            error!("Conflux simulation task admission is closed");
+            ErrorObjectOwned::owned(
+                SIMULATION_CLOSED_CODE,
+                "Simulation service is closing",
+                None::<()>,
+            )
+        }
+        SimulationTaskError::ResponseTimedOut => {
+            warn!("Conflux simulation response deadline exceeded");
+            ErrorObjectOwned::owned(
+                SIMULATION_TIMEOUT_CODE,
+                "Simulation response timed out",
+                None::<()>,
+            )
+        }
+        SimulationTaskError::TaskCancelled { source } => {
+            warn!(error = ?source, "Conflux simulation task was cancelled");
+            ErrorObjectOwned::owned(
+                SIMULATION_CANCELLED_CODE,
+                "Simulation task was cancelled",
+                None::<()>,
+            )
+        }
+        SimulationTaskError::TaskPanicked { source } => {
+            error!(error = ?source, "Conflux simulation task panicked");
+            internal_error()
+        }
+    }
 }

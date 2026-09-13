@@ -119,6 +119,22 @@ fn transaction_completion_message(error: &EvmTransactionCompletionError) -> &'st
 }
 
 fn simulation_task_error_response(error: SimulationTaskError) -> ErrorObjectOwned {
-    error!(error = ?error, "EVM simulation task failed");
-    internal_error()
+    match error {
+        SimulationTaskError::Closed => {
+            error!("EVM simulation task admission is closed");
+            ErrorObjectOwned::owned(-32005, "Simulation service is closing", None::<()>)
+        }
+        SimulationTaskError::ResponseTimedOut => {
+            warn!("EVM simulation response deadline exceeded");
+            ErrorObjectOwned::owned(-32006, "Simulation response timed out", None::<()>)
+        }
+        SimulationTaskError::TaskCancelled { source } => {
+            warn!(error = ?source, "EVM simulation task was cancelled");
+            ErrorObjectOwned::owned(-32007, "Simulation task was cancelled", None::<()>)
+        }
+        SimulationTaskError::TaskPanicked { source } => {
+            error!(error = ?source, "EVM simulation task panicked");
+            internal_error()
+        }
+    }
 }

@@ -98,6 +98,8 @@ function ChangeRow({
         normalizeAddress(item.address) === normalizeAddress(view.identifier!),
     );
   const rawChange = formatJson(change);
+  const spaceLabel =
+    'space' in change ? (change.space === 'ESPACE' ? 'eSpace' : 'Core') : null;
 
   return (
     <article
@@ -110,7 +112,10 @@ function ChangeRow({
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <ChangeBadge label={view.label} tone={view.tone} />
+              <ChangeBadge
+                label={spaceLabel ? `${spaceLabel} · ${view.label}` : view.label}
+                tone={view.tone}
+              />
               <h4 className="text-sm font-semibold text-ink-950">
                 {view.title}
               </h4>

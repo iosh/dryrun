@@ -269,13 +269,6 @@ export function toChangeItemViewModel(
         tone: 'blue',
         value: formatNativeAmount(change.rawAmount, 'CFX'),
       };
-    case 'ESPACE': {
-      const nested = toChangeItemViewModel(change.change);
-      return {
-        ...nested,
-        label: `eSpace ${nested.label}`,
-      };
-    }
   }
 }
 

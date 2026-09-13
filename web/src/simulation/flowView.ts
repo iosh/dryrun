@@ -44,6 +44,8 @@ export function toAssetFlowItemViewModels(
     return toEvmAssetFlowItemViewModels(change, view);
   }
 
+  const spaceContext = change.space === 'ESPACE' ? 'eSpace' : undefined;
+
   switch (change.changeType) {
     case 'NATIVE_TRANSFER':
       return [
@@ -51,10 +53,10 @@ export function toAssetFlowItemViewModels(
           assetKey: `NATIVE:${change.symbol}`,
           assetTitle: change.symbol,
           decimals: change.decimals,
-          from: addressEndpoint('From', change.from),
+          from: addressEndpoint('From', change.from, spaceContext),
           label: view.label,
           rawAmount: change.rawAmount,
-          to: addressEndpoint('To', change.to),
+          to: addressEndpoint('To', change.to, spaceContext),
           tone: view.tone,
           value: view.value ?? view.title,
         },
@@ -65,7 +67,7 @@ export function toAssetFlowItemViewModels(
           assetKey: `NATIVE:${change.symbol}`,
           assetTitle: change.symbol,
           decimals: change.decimals,
-          from: addressEndpoint('From', change.from),
+          from: addressEndpoint('From', change.from, spaceContext),
           label: view.label,
           rawAmount: change.rawAmount,
           to: { kind: 'terminal', label: 'Burn' },
@@ -79,7 +81,7 @@ export function toAssetFlowItemViewModels(
           assetKey: `NATIVE:${change.symbol}`,
           assetTitle: change.symbol,
           decimals: change.decimals,
-          from: addressEndpoint('Contract', change.contractAddress),
+          from: addressEndpoint('Contract', change.contractAddress, spaceContext),
           label: view.label,
           rawAmount: change.rawAmount,
           to: { kind: 'terminal', label: 'Burn' },
@@ -94,10 +96,10 @@ export function toAssetFlowItemViewModels(
           assetIdentifier: change.contractAddress,
           assetTitle: view.title,
           decimals: change.decimals ?? 0,
-          from: addressEndpoint('From', change.from),
+          from: addressEndpoint('From', change.from, spaceContext),
           label: view.label,
           rawAmount: change.rawAmount,
-          to: addressEndpoint('To', change.to),
+          to: addressEndpoint('To', change.to, spaceContext),
           tone: view.tone,
           value: view.value ?? view.title,
         },
@@ -109,10 +111,10 @@ export function toAssetFlowItemViewModels(
           assetIdentifier: change.contractAddress,
           assetTitle: view.title,
           decimals: 0,
-          from: addressEndpoint('From', change.from),
+          from: addressEndpoint('From', change.from, spaceContext),
           label: view.label,
           rawAmount: '0x1',
-          to: addressEndpoint('To', change.to),
+          to: addressEndpoint('To', change.to, spaceContext),
           tone: view.tone,
           value: view.title,
         },
@@ -125,10 +127,10 @@ export function toAssetFlowItemViewModels(
           assetIdentifier: change.contractAddress,
           assetTitle,
           decimals: 0,
-          from: addressEndpoint('From', change.from),
+          from: addressEndpoint('From', change.from, spaceContext),
           label: view.label,
           rawAmount: change.rawAmount,
-          to: addressEndpoint('To', change.to),
+          to: addressEndpoint('To', change.to, spaceContext),
           tone: view.tone,
           value: `${formatHexQuantity(change.rawAmount)} ${assetTitle}`,
         },
@@ -172,13 +174,6 @@ export function toAssetFlowItemViewModels(
           value: view.value ?? view.title,
         },
       ];
-    case 'ESPACE':
-      return toAssetFlowItemViewModels(change.change).map((flow) => ({
-        ...flow,
-        from: withAddressContext(flow.from, 'eSpace'),
-        label: view.label,
-        to: withAddressContext(flow.to, 'eSpace'),
-      }));
     default:
       return [];
   }
@@ -287,11 +282,6 @@ export function getChangeAddresses(
           label: `To / ${spaceLabel(change.to.space)}`,
         },
       ];
-    case 'ESPACE':
-      return getChangeAddresses(change.change).map((address) => ({
-        ...address,
-        label: `${address.label} / eSpace`,
-      }));
   }
 }
 
@@ -579,15 +569,6 @@ function addressEndpoint(
   context?: string,
 ): FlowEndpoint {
   return { address, context, kind: 'address', label };
-}
-
-function withAddressContext(
-  endpoint: FlowEndpoint,
-  context: string,
-): FlowEndpoint {
-  return endpoint.kind === 'address'
-    ? { ...endpoint, context: endpoint.context ?? context }
-    : endpoint;
 }
 
 function compactAddresses(

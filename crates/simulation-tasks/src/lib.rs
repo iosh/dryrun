@@ -22,8 +22,14 @@ pub enum SimulationTaskError {
     #[error("simulation response deadline exceeded")]
     ResponseTimedOut,
 
-    #[error("simulation task failed")]
-    TaskFailed {
+    #[error("simulation task was cancelled")]
+    TaskCancelled {
+        #[source]
+        source: JoinError,
+    },
+
+    #[error("simulation task panicked")]
+    TaskPanicked {
         #[source]
         source: JoinError,
     },
@@ -78,21 +84,23 @@ impl SimulationTaskSet {
                 let _permit = permit;
                 match tokio::spawn(async move { start_attempt().await }).await {
                     Ok(output) => Ok(output),
-                    Err(source) => {
-                        if source.is_panic() {
-                            error!(error = ?source, "admitted simulation task panicked");
-                        } else {
-                            error!(error = ?source, "admitted simulation task was cancelled");
-                        }
-                        Err(SimulationTaskError::TaskFailed { source })
-                    }
+                    Err(source) => Err(classify_join_error(source)),
                 }
             });
 
-            task.await
-                .map_err(|source| SimulationTaskError::TaskFailed { source })
+            task.await.map_err(classify_join_error)
         })
         .await
         .map_err(|_| SimulationTaskError::ResponseTimedOut)??
+    }
+}
+
+fn classify_join_error(source: JoinError) -> SimulationTaskError {
+    if source.is_panic() {
+        error!(error = ?source, "admitted simulation task panicked");
+        SimulationTaskError::TaskPanicked { source }
+    } else {
+        error!(error = ?source, "admitted simulation task was cancelled");
+        SimulationTaskError::TaskCancelled { source }
     }
 }

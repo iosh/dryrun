@@ -234,14 +234,14 @@ export type EspaceErc1155BurnBatchChange = EvmErc1155BurnBatchChange;
 export type EspaceChange = EvmChange;
 export type EspaceChanges = EvmChanges;
 
-// Core Space nested eSpace changes retain their existing legacy wire.
+// Core Space change items use the shared flat wire and identify their space.
 interface LegacyEspaceNativeCurrency {
   name: string;
   symbol: string;
   decimals: number;
 }
 
-export interface EspaceNativeTransferChangeLegacy
+export interface CoreEspaceNativeTransferChange
   extends LegacyEspaceNativeCurrency {
   changeType: 'NATIVE_TRANSFER';
   from: string;
@@ -249,14 +249,14 @@ export interface EspaceNativeTransferChangeLegacy
   rawAmount: string;
 }
 
-export interface EspaceSelfDestructBurnChangeLegacy
+export interface CoreEspaceSelfDestructBurnChange
   extends LegacyEspaceNativeCurrency {
   changeType: 'SELF_DESTRUCT_BURN';
   contractAddress: string;
   rawAmount: string;
 }
 
-export interface EspaceWrappedNativeDepositChangeLegacy
+export interface CoreEspaceWrappedNativeDepositChange
   extends FungibleAssetMetadata {
   changeType: 'WRAPPED_NATIVE_DEPOSIT';
   contractAddress: string;
@@ -264,7 +264,7 @@ export interface EspaceWrappedNativeDepositChangeLegacy
   rawAmount: string;
 }
 
-export interface EspaceWrappedNativeWithdrawalChangeLegacy
+export interface CoreEspaceWrappedNativeWithdrawalChange
   extends FungibleAssetMetadata {
   changeType: 'WRAPPED_NATIVE_WITHDRAWAL';
   contractAddress: string;
@@ -331,11 +331,11 @@ export interface Erc1155TransferBatchChange {
   items: Erc1155TransferItem[];
 }
 
-export type LegacyEspaceChange =
-  | EspaceNativeTransferChangeLegacy
-  | EspaceSelfDestructBurnChangeLegacy
-  | EspaceWrappedNativeDepositChangeLegacy
-  | EspaceWrappedNativeWithdrawalChangeLegacy
+export type CoreEspaceChangePayload =
+  | CoreEspaceNativeTransferChange
+  | CoreEspaceSelfDestructBurnChange
+  | CoreEspaceWrappedNativeDepositChange
+  | CoreEspaceWrappedNativeWithdrawalChange
   | Erc20TransferChange
   | Erc20ApprovalChange
   | Erc721TransferChange
@@ -501,12 +501,7 @@ export interface CrossSpaceNativeTransferChange {
   rawAmount: string;
 }
 
-export interface NestedEspaceChange {
-  changeType: 'ESPACE';
-  change: LegacyEspaceChange;
-}
-
-export type CoreChange =
+type CoreChangePayload =
   | CoreNativeTransferChange
   | CoreNativeBurnChange
   | Erc20TransferChange
@@ -528,8 +523,10 @@ export type CoreChange =
   | ContractAdminSetChange
   | SponsorshipAccessRuleSetChange
   | StoragePointConversionChange
-  | CrossSpaceNativeTransferChange
-  | NestedEspaceChange;
+  | CrossSpaceNativeTransferChange;
+
+export type CoreChange = { space: 'CORE' } & CoreChangePayload;
+export type CoreEspaceChange = { space: 'ESPACE' } & CoreEspaceChangePayload;
 
 export type CoreChanges =
   | { status: 'complete'; items: CoreChange[] }
