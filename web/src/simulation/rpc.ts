@@ -529,7 +529,7 @@ export type CoreChange = { space: 'CORE' } & CoreChangePayload;
 export type CoreEspaceChange = { space: 'ESPACE' } & CoreEspaceChangePayload;
 
 export type CoreChanges =
-  | { status: 'complete'; items: CoreChange[] }
+  | { status: 'complete'; items: (CoreChange | CoreEspaceChange)[] }
   | { status: 'unavailable'; error: string };
 
 export interface EvmState {

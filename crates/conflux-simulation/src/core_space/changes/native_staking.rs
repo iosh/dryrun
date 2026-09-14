@@ -7,7 +7,10 @@ use cfx_vm_types::CallType;
 use conflux_provider::CoreAddress;
 use primitives::{DepositInfo, DepositList, VoteStakeList};
 
-use super::{CoreSpaceChangeSet, CoreSpaceChangeSetBuilder, CoreSpaceNativeCurrency};
+use super::{
+    CoreSpaceChangeSet, CoreSpaceChangeSetBuilder, CoreSpaceNativeCurrency, CrossSpaceAddress,
+};
+use crate::core_space::cross_space_scope::CommittedCrossSpaceTransfer;
 use crate::{
     core_space::{
         CoreSpaceChangesError, CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition,
@@ -356,6 +359,7 @@ fn invalid_staking_transfer(operation: &str) -> CoreSpaceChangesError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum BalanceLocation {
     CoreAccount(Address),
+    Espace(Address),
     Staking(Address),
     GasSponsor(Address),
 }
@@ -390,6 +394,53 @@ enum NativeOperation {
         principal_amount: U256,
         reward_amount: U256,
     },
+    CrossSpaceToEspace {
+        position: CoreSpaceExecutionPosition,
+        core_sender: Address,
+        receiver: alloy_primitives::Address,
+        amount: U256,
+    },
+    CrossSpaceToCore {
+        position: CoreSpaceExecutionPosition,
+        mapped_sender: Address,
+        core_receiver: Address,
+        amount: U256,
+    },
+    EspaceBurn {
+        account: Address,
+        amount: U256,
+    },
+}
+
+impl NativeOperation {
+    fn from_cross_space(transfer: CommittedCrossSpaceTransfer) -> Self {
+        match transfer {
+            CommittedCrossSpaceTransfer::ToEspace {
+                position,
+                core_sender,
+                receiver,
+                amount,
+                ..
+            } => Self::CrossSpaceToEspace {
+                position: CoreSpaceExecutionPosition::from_index(position),
+                core_sender,
+                receiver,
+                amount,
+            },
+            CommittedCrossSpaceTransfer::ToCoreSpace {
+                position,
+                mapped_sender,
+                core_receiver,
+                amount,
+                ..
+            } => Self::CrossSpaceToCore {
+                position: CoreSpaceExecutionPosition::from_index(position),
+                mapped_sender,
+                core_receiver,
+                amount,
+            },
+        }
+    }
 }
 
 fn collect_native_operations(
@@ -432,6 +483,22 @@ fn collect_native_operations(
                     }
                     continue;
                 }
+                let cross_space_transfer =
+                    execution
+                        .cross_space_transfers()
+                        .iter()
+                        .find(|transfer| match transfer {
+                            CommittedCrossSpaceTransfer::ToEspace {
+                                parent_frame_id, ..
+                            }
+                            | CommittedCrossSpaceTransfer::ToCoreSpace {
+                                parent_frame_id, ..
+                            } => *parent_frame_id == *frame_id,
+                        });
+                if let Some(transfer) = cross_space_transfer {
+                    operations.push(NativeOperation::from_cross_space(*transfer));
+                    continue;
+                }
                 if execution.is_cross_space_scope_parent(*frame_id) {
                     continue;
                 }
@@ -451,6 +518,30 @@ fn collect_native_operations(
                 to,
                 value,
             } => {
+                if frame_id.is_none()
+                    && *space == Space::Native
+                    && matches!(
+                        (from, to),
+                        (AddressPocket::Balance(account), AddressPocket::MintBurn)
+                            if account.space == Space::Ethereum
+                    )
+                {
+                    if execution.nested_espace_scope_roots().is_empty() {
+                        return Err(CoreSpaceChangesError::inconsistent_execution(
+                            "committed eSpace selfdestruct burn had no verified Core cross-space scope",
+                        ));
+                    }
+                    if let AddressPocket::Balance(account) = *from {
+                        operations.push(NativeOperation::EspaceBurn {
+                            account: account.address,
+                            amount: u256_from_cfx(*value),
+                        });
+                    }
+                    continue;
+                }
+                if frame_id.is_some_and(|id| execution.is_cross_space_parent(id)) {
+                    continue;
+                }
                 if frame_id.is_some_and(|id| execution.is_cross_space_scope_parent(id)) {
                     continue;
                 }
@@ -641,6 +732,20 @@ fn required_balance_locations(
                 locations.insert(BalanceLocation::CoreAccount(*account));
                 locations.insert(BalanceLocation::Staking(*account));
             }
+            NativeOperation::CrossSpaceToEspace { core_sender, .. } => {
+                locations.insert(BalanceLocation::CoreAccount(*core_sender));
+            }
+            NativeOperation::CrossSpaceToCore {
+                mapped_sender,
+                core_receiver,
+                ..
+            } => {
+                locations.insert(BalanceLocation::CoreAccount(*core_receiver));
+                locations.insert(BalanceLocation::Espace(*mapped_sender));
+            }
+            NativeOperation::EspaceBurn { account, .. } => {
+                locations.insert(BalanceLocation::Espace(*account));
+            }
         }
     }
     for call in staking_calls {
@@ -654,6 +759,7 @@ struct NativeState {
     balances: BTreeMap<BalanceLocation, U256>,
     total_issued: U256,
     total_staking: U256,
+    total_espace_tokens: U256,
 }
 
 fn read_state(
@@ -665,12 +771,17 @@ fn read_state(
     for location in locations {
         let value = match *location {
             BalanceLocation::CoreAccount(account) => reader.core_balance_raw(account),
+            BalanceLocation::Espace(account) => reader.espace_balance(account).map(u256_from_cfx),
             BalanceLocation::Staking(account) => reader.staking_balance_raw(account),
             BalanceLocation::GasSponsor(contract) => reader.gas_sponsor_balance_raw(contract),
         }
         .map_err(|source| state_error(phase, source))?;
         balances.insert(*location, value);
     }
+    let total_espace_tokens = reader
+        .global_state()
+        .map_err(|source| state_error(phase, source))?
+        .total_espace_tokens;
     Ok(NativeState {
         balances,
         total_issued: reader
@@ -679,6 +790,7 @@ fn read_state(
         total_staking: reader
             .total_staking()
             .map_err(|source| state_error(phase, source))?,
+        total_espace_tokens: u256_from_cfx(total_espace_tokens),
     })
 }
 
@@ -810,6 +922,73 @@ fn replay_native_operations(
                     },
                 )?;
             }
+            NativeOperation::CrossSpaceToEspace {
+                position,
+                core_sender,
+                receiver,
+                amount,
+            } => {
+                replay.debit(BalanceLocation::CoreAccount(core_sender), amount)?;
+                builder
+                    .cross_space_transfer(
+                        position,
+                        CrossSpaceAddress::CoreSpace(core_address(core_sender, execution)),
+                        CrossSpaceAddress::Espace(receiver),
+                        amount,
+                    )
+                    .expect("built-in Core Space changes use unique execution positions");
+                replay.total_espace_tokens = replay
+                    .total_espace_tokens
+                    .checked_add(amount)
+                    .ok_or_else(|| {
+                        CoreSpaceChangesError::inconsistent_execution(
+                            "Core total eSpace tokens overflowed while replaying a cross-space transfer",
+                        )
+                    })?;
+            }
+            NativeOperation::CrossSpaceToCore {
+                position,
+                mapped_sender,
+                core_receiver,
+                amount,
+            } => {
+                replay.debit(BalanceLocation::Espace(mapped_sender), amount)?;
+                replay.credit(BalanceLocation::CoreAccount(core_receiver), amount)?;
+                builder
+                    .cross_space_transfer(
+                        position,
+                        CrossSpaceAddress::Espace(crate::primitive::address_from_cfx(
+                            mapped_sender,
+                        )),
+                        CrossSpaceAddress::CoreSpace(core_address(core_receiver, execution)),
+                        amount,
+                    )
+                    .expect("built-in Core Space changes use unique execution positions");
+                replay.total_espace_tokens = replay
+                    .total_espace_tokens
+                    .checked_sub(amount)
+                    .ok_or_else(|| {
+                        CoreSpaceChangesError::inconsistent_execution(
+                            "Core total eSpace tokens underflowed while replaying a withdrawal",
+                        )
+                    })?;
+            }
+            NativeOperation::EspaceBurn { account, amount } => {
+                replay.debit(BalanceLocation::Espace(account), amount)?;
+                replay.total_issued = replay.total_issued.checked_sub(amount).ok_or_else(|| {
+                    CoreSpaceChangesError::inconsistent_execution(
+                        "Core total issued underflowed while replaying a nested eSpace burn",
+                    )
+                })?;
+                replay.total_espace_tokens = replay
+                    .total_espace_tokens
+                    .checked_sub(amount)
+                    .ok_or_else(|| {
+                        CoreSpaceChangesError::inconsistent_execution(
+                            "Core total eSpace tokens underflowed while replaying a selfdestruct burn",
+                        )
+                    })?;
+            }
         }
     }
     let settled_fee = precharged_fee.checked_sub(refunded_fee).ok_or_else(|| {
@@ -884,6 +1063,12 @@ impl NativeState {
             return Err(CoreSpaceChangesError::inconsistent_execution(format!(
                 "replayed Core Space total staking {}, finalized {}",
                 self.total_staking, after.total_staking
+            )));
+        }
+        if self.total_espace_tokens != after.total_espace_tokens {
+            return Err(CoreSpaceChangesError::inconsistent_execution(format!(
+                "replayed Core total eSpace tokens {}, finalized {}",
+                self.total_espace_tokens, after.total_espace_tokens
             )));
         }
         Ok(())

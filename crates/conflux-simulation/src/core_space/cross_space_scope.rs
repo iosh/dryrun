@@ -25,21 +25,44 @@ enum CrossSpaceOperation {
     CallEspace,
 }
 
-/// Collect the roots of committed nested eSpace scopes. This runs while the
-/// finalized Core execution record is assembled, before change rules inspect
-/// logs or child frames.
-pub(crate) fn collect_committed_espace_scope_roots(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommittedCrossSpaceTransfer {
+    ToEspace {
+        position: usize,
+        parent_frame_id: FrameId,
+        child_frame_id: FrameId,
+        core_sender: cfx_types::Address,
+        mapped_sender: cfx_types::Address,
+        receiver: alloy_primitives::Address,
+        amount: alloy_primitives::U256,
+    },
+    ToCoreSpace {
+        position: usize,
+        parent_frame_id: FrameId,
+        mapped_sender: cfx_types::Address,
+        core_receiver: cfx_types::Address,
+        amount: alloy_primitives::U256,
+    },
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct CommittedCrossSpaceScopes {
+    pub(crate) roots: Vec<FrameId>,
+    pub(crate) transfers: Vec<CommittedCrossSpaceTransfer>,
+}
+
+/// Collect committed nested eSpace scopes and their canonical value movements.
+/// This runs while the finalized Core execution record is assembled, before
+/// change rules inspect logs or child frames.
+pub(crate) fn collect_committed_espace_scopes(
     trace: &CommittedExecutionTrace,
-) -> Result<Vec<FrameId>, CoreSpaceChangesError> {
+) -> Result<CommittedCrossSpaceScopes, CoreSpaceChangesError> {
     let contract = cfx_parameters::internal_contract_addresses::CROSS_SPACE_CONTRACT_ADDRESS;
     let mut roots = Vec::new();
+    let mut transfers = Vec::new();
 
     for event in trace.events() {
-        let TraceEvent::FrameStart {
-            position: _,
-            frame_id,
-        } = event
-        else {
+        let TraceEvent::FrameStart { position, frame_id } = event else {
             continue;
         };
         let frame = trace.frame(*frame_id);
@@ -122,26 +145,28 @@ pub(crate) fn collect_committed_espace_scope_roots(
                 matched.then_some(*value)
             })
             .collect();
-        if bridge_transfers.len() != 1 {
+        let parent_transfer_count = trace.internal_transfers_in_scope(Some(*frame_id)).count();
+        if bridge_transfers.len() != 1 || parent_transfer_count != 1 {
             return Err(CoreSpaceChangesError::inconsistent_execution(
-                "Core cross-space bridge touch is missing or ambiguous",
+                "Core cross-space bridge touch is missing, ambiguous, or accompanied by an unexpected parent transfer",
             ));
         }
 
         if operation == CrossSpaceOperation::WithdrawToCore {
-            unique_withdraw_event(
-                trace,
-                *frame_id,
-                mapped.address,
-                *caller,
-                crate::primitive::u256_from_cfx(bridge_transfers[0]),
-            )?;
-            if Some(crate::primitive::u256_from_cfx(bridge_transfers[0])) != expected_withdraw_value
-            {
+            let amount = crate::primitive::u256_from_cfx(bridge_transfers[0]);
+            unique_withdraw_event(trace, *frame_id, mapped.address, *caller, amount)?;
+            if Some(amount) != expected_withdraw_value {
                 return Err(CoreSpaceChangesError::inconsistent_execution(
                     "Core cross-space withdrawal value does not match its calldata",
                 ));
             }
+            transfers.push(CommittedCrossSpaceTransfer::ToCoreSpace {
+                position: *position,
+                parent_frame_id: *frame_id,
+                mapped_sender: mapped.address,
+                core_receiver: *caller,
+                amount,
+            });
             continue;
         }
 
@@ -160,9 +185,14 @@ pub(crate) fn collect_committed_espace_scope_roots(
                     return None;
                 }
                 let matched = match (&child.action, operation) {
-                    (FrameAction::Call { caller, .. }, CrossSpaceOperation::CallEspace) => {
-                        *caller == mapped.address
-                    }
+                    (
+                        FrameAction::Call {
+                            call_type: child_call_type,
+                            caller,
+                            ..
+                        },
+                        CrossSpaceOperation::CallEspace,
+                    ) => *child_call_type == CallType::Call && *caller == mapped.address,
                     (FrameAction::Create { creator, .. }, CrossSpaceOperation::CreateEspace) => {
                         *creator == mapped.address
                     }
@@ -247,6 +277,15 @@ pub(crate) fn collect_committed_espace_scope_roots(
             ));
         }
         roots.push(child);
+        transfers.push(CommittedCrossSpaceTransfer::ToEspace {
+            position: *position,
+            parent_frame_id: *frame_id,
+            child_frame_id: child,
+            core_sender: *caller,
+            mapped_sender: mapped.address,
+            receiver: child_receiver,
+            amount: child_value,
+        });
     }
 
     for event in trace.events() {
@@ -263,7 +302,7 @@ pub(crate) fn collect_committed_espace_scope_roots(
             ));
         }
     }
-    Ok(roots)
+    Ok(CommittedCrossSpaceScopes { roots, transfers })
 }
 
 fn unique_call_event(

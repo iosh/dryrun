@@ -532,6 +532,26 @@ impl CoreSpaceChangeSetBuilder {
         self.insert(position, CoreSpaceChange::Espace(change))
     }
 
+    pub(crate) fn cross_space_transfer(
+        &mut self,
+        position: CoreSpaceExecutionPosition,
+        from: CrossSpaceAddress,
+        to: CrossSpaceAddress,
+        raw_amount: U256,
+    ) -> Result<(), CoreSpaceChangeDerivationError> {
+        if raw_amount.is_zero() {
+            return Ok(());
+        }
+        self.insert(
+            position,
+            CoreSpaceChange::CrossSpaceNativeTransfer {
+                from,
+                to,
+                raw_amount,
+            },
+        )
+    }
+
     pub fn finish(self) -> CoreSpaceChangeSet {
         let entries = self.entries.into_iter().collect::<Vec<_>>();
         let items = entries.iter().map(|(_, change)| change.clone()).collect();

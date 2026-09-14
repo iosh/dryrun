@@ -28,9 +28,6 @@ pub(super) fn derive_native_changes(
 ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
     let trace = execution.trace();
     let roots = execution.nested_espace_scope_roots();
-    if roots.is_empty() {
-        return Ok(CoreSpaceChangeSet::default());
-    }
     let token_effects = NestedEspaceEffects::from_trace(trace, roots, wrapped_native_token)
         .map_err(|error| {
             CoreSpaceChangeDerivationError::Existing(CoreSpaceChangesError::inconsistent_execution(
@@ -77,6 +74,17 @@ pub(super) fn derive_native_changes(
                                 currency: currency.clone(),
                             },
                         )?;
+                    }
+                    FrameAction::Call {
+                        call_type,
+                        transferred_value,
+                        ..
+                    } if !transferred_value.is_zero() => {
+                        return Err(CoreSpaceChangeDerivationError::Existing(
+                            CoreSpaceChangesError::inconsistent_execution(format!(
+                                "nonzero nested eSpace {call_type:?} value is not a balance transfer"
+                            )),
+                        ));
                     }
                     FrameAction::Create {
                         creator,
@@ -129,6 +137,35 @@ pub(super) fn derive_native_changes(
                     EspaceChange::NativeTransfer {
                         from: crate::primitive::address_from_cfx(from.address),
                         to: crate::primitive::address_from_cfx(to.address),
+                        raw_amount: amount,
+                        currency: currency.clone(),
+                    },
+                )?;
+            }
+            TraceEvent::InternalTransfer {
+                position,
+                space: Space::Native,
+                from: AddressPocket::Balance(from),
+                to: AddressPocket::MintBurn,
+                value,
+                frame_id: None,
+            } if from.space == Space::Ethereum => {
+                if value.is_zero() {
+                    continue;
+                }
+                let amount = u256_from_cfx(*value);
+                let delta = deltas.entry(from.address).or_default();
+                delta.debited = delta.debited.checked_add(*value).ok_or_else(|| {
+                    CoreSpaceChangeDerivationError::Existing(
+                        CoreSpaceChangesError::inconsistent_execution(
+                            "nested eSpace balance delta overflows",
+                        ),
+                    )
+                })?;
+                builder.espace(
+                    CoreSpaceExecutionPosition::from_index(*position),
+                    EspaceChange::SelfDestructBurn {
+                        contract_address: crate::primitive::address_from_cfx(from.address),
                         raw_amount: amount,
                         currency: currency.clone(),
                     },
