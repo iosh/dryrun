@@ -1,6 +1,5 @@
 use std::collections::BTreeMap;
 
-use alloy_primitives::{Address, address};
 use cfx_executor::{
     machine::{Machine, VmFactory},
     spec::CommonParams,
@@ -23,8 +22,6 @@ use crate::{core_space::CoreSpaceNativeCurrency, espace::EspaceNativeCurrency};
 const MAINNET_CORE_SPACE_CHAIN_ID: u32 = 1029;
 const MAINNET_ESPACE_CHAIN_ID: u32 = 1030;
 const MAINNET_NETWORK_ID: u64 = 1029;
-const MAINNET_ESPACE_WRAPPED_NATIVE_TOKEN: Address =
-    address!("14b2d3bc65e74dae1030eafd8ac30c533c976a9b");
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConfluxChainSpec {
@@ -32,7 +29,6 @@ pub(crate) struct ConfluxChainSpec {
     core_space_address_network: Network,
     core_space_native_currency: CoreSpaceNativeCurrency,
     espace_native_currency: EspaceNativeCurrency,
-    espace_wrapped_native_token: Address,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -67,7 +63,6 @@ impl ConfluxChainSpec {
                 symbol: "CFX".to_owned(),
                 decimals: 18,
             },
-            espace_wrapped_native_token: MAINNET_ESPACE_WRAPPED_NATIVE_TOKEN,
         }
     }
 
@@ -101,10 +96,6 @@ impl ConfluxChainSpec {
 
     pub(crate) const fn espace_native_currency(&self) -> &EspaceNativeCurrency {
         &self.espace_native_currency
-    }
-
-    pub(crate) const fn espace_wrapped_native_token(&self) -> Address {
-        self.espace_wrapped_native_token
     }
 
     pub(crate) fn espace_transaction_validation_rules(
