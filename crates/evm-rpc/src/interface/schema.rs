@@ -138,7 +138,7 @@ pub struct SignedAuthorization {
 #[serde(rename_all = "camelCase")]
 pub struct EvmSimulateTransactionResponse {
     pub state: EvmState,
-    pub transaction: CompletedTransaction,
+    pub transaction: evm_simulation::TypedTransaction,
     pub outcome: Outcome,
     pub changes: Changes,
 }
@@ -149,92 +149,6 @@ pub struct EvmState {
     #[serde(with = "quantity")]
     pub block_number: u64,
     pub block_hash: B256,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum CompletedTransaction {
-    Legacy(LegacyTransaction),
-    Eip2930(Eip2930Transaction),
-    Eip1559(Eip1559Transaction),
-    Eip4844(Eip4844Transaction),
-    Eip7702(Eip7702Transaction),
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct CompletedTransactionBase {
-    #[serde(rename = "type", with = "quantity")]
-    pub tx_type: u8,
-    #[serde(with = "quantity")]
-    pub chain_id: u64,
-    pub from: Address,
-    pub to: Option<Address>,
-    #[serde(with = "quantity")]
-    pub nonce: u64,
-    #[serde(with = "quantity")]
-    pub gas: u64,
-    pub value: U256,
-    pub data: Bytes,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct LegacyTransaction {
-    #[serde(flatten)]
-    pub base: CompletedTransactionBase,
-    #[serde(with = "quantity")]
-    pub gas_price: u128,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Eip2930Transaction {
-    #[serde(flatten)]
-    pub base: CompletedTransactionBase,
-    #[serde(with = "quantity")]
-    pub gas_price: u128,
-    pub access_list: Vec<AccessListItem>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Eip1559Transaction {
-    #[serde(flatten)]
-    pub base: CompletedTransactionBase,
-    #[serde(with = "quantity")]
-    pub max_fee_per_gas: u128,
-    #[serde(with = "quantity")]
-    pub max_priority_fee_per_gas: u128,
-    pub access_list: Vec<AccessListItem>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Eip4844Transaction {
-    #[serde(flatten)]
-    pub base: CompletedTransactionBase,
-    #[serde(with = "quantity")]
-    pub max_fee_per_gas: u128,
-    #[serde(with = "quantity")]
-    pub max_priority_fee_per_gas: u128,
-    #[serde(with = "quantity")]
-    pub max_fee_per_blob_gas: u128,
-    pub access_list: Vec<AccessListItem>,
-    pub blob_versioned_hashes: Vec<B256>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Eip7702Transaction {
-    #[serde(flatten)]
-    pub base: CompletedTransactionBase,
-    #[serde(with = "quantity")]
-    pub max_fee_per_gas: u128,
-    #[serde(with = "quantity")]
-    pub max_priority_fee_per_gas: u128,
-    pub access_list: Vec<AccessListItem>,
-    pub authorization_list: Vec<SignedAuthorization>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

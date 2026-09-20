@@ -1,6 +1,6 @@
 use alloy_primitives::B256;
 
-use crate::{CompleteTransaction, EvmChanges, EvmExecutionOutcome};
+use crate::{EvmChanges, EvmExecutionOutcome, TypedTransaction};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EvmBlockContext {
@@ -11,7 +11,7 @@ pub struct EvmBlockContext {
 #[derive(Debug)]
 pub struct EvmSimulation {
     pub context: EvmBlockContext,
-    pub transaction: CompleteTransaction,
+    pub transaction: TypedTransaction,
     pub execution: EvmExecutionOutcome,
     pub changes: EvmChanges,
 }

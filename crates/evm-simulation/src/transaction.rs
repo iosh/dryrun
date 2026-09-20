@@ -1,109 +1,14 @@
 use alloy::primitives::{Address, B256, Bytes, U256};
-use thiserror::Error;
 
-pub use alloy::consensus::TxType;
-pub use alloy::eips::{
-    eip2930::AccessListItem,
-    eip7702::{Authorization, SignedAuthorization},
+pub use simulation_core::transaction::{
+    AccessListItem, Authorization, DynamicFees, SignedAuthorization, TransactionCommon,
+    TransactionInputError, TxType, TypedTransaction,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransactionInput {
-    Complete(CompleteTransaction),
+    Complete(TypedTransaction),
     Partial(PartialTransaction),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TransactionCommon {
-    pub from: Address,
-    pub to: Option<Address>,
-    pub nonce: u64,
-    pub gas_limit: u64,
-    pub value: U256,
-    pub input: Bytes,
-    pub chain_id: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CompleteTransaction {
-    Legacy {
-        common: TransactionCommon,
-        gas_price: u128,
-    },
-    Eip2930 {
-        common: TransactionCommon,
-        gas_price: u128,
-        access_list: Vec<AccessListItem>,
-    },
-    Eip1559 {
-        common: TransactionCommon,
-        max_fee_per_gas: u128,
-        max_priority_fee_per_gas: u128,
-        access_list: Vec<AccessListItem>,
-    },
-    Eip4844 {
-        common: TransactionCommon,
-        max_fee_per_gas: u128,
-        max_priority_fee_per_gas: u128,
-        max_fee_per_blob_gas: u128,
-        access_list: Vec<AccessListItem>,
-        blob_versioned_hashes: Vec<B256>,
-    },
-    Eip7702 {
-        common: TransactionCommon,
-        max_fee_per_gas: u128,
-        max_priority_fee_per_gas: u128,
-        access_list: Vec<AccessListItem>,
-        authorization_list: Vec<SignedAuthorization>,
-    },
-}
-
-impl CompleteTransaction {
-    pub fn common(&self) -> &TransactionCommon {
-        match self {
-            Self::Legacy { common, .. }
-            | Self::Eip2930 { common, .. }
-            | Self::Eip1559 { common, .. }
-            | Self::Eip4844 { common, .. }
-            | Self::Eip7702 { common, .. } => common,
-        }
-    }
-
-    pub(crate) fn common_mut(&mut self) -> &mut TransactionCommon {
-        match self {
-            Self::Legacy { common, .. }
-            | Self::Eip2930 { common, .. }
-            | Self::Eip1559 { common, .. }
-            | Self::Eip4844 { common, .. }
-            | Self::Eip7702 { common, .. } => common,
-        }
-    }
-
-    pub fn transaction_type(&self) -> TxType {
-        match self {
-            Self::Legacy { .. } => TxType::Legacy,
-            Self::Eip2930 { .. } => TxType::Eip2930,
-            Self::Eip1559 { .. } => TxType::Eip1559,
-            Self::Eip4844 { .. } => TxType::Eip4844,
-            Self::Eip7702 { .. } => TxType::Eip7702,
-        }
-    }
-
-    pub(crate) fn validate(&self) -> Result<(), TransactionInputError> {
-        match self {
-            Self::Eip4844 {
-                common,
-                blob_versioned_hashes,
-                ..
-            } => validate_eip4844_requirements(common.to, blob_versioned_hashes),
-            Self::Eip7702 {
-                common,
-                authorization_list,
-                ..
-            } => validate_eip7702_requirements(common.to, authorization_list),
-            Self::Legacy { .. } | Self::Eip2930 { .. } | Self::Eip1559 { .. } => Ok(()),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,22 +153,6 @@ impl PartialTransaction {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[non_exhaustive]
-pub enum TransactionInputError {
-    #[error("{transaction_type} transactions do not accept transaction.{field}")]
-    IncompatibleField {
-        transaction_type: TxType,
-        field: &'static str,
-    },
-
-    #[error("{transaction_type} transactions require transaction.{field}")]
-    MissingField {
-        transaction_type: TxType,
-        field: &'static str,
-    },
-}
-
 fn reject_present(
     present: bool,
     transaction_type: TxType,
@@ -317,4 +206,15 @@ fn validate_eip7702_requirements(
     }
 
     Ok(())
+}
+
+pub(crate) fn checked_fee(
+    field: &'static str,
+    value: U256,
+) -> Result<u128, crate::TransactionInputError> {
+    u128::try_from(value).map_err(|_| crate::TransactionInputError::OutOfRange {
+        field,
+        value,
+        maximum: U256::from(u128::MAX),
+    })
 }

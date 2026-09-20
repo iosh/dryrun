@@ -3181,6 +3181,7 @@ dependencies = [
  "alloy-sol-types",
  "contract-standards",
  "revm",
+ "simulation-core",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -7047,6 +7048,19 @@ checksum = "b5b441962c817e33508847a22bd82f03a30cff43642dc2fae8b050566121eb9a"
 dependencies = [
  "console",
  "similar",
+]
+
+[[package]]
+name = "simulation-core"
+version = "0.1.0"
+dependencies = [
+ "alloy-consensus 1.8.3",
+ "alloy-eips 1.8.3",
+ "alloy-primitives",
+ "alloy-serde 1.8.3",
+ "serde",
+ "serde_with",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

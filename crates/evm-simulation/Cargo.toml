@@ -3,7 +3,11 @@ name = "evm-simulation"
 version = { workspace = true }
 edition = { workspace = true }
 
+[features]
+serde = ["simulation-core/serde"]
+
 [dependencies]
+simulation-core = { workspace = true }
 alloy = { workspace = true }
 alloy-chains = { workspace = true }
 alloy-hardforks = { workspace = true }

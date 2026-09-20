@@ -1,3 +1,4 @@
+use alloy::primitives::U256;
 use alloy::{
     consensus::{BlockHeader, Header, Sealed},
     eips::BlockId,
@@ -10,8 +11,8 @@ use alloy::{
 };
 
 use crate::{
-    CompleteTransaction, EthereumChainSpec, EvmTransactionCompletionError, PartialTransaction,
-    TransactionCommon, TransactionInput, TxType,
+    DynamicFees, EthereumChainSpec, EvmTransactionCompletionError, PartialTransaction,
+    TransactionCommon, TransactionInput, TxType, TypedTransaction,
 };
 
 pub(crate) async fn complete_transaction(
@@ -19,10 +20,10 @@ pub(crate) async fn complete_transaction(
     provider: &DynProvider<Ethereum>,
     block: &Sealed<Header>,
     chain_spec: &EthereumChainSpec,
-) -> Result<CompleteTransaction, EvmTransactionCompletionError> {
+) -> Result<TypedTransaction, EvmTransactionCompletionError> {
     match input {
         TransactionInput::Complete(transaction) => {
-            transaction.validate()?;
+            transaction.validate_fields()?;
             Ok(transaction)
         }
         TransactionInput::Partial(transaction) => {
@@ -36,7 +37,7 @@ async fn complete_partial_transaction(
     provider: &DynProvider<Ethereum>,
     block: &Sealed<Header>,
     chain_spec: &EthereumChainSpec,
-) -> Result<CompleteTransaction, EvmTransactionCompletionError> {
+) -> Result<TypedTransaction, EvmTransactionCompletionError> {
     let transaction_type = transaction
         .transaction_type
         .unwrap_or_else(|| transaction.preferred_type());
@@ -89,23 +90,25 @@ async fn complete_partial_transaction(
     let blob_versioned_hashes = blob_versioned_hashes.unwrap_or_default();
     let authorization_list = authorization_list.unwrap_or_default();
     let mut transaction = match transaction_type {
-        TxType::Legacy => CompleteTransaction::Legacy {
+        TxType::Legacy => TypedTransaction::Legacy {
             common,
-            gas_price: complete_gas_price(provider, gas_price).await?,
+            gas_price: U256::from(complete_gas_price(provider, gas_price).await?),
         },
-        TxType::Eip2930 => CompleteTransaction::Eip2930 {
+        TxType::Eip2930 => TypedTransaction::Eip2930 {
             common,
-            gas_price: complete_gas_price(provider, gas_price).await?,
+            gas_price: U256::from(complete_gas_price(provider, gas_price).await?),
             access_list,
         },
         TxType::Eip1559 => {
             let (max_fee_per_gas, max_priority_fee_per_gas) =
                 complete_dynamic_fees(provider, block, max_fee_per_gas, max_priority_fee_per_gas)
                     .await?;
-            CompleteTransaction::Eip1559 {
+            TypedTransaction::Eip1559 {
                 common,
-                max_fee_per_gas,
-                max_priority_fee_per_gas,
+                fees: DynamicFees {
+                    max_fee_per_gas: U256::from(max_fee_per_gas),
+                    max_priority_fee_per_gas: U256::from(max_priority_fee_per_gas),
+                },
                 access_list,
             }
         }
@@ -119,11 +122,13 @@ async fn complete_partial_transaction(
                     EvmTransactionCompletionError::BlobBaseFeeLookup { source }
                 })?,
             };
-            CompleteTransaction::Eip4844 {
+            TypedTransaction::Eip4844 {
                 common,
-                max_fee_per_gas,
-                max_priority_fee_per_gas,
-                max_fee_per_blob_gas,
+                fees: DynamicFees {
+                    max_fee_per_gas: U256::from(max_fee_per_gas),
+                    max_priority_fee_per_gas: U256::from(max_priority_fee_per_gas),
+                },
+                max_fee_per_blob_gas: U256::from(max_fee_per_blob_gas),
                 access_list,
                 blob_versioned_hashes,
             }
@@ -132,10 +137,12 @@ async fn complete_partial_transaction(
             let (max_fee_per_gas, max_priority_fee_per_gas) =
                 complete_dynamic_fees(provider, block, max_fee_per_gas, max_priority_fee_per_gas)
                     .await?;
-            CompleteTransaction::Eip7702 {
+            TypedTransaction::Eip7702 {
                 common,
-                max_fee_per_gas,
-                max_priority_fee_per_gas,
+                fees: DynamicFees {
+                    max_fee_per_gas: U256::from(max_fee_per_gas),
+                    max_priority_fee_per_gas: U256::from(max_priority_fee_per_gas),
+                },
                 access_list,
                 authorization_list,
             }
@@ -143,7 +150,7 @@ async fn complete_partial_transaction(
     };
 
     if needs_gas_estimate {
-        let mut request = gas_estimation_request(&transaction);
+        let mut request = gas_estimation_request(&transaction)?;
         request.chain_id = Some(estimation_chain_id);
         let gas_limit = anchored_provider
             .estimate_gas(request)
@@ -209,7 +216,10 @@ fn suggested_max_fee_per_gas(
         .ok_or(EvmTransactionCompletionError::MaxFeePerGasOverflow)
 }
 
-fn gas_estimation_request(transaction: &CompleteTransaction) -> RpcTransactionRequest {
+fn gas_estimation_request(
+    transaction: &TypedTransaction,
+) -> Result<RpcTransactionRequest, crate::TransactionInputError> {
+    use crate::transaction::checked_fee;
     let common = transaction.common();
     let mut request = RpcTransactionRequest {
         from: Some(common.from),
@@ -224,62 +234,47 @@ fn gas_estimation_request(transaction: &CompleteTransaction) -> RpcTransactionRe
         ..Default::default()
     };
 
+    request.transaction_type = Some(transaction.transaction_type() as u8);
+    if let Some(fees) = transaction.dynamic_fees() {
+        request.max_fee_per_gas = Some(checked_fee("maxFeePerGas", fees.max_fee_per_gas)?);
+        request.max_priority_fee_per_gas = Some(checked_fee(
+            "maxPriorityFeePerGas",
+            fees.max_priority_fee_per_gas,
+        )?);
+    } else {
+        request.gas_price = Some(checked_fee("gasPrice", transaction.gas_price_cap())?);
+    }
+    if transaction.transaction_type() != TxType::Legacy {
+        request.access_list = Some(RpcAccessList(
+            transaction
+                .access_list()
+                .iter()
+                .map(|item| alloy::eips::eip2930::AccessListItem {
+                    address: item.address,
+                    storage_keys: item.storage_keys.clone(),
+                })
+                .collect(),
+        ));
+    }
     match transaction {
-        CompleteTransaction::Legacy { gas_price, .. } => {
-            request.transaction_type = Some(0);
-            request.gas_price = Some(*gas_price);
-        }
-        CompleteTransaction::Eip2930 {
-            gas_price,
-            access_list,
-            ..
-        } => {
-            request.transaction_type = Some(1);
-            request.gas_price = Some(*gas_price);
-            request.access_list = Some(RpcAccessList(access_list.clone()));
-        }
-        CompleteTransaction::Eip1559 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            access_list,
-            ..
-        } => {
-            request.transaction_type = Some(2);
-            request.max_fee_per_gas = Some(*max_fee_per_gas);
-            request.max_priority_fee_per_gas = Some(*max_priority_fee_per_gas);
-            request.access_list = Some(RpcAccessList(access_list.clone()));
-        }
-        CompleteTransaction::Eip4844 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
+        TypedTransaction::Eip4844 {
             max_fee_per_blob_gas,
-            access_list,
             blob_versioned_hashes,
             ..
         } => {
-            request.transaction_type = Some(3);
-            request.max_fee_per_gas = Some(*max_fee_per_gas);
-            request.max_priority_fee_per_gas = Some(*max_priority_fee_per_gas);
-            request.max_fee_per_blob_gas = Some(*max_fee_per_blob_gas);
-            request.access_list = Some(RpcAccessList(access_list.clone()));
+            request.max_fee_per_blob_gas =
+                Some(checked_fee("maxFeePerBlobGas", *max_fee_per_blob_gas)?);
             request.blob_versioned_hashes = Some(blob_versioned_hashes.clone());
         }
-        CompleteTransaction::Eip7702 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            access_list,
-            authorization_list,
-            ..
+        TypedTransaction::Eip7702 {
+            authorization_list, ..
         } => {
-            request.transaction_type = Some(4);
-            request.max_fee_per_gas = Some(*max_fee_per_gas);
-            request.max_priority_fee_per_gas = Some(*max_priority_fee_per_gas);
-            request.access_list = Some(RpcAccessList(access_list.clone()));
             request.authorization_list = Some(authorization_list.clone());
         }
+        _ => {}
     }
 
-    request
+    Ok(request)
 }
 
 #[cfg(test)]
@@ -297,8 +292,8 @@ mod tests {
 
     use super::{complete_transaction, suggested_max_fee_per_gas};
     use crate::{
-        CompleteTransaction, EthereumChainSpec, EvmTransactionCompletionError, PartialTransaction,
-        TransactionInput, TxType,
+        EthereumChainSpec, EvmTransactionCompletionError, PartialTransaction, TransactionInput,
+        TxType, TypedTransaction,
     };
 
     #[test]
@@ -338,7 +333,7 @@ mod tests {
         assert_eq!(completed.common().gas_limit, 21_000);
         assert!(matches!(
             completed,
-            CompleteTransaction::Legacy { gas_price: 100, .. }
+            TypedTransaction::Legacy { gas_price, .. } if gas_price == U256::from(100)
         ));
         assert!(asserter.read_q().is_empty());
     }
@@ -378,11 +373,9 @@ mod tests {
 
         assert!(matches!(
             dynamic,
-            CompleteTransaction::Eip1559 {
-                max_fee_per_gas: 23,
-                max_priority_fee_per_gas: 3,
-                ..
-            }
+            TypedTransaction::Eip1559 { fees, .. }
+                if fees.max_fee_per_gas == U256::from(23)
+                    && fees.max_priority_fee_per_gas == U256::from(3)
         ));
         assert!(dynamic_asserter.read_q().is_empty());
 
@@ -416,10 +409,8 @@ mod tests {
 
         assert!(matches!(
             blob,
-            CompleteTransaction::Eip4844 {
-                max_fee_per_blob_gas: 32,
-                ..
-            }
+            TypedTransaction::Eip4844 { max_fee_per_blob_gas, .. }
+                if max_fee_per_blob_gas == U256::from(32)
         ));
         assert!(blob_asserter.read_q().is_empty());
     }

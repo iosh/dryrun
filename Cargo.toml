@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "apps/dryrun",
+    "crates/simulation-core",
     "crates/contract-standards",
     "crates/conflux-provider",
     "crates/evm-simulation",
@@ -16,6 +17,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+simulation-core = { path = "crates/simulation-core" }
 contract-standards = { path = "crates/contract-standards" }
 conflux-provider = { path = "crates/conflux-provider" }
 evm-simulation = { path = "crates/evm-simulation" }
@@ -31,6 +33,7 @@ tokio = "1"
 tokio-util = "0.7"
 
 alloy = "1"
+alloy-consensus = "1"
 alloy-json-rpc = "1"
 alloy-rpc-types = "2"
 alloy-serde = "1"
@@ -53,6 +56,7 @@ primitives = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" 
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_with = { version = "3", default-features = false, features = ["std"] }
 
 tracing = "0.1"
 tracing-subscriber = "0.3"

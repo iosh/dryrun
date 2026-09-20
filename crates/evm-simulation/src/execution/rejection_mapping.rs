@@ -1,11 +1,11 @@
 use revm::context_interface::result::InvalidTransaction;
 use revm::primitives::eip4844::VERSIONED_HASH_VERSION_KZG;
 
-use crate::{CompleteTransaction, EvmExecutionError, EvmTransactionRejection};
+use crate::{EvmExecutionError, EvmTransactionRejection, TypedTransaction};
 
 pub(super) fn map_transaction_rejection(
     error: InvalidTransaction,
-    transaction: &CompleteTransaction,
+    transaction: &TypedTransaction,
     expected_chain_id: u64,
     block_gas_limit: u64,
     base_fee_per_gas: u64,
@@ -13,7 +13,9 @@ pub(super) fn map_transaction_rejection(
     let common = transaction.common();
     let rejection = match error {
         InvalidTransaction::PriorityFeeGreaterThanMaxFee => {
-            let (max_fee_per_gas, max_priority_fee_per_gas) = dynamic_fee_fields(transaction)
+            let (max_fee_per_gas, max_priority_fee_per_gas) = transaction
+                .dynamic_fees()
+                .map(|fees| (fees.max_fee_per_gas, fees.max_priority_fee_per_gas))
                 .ok_or_else(|| {
                     EvmExecutionError::unmapped_transaction_validation(
                         "legacy transaction failed dynamic priority fee validation",
@@ -26,7 +28,7 @@ pub(super) fn map_transaction_rejection(
         }
         InvalidTransaction::GasPriceLessThanBasefee => {
             EvmTransactionRejection::GasPriceBelowBaseFee {
-                gas_price: transaction_gas_price(transaction),
+                gas_price: transaction.gas_price_cap(),
                 base_fee_per_gas,
             }
         }
@@ -130,8 +132,8 @@ pub(super) fn map_transaction_rejection(
     Ok(rejection)
 }
 
-fn unsupported_blob_version(transaction: &CompleteTransaction) -> Option<(usize, u8)> {
-    let CompleteTransaction::Eip4844 {
+fn unsupported_blob_version(transaction: &TypedTransaction) -> Option<(usize, u8)> {
+    let TypedTransaction::Eip4844 {
         blob_versioned_hashes,
         ..
     } = transaction
@@ -145,41 +147,4 @@ fn unsupported_blob_version(transaction: &CompleteTransaction) -> Option<(usize,
         .find_map(|(index, hash)| {
             (hash[0] != VERSIONED_HASH_VERSION_KZG).then_some((index, hash[0]))
         })
-}
-
-fn transaction_gas_price(transaction: &CompleteTransaction) -> u128 {
-    match transaction {
-        CompleteTransaction::Legacy { gas_price, .. }
-        | CompleteTransaction::Eip2930 { gas_price, .. } => *gas_price,
-        CompleteTransaction::Eip1559 {
-            max_fee_per_gas, ..
-        }
-        | CompleteTransaction::Eip4844 {
-            max_fee_per_gas, ..
-        }
-        | CompleteTransaction::Eip7702 {
-            max_fee_per_gas, ..
-        } => *max_fee_per_gas,
-    }
-}
-
-fn dynamic_fee_fields(transaction: &CompleteTransaction) -> Option<(u128, u128)> {
-    match transaction {
-        CompleteTransaction::Eip1559 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            ..
-        }
-        | CompleteTransaction::Eip4844 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            ..
-        }
-        | CompleteTransaction::Eip7702 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            ..
-        } => Some((*max_fee_per_gas, *max_priority_fee_per_gas)),
-        CompleteTransaction::Legacy { .. } | CompleteTransaction::Eip2930 { .. } => None,
-    }
 }

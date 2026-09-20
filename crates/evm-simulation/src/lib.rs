@@ -56,8 +56,8 @@ pub use state::{
 };
 pub(crate) use token_changes::EvmTokenChangeRules;
 pub use transaction::{
-    AccessListItem, Authorization, CompleteTransaction, PartialTransaction, SignedAuthorization,
-    TransactionCommon, TransactionInput, TransactionInputError, TxType,
+    AccessListItem, Authorization, DynamicFees, PartialTransaction, SignedAuthorization,
+    TransactionCommon, TransactionInput, TransactionInputError, TxType, TypedTransaction,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

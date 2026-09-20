@@ -1,13 +1,12 @@
-use crate::{AccessListItem, CompleteTransaction, EthereumExecutionSpec, EvmBlockEnvironmentError};
+use crate::transaction::checked_fee;
+use crate::{AccessListItem, EthereumExecutionSpec, EvmBlockEnvironmentError, TypedTransaction};
 use alloy::consensus::{BlockHeader, Header};
 use alloy::primitives::{TxKind, U256};
 use revm::{
     context::{BlockEnv, CfgEnv, TxEnv},
     context_interface::{
         block::BlobExcessGasAndPrice,
-        transaction::{
-            AccessList as RevmAccessList, AccessListItem as RevmAccessListItem, TransactionType,
-        },
+        transaction::{AccessList as RevmAccessList, AccessListItem as RevmAccessListItem},
     },
     primitives::hardfork::SpecId,
 };
@@ -76,87 +75,24 @@ pub(super) fn create_block_env(
     })
 }
 
-pub(super) fn create_tx_env(transaction: &CompleteTransaction) -> TxEnv {
-    match transaction {
-        CompleteTransaction::Legacy { gas_price, .. } => base_tx_env(
-            transaction,
-            TransactionType::Legacy,
-            *gas_price,
-            None,
-            Default::default(),
-        ),
-        CompleteTransaction::Eip2930 {
-            gas_price,
-            access_list,
-            ..
-        } => base_tx_env(
-            transaction,
-            TransactionType::Eip2930,
-            *gas_price,
-            None,
-            map_access_list(access_list),
-        ),
-        CompleteTransaction::Eip1559 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            access_list,
-            ..
-        } => base_tx_env(
-            transaction,
-            TransactionType::Eip1559,
-            *max_fee_per_gas,
-            Some(*max_priority_fee_per_gas),
-            map_access_list(access_list),
-        ),
-        CompleteTransaction::Eip4844 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            max_fee_per_blob_gas,
-            access_list,
-            blob_versioned_hashes,
-            ..
-        } => {
-            let mut tx = base_tx_env(
-                transaction,
-                TransactionType::Eip4844,
-                *max_fee_per_gas,
-                Some(*max_priority_fee_per_gas),
-                map_access_list(access_list),
-            );
-            tx.blob_hashes = blob_versioned_hashes.clone();
-            tx.max_fee_per_blob_gas = *max_fee_per_blob_gas;
-            tx
-        }
-        CompleteTransaction::Eip7702 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            access_list,
-            authorization_list,
-            ..
-        } => {
-            let mut tx = base_tx_env(
-                transaction,
-                TransactionType::Eip7702,
-                *max_fee_per_gas,
-                Some(*max_priority_fee_per_gas),
-                map_access_list(access_list),
-            );
-            tx.set_signed_authorization(authorization_list.clone());
-            tx
-        }
-    }
-}
-
-fn base_tx_env(
-    transaction: &CompleteTransaction,
-    tx_type: TransactionType,
-    gas_price: u128,
-    gas_priority_fee: Option<u128>,
-    access_list: RevmAccessList,
-) -> TxEnv {
+pub(super) fn create_tx_env(
+    transaction: &TypedTransaction,
+) -> Result<TxEnv, crate::TransactionInputError> {
     let common = transaction.common();
-    TxEnv {
-        tx_type: tx_type as u8,
+    let dynamic = transaction.dynamic_fees();
+    let gas_price = checked_fee(
+        if dynamic.is_some() {
+            "maxFeePerGas"
+        } else {
+            "gasPrice"
+        },
+        transaction.gas_price_cap(),
+    )?;
+    let gas_priority_fee = dynamic
+        .map(|fees| checked_fee("maxPriorityFeePerGas", fees.max_priority_fee_per_gas))
+        .transpose()?;
+    let mut tx = TxEnv {
+        tx_type: transaction.transaction_type() as u8,
         caller: common.from,
         gas_limit: common.gas_limit,
         gas_price,
@@ -165,12 +101,27 @@ fn base_tx_env(
         data: common.input.clone(),
         nonce: common.nonce,
         chain_id: Some(common.chain_id),
-        access_list,
+        access_list: map_access_list(transaction.access_list()),
         gas_priority_fee,
         blob_hashes: Vec::new(),
         max_fee_per_blob_gas: 0,
         authorization_list: Vec::new(),
+    };
+    match transaction {
+        crate::TypedTransaction::Eip4844 {
+            max_fee_per_blob_gas,
+            blob_versioned_hashes,
+            ..
+        } => {
+            tx.max_fee_per_blob_gas = checked_fee("maxFeePerBlobGas", *max_fee_per_blob_gas)?;
+            tx.blob_hashes = blob_versioned_hashes.clone();
+        }
+        crate::TypedTransaction::Eip7702 {
+            authorization_list, ..
+        } => tx.set_signed_authorization(authorization_list.clone()),
+        _ => {}
     }
+    Ok(tx)
 }
 
 fn map_access_list(items: &[AccessListItem]) -> RevmAccessList {

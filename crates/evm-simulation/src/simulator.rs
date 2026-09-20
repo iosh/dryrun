@@ -8,10 +8,10 @@ use alloy::{
 use tokio::runtime::Handle;
 
 use crate::{
-    CompleteTransaction, EthereumChainSpec, EvmBlockContext, EvmExecutionObserver,
-    EvmExecutionOutcome, EvmInitializationError, EvmObservationRequirements, EvmSimulation,
-    EvmSimulationError, EvmSimulationLimits, EvmSimulationRequest, EvmTransactionExecutionResult,
-    EvmTransactionExecutor,
+    EthereumChainSpec, EvmBlockContext, EvmExecutionObserver, EvmExecutionOutcome,
+    EvmInitializationError, EvmObservationRequirements, EvmSimulation, EvmSimulationError,
+    EvmSimulationLimits, EvmSimulationRequest, EvmTransactionExecutionResult,
+    EvmTransactionExecutor, TypedTransaction,
     changeset::{
         CombinedEvmChangeRules, DefaultEvmChangeRules, EvmChangeRules, EvmChangeSet, EvmChanges,
     },
@@ -165,7 +165,7 @@ struct BlockingSimulationInput<R> {
     change_rules: Arc<R>,
     limits: EvmSimulationLimits,
     block: Sealed<Header>,
-    transaction: CompleteTransaction,
+    transaction: TypedTransaction,
 }
 
 fn simulate_verified_changes_blocking<R>(

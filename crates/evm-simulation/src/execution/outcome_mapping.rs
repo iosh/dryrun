@@ -6,8 +6,8 @@ use revm::context_interface::result::{
 };
 
 use crate::{
-    CompleteTransaction, EvmExecutionError, EvmHaltReason, EvmOutOfGasReason,
-    EvmResultIntegrationError, EvmRevertReason, EvmSuccessOutput, EvmSuccessReason,
+    EvmExecutionError, EvmHaltReason, EvmOutOfGasReason, EvmResultIntegrationError,
+    EvmRevertReason, EvmSuccessOutput, EvmSuccessReason, TypedTransaction,
 };
 
 #[derive(Debug)]
@@ -27,7 +27,7 @@ pub(crate) enum EvmFinalStatus {
 
 pub(crate) fn map_executed_status(
     result: RevmExecutionResult<HaltReason>,
-    transaction: &CompleteTransaction,
+    transaction: &TypedTransaction,
 ) -> Result<EvmFinalStatus, EvmExecutionError> {
     match result {
         RevmExecutionResult::Success { reason, output, .. } => Ok(EvmFinalStatus::Success {
@@ -57,7 +57,7 @@ const fn map_success_reason(reason: SuccessReason) -> EvmSuccessReason {
 
 fn map_success_output(
     output: RevmOutput,
-    transaction: &CompleteTransaction,
+    transaction: &TypedTransaction,
 ) -> Result<EvmSuccessOutput, EvmExecutionError> {
     let common = transaction.common();
     match (common.to, output) {

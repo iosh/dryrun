@@ -6,11 +6,11 @@ use alloy_primitives::{Address, U256};
 #[non_exhaustive]
 pub enum EvmTransactionRejection {
     PriorityFeeGreaterThanMaxFee {
-        max_priority_fee_per_gas: u128,
-        max_fee_per_gas: u128,
+        max_priority_fee_per_gas: U256,
+        max_fee_per_gas: U256,
     },
     GasPriceBelowBaseFee {
-        gas_price: u128,
+        gas_price: U256,
         base_fee_per_gas: u64,
     },
     GasLimitExceedsBlockGasLimit {

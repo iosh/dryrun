@@ -12,10 +12,10 @@ use self::{
     rejection_mapping::map_transaction_rejection,
 };
 use crate::{
-    CompleteTransaction, EthereumChainSpec, EvmBlobGasFee, EvmBlockEnvironmentError,
-    EvmExecutionError, EvmExecutionOutcome, EvmExecutionResult, EvmGas, EvmNotReadyError,
-    EvmResultIntegrationError, EvmSimulationError, EvmSimulationLimits, EvmStateAccessError,
-    EvmTransactionRejection,
+    EthereumChainSpec, EvmBlobGasFee, EvmBlockEnvironmentError, EvmExecutionError,
+    EvmExecutionOutcome, EvmExecutionResult, EvmGas, EvmNotReadyError, EvmResultIntegrationError,
+    EvmSimulationError, EvmSimulationLimits, EvmStateAccessError, EvmTransactionRejection,
+    TypedTransaction,
     state::{
         EvmDatabase, EvmExecutionIdentity, EvmOccurrenceHandle, EvmStateAccess,
         EvmStateAccessFactory, EvmStateSource, MainnetEvm,
@@ -66,7 +66,7 @@ pub(crate) struct ExecutedTransaction<INSP> {
 impl ExecutedTransaction<EvmExecutionObserver> {
     pub(crate) fn commit(
         mut self,
-        transaction: &CompleteTransaction,
+        transaction: &TypedTransaction,
     ) -> Result<(EvmTransactionExecution, EvmStateAccess), EvmExecutionError> {
         let observation = self.evm.inspector.take_observation().map_err(|error| {
             EvmResultIntegrationError::new(format!("execution observation: {error}"))
@@ -353,12 +353,12 @@ impl<INSP> EvmTransactionExecutor<INSP> {
 
     pub(crate) fn execute(
         mut self,
-        transaction: &CompleteTransaction,
+        transaction: &TypedTransaction,
     ) -> Result<EvmTransactionExecutionResult<INSP>, EvmSimulationError>
     where
         INSP: revm::Inspector<Context<BlockEnv, TxEnv, CfgEnv, EvmDatabase>, EthInterpreter>,
     {
-        let tx_env = create_tx_env(transaction);
+        let tx_env = create_tx_env(transaction)?;
         let effective_gas_price = tx_env.effective_gas_price(self.base_fee_per_gas as u128);
         let result_and_state = match self.evm.inspect_tx(tx_env) {
             Ok(result_and_state) => result_and_state,
@@ -397,7 +397,7 @@ impl<INSP> EvmTransactionExecutor<INSP> {
         )
         .map_err(EvmExecutionError::from)?;
         let blob_gas_fee = match transaction {
-            CompleteTransaction::Eip4844 {
+            TypedTransaction::Eip4844 {
                 blob_versioned_hashes,
                 ..
             } => {
@@ -412,10 +412,10 @@ impl<INSP> EvmTransactionExecutor<INSP> {
                     gas_price,
                 ))
             }
-            CompleteTransaction::Legacy { .. }
-            | CompleteTransaction::Eip2930 { .. }
-            | CompleteTransaction::Eip1559 { .. }
-            | CompleteTransaction::Eip7702 { .. } => None,
+            TypedTransaction::Legacy { .. }
+            | TypedTransaction::Eip2930 { .. }
+            | TypedTransaction::Eip1559 { .. }
+            | TypedTransaction::Eip7702 { .. } => None,
         };
         let fee_settlement = EvmFeeSettlement::new(
             &gas,
