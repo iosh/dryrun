@@ -11,7 +11,7 @@ cfx-rpc-eth-types = { workspace = true }
 cfx-rpc-primitives = { workspace = true }
 cfx-types = { workspace = true }
 conflux-provider = { workspace = true }
-conflux-simulation = { workspace = true }
+conflux-simulation = { workspace = true, features = ["serde"] }
 hex = "0.4"
 jsonrpsee = { workspace = true, features = ["server"] }
 serde = { workspace = true }

@@ -126,7 +126,8 @@ where
             .backend
             .chain_spec()
             .espace_transaction_validation_rules(execution_block_number, execution_epoch_height);
-        if let Some(rejection) = validate_transaction_for_execution(&transaction, chain_id, rules) {
+        if let Some(rejection) = validate_transaction_for_execution(&transaction, chain_id, rules)?
+        {
             return Ok(EspaceSimulation {
                 context: context.public_context,
                 transaction,
@@ -169,7 +170,7 @@ fn simulate_blocking<R>(
     backend: ConfluxSimulationBackend,
     runtime_handle: Handle,
     context: super::ResolvedEspaceContext,
-    transaction: super::EspaceCompleteTransaction,
+    transaction: super::EspaceTypedTransaction,
     state_source: Arc<ConfluxStateSource>,
     limits: EspaceSimulationLimits,
     change_rules: Arc<R>,

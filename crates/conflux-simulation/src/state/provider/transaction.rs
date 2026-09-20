@@ -1,6 +1,6 @@
 use crate::{
     core_space::{CoreSpaceAccessListItem, CoreSpaceCompleteTransaction},
-    espace::EspaceCompleteTransaction,
+    espace::EspaceTypedTransaction,
     primitive::{access_list_to_cfx, address_to_cfx, alloy_u256_from_u64, u256_to_cfx},
 };
 use alloy::{
@@ -29,7 +29,7 @@ pub(crate) struct CoreSpaceResourceEstimate {
 }
 
 pub(crate) struct EspaceEstimateTransaction<'a> {
-    pub(crate) transaction: &'a EspaceCompleteTransaction,
+    pub(crate) transaction: &'a EspaceTypedTransaction,
 }
 
 pub(crate) struct CoreSpaceEstimateTransaction<'a> {
@@ -191,62 +191,38 @@ fn espace_estimate_gas_request(
         ..Default::default()
     };
 
-    match transaction {
-        EspaceCompleteTransaction::Legacy { gas_price, .. } => {
-            request.transaction_type = Some(U64::from(0));
-            request.gas_price = Some(u256_to_cfx(*gas_price));
-        }
-        EspaceCompleteTransaction::Eip2930 {
-            gas_price,
-            access_list,
-            ..
-        } => {
-            request.transaction_type = Some(U64::from(1));
-            request.gas_price = Some(u256_to_cfx(*gas_price));
-            request.access_list = Some(access_list_to_cfx(access_list.to_vec()));
-        }
-        EspaceCompleteTransaction::Eip1559 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            access_list,
-            ..
-        } => {
-            request.transaction_type = Some(U64::from(2));
-            request.max_fee_per_gas = Some(u256_to_cfx(*max_fee_per_gas));
-            request.max_priority_fee_per_gas = Some(u256_to_cfx(*max_priority_fee_per_gas));
-            request.access_list = Some(access_list_to_cfx(access_list.to_vec()));
-        }
-        EspaceCompleteTransaction::Eip7702 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            access_list,
-            authorization_list,
-            ..
-        } => {
-            request.transaction_type = Some(U64::from(4));
-            request.max_fee_per_gas = Some(u256_to_cfx(*max_fee_per_gas));
-            request.max_priority_fee_per_gas = Some(u256_to_cfx(*max_priority_fee_per_gas));
-            request.access_list = Some(access_list_to_cfx(access_list.to_vec()));
-            request.authorization_list = Some(
-                authorization_list
-                    .iter()
-                    .map(|authorization| {
-                        let inner = authorization.inner();
-                        AuthorizationListItem {
-                            chain_id: u256_to_cfx(inner.chain_id),
-                            address: address_to_cfx(inner.address),
-                            nonce: inner.nonce,
-                            y_parity: authorization.y_parity(),
-                            r: u256_to_cfx(authorization.r()),
-                            s: u256_to_cfx(authorization.s()),
-                        }
-                        .into()
-                    })
-                    .collect(),
-            );
-        }
+    request.transaction_type = Some(U64::from(transaction.transaction_type() as u8));
+    if let Some(fees) = transaction.dynamic_fees() {
+        request.max_fee_per_gas = Some(u256_to_cfx(fees.max_fee_per_gas));
+        request.max_priority_fee_per_gas = Some(u256_to_cfx(fees.max_priority_fee_per_gas));
+    } else {
+        request.gas_price = Some(u256_to_cfx(transaction.gas_price_cap()));
     }
-
+    if transaction.transaction_type() != crate::espace::TxType::Legacy {
+        request.access_list = Some(access_list_to_cfx(transaction.access_list().to_vec()));
+    }
+    if let EspaceTypedTransaction::Eip7702 {
+        authorization_list, ..
+    } = transaction
+    {
+        request.authorization_list = Some(
+            authorization_list
+                .iter()
+                .map(|authorization| {
+                    let inner = authorization.inner();
+                    AuthorizationListItem {
+                        chain_id: u256_to_cfx(inner.chain_id),
+                        address: address_to_cfx(inner.address),
+                        nonce: inner.nonce,
+                        y_parity: authorization.y_parity(),
+                        r: u256_to_cfx(authorization.r()),
+                        s: u256_to_cfx(authorization.s()),
+                    }
+                    .into()
+                })
+                .collect(),
+        );
+    }
     request
 }
 

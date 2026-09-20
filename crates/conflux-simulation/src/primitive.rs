@@ -1,9 +1,7 @@
-use alloy::{
-    eips::eip2930::AccessListItem,
-    primitives::{Address, B256, U256, U512},
-};
+use alloy::primitives::{Address, B256, U256, U512};
 use cfx_types::{Address as CfxAddress, H256 as CfxH256, U256 as CfxU256, U512 as CfxU512};
 use primitives::AccessListItem as CfxAccessListItem;
+use simulation_core::transaction::AccessListItem;
 
 pub(crate) fn address_to_cfx(address: Address) -> CfxAddress {
     CfxAddress::from_slice(address.as_slice())

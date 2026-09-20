@@ -1,8 +1,9 @@
 use alloy_primitives::U256;
 
 use super::{
-    EspaceCompleteTransaction, EspacePartialTransaction, EspaceTransactionCommon,
-    EspaceTransactionCompletionError, EspaceTransactionInput, ResolvedEspaceContext, TxType,
+    DynamicFees, EspacePartialTransaction, EspaceTransactionCommon,
+    EspaceTransactionCompletionError, EspaceTransactionInput, EspaceTypedTransaction,
+    ResolvedEspaceContext, TxType,
 };
 use crate::state::{ConfluxSimulationProvider, EspaceEstimateTransaction};
 
@@ -11,10 +12,17 @@ pub(crate) async fn complete_transaction(
     provider: &ConfluxSimulationProvider,
     context: &ResolvedEspaceContext,
     chain_id: u64,
-) -> Result<EspaceCompleteTransaction, EspaceTransactionCompletionError> {
+) -> Result<EspaceTypedTransaction, EspaceTransactionCompletionError> {
     match input {
         EspaceTransactionInput::Complete(transaction) => {
-            transaction.validate()?;
+            if transaction.transaction_type() == TxType::Eip4844 {
+                return Err(
+                    EspaceTransactionCompletionError::UnsupportedTransactionType {
+                        transaction_type: TxType::Eip4844,
+                    },
+                );
+            }
+            transaction.validate_fields()?;
             Ok(transaction)
         }
         EspaceTransactionInput::Partial(transaction) => {
@@ -28,7 +36,7 @@ async fn complete_partial_transaction(
     provider: &ConfluxSimulationProvider,
     context: &ResolvedEspaceContext,
     chain_id: u64,
-) -> Result<EspaceCompleteTransaction, EspaceTransactionCompletionError> {
+) -> Result<EspaceTypedTransaction, EspaceTransactionCompletionError> {
     let transaction_type = transaction.transaction_type.unwrap_or_else(|| {
         transaction.preferred_type(
             context
@@ -92,11 +100,11 @@ async fn complete_partial_transaction(
     let access_list = access_list.unwrap_or_default();
     let authorization_list = authorization_list.unwrap_or_default();
     let mut transaction = match transaction_type {
-        TxType::Legacy => EspaceCompleteTransaction::Legacy {
+        TxType::Legacy => EspaceTypedTransaction::Legacy {
             common,
             gas_price: complete_gas_price(provider, gas_price).await?,
         },
-        TxType::Eip2930 => EspaceCompleteTransaction::Eip2930 {
+        TxType::Eip2930 => EspaceTypedTransaction::Eip2930 {
             common,
             gas_price: complete_gas_price(provider, gas_price).await?,
             access_list,
@@ -105,10 +113,12 @@ async fn complete_partial_transaction(
             let (max_fee_per_gas, max_priority_fee_per_gas) =
                 complete_dynamic_fees(provider, context, max_fee_per_gas, max_priority_fee_per_gas)
                     .await?;
-            EspaceCompleteTransaction::Eip1559 {
+            EspaceTypedTransaction::Eip1559 {
                 common,
-                max_fee_per_gas,
-                max_priority_fee_per_gas,
+                fees: DynamicFees {
+                    max_fee_per_gas,
+                    max_priority_fee_per_gas,
+                },
                 access_list,
             }
         }
@@ -116,10 +126,12 @@ async fn complete_partial_transaction(
             let (max_fee_per_gas, max_priority_fee_per_gas) =
                 complete_dynamic_fees(provider, context, max_fee_per_gas, max_priority_fee_per_gas)
                     .await?;
-            EspaceCompleteTransaction::Eip7702 {
+            EspaceTypedTransaction::Eip7702 {
                 common,
-                max_fee_per_gas,
-                max_priority_fee_per_gas,
+                fees: DynamicFees {
+                    max_fee_per_gas,
+                    max_priority_fee_per_gas,
+                },
                 access_list,
                 authorization_list,
             }

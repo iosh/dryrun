@@ -9,11 +9,11 @@ use cfx_vm_types::Error as VmError;
 use conflux_provider::Network;
 
 use super::{
-    EspaceCompleteTransaction, EspaceExecutedTransaction, EspaceExecutionError,
-    EspaceExecutionFailure, EspaceExecutionOutcome, EspaceExecutionResult, EspaceExecutionSpace,
-    EspaceFee, EspaceGas, EspaceLog, EspaceLogAddress, EspaceResultIntegrationError,
-    EspaceRevertReason, EspaceStateAccessError, EspaceStateReadError, EspaceStateReader,
-    EspaceSuccessOutput, EspaceTransactionRejection,
+    EspaceExecutedTransaction, EspaceExecutionError, EspaceExecutionFailure,
+    EspaceExecutionOutcome, EspaceExecutionResult, EspaceExecutionSpace, EspaceFee, EspaceGas,
+    EspaceLog, EspaceLogAddress, EspaceResultIntegrationError, EspaceRevertReason,
+    EspaceStateAccessError, EspaceStateReadError, EspaceStateReader, EspaceSuccessOutput,
+    EspaceTransactionRejection, EspaceTypedTransaction,
 };
 use crate::{
     execution::{ConfluxExecutionOutcome, ConfluxExecutionOutput},
@@ -23,7 +23,7 @@ use crate::{
 pub(crate) fn map_executor_outcome(
     outcome: ConfluxExecutionOutcome,
     execution: Option<&EspaceExecutedTransaction>,
-    transaction: &EspaceCompleteTransaction,
+    transaction: &EspaceTypedTransaction,
     state: Option<&EspaceStateReader>,
     core_space_network: Network,
 ) -> Result<EspaceExecutionOutcome, EspaceExecutionError> {
@@ -88,7 +88,7 @@ fn build_execution_result(
 fn build_success_output(
     execution: &EspaceExecutedTransaction,
     output: &ConfluxExecutionOutput,
-    transaction: &EspaceCompleteTransaction,
+    transaction: &EspaceTypedTransaction,
     state: Option<&EspaceStateReader>,
 ) -> Result<EspaceSuccessOutput, EspaceExecutionError> {
     let common = transaction.common();

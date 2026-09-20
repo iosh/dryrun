@@ -1,93 +1,16 @@
 use alloy::primitives::{Address, B256, Bytes, U256};
-use thiserror::Error;
 
-pub use alloy::consensus::TxType;
-pub use alloy::eips::{
-    eip2930::AccessListItem,
-    eip7702::{Authorization, SignedAuthorization},
+pub use simulation_core::transaction::{
+    AccessListItem, Authorization, DynamicFees, SignedAuthorization,
+    TransactionCommon as EspaceTransactionCommon,
+    TransactionInputError as EspaceTransactionInputError, TxType,
+    TypedTransaction as EspaceTypedTransaction,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EspaceTransactionInput {
-    Complete(EspaceCompleteTransaction),
+    Complete(EspaceTypedTransaction),
     Partial(EspacePartialTransaction),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EspaceTransactionCommon {
-    pub from: Address,
-    pub to: Option<Address>,
-    pub nonce: u64,
-    pub gas_limit: u64,
-    pub value: U256,
-    pub input: Bytes,
-    pub chain_id: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EspaceCompleteTransaction {
-    Legacy {
-        common: EspaceTransactionCommon,
-        gas_price: U256,
-    },
-    Eip2930 {
-        common: EspaceTransactionCommon,
-        gas_price: U256,
-        access_list: Vec<AccessListItem>,
-    },
-    Eip1559 {
-        common: EspaceTransactionCommon,
-        max_fee_per_gas: U256,
-        max_priority_fee_per_gas: U256,
-        access_list: Vec<AccessListItem>,
-    },
-    Eip7702 {
-        common: EspaceTransactionCommon,
-        max_fee_per_gas: U256,
-        max_priority_fee_per_gas: U256,
-        access_list: Vec<AccessListItem>,
-        authorization_list: Vec<SignedAuthorization>,
-    },
-}
-
-impl EspaceCompleteTransaction {
-    pub fn common(&self) -> &EspaceTransactionCommon {
-        match self {
-            Self::Legacy { common, .. }
-            | Self::Eip2930 { common, .. }
-            | Self::Eip1559 { common, .. }
-            | Self::Eip7702 { common, .. } => common,
-        }
-    }
-
-    pub(crate) fn common_mut(&mut self) -> &mut EspaceTransactionCommon {
-        match self {
-            Self::Legacy { common, .. }
-            | Self::Eip2930 { common, .. }
-            | Self::Eip1559 { common, .. }
-            | Self::Eip7702 { common, .. } => common,
-        }
-    }
-
-    pub fn transaction_type(&self) -> TxType {
-        match self {
-            Self::Legacy { .. } => TxType::Legacy,
-            Self::Eip2930 { .. } => TxType::Eip2930,
-            Self::Eip1559 { .. } => TxType::Eip1559,
-            Self::Eip7702 { .. } => TxType::Eip7702,
-        }
-    }
-
-    pub(crate) fn validate(&self) -> Result<(), EspaceTransactionInputError> {
-        match self {
-            Self::Eip7702 {
-                common,
-                authorization_list,
-                ..
-            } => validate_eip7702_requirements(common.to, authorization_list),
-            Self::Legacy { .. } | Self::Eip2930 { .. } | Self::Eip1559 { .. } => Ok(()),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,22 +151,6 @@ impl EspacePartialTransaction {
             }
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[non_exhaustive]
-pub enum EspaceTransactionInputError {
-    #[error("{transaction_type} transactions do not accept transaction.{field}")]
-    IncompatibleField {
-        transaction_type: TxType,
-        field: &'static str,
-    },
-
-    #[error("{transaction_type} transactions require transaction.{field}")]
-    MissingField {
-        transaction_type: TxType,
-        field: &'static str,
-    },
 }
 
 fn reject_present(

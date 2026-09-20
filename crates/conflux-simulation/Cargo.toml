@@ -3,7 +3,11 @@ name = "conflux-simulation"
 version = { workspace = true }
 edition = { workspace = true }
 
+[features]
+serde = ["simulation-core/serde"]
+
 [dependencies]
+simulation-core = { workspace = true }
 alloy = { workspace = true }
 alloy-rpc-types = { workspace = true }
 alloy-primitives = { workspace = true }

@@ -2347,6 +2347,7 @@ dependencies = [
  "rlp 0.6.1",
  "serde",
  "serde_json",
+ "simulation-core",
  "thiserror 2.0.18",
  "tokio",
  "tower",

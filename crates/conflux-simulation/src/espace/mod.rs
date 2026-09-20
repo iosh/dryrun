@@ -57,8 +57,8 @@ pub use state_access::{
     EspaceStateReader,
 };
 pub use transaction::{
-    AccessListItem, Authorization, EspaceCompleteTransaction, EspacePartialTransaction,
-    EspaceTransactionCommon, EspaceTransactionInput, EspaceTransactionInputError,
+    AccessListItem, Authorization, DynamicFees, EspacePartialTransaction, EspaceTransactionCommon,
+    EspaceTransactionInput, EspaceTransactionInputError, EspaceTypedTransaction,
     SignedAuthorization, TxType,
 };
 pub(crate) use transaction_adapter::{
