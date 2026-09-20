@@ -1,9 +1,9 @@
 use alloy_primitives::U256;
 
 use super::{
-    CoreSpaceCompleteTransaction, CoreSpacePartialTransaction, CoreSpacePartialTransactionCommon,
-    CoreSpaceTransactionCommon, CoreSpaceTransactionCompletionError, CoreSpaceTransactionInput,
-    ResolvedCoreSpaceContext,
+    CoreSpacePartialTransaction, CoreSpacePartialTransactionCommon, CoreSpaceTransactionCommon,
+    CoreSpaceTransactionCompletionError, CoreSpaceTransactionInput, CoreSpaceTypedTransaction,
+    DynamicFees, ResolvedCoreSpaceContext,
 };
 use crate::{
     primitive::u256_from_cfx,
@@ -15,7 +15,7 @@ pub(crate) async fn complete_transaction(
     provider: &ConfluxSimulationProvider,
     context: &ResolvedCoreSpaceContext,
     chain_id: u32,
-) -> Result<CoreSpaceCompleteTransaction, CoreSpaceTransactionCompletionError> {
+) -> Result<CoreSpaceTypedTransaction, CoreSpaceTransactionCompletionError> {
     match input {
         CoreSpaceTransactionInput::Complete(transaction) => Ok(transaction),
         CoreSpaceTransactionInput::Partial(transaction) => {
@@ -29,11 +29,28 @@ async fn complete_partial_transaction(
     provider: &ConfluxSimulationProvider,
     context: &ResolvedCoreSpaceContext,
     chain_id: u32,
-) -> Result<CoreSpaceCompleteTransaction, CoreSpaceTransactionCompletionError> {
-    let (transaction_kind, common) = match transaction {
+) -> Result<CoreSpaceTypedTransaction, CoreSpaceTransactionCompletionError> {
+    let common = match &transaction {
+        CoreSpacePartialTransaction::Cip155 { common, .. }
+        | CoreSpacePartialTransaction::Cip2930 { common, .. }
+        | CoreSpacePartialTransaction::Cip1559 { common, .. } => common,
+    };
+    let gas_limit = common.gas_limit;
+    let storage_limit = common.storage_limit;
+    let epoch_height = common
+        .epoch_height
+        .unwrap_or_else(|| context.epoch_height());
+
+    let mut completed = match transaction {
         CoreSpacePartialTransaction::Cip155 { common, gas_price } => {
             let gas_price = complete_gas_price(provider, gas_price).await?;
-            (PartialTransactionKind::Cip155 { gas_price }, common)
+            let common = complete_transaction_common(common, provider, context, chain_id).await?;
+            CoreSpaceTypedTransaction::Cip155 {
+                common,
+                storage_limit: storage_limit.unwrap_or_default(),
+                epoch_height,
+                gas_price,
+            }
         }
         CoreSpacePartialTransaction::Cip2930 {
             common,
@@ -41,13 +58,14 @@ async fn complete_partial_transaction(
             access_list,
         } => {
             let gas_price = complete_gas_price(provider, gas_price).await?;
-            (
-                PartialTransactionKind::Cip2930 {
-                    gas_price,
-                    access_list,
-                },
+            let common = complete_transaction_common(common, provider, context, chain_id).await?;
+            CoreSpaceTypedTransaction::Cip2930 {
                 common,
-            )
+                storage_limit: storage_limit.unwrap_or_default(),
+                epoch_height,
+                gas_price,
+                access_list,
+            }
         }
         CoreSpacePartialTransaction::Cip1559 {
             common,
@@ -63,93 +81,18 @@ async fn complete_partial_transaction(
                 Some(value) => value,
                 None => suggested_max_fee_per_gas(context, max_priority_fee_per_gas)?,
             };
-            (
-                PartialTransactionKind::Cip1559 {
+            let common = complete_transaction_common(common, provider, context, chain_id).await?;
+            CoreSpaceTypedTransaction::Cip1559 {
+                common,
+                storage_limit: storage_limit.unwrap_or_default(),
+                epoch_height,
+                fees: DynamicFees {
                     max_fee_per_gas,
                     max_priority_fee_per_gas,
-                    access_list,
                 },
-                common,
-            )
+                access_list,
+            }
         }
-    };
-    let CoreSpacePartialTransactionCommon {
-        from,
-        to,
-        nonce,
-        gas_limit,
-        value,
-        data,
-        chain_id: requested_chain_id,
-        storage_limit,
-        epoch_height,
-    } = common;
-    let chain_id = requested_chain_id.unwrap_or(chain_id);
-    let nonce = match nonce {
-        Some(nonce) => nonce,
-        None => u256_from_cfx(
-            provider
-                .cfx_get_next_nonce(from, context.state_pivot())
-                .await?,
-        ),
-    };
-    let value = value.unwrap_or_default();
-    let data = data.unwrap_or_default();
-    let epoch_height = epoch_height.unwrap_or_else(|| context.epoch_height());
-
-    let mut completed = match transaction_kind {
-        PartialTransactionKind::Cip155 { gas_price } => CoreSpaceCompleteTransaction::Cip155 {
-            common: CoreSpaceTransactionCommon {
-                from,
-                to,
-                nonce,
-                gas_limit: gas_limit.unwrap_or_default(),
-                value,
-                data,
-                chain_id,
-                storage_limit: storage_limit.unwrap_or_default(),
-                epoch_height,
-            },
-            gas_price,
-        },
-        PartialTransactionKind::Cip2930 {
-            gas_price,
-            access_list,
-        } => CoreSpaceCompleteTransaction::Cip2930 {
-            common: CoreSpaceTransactionCommon {
-                from,
-                to,
-                nonce,
-                gas_limit: gas_limit.unwrap_or_default(),
-                value,
-                data,
-                chain_id,
-                storage_limit: storage_limit.unwrap_or_default(),
-                epoch_height,
-            },
-            gas_price,
-            access_list,
-        },
-        PartialTransactionKind::Cip1559 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            access_list,
-        } => CoreSpaceCompleteTransaction::Cip1559 {
-            common: CoreSpaceTransactionCommon {
-                from,
-                to,
-                nonce,
-                gas_limit: gas_limit.unwrap_or_default(),
-                value,
-                data,
-                chain_id,
-                storage_limit: storage_limit.unwrap_or_default(),
-                epoch_height,
-            },
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            access_list,
-        },
     };
 
     if gas_limit.is_none() || storage_limit.is_none() {
@@ -166,25 +109,48 @@ async fn complete_partial_transaction(
         let (gas_limit, storage_limit) =
             complete_estimated_resources(gas_limit, storage_limit, estimate)?;
         completed.common_mut().gas_limit = gas_limit;
-        completed.common_mut().storage_limit = storage_limit;
+        match &mut completed {
+            CoreSpaceTypedTransaction::Cip155 {
+                storage_limit: value,
+                ..
+            }
+            | CoreSpaceTypedTransaction::Cip2930 {
+                storage_limit: value,
+                ..
+            }
+            | CoreSpaceTypedTransaction::Cip1559 {
+                storage_limit: value,
+                ..
+            } => *value = storage_limit,
+        }
     }
 
     Ok(completed)
 }
 
-enum PartialTransactionKind {
-    Cip155 {
-        gas_price: U256,
-    },
-    Cip2930 {
-        gas_price: U256,
-        access_list: Vec<super::CoreSpaceAccessListItem>,
-    },
-    Cip1559 {
-        max_fee_per_gas: U256,
-        max_priority_fee_per_gas: U256,
-        access_list: Vec<super::CoreSpaceAccessListItem>,
-    },
+async fn complete_transaction_common(
+    transaction: CoreSpacePartialTransactionCommon,
+    provider: &ConfluxSimulationProvider,
+    context: &ResolvedCoreSpaceContext,
+    chain_id: u32,
+) -> Result<CoreSpaceTransactionCommon, CoreSpaceTransactionCompletionError> {
+    let nonce = match transaction.nonce {
+        Some(nonce) => nonce,
+        None => u256_from_cfx(
+            provider
+                .cfx_get_next_nonce(transaction.from, context.state_pivot())
+                .await?,
+        ),
+    };
+    Ok(CoreSpaceTransactionCommon {
+        from: transaction.from,
+        to: transaction.to,
+        nonce,
+        gas_limit: transaction.gas_limit.unwrap_or_default(),
+        value: transaction.value.unwrap_or_default(),
+        input: transaction.data.unwrap_or_default(),
+        chain_id: transaction.chain_id.unwrap_or(chain_id),
+    })
 }
 
 fn complete_estimated_resources(

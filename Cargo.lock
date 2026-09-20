@@ -2328,6 +2328,7 @@ dependencies = [
  "alloy-json-rpc",
  "alloy-primitives",
  "alloy-rpc-types 2.4.1",
+ "alloy-serde 1.8.3",
  "alloy-sol-types",
  "cfx-addr",
  "cfx-executor",

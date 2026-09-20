@@ -9,11 +9,11 @@ use cfx_vm_types::Error as VmError;
 use conflux_provider::{CoreAddress, Network};
 
 use super::{
-    CoreSpaceCompleteTransaction, CoreSpaceExecutionError, CoreSpaceExecutionFailure,
-    CoreSpaceExecutionOutcome, CoreSpaceExecutionResult, CoreSpaceGas, CoreSpaceLog,
-    CoreSpaceLogAddress, CoreSpaceResultIntegrationError, CoreSpaceRevertReason,
-    CoreSpaceStateAccessError, CoreSpaceSuccessOutput, CoreSpaceTransactionRejection,
-    ResolvedStorageSponsorship,
+    CoreSpaceExecutionError, CoreSpaceExecutionFailure, CoreSpaceExecutionOutcome,
+    CoreSpaceExecutionResult, CoreSpaceGas, CoreSpaceLog, CoreSpaceLogAddress,
+    CoreSpaceResultIntegrationError, CoreSpaceRevertReason, CoreSpaceStateAccessError,
+    CoreSpaceSuccessOutput, CoreSpaceTransactionRejection, CoreSpaceTypedTransaction,
+    StorageSponsorship,
     executed_transaction::{CoreSpaceExecutedTransaction, CoreSpaceFinalStatus},
     state_access::CoreSpaceStateAccess,
 };
@@ -23,9 +23,9 @@ use crate::primitive::{
 
 pub(crate) fn build_execution_outcome(
     executed: &CoreSpaceExecutedTransaction,
-    transaction: &CoreSpaceCompleteTransaction,
+    transaction: &CoreSpaceTypedTransaction,
     state: &CoreSpaceStateAccess,
-    storage_sponsorship: Option<ResolvedStorageSponsorship>,
+    storage_sponsorship: Option<StorageSponsorship>,
 ) -> Result<CoreSpaceExecutionOutcome, CoreSpaceExecutionError> {
     let common = transaction.common();
     let network = common.from.network();
@@ -92,7 +92,7 @@ fn build_execution_result(
 
 fn build_success_output(
     executed: &CoreSpaceExecutedTransaction,
-    transaction: &CoreSpaceCompleteTransaction,
+    transaction: &CoreSpaceTypedTransaction,
     state: &CoreSpaceStateAccess,
     network: Network,
 ) -> Result<CoreSpaceSuccessOutput, CoreSpaceExecutionError> {
@@ -108,7 +108,7 @@ fn build_success_output(
         CreateContractAddressType::FromSenderNonceAndCodeHash,
         &sender,
         &u256_to_cfx(common.nonce),
-        common.data.as_ref(),
+        common.input.as_ref(),
     );
     let created_address = core_address(created.address, network)?;
     if !executed.contracts_created.contains(&created) {
@@ -365,7 +365,7 @@ enum StorageCoverageOutcome {
 }
 
 fn storage_covered_by_sponsor_for_outcome(
-    resolved: Option<ResolvedStorageSponsorship>,
+    resolved: Option<StorageSponsorship>,
     executor_reported: bool,
     outcome: StorageCoverageOutcome,
     cip78a: bool,
@@ -379,7 +379,7 @@ fn storage_covered_by_sponsor_for_outcome(
     // normal receipt semantics from the same anchored state in those branches.
     if use_prepared_value {
         resolved
-            .map(ResolvedStorageSponsorship::storage_covered_by_sponsor)
+            .map(StorageSponsorship::storage_covered_by_sponsor)
             .ok_or_else(|| {
                 CoreSpaceResultIntegrationError::invalid_executor_output(
                     "CIP-78 storage sponsorship was not resolved",

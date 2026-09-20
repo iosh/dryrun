@@ -16,7 +16,7 @@ mod state_access;
 mod transaction;
 
 pub(crate) use completion::complete_transaction;
-pub(crate) use transaction::{ResolvedStorageSponsorship, resolve_storage_sponsorship};
+pub(crate) use transaction::{StorageSponsorship, check_storage_sponsorship};
 
 pub use changes::{
     CombinedCoreSpaceChangeRules, ContractAdminState, CoreSpaceAccessRuleChangeRules,
@@ -56,7 +56,8 @@ pub use state_access::{
     CoreSpaceVoteLockInfo,
 };
 pub use transaction::{
-    CoreSpaceAccessListItem, CoreSpaceCompleteTransaction, CoreSpacePartialTransaction,
-    CoreSpacePartialTransactionCommon, CoreSpaceTransactionCommon,
-    CoreSpaceTransactionCompletionError, CoreSpaceTransactionInput, CoreSpaceTransactionInputError,
+    CoreSpaceAccessListItem, CoreSpacePartialTransaction, CoreSpacePartialTransactionCommon,
+    CoreSpaceTransactionCommon, CoreSpaceTransactionCompletionError, CoreSpaceTransactionInput,
+    CoreSpaceTransactionInputError, CoreSpaceTransactionType, CoreSpaceTypedTransaction,
+    DynamicFees,
 };

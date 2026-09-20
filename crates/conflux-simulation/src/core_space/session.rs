@@ -14,9 +14,8 @@ use crate::{
 };
 
 use super::{
-    CoreSpaceChanges, CoreSpaceCompleteTransaction, CoreSpaceExecutionError,
-    CoreSpaceExecutionOutcome, CoreSpaceSimulationError, CoreSpaceStateAccessError,
-    ResolvedStorageSponsorship,
+    CoreSpaceChanges, CoreSpaceExecutionError, CoreSpaceExecutionOutcome, CoreSpaceSimulationError,
+    CoreSpaceStateAccessError, CoreSpaceTypedTransaction, StorageSponsorship,
     executed_transaction::CoreSpaceExecutedTransaction,
     outcome::{build_execution_outcome, map_drop_error, map_reconsider_packing_error},
     transaction::build_core_space_transaction_input,
@@ -60,9 +59,9 @@ impl CoreSpaceExecutionSession {
 
     pub(super) fn execute(
         mut self,
-        transaction: &CoreSpaceCompleteTransaction,
+        transaction: &CoreSpaceTypedTransaction,
         block_context: ExecutionBlockContext,
-        storage_sponsorship: Option<ResolvedStorageSponsorship>,
+        storage_sponsorship: Option<StorageSponsorship>,
         change_rules: &impl super::CoreSpaceChangeRules,
     ) -> Result<CoreSpaceExecutionSessionResult, CoreSpaceSimulationError> {
         let execution_input = TransactionExecutionInput {

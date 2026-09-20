@@ -10,10 +10,10 @@ use crate::{
 };
 
 use super::{
-    CoreSpaceChanges, CoreSpaceCompleteTransaction, CoreSpaceExecutionError,
-    CoreSpaceExecutionOutcome, CoreSpaceSimulation, CoreSpaceSimulationError,
-    CoreSpaceSimulationRequest, CoreSpaceStateAccessError, CoreSpaceTransactionRejection,
-    complete_transaction, resolve_core_space_context, resolve_storage_sponsorship,
+    CoreSpaceChanges, CoreSpaceExecutionError, CoreSpaceExecutionOutcome, CoreSpaceSimulation,
+    CoreSpaceSimulationError, CoreSpaceSimulationRequest, CoreSpaceStateAccessError,
+    CoreSpaceTransactionRejection, CoreSpaceTypedTransaction, DynamicFees,
+    check_storage_sponsorship, complete_transaction, resolve_core_space_context,
     session::CoreSpaceExecutionSession,
 };
 
@@ -121,7 +121,7 @@ where
             .spec(execution_block_number, execution_epoch_height);
         let storage_sponsorship = if execution_spec.cip78a || execution_spec.cip78b {
             Some(
-                resolve_storage_sponsorship(
+                check_storage_sponsorship(
                     self.backend.provider(),
                     context.state_anchor,
                     &transaction,
@@ -164,8 +164,8 @@ fn simulate_blocking<R>(
     backend: ConfluxSimulationBackend,
     runtime_handle: Handle,
     context: super::ResolvedCoreSpaceContext,
-    transaction: CoreSpaceCompleteTransaction,
-    storage_sponsorship: Option<super::ResolvedStorageSponsorship>,
+    transaction: CoreSpaceTypedTransaction,
+    storage_sponsorship: Option<super::StorageSponsorship>,
     state_source: ConfluxStateSource,
     change_rules: Arc<R>,
 ) -> Result<CoreSpaceSimulation, CoreSpaceSimulationError>
@@ -188,7 +188,7 @@ where
 }
 
 fn validate_transaction_for_execution(
-    transaction: &CoreSpaceCompleteTransaction,
+    transaction: &CoreSpaceTypedTransaction,
     expected_chain_id: u32,
     rules: CoreSpaceTransactionValidationRules,
 ) -> Option<CoreSpaceTransactionRejection> {
@@ -202,26 +202,29 @@ fn validate_transaction_for_execution(
 
     if !rules.typed_transactions_active {
         match transaction {
-            CoreSpaceCompleteTransaction::Cip155 { .. } => {}
-            CoreSpaceCompleteTransaction::Cip2930 { .. } => {
+            CoreSpaceTypedTransaction::Cip155 { .. } => {}
+            CoreSpaceTypedTransaction::Cip2930 { .. } => {
                 return Some(CoreSpaceTransactionRejection::Cip2930NotActivated);
             }
-            CoreSpaceCompleteTransaction::Cip1559 { .. } => {
+            CoreSpaceTypedTransaction::Cip1559 { .. } => {
                 return Some(CoreSpaceTransactionRejection::Cip1559NotActivated);
             }
         }
     }
 
     match transaction {
-        CoreSpaceCompleteTransaction::Cip155 { gas_price, .. }
-        | CoreSpaceCompleteTransaction::Cip2930 { gas_price, .. } => {
+        CoreSpaceTypedTransaction::Cip155 { gas_price, .. }
+        | CoreSpaceTypedTransaction::Cip2930 { gas_price, .. } => {
             if gas_price.is_zero() {
                 return Some(CoreSpaceTransactionRejection::ZeroGasPrice);
             }
         }
-        CoreSpaceCompleteTransaction::Cip1559 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
+        CoreSpaceTypedTransaction::Cip1559 {
+            fees:
+                DynamicFees {
+                    max_fee_per_gas,
+                    max_priority_fee_per_gas,
+                },
             ..
         } => {
             if max_fee_per_gas.is_zero() {

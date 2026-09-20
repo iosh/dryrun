@@ -4,9 +4,10 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [features]
-serde = ["simulation-core/serde"]
+serde = ["dep:alloy-serde", "simulation-core/serde"]
 
 [dependencies]
+alloy-serde = { workspace = true, optional = true }
 simulation-core = { workspace = true }
 alloy = { workspace = true }
 alloy-rpc-types = { workspace = true }

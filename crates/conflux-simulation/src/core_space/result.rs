@@ -1,6 +1,6 @@
 use super::{
     CoreSpaceBlockContext, CoreSpaceChangeDerivationError, CoreSpaceChangeSet,
-    CoreSpaceCompleteTransaction, CoreSpaceExecutionOutcome,
+    CoreSpaceExecutionOutcome, CoreSpaceTypedTransaction,
 };
 
 /// Availability of verified Core Space state changes.
@@ -22,7 +22,7 @@ impl From<Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError>> for CoreSp
 #[derive(Debug)]
 pub struct CoreSpaceSimulation {
     pub context: CoreSpaceBlockContext,
-    pub transaction: CoreSpaceCompleteTransaction,
+    pub transaction: CoreSpaceTypedTransaction,
     outcome: CoreSpaceExecutionOutcome,
     changes: CoreSpaceChanges,
 }
@@ -30,7 +30,7 @@ pub struct CoreSpaceSimulation {
 impl CoreSpaceSimulation {
     pub(crate) fn new(
         context: CoreSpaceBlockContext,
-        transaction: CoreSpaceCompleteTransaction,
+        transaction: CoreSpaceTypedTransaction,
         outcome: CoreSpaceExecutionOutcome,
         changes: CoreSpaceChanges,
     ) -> Self {
@@ -54,7 +54,7 @@ impl CoreSpaceSimulation {
         self,
     ) -> (
         CoreSpaceBlockContext,
-        CoreSpaceCompleteTransaction,
+        CoreSpaceTypedTransaction,
         CoreSpaceExecutionOutcome,
         CoreSpaceChanges,
     ) {

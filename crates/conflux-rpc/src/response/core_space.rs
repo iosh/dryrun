@@ -29,7 +29,7 @@ impl ResponseMappingError {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SimulateCoreSpaceTransactionResponse {
     state: State,
-    transaction: CompletedTransaction,
+    transaction: simulation_core_space::CoreSpaceTypedTransaction,
     outcome: Outcome,
     changes: Changes,
 }
@@ -39,53 +39,6 @@ pub(crate) struct SimulateCoreSpaceTransactionResponse {
 struct State {
     epoch_number: U64,
     pivot_hash: H256,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all_fields = "camelCase")]
-enum CompletedTransaction {
-    #[serde(rename = "0x0")]
-    Cip155 {
-        #[serde(flatten)]
-        common: TransactionCommon,
-        gas_price: U256,
-    },
-    #[serde(rename = "0x1")]
-    Cip2930 {
-        #[serde(flatten)]
-        common: TransactionCommon,
-        gas_price: U256,
-        access_list: Vec<AccessListItem>,
-    },
-    #[serde(rename = "0x2")]
-    Cip1559 {
-        #[serde(flatten)]
-        common: TransactionCommon,
-        max_fee_per_gas: U256,
-        max_priority_fee_per_gas: U256,
-        access_list: Vec<AccessListItem>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct TransactionCommon {
-    chain_id: U64,
-    from: RpcAddress,
-    to: Option<RpcAddress>,
-    nonce: U256,
-    gas: U256,
-    value: U256,
-    data: CoreSpaceRpcBytes,
-    storage_limit: U64,
-    epoch_height: U64,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct AccessListItem {
-    address: RpcAddress,
-    storage_keys: Vec<H256>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -177,7 +130,7 @@ impl SimulateCoreSpaceTransactionResponse {
         let (context, transaction, outcome, changes) = simulation.into_parts();
         Ok(Self {
             state: context.into(),
-            transaction: CompletedTransaction::try_from_simulation(transaction, network)?,
+            transaction,
             outcome: Outcome::try_from_simulation(outcome, network)?,
             changes: Changes::try_from_simulation(changes, network)?,
         })
@@ -191,78 +144,6 @@ impl From<simulation_core_space::CoreSpaceBlockContext> for State {
             pivot_hash: b256_to_wire(context.pivot_hash),
         }
     }
-}
-
-impl CompletedTransaction {
-    fn try_from_simulation(
-        transaction: simulation_core_space::CoreSpaceCompleteTransaction,
-        network: Network,
-    ) -> Result<Self, ResponseMappingError> {
-        let common = transaction.common();
-        let common = TransactionCommon {
-            chain_id: u64::from(common.chain_id).into(),
-            from: map_core_address(common.from, network, "transaction.from".to_owned())?,
-            to: common
-                .to
-                .map(|address| map_core_address(address, network, "transaction.to".to_owned()))
-                .transpose()?,
-            nonce: u256_to_wire(common.nonce),
-            gas: u256_to_wire(common.gas_limit),
-            value: u256_to_wire(common.value),
-            data: CoreSpaceRpcBytes::from(common.data.to_vec()),
-            storage_limit: common.storage_limit.into(),
-            epoch_height: common.epoch_height.into(),
-        };
-
-        match transaction {
-            simulation_core_space::CoreSpaceCompleteTransaction::Cip155 { gas_price, .. } => {
-                Ok(Self::Cip155 {
-                    common,
-                    gas_price: u256_to_wire(gas_price),
-                })
-            }
-            simulation_core_space::CoreSpaceCompleteTransaction::Cip2930 {
-                gas_price,
-                access_list,
-                ..
-            } => Ok(Self::Cip2930 {
-                common,
-                gas_price: u256_to_wire(gas_price),
-                access_list: map_access_list(access_list, network)?,
-            }),
-            simulation_core_space::CoreSpaceCompleteTransaction::Cip1559 {
-                max_fee_per_gas,
-                max_priority_fee_per_gas,
-                access_list,
-                ..
-            } => Ok(Self::Cip1559 {
-                common,
-                max_fee_per_gas: u256_to_wire(max_fee_per_gas),
-                max_priority_fee_per_gas: u256_to_wire(max_priority_fee_per_gas),
-                access_list: map_access_list(access_list, network)?,
-            }),
-        }
-    }
-}
-
-fn map_access_list(
-    access_list: Vec<simulation_core_space::CoreSpaceAccessListItem>,
-    network: Network,
-) -> Result<Vec<AccessListItem>, ResponseMappingError> {
-    access_list
-        .into_iter()
-        .enumerate()
-        .map(|(index, item)| {
-            Ok(AccessListItem {
-                address: map_core_address(
-                    item.address,
-                    network,
-                    format!("transaction.accessList[{index}].address"),
-                )?,
-                storage_keys: item.storage_keys.into_iter().map(b256_to_wire).collect(),
-            })
-        })
-        .collect()
 }
 
 impl Outcome {

@@ -1,6 +1,6 @@
 use crate::{
-    core_space::{CoreSpaceAccessListItem, CoreSpaceCompleteTransaction},
-    espace::EspaceTypedTransaction,
+    core_space::{CoreSpaceAccessListItem, CoreSpaceTypedTransaction},
+    espace::{DynamicFees, EspaceTypedTransaction},
     primitive::{access_list_to_cfx, address_to_cfx, alloy_u256_from_u64, u256_to_cfx},
 };
 use alloy::{
@@ -33,7 +33,7 @@ pub(crate) struct EspaceEstimateTransaction<'a> {
 }
 
 pub(crate) struct CoreSpaceEstimateTransaction<'a> {
-    pub(crate) transaction: &'a CoreSpaceCompleteTransaction,
+    pub(crate) transaction: &'a CoreSpaceTypedTransaction,
     pub(crate) gas_limit: Option<AlloyU256>,
     pub(crate) storage_limit: Option<u64>,
 }
@@ -248,20 +248,20 @@ fn core_space_estimate_request(
         max_priority_fee_per_gas: None,
         gas: transaction.gas_limit,
         value: common.value,
-        data: common.data.clone(),
+        data: common.input.clone(),
         nonce: common.nonce,
         storage_limit: transaction.storage_limit.map(alloy_u256_from_u64),
         access_list: None,
         transaction_type: CoreTransactionType::Legacy,
         chain_id: AlloyU256::from(common.chain_id),
-        epoch_height: Some(alloy_u256_from_u64(common.epoch_height)),
+        epoch_height: Some(alloy_u256_from_u64(complete.epoch_height())),
     };
 
     match complete {
-        CoreSpaceCompleteTransaction::Cip155 { gas_price, .. } => {
+        CoreSpaceTypedTransaction::Cip155 { gas_price, .. } => {
             request.gas_price = Some(*gas_price);
         }
-        CoreSpaceCompleteTransaction::Cip2930 {
+        CoreSpaceTypedTransaction::Cip2930 {
             gas_price,
             access_list,
             ..
@@ -270,9 +270,12 @@ fn core_space_estimate_request(
             request.access_list = Some(core_access_list(access_list));
             request.transaction_type = CoreTransactionType::AccessList;
         }
-        CoreSpaceCompleteTransaction::Cip1559 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
+        CoreSpaceTypedTransaction::Cip1559 {
+            fees:
+                DynamicFees {
+                    max_fee_per_gas,
+                    max_priority_fee_per_gas,
+                },
             access_list,
             ..
         } => {

@@ -1,9 +1,13 @@
-use alloy_primitives::{B256, Bytes, U256};
+use alloy_primitives::{Bytes, U256};
 use conflux_provider::{CoreAddress, Network};
 use primitives::transaction::{
     Action, Cip1559Transaction, Cip2930Transaction,
     NativeTransaction as PrimitiveNativeTransaction, TypedNativeTransaction,
 };
+#[cfg(feature = "serde")]
+use serde::Serialize;
+pub use simulation_core::transaction::DynamicFees;
+use simulation_core::transaction::TransactionCommon;
 use thiserror::Error;
 
 use crate::{
@@ -13,9 +17,62 @@ use crate::{
     state::{ConfluxSimulationProvider, ConfluxStateAnchor},
 };
 
+pub type CoreSpaceTransactionCommon = TransactionCommon<CoreAddress, U256, u32>;
+pub type CoreSpaceAccessListItem = simulation_core::transaction::AccessListItem<CoreAddress>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(tag = "type", rename_all_fields = "camelCase")
+)]
+pub enum CoreSpaceTypedTransaction {
+    #[cfg_attr(feature = "serde", serde(rename = "0x0"))]
+    Cip155 {
+        #[cfg_attr(feature = "serde", serde(flatten))]
+        common: CoreSpaceTransactionCommon,
+        #[cfg_attr(feature = "serde", serde(with = "alloy_serde::quantity"))]
+        storage_limit: u64,
+        #[cfg_attr(feature = "serde", serde(with = "alloy_serde::quantity"))]
+        epoch_height: u64,
+        gas_price: U256,
+    },
+    #[cfg_attr(feature = "serde", serde(rename = "0x1"))]
+    Cip2930 {
+        #[cfg_attr(feature = "serde", serde(flatten))]
+        common: CoreSpaceTransactionCommon,
+        #[cfg_attr(feature = "serde", serde(with = "alloy_serde::quantity"))]
+        storage_limit: u64,
+        #[cfg_attr(feature = "serde", serde(with = "alloy_serde::quantity"))]
+        epoch_height: u64,
+        gas_price: U256,
+        access_list: Vec<CoreSpaceAccessListItem>,
+    },
+    #[cfg_attr(feature = "serde", serde(rename = "0x2"))]
+    Cip1559 {
+        #[cfg_attr(feature = "serde", serde(flatten))]
+        common: CoreSpaceTransactionCommon,
+        #[cfg_attr(feature = "serde", serde(with = "alloy_serde::quantity"))]
+        storage_limit: u64,
+        #[cfg_attr(feature = "serde", serde(with = "alloy_serde::quantity"))]
+        epoch_height: u64,
+        #[cfg_attr(feature = "serde", serde(flatten))]
+        fees: DynamicFees,
+        access_list: Vec<CoreSpaceAccessListItem>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CoreSpaceTransactionType {
+    Cip155 = 0,
+    Cip2930 = 1,
+    Cip1559 = 2,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreSpaceTransactionInput {
-    Complete(CoreSpaceCompleteTransaction),
+    Complete(CoreSpaceTypedTransaction),
     Partial(CoreSpacePartialTransaction),
 }
 
@@ -29,44 +86,6 @@ impl CoreSpaceTransactionInput {
             Self::Partial(transaction) => transaction.validate_network(expected),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoreSpaceTransactionCommon {
-    pub from: CoreAddress,
-    pub to: Option<CoreAddress>,
-    pub nonce: U256,
-    pub gas_limit: U256,
-    pub value: U256,
-    pub data: Bytes,
-    pub chain_id: u32,
-    pub storage_limit: u64,
-    pub epoch_height: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoreSpaceAccessListItem {
-    pub address: CoreAddress,
-    pub storage_keys: Vec<B256>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CoreSpaceCompleteTransaction {
-    Cip155 {
-        common: CoreSpaceTransactionCommon,
-        gas_price: U256,
-    },
-    Cip2930 {
-        common: CoreSpaceTransactionCommon,
-        gas_price: U256,
-        access_list: Vec<CoreSpaceAccessListItem>,
-    },
-    Cip1559 {
-        common: CoreSpaceTransactionCommon,
-        max_fee_per_gas: U256,
-        max_priority_fee_per_gas: U256,
-        access_list: Vec<CoreSpaceAccessListItem>,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,7 +120,7 @@ pub enum CoreSpacePartialTransaction {
     },
 }
 
-impl CoreSpaceCompleteTransaction {
+impl CoreSpaceTypedTransaction {
     pub fn common(&self) -> &CoreSpaceTransactionCommon {
         match self {
             Self::Cip155 { common, .. }
@@ -110,11 +129,35 @@ impl CoreSpaceCompleteTransaction {
         }
     }
 
-    pub(crate) fn common_mut(&mut self) -> &mut CoreSpaceTransactionCommon {
+    pub fn common_mut(&mut self) -> &mut CoreSpaceTransactionCommon {
         match self {
             Self::Cip155 { common, .. }
             | Self::Cip2930 { common, .. }
             | Self::Cip1559 { common, .. } => common,
+        }
+    }
+
+    pub fn storage_limit(&self) -> u64 {
+        match self {
+            Self::Cip155 { storage_limit, .. }
+            | Self::Cip2930 { storage_limit, .. }
+            | Self::Cip1559 { storage_limit, .. } => *storage_limit,
+        }
+    }
+
+    pub fn epoch_height(&self) -> u64 {
+        match self {
+            Self::Cip155 { epoch_height, .. }
+            | Self::Cip2930 { epoch_height, .. }
+            | Self::Cip1559 { epoch_height, .. } => *epoch_height,
+        }
+    }
+
+    pub fn transaction_type(&self) -> CoreSpaceTransactionType {
+        match self {
+            Self::Cip155 { .. } => CoreSpaceTransactionType::Cip155,
+            Self::Cip2930 { .. } => CoreSpaceTransactionType::Cip2930,
+            Self::Cip1559 { .. } => CoreSpaceTransactionType::Cip1559,
         }
     }
 
@@ -130,9 +173,7 @@ impl CoreSpaceCompleteTransaction {
     pub(crate) fn gas_price_for_sponsorship_check(&self) -> U256 {
         match self {
             Self::Cip155 { gas_price, .. } | Self::Cip2930 { gas_price, .. } => *gas_price,
-            Self::Cip1559 {
-                max_fee_per_gas, ..
-            } => *max_fee_per_gas,
+            Self::Cip1559 { fees, .. } => fees.max_fee_per_gas,
         }
     }
 
@@ -226,24 +267,24 @@ pub enum CoreSpaceTransactionCompletionError {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct ResolvedStorageSponsorship {
+pub(crate) struct StorageSponsorship {
     storage_covered_by_sponsor: bool,
 }
 
-impl ResolvedStorageSponsorship {
+impl StorageSponsorship {
     pub(crate) const fn storage_covered_by_sponsor(self) -> bool {
         self.storage_covered_by_sponsor
     }
 }
 
-pub(crate) async fn resolve_storage_sponsorship(
+pub(crate) async fn check_storage_sponsorship(
     provider: &ConfluxSimulationProvider,
     state_anchor: ConfluxStateAnchor,
-    transaction: &CoreSpaceCompleteTransaction,
-) -> Result<ResolvedStorageSponsorship, super::CoreSpaceExecutionError> {
+    transaction: &CoreSpaceTypedTransaction,
+) -> Result<StorageSponsorship, super::CoreSpaceExecutionError> {
     let common = transaction.common();
     let Some(target) = common.to.as_ref() else {
-        return Ok(ResolvedStorageSponsorship {
+        return Ok(StorageSponsorship {
             storage_covered_by_sponsor: false,
         });
     };
@@ -258,12 +299,12 @@ pub(crate) async fn resolve_storage_sponsorship(
             )
         })?;
     if code.is_empty() {
-        return Ok(ResolvedStorageSponsorship {
+        return Ok(StorageSponsorship {
             storage_covered_by_sponsor: false,
         });
     }
 
-    let storage_limit = common.storage_limit;
+    let storage_limit = transaction.storage_limit();
     let balance_check = provider
         .cfx_check_balance_against_transaction(
             common.from,
@@ -280,23 +321,23 @@ pub(crate) async fn resolve_storage_sponsorship(
             )
         })?;
 
-    Ok(ResolvedStorageSponsorship {
+    Ok(StorageSponsorship {
         storage_covered_by_sponsor: !balance_check.will_pay_collateral,
     })
 }
 
 pub(super) fn build_core_space_transaction_input(
-    input: &CoreSpaceCompleteTransaction,
+    input: &CoreSpaceTypedTransaction,
     chain_id: u32,
 ) -> ExecutorCoreSpaceTransactionInput {
     let sender = cfx_types::Address::from_slice(&input.common().from.bytes());
-    let tx = build_typed_core_space_transaction(input, chain_id);
+    let tx = to_native_transaction(input, chain_id);
 
     ExecutorCoreSpaceTransactionInput { tx, sender }
 }
 
-fn build_typed_core_space_transaction(
-    input: &CoreSpaceCompleteTransaction,
+fn to_native_transaction(
+    input: &CoreSpaceTypedTransaction,
     chain_id: u32,
 ) -> TypedNativeTransaction {
     let common = input.common();
@@ -307,23 +348,23 @@ fn build_typed_core_space_transaction(
     let nonce = u256_to_cfx(common.nonce);
     let gas = u256_to_cfx(common.gas_limit);
     let value = u256_to_cfx(common.value);
-    let data = common.data.to_vec();
+    let data = common.input.to_vec();
 
     match input {
-        CoreSpaceCompleteTransaction::Cip155 { gas_price, .. } => {
+        CoreSpaceTypedTransaction::Cip155 { gas_price, .. } => {
             TypedNativeTransaction::Cip155(PrimitiveNativeTransaction {
                 nonce,
                 gas_price: u256_to_cfx(*gas_price),
                 gas,
                 action,
                 value,
-                storage_limit: common.storage_limit,
-                epoch_height: common.epoch_height,
+                storage_limit: input.storage_limit(),
+                epoch_height: input.epoch_height(),
                 chain_id,
                 data,
             })
         }
-        CoreSpaceCompleteTransaction::Cip2930 {
+        CoreSpaceTypedTransaction::Cip2930 {
             gas_price,
             access_list,
             ..
@@ -333,15 +374,18 @@ fn build_typed_core_space_transaction(
             gas,
             action,
             value,
-            storage_limit: common.storage_limit,
-            epoch_height: common.epoch_height,
+            storage_limit: input.storage_limit(),
+            epoch_height: input.epoch_height(),
             chain_id,
             data,
             access_list: core_access_list_to_cfx(access_list),
         }),
-        CoreSpaceCompleteTransaction::Cip1559 {
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
+        CoreSpaceTypedTransaction::Cip1559 {
+            fees:
+                DynamicFees {
+                    max_fee_per_gas,
+                    max_priority_fee_per_gas,
+                },
             access_list,
             ..
         } => TypedNativeTransaction::Cip1559(Cip1559Transaction {
@@ -351,8 +395,8 @@ fn build_typed_core_space_transaction(
             gas,
             action,
             value,
-            storage_limit: common.storage_limit,
-            epoch_height: common.epoch_height,
+            storage_limit: input.storage_limit(),
+            epoch_height: input.epoch_height(),
             chain_id,
             data,
             access_list: core_access_list_to_cfx(access_list),
