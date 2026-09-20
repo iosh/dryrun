@@ -40,7 +40,7 @@ impl EspaceTransactionSimulator<super::DefaultEspaceChangeRules> {
     pub fn new(backend: ConfluxSimulationBackend, limits: EspaceSimulationLimits) -> Self {
         let change_rules = super::DefaultEspaceChangeRules::new(
             backend.chain_spec().espace_native_currency().clone(),
-            backend.chain_spec().espace_wrapped_native_token(),
+            super::DefaultEspaceChangeRules::MAINNET_WCFX,
         );
         Self {
             backend,

@@ -1375,6 +1375,9 @@ pub struct DefaultEspaceChangeRules {
 }
 
 impl DefaultEspaceChangeRules {
+    pub(crate) const MAINNET_WCFX: Address =
+        alloy_primitives::address!("14b2d3bc65e74dae1030eafd8ac30c533c976a9b");
+
     pub fn new(currency: EspaceNativeCurrency, wrapped_native_token: Address) -> Self {
         Self {
             components: CombinedEspaceChangeRules::new(
