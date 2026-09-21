@@ -85,7 +85,7 @@ pub enum EvmTransactionCompletionError {
     #[error("block {block_number} does not provide a base fee for dynamic fee completion")]
     MissingBaseFee { block_number: u64 },
 
-    #[error("calculated max fee per gas exceeds u128::MAX")]
+    #[error("calculated max fee per gas exceeds U256")]
     MaxFeePerGasOverflow,
 }
 

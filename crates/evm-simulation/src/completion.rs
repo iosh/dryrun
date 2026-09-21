@@ -11,8 +11,9 @@ use alloy::{
 };
 
 use crate::{
-    DynamicFees, EthereumChainSpec, EvmTransactionCompletionError, PartialTransaction,
-    TransactionCommon, TransactionInput, TxType, TypedTransaction,
+    DynamicFees, EthereumChainSpec, EvmTransactionCompletionError, FeeInput,
+    PartialTransactionCommon, TransactionCommon, TransactionInput, TransactionRequest, TxType,
+    TypedTransaction,
 };
 
 pub(crate) async fn complete_transaction(
@@ -23,7 +24,7 @@ pub(crate) async fn complete_transaction(
 ) -> Result<TypedTransaction, EvmTransactionCompletionError> {
     match input {
         TransactionInput::Complete(transaction) => {
-            transaction.validate_fields()?;
+            transaction.check_type_requirements()?;
             Ok(transaction)
         }
         TransactionInput::Partial(transaction) => {
@@ -33,17 +34,27 @@ pub(crate) async fn complete_transaction(
 }
 
 async fn complete_partial_transaction(
-    transaction: PartialTransaction,
+    transaction: TransactionRequest,
     provider: &DynProvider<Ethereum>,
     block: &Sealed<Header>,
     chain_spec: &EthereumChainSpec,
 ) -> Result<TypedTransaction, EvmTransactionCompletionError> {
-    let transaction_type = transaction
-        .transaction_type
-        .unwrap_or_else(|| transaction.preferred_type());
-    transaction.validate(transaction_type)?;
-
-    let PartialTransaction {
+    let default_type = if block.base_fee_per_gas().is_some() {
+        TxType::Eip1559
+    } else {
+        TxType::Legacy
+    };
+    let transaction_type = transaction.transaction_type(default_type)?;
+    let TransactionRequest {
+        common,
+        fees,
+        transaction_type: _,
+        max_fee_per_blob_gas,
+        access_list,
+        blob_versioned_hashes,
+        authorization_list,
+    } = transaction;
+    let PartialTransactionCommon {
         from,
         to,
         nonce,
@@ -51,15 +62,12 @@ async fn complete_partial_transaction(
         value,
         input,
         chain_id,
-        transaction_type: _,
+    } = common;
+    let FeeInput {
         gas_price,
         max_fee_per_gas,
         max_priority_fee_per_gas,
-        max_fee_per_blob_gas,
-        access_list,
-        blob_versioned_hashes,
-        authorization_list,
-    } = transaction;
+    } = fees;
     let block_id = BlockId::Hash(block.hash().into());
     let anchored_provider = BlockIdProvider::new(provider.clone(), block_id);
     let nonce = match nonce {
@@ -92,11 +100,11 @@ async fn complete_partial_transaction(
     let mut transaction = match transaction_type {
         TxType::Legacy => TypedTransaction::Legacy {
             common,
-            gas_price: U256::from(complete_gas_price(provider, gas_price).await?),
+            gas_price: complete_gas_price(provider, gas_price).await?,
         },
         TxType::Eip2930 => TypedTransaction::Eip2930 {
             common,
-            gas_price: U256::from(complete_gas_price(provider, gas_price).await?),
+            gas_price: complete_gas_price(provider, gas_price).await?,
             access_list,
         },
         TxType::Eip1559 => {
@@ -106,8 +114,8 @@ async fn complete_partial_transaction(
             TypedTransaction::Eip1559 {
                 common,
                 fees: DynamicFees {
-                    max_fee_per_gas: U256::from(max_fee_per_gas),
-                    max_priority_fee_per_gas: U256::from(max_priority_fee_per_gas),
+                    max_fee_per_gas,
+                    max_priority_fee_per_gas,
                 },
                 access_list,
             }
@@ -118,17 +126,21 @@ async fn complete_partial_transaction(
                     .await?;
             let max_fee_per_blob_gas = match max_fee_per_blob_gas {
                 Some(value) => value,
-                None => provider.get_blob_base_fee().await.map_err(|source| {
-                    EvmTransactionCompletionError::BlobBaseFeeLookup { source }
-                })?,
+                None => provider
+                    .get_blob_base_fee()
+                    .await
+                    .map(U256::from)
+                    .map_err(|source| EvmTransactionCompletionError::BlobBaseFeeLookup {
+                        source,
+                    })?,
             };
             TypedTransaction::Eip4844 {
                 common,
                 fees: DynamicFees {
-                    max_fee_per_gas: U256::from(max_fee_per_gas),
-                    max_priority_fee_per_gas: U256::from(max_priority_fee_per_gas),
+                    max_fee_per_gas,
+                    max_priority_fee_per_gas,
                 },
-                max_fee_per_blob_gas: U256::from(max_fee_per_blob_gas),
+                max_fee_per_blob_gas,
                 access_list,
                 blob_versioned_hashes,
             }
@@ -140,8 +152,8 @@ async fn complete_partial_transaction(
             TypedTransaction::Eip7702 {
                 common,
                 fees: DynamicFees {
-                    max_fee_per_gas: U256::from(max_fee_per_gas),
-                    max_priority_fee_per_gas: U256::from(max_priority_fee_per_gas),
+                    max_fee_per_gas,
+                    max_priority_fee_per_gas,
                 },
                 access_list,
                 authorization_list,
@@ -167,13 +179,14 @@ async fn complete_partial_transaction(
 
 async fn complete_gas_price(
     provider: &DynProvider<Ethereum>,
-    gas_price: Option<u128>,
-) -> Result<u128, EvmTransactionCompletionError> {
+    gas_price: Option<U256>,
+) -> Result<U256, EvmTransactionCompletionError> {
     match gas_price {
         Some(value) => Ok(value),
         None => provider
             .get_gas_price()
             .await
+            .map(U256::from)
             .map_err(|source| EvmTransactionCompletionError::GasPriceSuggestion { source }),
     }
 }
@@ -181,14 +194,15 @@ async fn complete_gas_price(
 async fn complete_dynamic_fees(
     provider: &DynProvider<Ethereum>,
     block: &Sealed<Header>,
-    max_fee_per_gas: Option<u128>,
-    max_priority_fee_per_gas: Option<u128>,
-) -> Result<(u128, u128), EvmTransactionCompletionError> {
+    max_fee_per_gas: Option<U256>,
+    max_priority_fee_per_gas: Option<U256>,
+) -> Result<(U256, U256), EvmTransactionCompletionError> {
     let max_priority_fee_per_gas = match max_priority_fee_per_gas {
         Some(value) => value,
         None => provider
             .get_max_priority_fee_per_gas()
             .await
+            .map(U256::from)
             .map_err(|source| EvmTransactionCompletionError::PriorityFeeSuggestion { source })?,
     };
     let max_fee_per_gas = match max_fee_per_gas {
@@ -201,8 +215,8 @@ async fn complete_dynamic_fees(
 
 fn suggested_max_fee_per_gas(
     block: &Header,
-    max_priority_fee_per_gas: u128,
-) -> Result<u128, EvmTransactionCompletionError> {
+    max_priority_fee_per_gas: U256,
+) -> Result<U256, EvmTransactionCompletionError> {
     let base_fee =
         block
             .base_fee_per_gas()
@@ -210,8 +224,8 @@ fn suggested_max_fee_per_gas(
                 block_number: block.number(),
             })?;
 
-    u128::from(base_fee)
-        .checked_mul(2)
+    U256::from(base_fee)
+        .checked_mul(U256::from(2))
         .and_then(|value| value.checked_add(max_priority_fee_per_gas))
         .ok_or(EvmTransactionCompletionError::MaxFeePerGasOverflow)
 }
@@ -219,7 +233,6 @@ fn suggested_max_fee_per_gas(
 fn gas_estimation_request(
     transaction: &TypedTransaction,
 ) -> Result<RpcTransactionRequest, crate::TransactionInputError> {
-    use crate::transaction::checked_fee;
     let common = transaction.common();
     let mut request = RpcTransactionRequest {
         from: Some(common.from),
@@ -277,6 +290,14 @@ fn gas_estimation_request(
     Ok(request)
 }
 
+fn checked_fee(field: &'static str, value: U256) -> Result<u128, crate::TransactionInputError> {
+    u128::try_from(value).map_err(|_| crate::TransactionInputError::OutOfRange {
+        field,
+        value,
+        maximum: U256::from(u128::MAX),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::future::Future;
@@ -292,8 +313,8 @@ mod tests {
 
     use super::{complete_transaction, suggested_max_fee_per_gas};
     use crate::{
-        EthereumChainSpec, EvmTransactionCompletionError, PartialTransaction, TransactionInput,
-        TxType, TypedTransaction,
+        EthereumChainSpec, EvmTransactionCompletionError, FeeInput, PartialTransactionCommon,
+        TransactionInput, TransactionRequest, TxType, TypedTransaction,
     };
 
     #[test]
@@ -306,18 +327,22 @@ mod tests {
         let block = block(42, B256::repeat_byte(9), Some(10));
 
         let completed = block_on(complete_transaction(
-            TransactionInput::Partial(PartialTransaction {
-                from: Address::repeat_byte(1),
-                to: Some(Address::repeat_byte(2)),
-                nonce: None,
-                gas_limit: None,
-                value: None,
-                input: None,
-                chain_id: None,
+            TransactionInput::Partial(TransactionRequest {
+                common: PartialTransactionCommon {
+                    from: Address::repeat_byte(1),
+                    to: Some(Address::repeat_byte(2)),
+                    nonce: None,
+                    gas_limit: None,
+                    value: None,
+                    input: None,
+                    chain_id: None,
+                },
+                fees: FeeInput {
+                    gas_price: None,
+                    max_fee_per_gas: None,
+                    max_priority_fee_per_gas: None,
+                },
                 transaction_type: Some(TxType::Legacy),
-                gas_price: None,
-                max_fee_per_gas: None,
-                max_priority_fee_per_gas: None,
                 max_fee_per_blob_gas: None,
                 access_list: None,
                 blob_versioned_hashes: None,
@@ -348,18 +373,22 @@ mod tests {
         let dynamic_block = block(42, B256::repeat_byte(5), Some(10));
 
         let dynamic = block_on(complete_transaction(
-            TransactionInput::Partial(PartialTransaction {
-                from,
-                to: Some(to),
-                nonce: Some(6),
-                gas_limit: Some(7),
-                value: Some(U256::from(8)),
-                input: Some(Bytes::from_static(&[3, 4])),
-                chain_id: Some(5),
+            TransactionInput::Partial(TransactionRequest {
+                common: PartialTransactionCommon {
+                    from,
+                    to: Some(to),
+                    nonce: Some(6),
+                    gas_limit: Some(7),
+                    value: Some(U256::from(8)),
+                    input: Some(Bytes::from_static(&[3, 4])),
+                    chain_id: Some(5),
+                },
+                fees: FeeInput {
+                    gas_price: None,
+                    max_fee_per_gas: None,
+                    max_priority_fee_per_gas: None,
+                },
                 transaction_type: Some(TxType::Eip1559),
-                gas_price: None,
-                max_fee_per_gas: None,
-                max_priority_fee_per_gas: None,
                 max_fee_per_blob_gas: None,
                 access_list: Some(Vec::new()),
                 blob_versioned_hashes: None,
@@ -384,18 +413,22 @@ mod tests {
         let blob_provider = mock_provider(blob_asserter.clone());
         let blob_block = block(43, B256::repeat_byte(7), Some(11));
         let blob = block_on(complete_transaction(
-            TransactionInput::Partial(PartialTransaction {
-                from,
-                to: Some(to),
-                nonce: Some(9),
-                gas_limit: Some(10),
-                value: None,
-                input: None,
-                chain_id: None,
+            TransactionInput::Partial(TransactionRequest {
+                common: PartialTransactionCommon {
+                    from,
+                    to: Some(to),
+                    nonce: Some(9),
+                    gas_limit: Some(10),
+                    value: None,
+                    input: None,
+                    chain_id: None,
+                },
+                fees: FeeInput {
+                    gas_price: None,
+                    max_fee_per_gas: Some(U256::from(30)),
+                    max_priority_fee_per_gas: Some(U256::from(2)),
+                },
                 transaction_type: Some(TxType::Eip4844),
-                gas_price: None,
-                max_fee_per_gas: Some(30),
-                max_priority_fee_per_gas: Some(2),
                 max_fee_per_blob_gas: None,
                 access_list: Some(Vec::new()),
                 blob_versioned_hashes: Some(vec![B256::repeat_byte(6)]),
@@ -423,7 +456,7 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            suggested_max_fee_per_gas(&missing_base_fee, 1),
+            suggested_max_fee_per_gas(&missing_base_fee, U256::from(1)),
             Err(EvmTransactionCompletionError::MissingBaseFee { block_number: 12 })
         ));
 
@@ -432,7 +465,7 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            suggested_max_fee_per_gas(&overflowing, u128::MAX),
+            suggested_max_fee_per_gas(&overflowing, U256::MAX),
             Err(EvmTransactionCompletionError::MaxFeePerGasOverflow)
         ));
     }

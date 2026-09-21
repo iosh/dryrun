@@ -1,4 +1,3 @@
-use crate::transaction::checked_fee;
 use crate::{AccessListItem, EthereumExecutionSpec, EvmBlockEnvironmentError, TypedTransaction};
 use alloy::consensus::{BlockHeader, Header};
 use alloy::primitives::{TxKind, U256};
@@ -80,7 +79,7 @@ pub(super) fn create_tx_env(
 ) -> Result<TxEnv, crate::TransactionInputError> {
     let common = transaction.common();
     let dynamic = transaction.dynamic_fees();
-    let gas_price = checked_fee(
+    let gas_price = fee_to_u128(
         if dynamic.is_some() {
             "maxFeePerGas"
         } else {
@@ -89,7 +88,7 @@ pub(super) fn create_tx_env(
         transaction.gas_price_cap(),
     )?;
     let gas_priority_fee = dynamic
-        .map(|fees| checked_fee("maxPriorityFeePerGas", fees.max_priority_fee_per_gas))
+        .map(|fees| fee_to_u128("maxPriorityFeePerGas", fees.max_priority_fee_per_gas))
         .transpose()?;
     let mut tx = TxEnv {
         tx_type: transaction.transaction_type() as u8,
@@ -113,7 +112,7 @@ pub(super) fn create_tx_env(
             blob_versioned_hashes,
             ..
         } => {
-            tx.max_fee_per_blob_gas = checked_fee("maxFeePerBlobGas", *max_fee_per_blob_gas)?;
+            tx.max_fee_per_blob_gas = fee_to_u128("maxFeePerBlobGas", *max_fee_per_blob_gas)?;
             tx.blob_hashes = blob_versioned_hashes.clone();
         }
         crate::TypedTransaction::Eip7702 {
@@ -122,6 +121,14 @@ pub(super) fn create_tx_env(
         _ => {}
     }
     Ok(tx)
+}
+
+fn fee_to_u128(field: &'static str, value: U256) -> Result<u128, crate::TransactionInputError> {
+    u128::try_from(value).map_err(|_| crate::TransactionInputError::OutOfRange {
+        field,
+        value,
+        maximum: U256::from(u128::MAX),
+    })
 }
 
 fn map_access_list(items: &[AccessListItem]) -> RevmAccessList {

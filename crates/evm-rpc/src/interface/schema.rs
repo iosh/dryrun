@@ -3,6 +3,8 @@ use alloy_serde::quantity;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub use evm_simulation::TransactionRequest as Transaction;
+
 mod u256_hex {
     use alloy_primitives::U256;
     use serde::{Serialize, Serializer};
@@ -45,93 +47,6 @@ pub struct SimulateTransactionOptions {
     pub block_overrides: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include: Option<Value>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Transaction {
-    #[serde(
-        rename = "type",
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "quantity::opt"
-    )]
-    pub tx_type: Option<u8>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "quantity::opt"
-    )]
-    pub chain_id: Option<u64>,
-    pub from: Address,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub to: Option<Address>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "quantity::opt"
-    )]
-    pub nonce: Option<u64>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "quantity::opt"
-    )]
-    pub gas: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub value: Option<U256>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<Bytes>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub access_list: Option<Vec<AccessListItem>>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "quantity::opt"
-    )]
-    pub gas_price: Option<u128>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "quantity::opt"
-    )]
-    pub max_fee_per_gas: Option<u128>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "quantity::opt"
-    )]
-    pub max_priority_fee_per_gas: Option<u128>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        with = "quantity::opt"
-    )]
-    pub max_fee_per_blob_gas: Option<u128>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blob_versioned_hashes: Option<Vec<B256>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub authorization_list: Option<Vec<SignedAuthorization>>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AccessListItem {
-    pub address: Address,
-    pub storage_keys: Vec<B256>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SignedAuthorization {
-    pub chain_id: U256,
-    pub address: Address,
-    #[serde(with = "quantity")]
-    pub nonce: u64,
-    #[serde(rename = "yParity", alias = "v", with = "quantity")]
-    pub y_parity: u8,
-    pub r: U256,
-    pub s: U256,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

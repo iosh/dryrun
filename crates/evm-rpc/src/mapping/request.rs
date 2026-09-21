@@ -1,10 +1,10 @@
 use std::convert::TryFrom;
 
-use evm_simulation::{EvmBlockSelector, EvmSimulationRequest};
+use evm_simulation::{EvmBlockSelector, EvmSimulationRequest, TransactionInput};
 
 use crate::{errors::ValidationError, interface as rpc};
 
-use super::{shared::parse_u64_param, transaction::map_transaction};
+use super::shared::parse_u64_param;
 
 impl TryFrom<rpc::EvmSimulateTransactionRequest> for EvmSimulationRequest {
     type Error = ValidationError;
@@ -21,7 +21,7 @@ impl TryFrom<rpc::EvmSimulateTransactionRequest> for EvmSimulationRequest {
                 .map(map_block_ref)
                 .transpose()?
                 .unwrap_or(EvmBlockSelector::Latest),
-            transaction: map_transaction(transaction)?,
+            transaction: TransactionInput::Partial(transaction),
         })
     }
 }
