@@ -1,62 +1,19 @@
 use std::str::FromStr;
 
-use alloy_primitives::Bytes;
-use cfx_rpc_eth_types::Bytes as RpcBytes;
-use cfx_types::{Address as CfxAddress, H256, U64, U256};
+use cfx_types::{H256, U256};
 use conflux_simulation::espace::{
-    AccessListItem, Authorization, EspaceBlockSelector, EspacePartialTransaction,
-    EspaceSimulationRequest, EspaceTransactionInput, SignedAuthorization, TxType,
+    EspaceBlockSelector, EspaceSimulationRequest, EspaceTransactionInput, EspaceTransactionRequest,
 };
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{cfx_address_to_alloy, cfx_h256_to_alloy, cfx_u256_to_alloy, u64_param};
+use super::{cfx_h256_to_alloy, u64_param};
 use crate::error::ValidationError;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct EspaceRpcTransactionRequest {
-    from: Option<CfxAddress>,
-    to: Option<CfxAddress>,
-    gas_price: Option<U256>,
-    max_fee_per_gas: Option<U256>,
-    max_priority_fee_per_gas: Option<U256>,
-    gas: Option<U256>,
-    value: Option<U256>,
-    input: Option<RpcBytes>,
-    data: Option<RpcBytes>,
-    nonce: Option<U256>,
-    access_list: Option<Vec<RpcAccessListItem>>,
-    #[serde(rename = "type")]
-    transaction_type: Option<U64>,
-    chain_id: Option<U256>,
-    max_fee_per_blob_gas: Option<U256>,
-    blob_versioned_hashes: Option<Vec<H256>>,
-    authorization_list: Option<Vec<RpcSignedAuthorization>>,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct RpcAccessListItem {
-    address: CfxAddress,
-    storage_keys: Vec<H256>,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct RpcSignedAuthorization {
-    chain_id: U256,
-    address: CfxAddress,
-    nonce: U64,
-    y_parity: U64,
-    r: U256,
-    s: U256,
-}
-
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct SimulateEspaceTransactionRequest {
-    transaction: EspaceRpcTransactionRequest,
+    transaction: EspaceTransactionRequest,
     #[serde(default)]
     block: Option<BlockRef>,
     #[serde(default)]
@@ -99,7 +56,7 @@ impl TryFrom<SimulateEspaceTransactionRequest> for EspaceSimulationRequest {
                 .map(map_block_ref)
                 .transpose()?
                 .unwrap_or(EspaceBlockSelector::Latest),
-            transaction: map_transaction(request.transaction)?,
+            transaction: EspaceTransactionInput::Partial(request.transaction),
         })
     }
 }
@@ -144,14 +101,6 @@ impl SimulateTransactionOptions {
     }
 }
 
-fn require_transaction_from(
-    transaction: &EspaceRpcTransactionRequest,
-) -> Result<CfxAddress, ValidationError> {
-    transaction
-        .from
-        .ok_or_else(|| ValidationError::invalid_params("`transaction.from` is required"))
-}
-
 fn validate_reserved_option(field: &str, value: Option<&Value>) -> Result<(), ValidationError> {
     if value.is_some() {
         return Err(ValidationError::not_supported(format!(
@@ -171,116 +120,6 @@ fn map_block_ref(block: BlockRef) -> Result<EspaceBlockSelector, ValidationError
             block.block_hash,
         ))),
     }
-}
-
-fn map_transaction(
-    transaction: EspaceRpcTransactionRequest,
-) -> Result<EspaceTransactionInput, ValidationError> {
-    let from = require_transaction_from(&transaction)?;
-    let EspaceRpcTransactionRequest {
-        to,
-        nonce,
-        gas,
-        value,
-        input,
-        data,
-        access_list,
-        gas_price,
-        max_fee_per_gas,
-        max_priority_fee_per_gas,
-        max_fee_per_blob_gas,
-        blob_versioned_hashes,
-        authorization_list,
-        transaction_type,
-        chain_id,
-        ..
-    } = transaction;
-    let chain_id = chain_id
-        .ok_or_else(|| ValidationError::invalid_params("`transaction.chainId` is required"))?;
-    let chain_id = u64_param(chain_id, "transaction.chainId")?;
-    let input = match (input, data) {
-        (Some(input), Some(data)) if input != data => {
-            return Err(ValidationError::invalid_params(
-                "`transaction.input` and `transaction.data` must be equal when both are provided",
-            ));
-        }
-        (Some(input), _) | (_, Some(input)) => Some(Bytes::from(input.0)),
-        (None, None) => None,
-    };
-    let transaction_type = transaction_type
-        .map(|value| match value.as_u64() {
-            0x3 => Err(ValidationError::not_supported(
-                "`transaction.type` `0x3` / EIP-4844 is not supported by eSpace",
-            )),
-            raw => TxType::try_from(raw).map_err(|_| {
-                ValidationError::invalid_params(
-                    "`transaction.type` must be one of `0x0`, `0x1`, `0x2`, or `0x4`",
-                )
-            }),
-        })
-        .transpose()?;
-    let authorization_list = authorization_list
-        .map(|items| items.into_iter().map(map_signed_authorization).collect())
-        .transpose()?;
-
-    Ok(EspaceTransactionInput::Partial(EspacePartialTransaction {
-        from: cfx_address_to_alloy(from),
-        to: to.map(cfx_address_to_alloy),
-        nonce: nonce
-            .map(|value| u64_param(value, "transaction.nonce"))
-            .transpose()?,
-        gas_limit: gas
-            .map(|value| u64_param(value, "transaction.gas"))
-            .transpose()?,
-        value: value.map(cfx_u256_to_alloy),
-        input,
-        chain_id: Some(chain_id),
-        transaction_type,
-        gas_price: gas_price.map(cfx_u256_to_alloy),
-        max_fee_per_gas: max_fee_per_gas.map(cfx_u256_to_alloy),
-        max_priority_fee_per_gas: max_priority_fee_per_gas.map(cfx_u256_to_alloy),
-        max_fee_per_blob_gas: max_fee_per_blob_gas.map(cfx_u256_to_alloy),
-        access_list: map_access_list(access_list),
-        blob_versioned_hashes: blob_versioned_hashes
-            .map(|items| items.into_iter().map(cfx_h256_to_alloy).collect()),
-        authorization_list,
-    }))
-}
-
-fn map_access_list(items: Option<Vec<RpcAccessListItem>>) -> Option<Vec<AccessListItem>> {
-    items.map(|items| {
-        items
-            .into_iter()
-            .map(|item| AccessListItem {
-                address: cfx_address_to_alloy(item.address),
-                storage_keys: item
-                    .storage_keys
-                    .into_iter()
-                    .map(cfx_h256_to_alloy)
-                    .collect(),
-            })
-            .collect()
-    })
-}
-
-fn map_signed_authorization(
-    authorization: RpcSignedAuthorization,
-) -> Result<SignedAuthorization, ValidationError> {
-    let y_parity = u8::try_from(authorization.y_parity.as_u64()).map_err(|_| {
-        ValidationError::invalid_params(
-            "`transaction.authorizationList[].yParity` must fit into an unsigned 8-bit integer",
-        )
-    })?;
-    Ok(SignedAuthorization::new_unchecked(
-        Authorization {
-            chain_id: cfx_u256_to_alloy(authorization.chain_id),
-            address: cfx_address_to_alloy(authorization.address),
-            nonce: authorization.nonce.as_u64(),
-        },
-        y_parity,
-        cfx_u256_to_alloy(authorization.r),
-        cfx_u256_to_alloy(authorization.s),
-    ))
 }
 
 fn parse_u64_param(value: &str, field: &str) -> Result<u64, ValidationError> {

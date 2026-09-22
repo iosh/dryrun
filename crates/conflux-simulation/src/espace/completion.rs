@@ -1,8 +1,8 @@
 use alloy_primitives::U256;
 
 use super::{
-    DynamicFees, EspacePartialTransaction, EspaceTransactionCommon,
-    EspaceTransactionCompletionError, EspaceTransactionInput, EspaceTypedTransaction,
+    DynamicFees, EspaceTransactionCommon, EspaceTransactionCompletionError, EspaceTransactionInput,
+    EspaceTransactionRequest, EspaceTypedTransaction, FeeInput, PartialTransactionCommon,
     ResolvedEspaceContext, TxType,
 };
 use crate::state::{ConfluxSimulationProvider, EspaceEstimateTransaction};
@@ -15,6 +15,7 @@ pub(crate) async fn complete_transaction(
 ) -> Result<EspaceTypedTransaction, EspaceTransactionCompletionError> {
     match input {
         EspaceTransactionInput::Complete(transaction) => {
+            transaction.check_type_requirements()?;
             if transaction.transaction_type() == TxType::Eip4844 {
                 return Err(
                     EspaceTransactionCompletionError::UnsupportedTransactionType {
@@ -22,7 +23,6 @@ pub(crate) async fn complete_transaction(
                     },
                 );
             }
-            transaction.validate_fields()?;
             Ok(transaction)
         }
         EspaceTransactionInput::Partial(transaction) => {
@@ -32,26 +32,30 @@ pub(crate) async fn complete_transaction(
 }
 
 async fn complete_partial_transaction(
-    transaction: EspacePartialTransaction,
+    transaction: EspaceTransactionRequest,
     provider: &ConfluxSimulationProvider,
     context: &ResolvedEspaceContext,
     chain_id: u64,
 ) -> Result<EspaceTypedTransaction, EspaceTransactionCompletionError> {
-    let transaction_type = transaction.transaction_type.unwrap_or_else(|| {
-        transaction.preferred_type(
-            context
-                .base_fee_per_gas()
-                .map_or(false, |fee| !fee.is_zero()),
-        )
-    });
+    let default_type = if context.base_fee_per_gas().is_some_and(|fee| !fee.is_zero()) {
+        TxType::Eip1559
+    } else {
+        TxType::Legacy
+    };
+    let transaction_type = transaction.transaction_type(default_type)?;
     if transaction_type == TxType::Eip4844 {
         return Err(
             EspaceTransactionCompletionError::UnsupportedTransactionType { transaction_type },
         );
     }
-    transaction.validate(transaction_type)?;
-
-    let EspacePartialTransaction {
+    let EspaceTransactionRequest {
+        common,
+        fees,
+        access_list,
+        authorization_list,
+        ..
+    } = transaction;
+    let PartialTransactionCommon {
         from,
         to,
         nonce,
@@ -59,15 +63,12 @@ async fn complete_partial_transaction(
         value,
         input,
         chain_id: requested_chain_id,
+    } = common;
+    let FeeInput {
         gas_price,
         max_fee_per_gas,
         max_priority_fee_per_gas,
-        max_fee_per_blob_gas: _,
-        access_list,
-        blob_versioned_hashes: _,
-        authorization_list,
-        transaction_type: _,
-    } = transaction;
+    } = fees;
     let chain_id = requested_chain_id.unwrap_or(chain_id);
     let nonce = match nonce {
         Some(nonce) => nonce,

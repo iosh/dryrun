@@ -1,8 +1,8 @@
 mod core_space;
 mod espace;
 
-use alloy_primitives::{Address, B256, U256 as AlloyU256};
-use cfx_types::{Address as CfxAddress, H256, U256};
+use alloy_primitives::{B256, U256 as AlloyU256};
+use cfx_types::{H256, U256};
 
 use crate::error::ValidationError;
 
@@ -17,10 +17,6 @@ fn param_exceeds_max(field: &str, value: U256, max: U256) -> ValidationError {
     ValidationError::invalid_params(format!(
         "`{field}` value {value:#x} exceeds the simulator maximum {max:#x}"
     ))
-}
-
-fn cfx_address_to_alloy(address: CfxAddress) -> Address {
-    Address::from_slice(address.as_bytes())
 }
 
 fn cfx_h256_to_alloy(value: H256) -> B256 {
