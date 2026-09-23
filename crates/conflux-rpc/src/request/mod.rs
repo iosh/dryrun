@@ -1,7 +1,7 @@
 mod core_space;
 mod espace;
 
-use alloy_primitives::{B256, U256 as AlloyU256};
+use alloy_primitives::B256;
 use cfx_types::{H256, U256};
 
 use crate::error::ValidationError;
@@ -21,9 +21,4 @@ fn param_exceeds_max(field: &str, value: U256, max: U256) -> ValidationError {
 
 fn cfx_h256_to_alloy(value: H256) -> B256 {
     B256::from_slice(value.as_bytes())
-}
-
-fn cfx_u256_to_alloy(value: U256) -> AlloyU256 {
-    let bytes = value.to_big_endian();
-    AlloyU256::from_be_bytes(bytes)
 }

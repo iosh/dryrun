@@ -14,6 +14,8 @@ mod session;
 mod simulator;
 mod state_access;
 mod transaction;
+#[cfg(feature = "serde")]
+mod transaction_codec;
 
 pub(crate) use completion::complete_transaction;
 pub(crate) use transaction::{StorageSponsorship, check_storage_sponsorship};
@@ -56,8 +58,8 @@ pub use state_access::{
     CoreSpaceVoteLockInfo,
 };
 pub use transaction::{
-    CoreSpaceAccessListItem, CoreSpacePartialTransaction, CoreSpacePartialTransactionCommon,
-    CoreSpaceTransactionCommon, CoreSpaceTransactionCompletionError, CoreSpaceTransactionInput,
-    CoreSpaceTransactionInputError, CoreSpaceTransactionType, CoreSpaceTypedTransaction,
-    DynamicFees,
+    CoreSpaceAccessListItem, CoreSpacePartialTransactionCommon, CoreSpaceTransactionCommon,
+    CoreSpaceTransactionCompletionError, CoreSpaceTransactionInput, CoreSpaceTransactionInputError,
+    CoreSpaceTransactionRequest, CoreSpaceTransactionType, CoreSpaceTypedTransaction, DynamicFees,
+    FeeInput,
 };

@@ -64,7 +64,7 @@ pub fn build_rpc_module(
                         .parse::<SimulateCoreSpaceTransactionRequest>()
                         .map_err(|error| invalid_params(error.to_string()))?;
 
-                    let input = request.try_into_simulation_request(rpc_network)?;
+                    let input = request.try_into()?;
 
                     let output = simulation_tasks
                         .run(move || async move { simulator.simulate(input).await })

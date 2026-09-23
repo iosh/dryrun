@@ -84,7 +84,10 @@ where
         request: CoreSpaceSimulationRequest,
     ) -> Result<CoreSpaceSimulation, CoreSpaceSimulationError> {
         let CoreSpaceSimulationRequest { block, transaction } = request;
-        transaction.validate_network(self.backend.core_space_address_network())?;
+        super::transaction::validate_address_networks(
+            &transaction,
+            self.backend.core_space_address_network(),
+        )?;
         let runtime_handle =
             Handle::try_current().map_err(|_| CoreSpaceSimulationError::RuntimeUnavailable)?;
         let context = resolve_core_space_context(self.backend.provider(), block).await?;

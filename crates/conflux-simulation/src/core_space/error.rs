@@ -137,7 +137,7 @@ pub enum CoreSpaceSimulationError {
     #[error(transparent)]
     Context(#[from] CoreSpaceContextError),
     #[error(transparent)]
-    Completion(#[from] CoreSpaceTransactionCompletionError),
+    Completion(CoreSpaceTransactionCompletionError),
     #[error(transparent)]
     Execution(#[from] CoreSpaceExecutionError),
     #[error(transparent)]
@@ -149,6 +149,15 @@ pub enum CoreSpaceSimulationError {
         #[source]
         source: JoinError,
     },
+}
+
+impl From<CoreSpaceTransactionCompletionError> for CoreSpaceSimulationError {
+    fn from(error: CoreSpaceTransactionCompletionError) -> Self {
+        match error {
+            CoreSpaceTransactionCompletionError::Input(input) => Self::Input(input),
+            error => Self::Completion(error),
+        }
+    }
 }
 
 impl CoreSpaceSimulationError {

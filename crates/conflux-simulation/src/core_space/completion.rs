@@ -1,9 +1,9 @@
 use alloy_primitives::U256;
 
 use super::{
-    CoreSpacePartialTransaction, CoreSpacePartialTransactionCommon, CoreSpaceTransactionCommon,
-    CoreSpaceTransactionCompletionError, CoreSpaceTransactionInput, CoreSpaceTypedTransaction,
-    DynamicFees, ResolvedCoreSpaceContext,
+    CoreSpacePartialTransactionCommon, CoreSpaceTransactionCommon,
+    CoreSpaceTransactionCompletionError, CoreSpaceTransactionInput, CoreSpaceTransactionRequest,
+    CoreSpaceTransactionType, CoreSpaceTypedTransaction, DynamicFees, ResolvedCoreSpaceContext,
 };
 use crate::{
     primitive::u256_from_cfx,
@@ -25,25 +25,27 @@ pub(crate) async fn complete_transaction(
 }
 
 async fn complete_partial_transaction(
-    transaction: CoreSpacePartialTransaction,
+    transaction: CoreSpaceTransactionRequest,
     provider: &ConfluxSimulationProvider,
     context: &ResolvedCoreSpaceContext,
     chain_id: u32,
 ) -> Result<CoreSpaceTypedTransaction, CoreSpaceTransactionCompletionError> {
-    let common = match &transaction {
-        CoreSpacePartialTransaction::Cip155 { common, .. }
-        | CoreSpacePartialTransaction::Cip2930 { common, .. }
-        | CoreSpacePartialTransaction::Cip1559 { common, .. } => common,
-    };
+    let transaction_type = transaction.transaction_type()?;
+    let CoreSpaceTransactionRequest {
+        common,
+        fees,
+        access_list,
+        storage_limit,
+        epoch_height,
+        ..
+    } = transaction;
     let gas_limit = common.gas_limit;
-    let storage_limit = common.storage_limit;
-    let epoch_height = common
-        .epoch_height
-        .unwrap_or_else(|| context.epoch_height());
+    let epoch_height = epoch_height.unwrap_or_else(|| context.epoch_height());
+    let access_list = access_list.unwrap_or_default();
 
-    let mut completed = match transaction {
-        CoreSpacePartialTransaction::Cip155 { common, gas_price } => {
-            let gas_price = complete_gas_price(provider, gas_price).await?;
+    let mut completed = match transaction_type {
+        CoreSpaceTransactionType::Cip155 => {
+            let gas_price = complete_gas_price(provider, fees.gas_price).await?;
             let common = complete_transaction_common(common, provider, context, chain_id).await?;
             CoreSpaceTypedTransaction::Cip155 {
                 common,
@@ -52,12 +54,8 @@ async fn complete_partial_transaction(
                 gas_price,
             }
         }
-        CoreSpacePartialTransaction::Cip2930 {
-            common,
-            gas_price,
-            access_list,
-        } => {
-            let gas_price = complete_gas_price(provider, gas_price).await?;
+        CoreSpaceTransactionType::Cip2930 => {
+            let gas_price = complete_gas_price(provider, fees.gas_price).await?;
             let common = complete_transaction_common(common, provider, context, chain_id).await?;
             CoreSpaceTypedTransaction::Cip2930 {
                 common,
@@ -67,17 +65,12 @@ async fn complete_partial_transaction(
                 access_list,
             }
         }
-        CoreSpacePartialTransaction::Cip1559 {
-            common,
-            max_fee_per_gas,
-            max_priority_fee_per_gas,
-            access_list,
-        } => {
-            let max_priority_fee_per_gas = match max_priority_fee_per_gas {
+        CoreSpaceTransactionType::Cip1559 => {
+            let max_priority_fee_per_gas = match fees.max_priority_fee_per_gas {
                 Some(value) => value,
                 None => u256_from_cfx(provider.cfx_max_priority_fee_per_gas().await?),
             };
-            let max_fee_per_gas = match max_fee_per_gas {
+            let max_fee_per_gas = match fees.max_fee_per_gas {
                 Some(value) => value,
                 None => suggested_max_fee_per_gas(context, max_priority_fee_per_gas)?,
             };
@@ -148,7 +141,7 @@ async fn complete_transaction_common(
         nonce,
         gas_limit: transaction.gas_limit.unwrap_or_default(),
         value: transaction.value.unwrap_or_default(),
-        input: transaction.data.unwrap_or_default(),
+        input: transaction.input.unwrap_or_default(),
         chain_id: transaction.chain_id.unwrap_or(chain_id),
     })
 }

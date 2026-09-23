@@ -1,6 +1,6 @@
 use alloy_primitives::{Address, B256, Bytes, U256};
 #[cfg(feature = "serde")]
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 #[cfg(feature = "serde")]
 use serde_with::{As, TryFromInto};
 use thiserror::Error;
@@ -107,7 +107,7 @@ pub struct TransactionCommon<A = Address, N = u64, C = u64> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct PartialTransactionCommon<A = Address, N = u64, C = u64> {
     pub from: A,
@@ -116,18 +116,26 @@ pub struct PartialTransactionCommon<A = Address, N = u64, C = u64> {
     #[cfg_attr(
         feature = "serde",
         serde(
+            default,
             skip_serializing_if = "Option::is_none",
             with = "As::<Option<TryFromInto<U256>>>",
-            bound(serialize = "N: Copy + TryInto<U256, Error: std::fmt::Display>")
+            bound(
+                serialize = "N: Copy + TryInto<U256, Error: std::fmt::Display>",
+                deserialize = "N: TryFrom<U256>, <N as TryFrom<U256>>::Error: std::fmt::Display"
+            )
         )
     )]
     pub nonce: Option<N>,
     #[cfg_attr(
         feature = "serde",
         serde(
+            default,
             rename = "gas",
             skip_serializing_if = "Option::is_none",
-            with = "As::<Option<TryFromInto<U256>>>"
+            with = "As::<Option<TryFromInto<U256>>>",
+            bound(
+                deserialize = "N: TryFrom<U256>, <N as TryFrom<U256>>::Error: std::fmt::Display"
+            )
         )
     )]
     pub gas_limit: Option<N>,
@@ -141,9 +149,13 @@ pub struct PartialTransactionCommon<A = Address, N = u64, C = u64> {
     #[cfg_attr(
         feature = "serde",
         serde(
+            default,
             skip_serializing_if = "Option::is_none",
             with = "As::<Option<TryFromInto<U256>>>",
-            bound(serialize = "C: Copy + TryInto<U256, Error: std::fmt::Display>")
+            bound(
+                serialize = "C: Copy + TryInto<U256, Error: std::fmt::Display>",
+                deserialize = "C: TryFrom<U256>, <C as TryFrom<U256>>::Error: std::fmt::Display"
+            )
         )
     )]
     pub chain_id: Option<C>,
@@ -180,7 +192,7 @@ pub struct DynamicFees {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(Serialize))]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct FeeInput {
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
