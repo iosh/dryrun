@@ -1,5 +1,4 @@
 mod metadata;
-mod read_call;
 mod token_changes;
 
 use cfx_types::Space;
@@ -12,7 +11,6 @@ use crate::{
 };
 
 use metadata::load_metadata;
-pub(crate) use read_call::{IsolatedReadCallError, ReadCallOutcome, execute_isolated_read_call};
 pub(crate) use token_changes::{VerifiedChange, WrappedOperation, derive_verified_changes};
 
 #[derive(Debug)]

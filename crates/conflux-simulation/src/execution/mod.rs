@@ -12,7 +12,12 @@ use crate::context::ExecutionBlockContext;
 mod env;
 mod observer;
 mod outcome;
+mod read_call;
 mod transaction;
+
+pub(crate) use read_call::{
+    IsolatedReadCallError, ReadCallInput, ReadCallOutcome, execute_isolated_read_call,
+};
 
 pub(crate) use env::build_conflux_state;
 use env::build_transaction_env;

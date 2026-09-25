@@ -3,22 +3,20 @@ use std::{cell::RefCell, sync::Arc};
 use alloy_primitives::{Address as AlloyAddress, B256, Bytes, U256 as AlloyU256};
 use alloy_sol_types::{SolCall, sol};
 use cfx_executor::{
-    executive::{
-        ChargeCollateral, ExecutionError, ExecutionOutcome, ExecutiveContext, TransactOptions,
-        TransactSettings,
-    },
     internal_contract::pos_internal_entries::{address_entry, identifier_entry, index_entry},
     machine::Machine,
     state::State,
 };
-use cfx_types::{Address, AddressSpaceUtil, AddressWithSpace, BigEndianHash, H256, Space, U256};
+use cfx_types::{Address, AddressSpaceUtil, AddressWithSpace, BigEndianHash, H256, U256};
 use conflux_provider::{CoreAddress, Network};
-use primitives::transaction::{Action, NativeTransaction, TypedNativeTransaction};
 use tokio::runtime::Handle;
 
 use crate::state::SponsorWhitelistStorageKey;
 use crate::{
-    execution::{PreparedTransactionExecution, build_conflux_state},
+    execution::{
+        IsolatedReadCallError, PreparedTransactionExecution, ReadCallInput, ReadCallOutcome,
+        build_conflux_state, execute_isolated_read_call,
+    },
     primitive::{b256_from_cfx, b256_to_cfx, u256_from_cfx},
     state::ConfluxStateSource,
 };
@@ -335,19 +333,19 @@ impl CoreSpaceStateReader {
             params,
             ParamsControlView::currentRoundCall {}.abi_encode().into(),
         )? {
-            CoreSpaceReadCallOutcome::Success(output) => {
+            ReadCallOutcome::Success(output) => {
                 ParamsControlView::currentRoundCall::abi_decode_returns_validate(&output).map_err(
                     |error| CoreSpaceStateAccessError::ReadCall {
                         details: format!("invalid currentRound return data: {error}"),
                     },
                 )?
             }
-            CoreSpaceReadCallOutcome::Reverted(_) => {
+            ReadCallOutcome::Reverted(_) => {
                 return Err(CoreSpaceStateAccessError::ReadCall {
                     details: "currentRound reverted".to_owned(),
                 });
             }
-            CoreSpaceReadCallOutcome::Failed => {
+            ReadCallOutcome::Failed => {
                 return Err(CoreSpaceStateAccessError::ReadCall {
                     details: "currentRound failed".to_owned(),
                 });
@@ -368,19 +366,19 @@ impl CoreSpaceStateReader {
             .abi_encode()
             .into(),
         )? {
-            CoreSpaceReadCallOutcome::Success(output) => {
+            ReadCallOutcome::Success(output) => {
                 ParamsControlView::readVoteCall::abi_decode_returns_validate(&output).map_err(
                     |error| CoreSpaceStateAccessError::ReadCall {
                         details: format!("invalid readVote return data: {error}"),
                     },
                 )?
             }
-            CoreSpaceReadCallOutcome::Reverted(_) => {
+            ReadCallOutcome::Reverted(_) => {
                 return Err(CoreSpaceStateAccessError::ReadCall {
                     details: "readVote reverted".to_owned(),
                 });
             }
-            CoreSpaceReadCallOutcome::Failed => {
+            ReadCallOutcome::Failed => {
                 return Err(CoreSpaceStateAccessError::ReadCall {
                     details: "readVote failed".to_owned(),
                 });
@@ -560,16 +558,35 @@ impl CoreSpaceStateReader {
         &self,
         target: Address,
         calldata: Bytes,
-    ) -> Result<CoreSpaceReadCallOutcome, CoreSpaceStateAccessError> {
+    ) -> Result<ReadCallOutcome, CoreSpaceStateAccessError> {
         let mut state_slot = self.state.borrow_mut();
         let state = state_slot
             .as_mut()
             .ok_or(CoreSpaceStateAccessError::Unavailable)?;
-        match execute_isolated_read_call(state, &self.context, target, calldata) {
+        let input = ReadCallInput {
+            sender: self.context.caller.with_native_space(),
+            target,
+            data: calldata,
+            gas_limit: READ_CALL_GAS_LIMIT,
+        };
+        match execute_isolated_read_call(
+            state,
+            &self.context.machine,
+            &self.context.env,
+            &self.context.spec,
+            input,
+        ) {
             Ok(outcome) => Ok(outcome),
             Err(error) => {
                 state_slot.take();
-                Err(error)
+                Err(match error {
+                    IsolatedReadCallError::StateAccess(source) => {
+                        operation("execute Core Space read call", source)
+                    }
+                    IsolatedReadCallError::Execution(details) => {
+                        CoreSpaceStateAccessError::ReadCall { details }
+                    }
+                })
             }
         }
     }
@@ -673,97 +690,6 @@ pub(crate) struct CoreSpaceGovernanceState {
     pub(crate) version: u64,
     pub(crate) allocations: [crate::core_space::VoteAllocation; 4],
     pub(crate) parameter_count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum CoreSpaceReadCallOutcome {
-    Success(Bytes),
-    Reverted(Bytes),
-    Failed,
-}
-
-fn execute_isolated_read_call(
-    state: &mut State,
-    context: &CoreSpaceReadContext,
-    target: Address,
-    calldata: Bytes,
-) -> Result<CoreSpaceReadCallOutcome, CoreSpaceStateAccessError> {
-    if !state.no_checkpoint() {
-        return Err(CoreSpaceStateAccessError::ReadCall {
-            details: "read call cannot run with an active state checkpoint".to_owned(),
-        });
-    }
-    let sender = context.caller.with_native_space();
-    let nonce = state
-        .nonce(&sender)
-        .map_err(|source| operation("read Core Space read-call nonce", source))?;
-    let chain_id = context
-        .env
-        .chain_id
-        .get(&Space::Native)
-        .copied()
-        .ok_or_else(|| CoreSpaceStateAccessError::ReadCall {
-            details: "execution environment is missing the Core Space chain id".to_owned(),
-        })?;
-    let transaction = TypedNativeTransaction::Cip155(NativeTransaction {
-        nonce,
-        gas_price: U256::zero(),
-        gas: U256::from(READ_CALL_GAS_LIMIT),
-        action: Action::Call(target),
-        value: U256::zero(),
-        storage_limit: u64::MAX,
-        epoch_height: context.env.epoch_height,
-        chain_id,
-        data: calldata.to_vec(),
-    })
-    .fake_sign_rpc(sender);
-    let mut env = context.env.clone();
-    env.gas_limit = U256::from(READ_CALL_GAS_LIMIT);
-    env.transaction_hash = transaction.hash();
-
-    let snapshot = state.save();
-    let outcome = ExecutiveContext::new(state, &env, &context.machine, &context.spec)
-        .transact(
-            &transaction,
-            TransactOptions {
-                observer: (),
-                settings: TransactSettings {
-                    charge_collateral: ChargeCollateral::EstimateSender,
-                    charge_gas: false,
-                    check_base_price: false,
-                    check_epoch_bound: false,
-                    forbid_eoa_with_code: false,
-                },
-            },
-        )
-        .map_err(|source| operation("execute Core Space read call", source))?;
-
-    let result = match outcome {
-        ExecutionOutcome::Finished(executed) => {
-            CoreSpaceReadCallOutcome::Success(Bytes::from(executed.output))
-        }
-        ExecutionOutcome::ExecutionErrorBumpNonce(
-            ExecutionError::VmError(cfx_vm_types::Error::Reverted),
-            executed,
-        ) => CoreSpaceReadCallOutcome::Reverted(Bytes::from(executed.output)),
-        ExecutionOutcome::ExecutionErrorBumpNonce(
-            ExecutionError::VmError(cfx_vm_types::Error::StateDbError(error)),
-            _,
-        ) => {
-            return Err(operation("execute Core Space read call", error.0));
-        }
-        ExecutionOutcome::ExecutionErrorBumpNonce(_, _)
-        | ExecutionOutcome::NotExecutedDrop(_)
-        | ExecutionOutcome::NotExecutedToReconsiderPacking(_) => CoreSpaceReadCallOutcome::Failed,
-    };
-    state.update_state_post_tx_execution(!context.spec.cip645.fix_eip1153);
-    if !state.no_checkpoint() {
-        return Err(CoreSpaceStateAccessError::ReadCall {
-            details: "read call left an active state checkpoint".to_owned(),
-        });
-    }
-    state.restore(snapshot);
-    Ok(result)
 }
 
 fn operation(operation: &'static str, source: cfx_statedb::Error) -> CoreSpaceStateAccessError {

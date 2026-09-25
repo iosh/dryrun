@@ -19,15 +19,15 @@ use thiserror::Error;
 use tokio::runtime::Handle;
 
 use crate::{
-    execution::{PreparedTransactionExecution, build_conflux_state},
+    execution::{
+        IsolatedReadCallError, PreparedTransactionExecution, ReadCallInput, ReadCallOutcome,
+        build_conflux_state, execute_isolated_read_call,
+    },
     primitive::{address_to_cfx, b256_to_cfx, u256_from_cfx},
     state::ConfluxStateSource,
 };
 
-use super::{
-    EspaceStateAccessError,
-    changes::{IsolatedReadCallError, ReadCallOutcome, execute_isolated_read_call},
-};
+use super::EspaceStateAccessError;
 
 /// Resource limits enforced by eSpace state readers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -353,10 +353,12 @@ impl EspaceStateReader {
             &self.context.machine,
             &self.context.env,
             &self.context.spec,
-            self.context.caller,
-            target,
-            calldata.clone(),
-            Some(self.context.budget.limits.read_call_gas_limit),
+            ReadCallInput {
+                sender: address_to_cfx(self.context.caller).with_evm_space(),
+                target: address_to_cfx(target),
+                data: calldata.clone(),
+                gas_limit: self.context.budget.limits.read_call_gas_limit,
+            },
         )
         .map_err(|error| match error {
             IsolatedReadCallError::StateAccess(source) => {

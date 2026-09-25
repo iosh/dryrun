@@ -21,8 +21,6 @@ use super::{
     EspaceExecutionPosition, EspaceStateAccess,
 };
 
-pub(crate) use standards::{IsolatedReadCallError, ReadCallOutcome, execute_isolated_read_call};
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EspaceNativeCurrency {
     pub name: String,
