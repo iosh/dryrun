@@ -1,129 +1,16 @@
-use alloy_primitives::Log;
+use crate::interface as rpc;
 use contract_standards::{Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem};
 use evm_simulation::{
-    EvmAccountDelegationChange, EvmBlockContext, EvmChanges, EvmExecutionOutcome,
-    EvmExecutionResult, EvmNativeCurrency, EvmNativeTransferChange, EvmSelfDestructBurnChange,
-    EvmSimulation, EvmStandardChange, EvmStateChange, EvmSuccessOutput,
+    EvmAccountDelegationChange, EvmNativeCurrency, EvmNativeTransferChange,
+    EvmSelfDestructBurnChange, EvmSimulation, EvmStandardChange, EvmStateChange,
     EvmWrappedNativeDepositChange, EvmWrappedNativeWithdrawalChange,
 };
 
-use crate::interface as rpc;
-
 impl From<EvmSimulation> for rpc::EvmSimulateTransactionResponse {
     fn from(simulation: EvmSimulation) -> Self {
-        let EvmSimulation {
-            context,
-            transaction,
-            execution,
-            changes,
-        } = simulation;
-
-        Self {
-            state: context.into(),
-            transaction,
-            outcome: execution.into(),
-            changes: changes.into(),
-        }
-    }
-}
-
-impl From<EvmBlockContext> for rpc::EvmState {
-    fn from(context: EvmBlockContext) -> Self {
-        Self {
-            block_number: context.number,
-            block_hash: context.hash,
-        }
-    }
-}
-
-impl From<EvmExecutionOutcome> for rpc::Outcome {
-    fn from(outcome: EvmExecutionOutcome) -> Self {
-        match outcome {
-            EvmExecutionOutcome::Success {
-                result,
-                output,
-                logs,
-                ..
-            } => {
-                let accounting = result.into();
-                let logs = logs.into_iter().map(Into::into).collect();
-                Self::Success(match output {
-                    EvmSuccessOutput::Call { return_data } => {
-                        rpc::SuccessOutcome::Call(rpc::SuccessCallOutcome {
-                            accounting,
-                            return_data,
-                            logs,
-                        })
-                    }
-                    EvmSuccessOutput::Create {
-                        address,
-                        runtime_code,
-                    } => rpc::SuccessOutcome::Create(rpc::SuccessCreateOutcome {
-                        accounting,
-                        contract_address: address,
-                        runtime_code,
-                        logs,
-                    }),
-                })
-            }
-            EvmExecutionOutcome::Reverted {
-                result,
-                revert_data,
-                reason,
-            } => Self::Reverted(rpc::RevertedOutcome {
-                accounting: result.into(),
-                revert_data,
-                reason: reason.map(|reason| reason.to_string()),
-            }),
-            EvmExecutionOutcome::Halted { result, reason } => Self::Failed(rpc::FailedOutcome {
-                accounting: result.into(),
-                error: reason.to_string(),
-            }),
-            EvmExecutionOutcome::NotExecuted(rejection) => Self::Rejected {
-                error: rejection.to_string(),
-            },
-        }
-    }
-}
-
-impl From<EvmExecutionResult> for rpc::ExecutionAccounting {
-    fn from(result: EvmExecutionResult) -> Self {
-        let fee = result.fee();
-        let execution_fee = fee.execution_gas_fee();
-        Self {
-            gas_used: result.gas().gas_used(),
-            effective_gas_price: execution_fee.effective_gas_price(),
-            gas_fee: execution_fee.charged_amount(),
-            burnt_gas_fee: execution_fee.burnt_amount_if_applicable(),
-            blob: fee.blob_gas_fee().map(|blob| rpc::BlobGasAccounting {
-                blob_gas_used: blob.gas_used(),
-                blob_gas_price: blob.gas_price(),
-                blob_gas_fee: blob.charged_amount(),
-            }),
-        }
-    }
-}
-
-impl From<Log> for rpc::SimulationLog {
-    fn from(log: Log) -> Self {
-        Self {
-            address: log.address,
-            topics: log.data.topics().to_vec(),
-            data: log.data.data,
-        }
-    }
-}
-
-impl From<EvmChanges> for rpc::Changes {
-    fn from(changes: EvmChanges) -> Self {
-        match changes {
-            EvmChanges::Complete(changes) => Self::Complete {
-                items: changes.into_items().into_iter().map(Into::into).collect(),
-            },
-            EvmChanges::Unavailable(error) => Self::Unavailable {
-                error: error.to_string(),
-            },
-        }
+        Self(std::sync::Arc::new(simulation.map_changes(|changes| {
+            changes.into_items().into_iter().map(Into::into).collect()
+        })))
     }
 }
 

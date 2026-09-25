@@ -233,9 +233,9 @@ function HistoryEntry({
             {status}
           </span>
           <span className="truncate text-ink-400">
-            {changes.error
-              ? 'Changes unavailable'
-              : `${changes.items.length} changes`}
+            {changes.status === 'complete'
+              ? `${changes.items.length} changes`
+              : changes.status === 'notAnalyzed' ? 'Not analyzed' : 'Changes unavailable'}
           </span>
         </div>
 

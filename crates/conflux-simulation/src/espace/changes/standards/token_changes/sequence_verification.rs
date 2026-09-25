@@ -6,8 +6,8 @@ use alloy::{
 };
 
 use crate::espace::{
-    EspaceCallKind, EspaceChangesError, EspaceExecutedTransaction, EspaceExecutionPosition,
-    EspaceFrameId, EspaceStateAccess, EspaceStateReader,
+    EspaceCallKind, EspaceChangeDerivationError, EspaceExecutedTransaction,
+    EspaceExecutionPosition, EspaceFrameId, EspaceStateAccess, EspaceStateReader,
 };
 
 use super::{
@@ -34,7 +34,7 @@ pub(super) fn verify_event(
     pairs: &[WrappedEventPair],
     wrapped_pair_proofs: &mut HashMap<usize, WrappedPairProof>,
     final_state_expectations: &mut HashMap<FinalStateQuery, ExpectedFinalValue>,
-) -> Result<VerifiedTokenChange, EspaceChangesError> {
+) -> Result<VerifiedTokenChange, EspaceChangeDerivationError> {
     let pair = pairs.iter().enumerate().find_map(|(index, pair)| {
         (pair.transfer_event_index == event_index || pair.wrapped_event_index == event_index)
             .then_some((index, *pair))
@@ -109,7 +109,7 @@ pub(super) fn verify_wrapped_event(
     direction: WrappedOperation,
     pair: Option<(usize, WrappedEventPair)>,
     wrapped_pair_proofs: &mut HashMap<usize, WrappedPairProof>,
-) -> Result<(U256, U256), EspaceChangesError> {
+) -> Result<(U256, U256), EspaceChangeDerivationError> {
     verify_wrapped_call_and_value(
         execution, frame_id, contract, account, amount, direction, position,
     )?;
@@ -160,7 +160,7 @@ pub(super) fn verify_wrapped_call_and_value(
     amount: U256,
     direction: WrappedOperation,
     position: EspaceExecutionPosition,
-) -> Result<(), EspaceChangesError> {
+) -> Result<(), EspaceChangeDerivationError> {
     let has_evidence = match direction {
         WrappedOperation::Deposit => has_matching_committed_call(
             execution,
@@ -206,7 +206,7 @@ pub(super) fn expect_increase(
     amount: U256,
     position: EspaceExecutionPosition,
     label: &'static str,
-) -> Result<(), EspaceChangesError> {
+) -> Result<(), EspaceChangeDerivationError> {
     let expected = before
         .checked_add(amount)
         .ok_or_else(|| state_mismatch_at(position, "balance increase overflow"))?;
@@ -221,7 +221,7 @@ pub(super) fn expect_decrease(
     amount: U256,
     position: EspaceExecutionPosition,
     label: &'static str,
-) -> Result<(), EspaceChangesError> {
+) -> Result<(), EspaceChangeDerivationError> {
     let expected = before
         .checked_sub(amount)
         .ok_or_else(|| state_mismatch_at(position, "balance decrease underflow"))?;
@@ -274,7 +274,7 @@ pub(super) enum ExpectedFinalValue {
 pub(super) fn verify_final_state(
     expectations: &HashMap<FinalStateQuery, ExpectedFinalValue>,
     state: &EspaceStateAccess,
-) -> Result<(), EspaceChangesError> {
+) -> Result<(), EspaceChangeDerivationError> {
     for (query, expected) in expectations {
         let actual = match query {
             FinalStateQuery::Erc20Balance { contract, account } => ExpectedFinalValue::Amount(

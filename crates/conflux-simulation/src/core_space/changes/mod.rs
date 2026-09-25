@@ -17,7 +17,7 @@ use conflux_provider::CoreAddress;
 use contract_standards::StandardChange;
 
 use super::{
-    CoreSpaceChangesError, CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition,
+    CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition, CoreSpaceProtocolError,
     CoreSpaceStateAccess,
 };
 
@@ -563,7 +563,7 @@ impl CoreSpaceChangeSetBuilder {
 #[non_exhaustive]
 pub enum CoreSpaceChangeDerivationError {
     #[error(transparent)]
-    Existing(#[from] CoreSpaceChangesError),
+    Protocol(#[from] CoreSpaceProtocolError),
     #[error("Core Space change rules produced conflicting results: {details}")]
     Conflict { details: String },
     #[error("Core Space change rule `{rules}` failed: {source}")]
@@ -586,6 +586,8 @@ impl CoreSpaceChangeDerivationError {
     }
 }
 
+/// Rules run only after successful execution. The configured composition must
+/// account for every supported effect or return an error; partial sets are not published.
 pub trait CoreSpaceChangeRules: Send + Sync + 'static {
     fn derive_changes(
         &self,
@@ -761,8 +763,8 @@ impl CoreSpaceChangeRules for DefaultCoreSpaceChangeRules {
         let nested_espace = if execution.nested_espace_scope_roots().is_empty() {
             CoreSpaceChangeSet::default()
         } else if !self.espace_change_rules_enabled {
-            return Err(CoreSpaceChangeDerivationError::Existing(
-                CoreSpaceChangesError::unsupported_operation(
+            return Err(CoreSpaceChangeDerivationError::Protocol(
+                CoreSpaceProtocolError::unsupported_operation(
                     "nested eSpace changes require eSpace chain configuration",
                 ),
             ));
@@ -839,4 +841,68 @@ impl CoreSpaceChangeRules for CoreSpaceAccessRuleChangeRules {
     ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
         access::derive_changes(execution, state).map_err(Into::into)
     }
+}
+
+pub(crate) fn check_contract_support(
+    execution: &CoreSpaceExecutedTransaction,
+    state: &CoreSpaceStateAccess,
+) -> Result<(), CoreSpaceChangeDerivationError> {
+    use crate::execution::FrameAction;
+    use cfx_parameters::internal_contract_addresses::*;
+    use cfx_types::{AddressSpaceUtil, Space};
+
+    for (_, frame) in execution.committed_trace.frames() {
+        let FrameAction::Call {
+            code_address,
+            target,
+            call_type,
+            ..
+        } = frame.action
+        else {
+            return Err(CoreSpaceProtocolError::unsupported_operation(
+                "contract creation requires an implementation-specific analyzer",
+            )
+            .into());
+        };
+        if frame.space == Space::Native && execution.is_active_internal_contract(code_address) {
+            let supported = [
+                ADMIN_CONTROL_CONTRACT_ADDRESS,
+                SPONSOR_WHITELIST_CONTROL_CONTRACT_ADDRESS,
+                STORAGE_INTEREST_STAKING_CONTRACT_ADDRESS,
+                POS_REGISTER_CONTRACT_ADDRESS,
+                CROSS_SPACE_CONTRACT_ADDRESS,
+                PARAMS_CONTROL_CONTRACT_ADDRESS,
+                CONTEXT_CONTRACT_ADDRESS,
+            ]
+            .contains(&code_address);
+            if !supported
+                || target != code_address
+                || !matches!(
+                    call_type,
+                    cfx_vm_types::CallType::Call | cfx_vm_types::CallType::StaticCall
+                )
+            {
+                return Err(CoreSpaceProtocolError::unsupported_operation(format!(
+                    "unverified internal contract call at {code_address:?}"
+                ))
+                .into());
+            }
+            continue;
+        }
+        for reader in [state.initial(), state.finalized()] {
+            let code = reader
+                .code(code_address.with_space(frame.space))
+                .map_err(|source| {
+                    CoreSpaceProtocolError::state_access("check contract implementation", source)
+                })?;
+            if code.is_some_and(|code| !code.is_empty()) {
+                return Err(CoreSpaceProtocolError::unsupported_operation(format!(
+                    "no verified implementation scope for code at {code_address:?} in {:?}",
+                    frame.space
+                ))
+                .into());
+            }
+        }
+    }
+    Ok(())
 }

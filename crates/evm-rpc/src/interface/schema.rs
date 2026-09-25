@@ -1,5 +1,4 @@
-use alloy_primitives::{Address, B256, Bytes, U256};
-use alloy_serde::quantity;
+use alloy_primitives::{Address, B256, U256};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -49,114 +48,21 @@ pub struct SimulateTransactionOptions {
     pub include: Option<Value>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct EvmSimulateTransactionResponse {
-    pub state: EvmState,
-    pub transaction: evm_simulation::TypedTransaction,
-    pub outcome: Outcome,
-    pub changes: Changes,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct EvmState {
-    #[serde(with = "quantity")]
-    pub block_number: u64,
-    pub block_hash: B256,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(tag = "status", rename_all = "lowercase")]
-pub enum Outcome {
-    Success(SuccessOutcome),
-    Reverted(RevertedOutcome),
-    Failed(FailedOutcome),
-    Rejected { error: String },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum SuccessOutcome {
-    Call(SuccessCallOutcome),
-    Create(SuccessCreateOutcome),
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct SuccessCallOutcome {
-    #[serde(flatten)]
-    pub accounting: ExecutionAccounting,
-    pub return_data: Bytes,
-    pub logs: Vec<SimulationLog>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct SuccessCreateOutcome {
-    #[serde(flatten)]
-    pub accounting: ExecutionAccounting,
-    pub contract_address: Address,
-    pub runtime_code: Bytes,
-    pub logs: Vec<SimulationLog>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct RevertedOutcome {
-    #[serde(flatten)]
-    pub accounting: ExecutionAccounting,
-    pub revert_data: Bytes,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct FailedOutcome {
-    #[serde(flatten)]
-    pub accounting: ExecutionAccounting,
-    pub error: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecutionAccounting {
-    #[serde(with = "quantity")]
-    pub gas_used: u64,
-    #[serde(with = "quantity")]
-    pub effective_gas_price: u128,
-    pub gas_fee: U256,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub burnt_gas_fee: Option<U256>,
-    #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    pub blob: Option<BlobGasAccounting>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct BlobGasAccounting {
-    #[serde(with = "quantity")]
-    pub blob_gas_used: u64,
-    #[serde(with = "quantity")]
-    pub blob_gas_price: u128,
-    pub blob_gas_fee: U256,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct SimulationLog {
-    pub address: Address,
-    pub topics: Vec<B256>,
-    pub data: Bytes,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(tag = "status", rename_all = "lowercase")]
-pub enum Changes {
-    Complete { items: Vec<StateChange> },
-    Unavailable { error: String },
-}
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub struct EvmSimulateTransactionResponse(
+    pub(crate)  std::sync::Arc<
+        simulation_core::simulation::Simulation<
+            evm_simulation::EvmBlockContext,
+            evm_simulation::TypedTransaction,
+            evm_simulation::TransactionRequest,
+            evm_simulation::EvmExecutionOutcome,
+            evm_simulation::EvmTransactionRejection,
+            Vec<StateChange>,
+            evm_simulation::EvmChangeDerivationError,
+        >,
+    >,
+);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(

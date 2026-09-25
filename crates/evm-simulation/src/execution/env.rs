@@ -1,3 +1,4 @@
+use crate::transaction::fee_to_u128;
 use crate::{AccessListItem, EthereumExecutionSpec, EvmBlockEnvironmentError, TypedTransaction};
 use alloy::consensus::{BlockHeader, Header};
 use alloy::primitives::{TxKind, U256};
@@ -121,14 +122,6 @@ pub(super) fn create_tx_env(
         _ => {}
     }
     Ok(tx)
-}
-
-fn fee_to_u128(field: &'static str, value: U256) -> Result<u128, crate::TransactionInputError> {
-    u128::try_from(value).map_err(|_| crate::TransactionInputError::OutOfRange {
-        field,
-        value,
-        maximum: U256::from(u128::MAX),
-    })
 }
 
 fn map_access_list(items: &[AccessListItem]) -> RevmAccessList {

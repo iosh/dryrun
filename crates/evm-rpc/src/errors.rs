@@ -1,11 +1,6 @@
-use jsonrpsee::types::{
-    ErrorObjectOwned,
-    error::{INTERNAL_ERROR_CODE, INVALID_PARAMS_CODE},
-};
+use jsonrpsee::types::ErrorObjectOwned;
+use simulation_core::error::{Diagnostic, ErrorCode, ErrorInfo};
 use thiserror::Error;
-
-const BLOCK_NOT_FOUND_CODE: i32 = -32001;
-const TRANSACTION_COMPLETION_FAILED_CODE: i32 = -32002;
 
 #[derive(Debug, Error)]
 pub enum ValidationError {
@@ -28,25 +23,17 @@ impl ValidationError {
 
 impl From<ValidationError> for ErrorObjectOwned {
     fn from(error: ValidationError) -> Self {
-        match error {
-            ValidationError::InvalidParams(details) => {
-                ErrorObjectOwned::owned(INVALID_PARAMS_CODE, details, None::<()>)
-            }
-            ValidationError::NotSupported(details) => {
-                ErrorObjectOwned::owned(-32004, details, None::<()>)
-            }
-        }
+        let code = match &error {
+            ValidationError::InvalidParams(_) => ErrorCode::InvalidInput,
+            ValidationError::NotSupported(_) => ErrorCode::UnsupportedSimulation,
+        };
+        rpc_error(Diagnostic::new(code, error.to_string()))
     }
 }
 
-pub(crate) fn internal_error() -> ErrorObjectOwned {
-    ErrorObjectOwned::owned(INTERNAL_ERROR_CODE, "Internal error", None::<()>)
-}
-
-pub(crate) fn block_not_found(details: impl Into<String>) -> ErrorObjectOwned {
-    ErrorObjectOwned::owned(BLOCK_NOT_FOUND_CODE, details.into(), None::<()>)
-}
-
-pub(crate) fn transaction_completion_failed(details: &'static str) -> ErrorObjectOwned {
-    ErrorObjectOwned::owned(TRANSACTION_COMPLETION_FAILED_CODE, details, None::<()>)
+pub(crate) fn rpc_error(error: impl ErrorInfo + std::fmt::Debug) -> ErrorObjectOwned {
+    let diagnostic = error.diagnostic();
+    tracing::warn!(error = ?error, code = ?diagnostic.code, "simulation request failed");
+    let (code, message, data) = simulation_core::codec::json_rpc_error(diagnostic);
+    ErrorObjectOwned::owned(code, message, Some(data))
 }

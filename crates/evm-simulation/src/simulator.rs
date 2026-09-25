@@ -9,12 +9,9 @@ use tokio::runtime::Handle;
 
 use crate::{
     EthereumChainSpec, EvmBlockContext, EvmExecutionObserver, EvmExecutionOutcome,
-    EvmInitializationError, EvmObservationRequirements, EvmSimulation, EvmSimulationError,
-    EvmSimulationLimits, EvmSimulationRequest, EvmTransactionExecutionResult,
-    EvmTransactionExecutor, TypedTransaction,
-    changeset::{
-        CombinedEvmChangeRules, DefaultEvmChangeRules, EvmChangeRules, EvmChangeSet, EvmChanges,
-    },
+    EvmInitializationError, EvmSimulation, EvmSimulationError, EvmSimulationLimits,
+    EvmSimulationRequest, EvmTransactionExecutionResult, EvmTransactionExecutor, TypedTransaction,
+    changeset::{CombinedEvmChangeRules, DefaultEvmChangeRules, EvmChangeRules, EvmChangeSet},
     resolve_block,
     state::EvmStateSource,
 };
@@ -102,140 +99,118 @@ impl<R> EvmTransactionSimulator<R> {
     }
 }
 
-impl<R> EvmTransactionSimulator<R>
-where
-    R: EvmChangeRules,
-{
-    /// Simulates one transaction and derives its verified wallet semantic changes.
-    ///
-    /// The returned future must be polled inside an active Tokio runtime.
+impl<R: EvmChangeRules> EvmTransactionSimulator<R> {
+    /// Simulates one transaction inside the caller's active Tokio runtime.
     pub async fn simulate(
         &self,
         request: EvmSimulationRequest,
     ) -> Result<EvmSimulation, EvmSimulationError> {
-        self.run_simulation(request, simulate_verified_changes_blocking::<R>)
-            .await
+        simulation_core::simulation::simulate(EthereumBackend(self.clone()), request).await
     }
+}
 
-    async fn run_simulation<T>(
+struct EthereumBackend<R>(EvmTransactionSimulator<R>);
+
+impl<R: EvmChangeRules> simulation_core::simulation::SimulationBackend for EthereumBackend<R> {
+    type Request = EvmSimulationRequest;
+    type Context = EvmBlockContext;
+    type Transaction = TypedTransaction;
+    type TransactionRequest = crate::TransactionRequest;
+    type Rejection = crate::EvmTransactionRejection;
+    type Prepared = Sealed<Header>;
+    type Evidence = (crate::EvmTransactionExecution, crate::EvmStateAccess);
+    type Outcome = EvmExecutionOutcome;
+    type ChangeSet = EvmChangeSet;
+    type AnalysisError = crate::EvmChangeDerivationError;
+    type Error = EvmSimulationError;
+
+    async fn prepare(
         &self,
-        request: EvmSimulationRequest,
-        simulate_blocking: BlockingSimulation<R, T>,
-    ) -> Result<T, EvmSimulationError>
-    where
-        T: Send + 'static,
-    {
+        request: Self::Request,
+    ) -> Result<simulation_core::simulation::PreparationFor<Self>, Self::Error> {
+        use simulation_core::{completion::Completion, simulation::Preparation};
         let EvmSimulationRequest { block, transaction } = request;
-        let runtime_handle =
-            Handle::try_current().map_err(|_| EvmSimulationError::RuntimeUnavailable)?;
-        let block = resolve_block(&self.provider, block).await?;
-        let transaction =
-            crate::complete_transaction(transaction, &self.provider, &block, &self.chain_spec)
-                .await?;
-
-        let provider = self.provider.clone();
-        let chain_spec = Arc::clone(&self.chain_spec);
-        let change_rules = Arc::clone(&self.change_rules);
-        let limits = self.limits.clone();
-        let blocking_runtime_handle = runtime_handle.clone();
-
-        runtime_handle
-            .spawn_blocking(move || {
-                simulate_blocking(BlockingSimulationInput {
-                    provider,
-                    runtime_handle: blocking_runtime_handle,
-                    chain_spec,
-                    change_rules,
-                    limits,
-                    block,
-                    transaction,
-                })
-            })
-            .await
-            .map_err(EvmSimulationError::execution_task)?
-    }
-}
-
-type BlockingSimulation<R, T> = fn(BlockingSimulationInput<R>) -> Result<T, EvmSimulationError>;
-
-struct BlockingSimulationInput<R> {
-    provider: DynProvider<Ethereum>,
-    runtime_handle: Handle,
-    chain_spec: Arc<EthereumChainSpec>,
-    change_rules: Arc<R>,
-    limits: EvmSimulationLimits,
-    block: Sealed<Header>,
-    transaction: TypedTransaction,
-}
-
-fn simulate_verified_changes_blocking<R>(
-    input: BlockingSimulationInput<R>,
-) -> Result<EvmSimulation, EvmSimulationError>
-where
-    R: EvmChangeRules,
-{
-    let BlockingSimulationInput {
-        provider,
-        runtime_handle,
-        chain_spec,
-        change_rules,
-        limits,
-        block,
-        transaction,
-    } = input;
-    let context = EvmBlockContext {
-        number: block.number(),
-        hash: block.hash(),
-    };
-    let requirements = change_rules.required_observations();
-    let executor = create_executor(
-        provider,
-        runtime_handle,
-        block,
-        &chain_spec,
-        requirements,
-        limits,
-    )?;
-    let (output, state) = match executor.execute(&transaction)? {
-        EvmTransactionExecutionResult::Executed(output) => output.commit(&transaction)?,
-        EvmTransactionExecutionResult::NotExecuted(rejection) => {
-            return Ok(EvmSimulation {
-                context,
+        let block = resolve_block(&self.0.provider, block).await?;
+        let context = EvmBlockContext {
+            number: block.number(),
+            hash: block.hash(),
+        };
+        let transaction = match crate::complete_transaction(
+            transaction,
+            &self.0.provider,
+            &block,
+            &self.0.chain_spec,
+        )
+        .await?
+        {
+            Completion::Ready(transaction) => transaction,
+            Completion::Rejected {
                 transaction,
-                execution: EvmExecutionOutcome::NotExecuted(rejection),
-                changes: EvmChanges::Complete(EvmChangeSet::default()),
-            });
+                rejection,
+            } => {
+                return Ok(Preparation::Rejected {
+                    context: Some(context),
+                    transaction,
+                    rejection,
+                });
+            }
+        };
+        Ok(Preparation::Ready {
+            context,
+            transaction,
+            execution: block,
+        })
+    }
+
+    fn execute(
+        &self,
+        transaction: &Self::Transaction,
+        block: Self::Prepared,
+        runtime_handle: Handle,
+    ) -> Result<simulation_core::simulation::Execution<Self::Evidence, Self::Rejection>, Self::Error>
+    {
+        use simulation_core::simulation::Execution;
+        let requirements = self.0.change_rules.required_observations();
+        let state_source =
+            EvmStateSource::new(self.0.provider.clone(), runtime_handle, block.hash());
+        let executor = EvmTransactionExecutor::new(
+            state_source,
+            block,
+            &self.0.chain_spec,
+            EvmExecutionObserver::with_requirements(requirements, self.0.limits.clone()),
+            self.0.limits.clone(),
+        )?;
+        match executor.execute(transaction)? {
+            EvmTransactionExecutionResult::Executed(output) => {
+                Ok(Execution::Executed(output.commit(transaction)?))
+            }
+            EvmTransactionExecutionResult::NotExecuted(rejection) => {
+                Ok(Execution::Rejected(rejection))
+            }
         }
-    };
+    }
 
-    let changes = EvmChanges::from(change_rules.derive_changes(&output, &state));
-    let execution = output.into_outcome();
+    fn is_success(&self, evidence: &Self::Evidence) -> bool {
+        evidence.0.is_success()
+    }
 
-    Ok(EvmSimulation {
-        context,
-        transaction,
-        execution,
-        changes,
-    })
-}
+    fn analyze(
+        &self,
+        view: simulation_core::simulation::AnalysisView<
+            '_,
+            Self::Context,
+            Self::Transaction,
+            Self::Evidence,
+        >,
+    ) -> Result<Self::ChangeSet, Self::AnalysisError> {
+        let (execution, state) = view.execution();
+        crate::changeset::check_contract_support(execution, state)?;
+        self.0.change_rules.derive_changes(execution, state)
+    }
 
-fn create_executor(
-    provider: DynProvider<Ethereum>,
-    runtime_handle: Handle,
-    block: Sealed<Header>,
-    chain_spec: &EthereumChainSpec,
-    requirements: EvmObservationRequirements,
-    limits: EvmSimulationLimits,
-) -> Result<EvmTransactionExecutor<EvmExecutionObserver>, EvmSimulationError> {
-    let block_hash = block.hash();
-    let state_source = EvmStateSource::new(provider, runtime_handle, block_hash);
-    EvmTransactionExecutor::new(
-        state_source,
-        block,
-        chain_spec,
-        EvmExecutionObserver::with_requirements(requirements, limits.clone()),
-        limits,
-    )
+    fn into_outcome(&self, evidence: Self::Evidence) -> Self::Outcome {
+        evidence.0.into_outcome()
+    }
 }
 
 #[cfg(test)]

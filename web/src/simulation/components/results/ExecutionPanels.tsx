@@ -13,6 +13,7 @@ import {
   formatNativeAmount,
 } from '../../../lib/formatting.ts';
 import { CopyButton } from '../../../ui/CopyButton.tsx';
+import type { Diagnostic } from '../../rpc.ts';
 import type {
   ExecutionAnchor,
   SimulationExecution,
@@ -26,7 +27,7 @@ export function ExecutionSummary({
   nativeSymbol,
   networkLabel,
 }: Readonly<{
-  anchor: ExecutionAnchor;
+  anchor: ExecutionAnchor | null;
   changesCount: string;
   execution: SimulationExecution;
   nativeSymbol: string;
@@ -56,7 +57,7 @@ export function ExecutionSummary({
         <div className="sm:text-right">
           <p className="text-sm font-medium">{networkLabel}</p>
           <p className="mt-1 font-mono text-[11px] text-ink-600">
-            {anchor.label} {formatHexQuantity(anchor.number)}
+            {anchor ? `${anchor.label} ${formatHexQuantity(anchor.number)}` : 'State not resolved'}
           </p>
         </div>
       </div>
@@ -77,7 +78,7 @@ export function ExecutionSummary({
         />
         <SummaryMetric
           label="Chain ID"
-          value={formatHexQuantity(execution.chainId)}
+          value={execution.chainId === null ? '—' : formatHexQuantity(execution.chainId)}
         />
       </div>
     </section>
@@ -87,7 +88,7 @@ export function ExecutionSummary({
 export function ExecutionFailure({
   failure,
 }: Readonly<{
-  failure: { detail?: string; message: string };
+  failure: Diagnostic;
 }>) {
   return (
     <section className="border-l-2 border-red-500 bg-red-50 px-4 py-3 text-red-900">
@@ -98,9 +99,15 @@ export function ExecutionFailure({
         />
         <div className="min-w-0">
           <p className="text-sm font-semibold">{failure.message}</p>
-          {failure.detail ? (
+          <p className="mt-1 font-mono text-[11px] text-red-800">{failure.code}</p>
+          {typeof failure.data?.reason === 'string' ? (
             <p className="mt-1 font-mono text-[11px] text-red-800">
-              {failure.detail}
+              {failure.data.reason}
+            </p>
+          ) : null}
+          {typeof failure.data?.panicCode === 'string' ? (
+            <p className="mt-1 font-mono text-[11px] text-red-800">
+              Solidity panic: {failure.data.panicCode}
             </p>
           ) : null}
         </div>
@@ -114,7 +121,7 @@ export function ExecutionDetails({
   execution,
   nativeSymbol,
 }: Readonly<{
-  anchor: ExecutionAnchor;
+  anchor: ExecutionAnchor | null;
   execution: SimulationExecution;
   nativeSymbol: string;
 }>) {
@@ -132,7 +139,7 @@ export function ExecutionDetails({
         />
         <DetailItem
           label="Gas limit"
-          value={formatHexQuantity(execution.gasLimit)}
+          value={execution.gasLimit === null ? 'Not completed' : formatHexQuantity(execution.gasLimit)}
         />
         {execution.effectiveGasPrice ? (
           <DetailItem
@@ -177,10 +184,10 @@ export function ExecutionDetails({
           />
         ) : null}
         <DetailItem label="Logs" value={String(execution.logsCount)} />
-        <DetailItem
+        {anchor ? <DetailItem
           label={anchor.label}
           value={formatHexQuantity(anchor.number)}
-        />
+        /> : null}
         {execution.gasCoveredBySponsor !== null ? (
           <>
             <DetailItem
@@ -193,7 +200,7 @@ export function ExecutionDetails({
             />
             <DetailItem
               label="Storage collateralized"
-              value={formatHexQuantity(execution.storageCollateralized ?? '0x0')}
+              value={execution.storageCollateralized === null ? '—' : formatHexQuantity(execution.storageCollateralized)}
             />
           </>
         ) : null}
@@ -208,7 +215,7 @@ export function ExecutionDetails({
         </div>
       ) : null}
 
-      <div className="border-t border-line px-5 py-4">
+      {anchor ? <div className="border-t border-line px-5 py-4">
         <p className="text-xs font-medium text-ink-600">
           {anchor.label} hash
         </p>
@@ -218,7 +225,7 @@ export function ExecutionDetails({
           </p>
           <CopyButton label={`Copy ${anchor.label.toLowerCase()} hash`} value={anchor.hash} />
         </div>
-      </div>
+      </div> : null}
 
       {execution.output ? <details className="group border-t border-line">
         <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-4 px-5 text-sm font-medium [&::-webkit-details-marker]:hidden">

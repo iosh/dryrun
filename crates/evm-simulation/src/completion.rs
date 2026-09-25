@@ -1,19 +1,17 @@
-use alloy::primitives::U256;
+use crate::{
+    EthereumChainSpec, EvmNotReadyError, EvmSimulationError, EvmTransactionCompletionError,
+    EvmTransactionRejection, TransactionInput, TxType, TypedTransaction,
+};
 use alloy::{
     consensus::{BlockHeader, Header, Sealed},
     eips::BlockId,
     network::Ethereum,
     providers::{DynProvider, Provider, layers::BlockIdProvider},
-    rpc::types::{
-        AccessList as RpcAccessList, TransactionInput as RpcTransactionInput,
-        TransactionRequest as RpcTransactionRequest,
-    },
 };
-
-use crate::{
-    DynamicFees, EthereumChainSpec, EvmNotReadyError, EvmSimulationError,
-    EvmTransactionCompletionError, FeeInput, PartialTransactionCommon, TransactionCommon,
-    TransactionInput, TransactionRequest, TxType, TypedTransaction,
+use alloy_primitives::{Address, U64, U256};
+use simulation_core::{
+    completion::{self, Completion, FeeSource, TransactionCompletionSource},
+    transaction::{TransactionRef, TransactionRequest},
 };
 
 pub(crate) async fn complete_transaction(
@@ -21,287 +19,224 @@ pub(crate) async fn complete_transaction(
     provider: &DynProvider<Ethereum>,
     block: &Sealed<Header>,
     chain_spec: &EthereumChainSpec,
-) -> Result<TypedTransaction, EvmSimulationError> {
-    match input {
-        TransactionInput::Complete(transaction) => {
-            transaction.check_type_requirements()?;
-            Ok(transaction)
-        }
-        TransactionInput::Partial(transaction) => {
-            complete_partial_transaction(transaction, provider, block, chain_spec).await
-        }
-    }
+) -> Result<
+    Completion<TypedTransaction, TransactionRequest, EvmTransactionRejection>,
+    EvmSimulationError,
+> {
+    completion::complete_transaction(
+        input,
+        &EthereumCompletionSource {
+            provider,
+            block,
+            chain_spec,
+        },
+    )
+    .await
 }
 
-async fn complete_partial_transaction(
-    transaction: TransactionRequest,
-    provider: &DynProvider<Ethereum>,
-    block: &Sealed<Header>,
-    chain_spec: &EthereumChainSpec,
-) -> Result<TypedTransaction, EvmSimulationError> {
-    let default_type = if block.base_fee_per_gas().is_some() {
-        TxType::Eip1559
-    } else {
-        TxType::Legacy
-    };
-    let transaction_type = transaction.transaction_type(default_type)?;
-    let TransactionRequest {
-        common,
-        fees,
-        transaction_type: _,
-        max_fee_per_blob_gas,
-        access_list,
-        blob_versioned_hashes,
-        authorization_list,
-    } = transaction;
-    let PartialTransactionCommon {
-        from,
-        to,
-        nonce,
-        gas_limit,
-        value,
-        input,
-        chain_id,
-    } = common;
-    let FeeInput {
-        gas_price,
-        max_fee_per_gas,
-        max_priority_fee_per_gas,
-    } = fees;
-    let block_id = BlockId::hash_canonical(block.hash());
-    let anchored_provider = BlockIdProvider::new(provider.clone(), block_id);
-    let nonce = match nonce {
-        Some(nonce) => nonce,
-        None => anchored_provider
-            .get_transaction_count(from)
-            .await
-            .map_err(|source| EvmTransactionCompletionError::NonceLookup {
-                block_number: block.number(),
-                source,
-            })?,
-    };
-    let value = value.unwrap_or_default();
-    let input = input.unwrap_or_default();
-    let estimation_chain_id = chain_spec.chain_id();
-    let chain_id = chain_id.unwrap_or(estimation_chain_id);
-    let needs_gas_estimate = gas_limit.is_none();
-    let common = TransactionCommon {
-        from,
-        to,
-        nonce,
-        gas_limit: gas_limit.unwrap_or_default(),
-        value,
-        input,
-        chain_id,
-    };
-    let access_list = access_list.unwrap_or_default();
-    let blob_versioned_hashes = blob_versioned_hashes.unwrap_or_default();
-    let authorization_list = authorization_list.unwrap_or_default();
-    let mut transaction = match transaction_type {
-        TxType::Legacy => TypedTransaction::Legacy {
-            common,
-            gas_price: complete_gas_price(provider, gas_price).await?,
-        },
-        TxType::Eip2930 => TypedTransaction::Eip2930 {
-            common,
-            gas_price: complete_gas_price(provider, gas_price).await?,
-            access_list,
-        },
-        TxType::Eip1559 => {
-            let (max_fee_per_gas, max_priority_fee_per_gas) =
-                complete_dynamic_fees(provider, block, max_fee_per_gas, max_priority_fee_per_gas)
-                    .await?;
-            TypedTransaction::Eip1559 {
-                common,
-                fees: DynamicFees {
-                    max_fee_per_gas,
-                    max_priority_fee_per_gas,
-                },
-                access_list,
-            }
-        }
-        TxType::Eip4844 => {
-            let (max_fee_per_gas, max_priority_fee_per_gas) =
-                complete_dynamic_fees(provider, block, max_fee_per_gas, max_priority_fee_per_gas)
-                    .await?;
-            let max_fee_per_blob_gas = match max_fee_per_blob_gas {
-                Some(value) => value,
-                None => {
-                    let params = chain_spec
-                        .execution_spec(block.number(), block.timestamp())
-                        .map_err(EvmNotReadyError::from)?
-                        .blob_params
-                        .ok_or(EvmTransactionCompletionError::MissingBlobBaseFee {
-                            block_number: block.number(),
-                        })?;
-                    let excess = block.excess_blob_gas().ok_or(
-                        EvmTransactionCompletionError::MissingBlobBaseFee {
-                            block_number: block.number(),
-                        },
-                    )?;
-                    U256::from(params.calc_blob_fee(excess))
+struct EthereumCompletionSource<'a> {
+    provider: &'a DynProvider<Ethereum>,
+    block: &'a Sealed<Header>,
+    chain_spec: &'a EthereumChainSpec,
+}
+
+impl FeeSource for EthereumCompletionSource<'_> {
+    type Error = EvmSimulationError;
+    fn base_fee(&self) -> Result<U256, Self::Error> {
+        self.block
+            .base_fee_per_gas()
+            .map(U256::from)
+            .ok_or_else(|| {
+                EvmTransactionCompletionError::MissingBaseFee {
+                    block_number: self.block.number(),
                 }
-            };
-            TypedTransaction::Eip4844 {
-                common,
-                fees: DynamicFees {
-                    max_fee_per_gas,
-                    max_priority_fee_per_gas,
-                },
-                max_fee_per_blob_gas,
-                access_list,
-                blob_versioned_hashes,
-            }
-        }
-        TxType::Eip7702 => {
-            let (max_fee_per_gas, max_priority_fee_per_gas) =
-                complete_dynamic_fees(provider, block, max_fee_per_gas, max_priority_fee_per_gas)
-                    .await?;
-            TypedTransaction::Eip7702 {
-                common,
-                fees: DynamicFees {
-                    max_fee_per_gas,
-                    max_priority_fee_per_gas,
-                },
-                access_list,
-                authorization_list,
-            }
-        }
-    };
-
-    if needs_gas_estimate {
-        let mut request = gas_estimation_request(&transaction)?;
-        request.chain_id = Some(estimation_chain_id);
-        let gas_limit = anchored_provider
-            .estimate_gas(request)
-            .await
-            .map_err(|source| EvmTransactionCompletionError::GasEstimation {
-                block_number: block.number(),
-                source,
-            })?;
-        transaction.common_mut().gas_limit = gas_limit;
+                .into()
+            })
     }
-
-    Ok(transaction)
-}
-
-async fn complete_gas_price(
-    provider: &DynProvider<Ethereum>,
-    gas_price: Option<U256>,
-) -> Result<U256, EvmTransactionCompletionError> {
-    match gas_price {
-        Some(value) => Ok(value),
-        None => provider
+    async fn gas_price(&self) -> Result<U256, Self::Error> {
+        self.provider
             .get_gas_price()
             .await
             .map(U256::from)
-            .map_err(|source| EvmTransactionCompletionError::GasPriceSuggestion { source }),
+            .map_err(|source| EvmTransactionCompletionError::GasPriceSuggestion { source }.into())
     }
-}
-
-async fn complete_dynamic_fees(
-    provider: &DynProvider<Ethereum>,
-    block: &Sealed<Header>,
-    max_fee_per_gas: Option<U256>,
-    max_priority_fee_per_gas: Option<U256>,
-) -> Result<(U256, U256), EvmTransactionCompletionError> {
-    let max_priority_fee_per_gas = match max_priority_fee_per_gas {
-        Some(value) => value,
-        None => provider
+    async fn priority_fee(&self) -> Result<U256, Self::Error> {
+        self.provider
             .get_max_priority_fee_per_gas()
             .await
             .map(U256::from)
-            .map_err(|source| EvmTransactionCompletionError::PriorityFeeSuggestion { source })?,
-    };
-    let max_fee_per_gas = match max_fee_per_gas {
-        Some(value) => value,
-        None => suggested_max_fee_per_gas(block.inner(), max_priority_fee_per_gas)?,
-    };
-
-    Ok((max_fee_per_gas, max_priority_fee_per_gas))
+            .map_err(|source| {
+                EvmTransactionCompletionError::PriorityFeeSuggestion { source }.into()
+            })
+    }
+    fn max_fee_overflow(&self) -> Self::Error {
+        EvmTransactionCompletionError::MaxFeePerGasOverflow.into()
+    }
+    fn max_fee_per_gas_limit(&self) -> U256 {
+        U256::from(u128::MAX)
+    }
 }
 
-fn suggested_max_fee_per_gas(
-    block: &Header,
-    max_priority_fee_per_gas: U256,
-) -> Result<U256, EvmTransactionCompletionError> {
-    let base_fee =
-        block
-            .base_fee_per_gas()
-            .ok_or(EvmTransactionCompletionError::MissingBaseFee {
-                block_number: block.number(),
+impl TransactionCompletionSource for EthereumCompletionSource<'_> {
+    type Rejection = EvmTransactionRejection;
+    fn chain_id(&self) -> u64 {
+        self.chain_spec.chain_id()
+    }
+    fn default_type(&self) -> TxType {
+        if self.block.base_fee_per_gas().is_some() {
+            TxType::Eip1559
+        } else {
+            TxType::Legacy
+        }
+    }
+    fn check_input(&self, transaction: TransactionRef<'_>, _: TxType) -> Result<(), Self::Error> {
+        let (fixed, cap, priority, blob) = match transaction {
+            TransactionInput::Partial(tx) => (
+                tx.fees.gas_price,
+                tx.fees.max_fee_per_gas,
+                tx.fees.max_priority_fee_per_gas,
+                tx.max_fee_per_blob_gas,
+            ),
+            TransactionInput::Complete(tx) => (
+                tx.dynamic_fees().is_none().then(|| tx.gas_price_cap()),
+                tx.dynamic_fees().map(|fees| fees.max_fee_per_gas),
+                tx.dynamic_fees().map(|fees| fees.max_priority_fee_per_gas),
+                match tx {
+                    TypedTransaction::Eip4844 {
+                        max_fee_per_blob_gas,
+                        ..
+                    } => Some(*max_fee_per_blob_gas),
+                    _ => None,
+                },
+            ),
+        };
+        for (field, value) in [
+            ("gasPrice", fixed),
+            ("maxFeePerGas", cap),
+            ("maxPriorityFeePerGas", priority),
+            ("maxFeePerBlobGas", blob),
+        ] {
+            if let Some(value) = value {
+                crate::transaction::fee_to_u128(field, value)?;
+            }
+        }
+        Ok(())
+    }
+    fn rejection(
+        &self,
+        transaction: TransactionRef<'_>,
+        transaction_type: TxType,
+    ) -> Result<Option<Self::Rejection>, Self::Error> {
+        use EvmTransactionRejection as Rejection;
+        use revm::primitives::hardfork::SpecId;
+
+        let spec = self
+            .chain_spec
+            .execution_spec(self.block.number(), self.block.timestamp())
+            .map_err(EvmNotReadyError::from)?
+            .spec_id;
+        if let Some(chain_id) = transaction.chain_id()
+            && chain_id != self.chain_spec.chain_id()
+        {
+            return Ok(Some(Rejection::InvalidChainId {
+                transaction_chain_id: chain_id,
+                expected_chain_id: self.chain_spec.chain_id(),
+            }));
+        }
+        let inactive = match transaction_type {
+            TxType::Eip2930 if !spec.is_enabled_in(SpecId::BERLIN) => {
+                Some(Rejection::Eip2930NotActivated)
+            }
+            TxType::Eip1559 if !spec.is_enabled_in(SpecId::LONDON) => {
+                Some(Rejection::Eip1559NotActivated)
+            }
+            TxType::Eip4844 if !spec.is_enabled_in(SpecId::CANCUN) => {
+                Some(Rejection::Eip4844NotActivated)
+            }
+            TxType::Eip7702 if !spec.is_enabled_in(SpecId::PRAGUE) => {
+                Some(Rejection::Eip7702NotActivated)
+            }
+            _ => None,
+        };
+        if inactive.is_some() {
+            return Ok(inactive);
+        }
+        if let (Some(max_fee_per_gas), Some(max_priority_fee_per_gas)) =
+            (transaction.gas_price_cap(), transaction.priority_fee())
+            && max_priority_fee_per_gas > max_fee_per_gas
+        {
+            return Ok(Some(Rejection::PriorityFeeGreaterThanMaxFee {
+                max_fee_per_gas,
+                max_priority_fee_per_gas,
+            }));
+        }
+        if let Some(gas_limit) = transaction.gas_limit()
+            && gas_limit > self.block.gas_limit()
+        {
+            return Ok(Some(Rejection::GasLimitExceedsBlockGasLimit {
+                gas_limit,
+                block_gas_limit: self.block.gas_limit(),
+            }));
+        }
+        if spec.is_enabled_in(SpecId::LONDON)
+            && let (Some(gas_price), Some(base_fee_per_gas)) =
+                (transaction.gas_price_cap(), self.block.base_fee_per_gas())
+            && gas_price < U256::from(base_fee_per_gas)
+        {
+            return Ok(Some(Rejection::GasPriceBelowBaseFee {
+                gas_price,
+                base_fee_per_gas,
+            }));
+        }
+        Ok(None)
+    }
+    async fn nonce(&self, from: Address) -> Result<u64, Self::Error> {
+        let anchored = BlockIdProvider::new(
+            self.provider.clone(),
+            BlockId::hash_canonical(self.block.hash()),
+        );
+        anchored
+            .get_transaction_count(from)
+            .await
+            .map_err(|source| {
+                EvmTransactionCompletionError::NonceLookup {
+                    block_number: self.block.number(),
+                    source,
+                }
+                .into()
+            })
+    }
+    async fn estimate_gas(&self, transaction: &TransactionRequest) -> Result<u64, Self::Error> {
+        self.provider
+            .raw_request::<_, U64>(
+                "eth_estimateGas".into(),
+                (transaction, BlockId::hash_canonical(self.block.hash())),
+            )
+            .await
+            .map(|value| value.to::<u64>())
+            .map_err(|source| {
+                EvmTransactionCompletionError::GasEstimation {
+                    block_number: self.block.number(),
+                    source,
+                }
+                .into()
+            })
+    }
+    async fn blob_fee(&self) -> Result<U256, Self::Error> {
+        let spec = self
+            .chain_spec
+            .execution_spec(self.block.number(), self.block.timestamp())
+            .map_err(EvmNotReadyError::from)?;
+        let params = spec
+            .blob_params
+            .ok_or(EvmTransactionCompletionError::MissingBlobBaseFee {
+                block_number: self.block.number(),
             })?;
-
-    U256::from(base_fee)
-        .checked_mul(U256::from(2))
-        .and_then(|value| value.checked_add(max_priority_fee_per_gas))
-        .ok_or(EvmTransactionCompletionError::MaxFeePerGasOverflow)
-}
-
-fn gas_estimation_request(
-    transaction: &TypedTransaction,
-) -> Result<RpcTransactionRequest, crate::TransactionInputError> {
-    let common = transaction.common();
-    let mut request = RpcTransactionRequest {
-        from: Some(common.from),
-        to: Some(common.to.map_or(
-            alloy::primitives::TxKind::Create,
-            alloy::primitives::TxKind::Call,
-        )),
-        value: Some(common.value),
-        input: RpcTransactionInput::new(common.input.clone()),
-        nonce: Some(common.nonce),
-        chain_id: Some(common.chain_id),
-        ..Default::default()
-    };
-
-    request.transaction_type = Some(transaction.transaction_type() as u8);
-    if let Some(fees) = transaction.dynamic_fees() {
-        request.max_fee_per_gas = Some(checked_fee("maxFeePerGas", fees.max_fee_per_gas)?);
-        request.max_priority_fee_per_gas = Some(checked_fee(
-            "maxPriorityFeePerGas",
-            fees.max_priority_fee_per_gas,
-        )?);
-    } else {
-        request.gas_price = Some(checked_fee("gasPrice", transaction.gas_price_cap())?);
+        let excess = self.block.excess_blob_gas().ok_or(
+            EvmTransactionCompletionError::MissingBlobBaseFee {
+                block_number: self.block.number(),
+            },
+        )?;
+        Ok(U256::from(params.calc_blob_fee(excess)))
     }
-    if transaction.transaction_type() != TxType::Legacy {
-        request.access_list = Some(RpcAccessList(
-            transaction
-                .access_list()
-                .iter()
-                .map(|item| alloy::eips::eip2930::AccessListItem {
-                    address: item.address,
-                    storage_keys: item.storage_keys.clone(),
-                })
-                .collect(),
-        ));
-    }
-    match transaction {
-        TypedTransaction::Eip4844 {
-            max_fee_per_blob_gas,
-            blob_versioned_hashes,
-            ..
-        } => {
-            request.max_fee_per_blob_gas =
-                Some(checked_fee("maxFeePerBlobGas", *max_fee_per_blob_gas)?);
-            request.blob_versioned_hashes = Some(blob_versioned_hashes.clone());
-        }
-        TypedTransaction::Eip7702 {
-            authorization_list, ..
-        } => {
-            request.authorization_list = Some(authorization_list.clone());
-        }
-        _ => {}
-    }
-
-    Ok(request)
-}
-
-fn checked_fee(field: &'static str, value: U256) -> Result<u128, crate::TransactionInputError> {
-    u128::try_from(value).map_err(|_| crate::TransactionInputError::OutOfRange {
-        field,
-        value,
-        maximum: U256::from(u128::MAX),
-    })
 }

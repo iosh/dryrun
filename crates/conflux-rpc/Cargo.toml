@@ -4,6 +4,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+simulation-core = { workspace = true, features = ["serde"] }
 alloy-primitives = { workspace = true }
 cfx-addr = { workspace = true }
 cfx-rpc-cfx-types = { workspace = true }
@@ -14,7 +15,7 @@ conflux-provider = { workspace = true }
 conflux-simulation = { workspace = true, features = ["serde"] }
 hex = "0.4"
 jsonrpsee = { workspace = true, features = ["server"] }
-serde = { workspace = true }
+serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 simulation-tasks = { workspace = true }
 thiserror = { workspace = true }

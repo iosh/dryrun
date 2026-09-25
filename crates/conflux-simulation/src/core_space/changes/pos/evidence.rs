@@ -4,7 +4,9 @@ use cfx_types::Space;
 use cfx_vm_types::CallType;
 
 use crate::{
-    core_space::{CoreSpaceChangesError, CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition},
+    core_space::{
+        CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition, CoreSpaceProtocolError,
+    },
     execution::{CommittedExecutionTrace, FrameAction, FrameId, TraceEvent},
     primitive::{address_from_cfx, b256_from_cfx},
 };
@@ -79,7 +81,7 @@ enum PoSCallData {
 
 pub(super) fn collect_operations(
     execution: &CoreSpaceExecutedTransaction,
-) -> Result<Vec<CommittedPoSOperation>, CoreSpaceChangesError> {
+) -> Result<Vec<CommittedPoSOperation>, CoreSpaceProtocolError> {
     let pos_contract = cfx_parameters::internal_contract_addresses::POS_REGISTER_CONTRACT_ADDRESS;
     if !execution.is_active_internal_contract(pos_contract) {
         return Ok(Vec::new());
@@ -116,7 +118,7 @@ pub(super) fn collect_operations(
             || *code_address != pos_contract
             || !transferred_value.is_zero()
         {
-            return Err(CoreSpaceChangesError::unsupported_operation(
+            return Err(CoreSpaceProtocolError::unsupported_operation(
                 "Core Space PoS call did not use the canonical native plain-call form",
             ));
         }
@@ -135,7 +137,7 @@ pub(super) fn collect_operations(
     Ok(operations)
 }
 
-fn decode_call_data(calldata: &[u8]) -> Result<Option<PoSCallData>, CoreSpaceChangesError> {
+fn decode_call_data(calldata: &[u8]) -> Result<Option<PoSCallData>, CoreSpaceProtocolError> {
     let Some(selector) = calldata.get(..4) else {
         return Ok(None);
     };
@@ -163,7 +165,7 @@ fn match_operation_evidence(
     account: Address,
     call_data: PoSCallData,
     protocol_logs: &[PoSProtocolLog<'_>],
-) -> Result<CommittedPoSOperation, CoreSpaceChangesError> {
+) -> Result<CommittedPoSOperation, CoreSpaceProtocolError> {
     match call_data {
         PoSCallData::Registration {
             identifier,
@@ -234,7 +236,7 @@ fn read_abi_word(
     calldata: &[u8],
     offset: usize,
     field: &str,
-) -> Result<[u8; 32], CoreSpaceChangesError> {
+) -> Result<[u8; 32], CoreSpaceProtocolError> {
     let Some(word) = calldata.get(offset..offset + 32) else {
         return Err(inconsistent(format!(
             "Core Space {field} was missing from committed call data"
@@ -282,7 +284,7 @@ fn pos_logs_for_frame<'a>(
 
 fn decode_register_event(
     log: PoSProtocolLog<'_>,
-) -> Result<events::Register, CoreSpaceChangesError> {
+) -> Result<events::Register, CoreSpaceProtocolError> {
     events::Register::decode_raw_log_validate(
         log.topics.iter().copied().map(b256_from_cfx),
         log.data,
@@ -292,7 +294,7 @@ fn decode_register_event(
 
 fn decode_increase_event(
     log: PoSProtocolLog<'_>,
-) -> Result<events::IncreaseStake, CoreSpaceChangesError> {
+) -> Result<events::IncreaseStake, CoreSpaceProtocolError> {
     events::IncreaseStake::decode_raw_log_validate(
         log.topics.iter().copied().map(b256_from_cfx),
         log.data,
@@ -300,23 +302,23 @@ fn decode_increase_event(
     .map_err(|_| invalid_event("IncreaseStake"))
 }
 
-fn decode_retire_event(log: PoSProtocolLog<'_>) -> Result<events::Retire, CoreSpaceChangesError> {
+fn decode_retire_event(log: PoSProtocolLog<'_>) -> Result<events::Retire, CoreSpaceProtocolError> {
     events::Retire::decode_raw_log_validate(log.topics.iter().copied().map(b256_from_cfx), log.data)
         .map_err(|_| invalid_event("Retire"))
 }
 
-fn invalid_event(event: &'static str) -> CoreSpaceChangesError {
+fn invalid_event(event: &'static str) -> CoreSpaceProtocolError {
     inconsistent(format!(
         "Core Space PoS {event} event is not canonical ABI data"
     ))
 }
 
-fn log_count_error(operation: &str, expected: usize, actual: usize) -> CoreSpaceChangesError {
+fn log_count_error(operation: &str, expected: usize, actual: usize) -> CoreSpaceProtocolError {
     inconsistent(format!(
         "Core Space PoS {operation} expected {expected} committed events, got {actual}"
     ))
 }
 
-fn inconsistent(details: impl Into<String>) -> CoreSpaceChangesError {
-    CoreSpaceChangesError::inconsistent_execution(details)
+fn inconsistent(details: impl Into<String>) -> CoreSpaceProtocolError {
+    CoreSpaceProtocolError::inconsistent_execution(details)
 }

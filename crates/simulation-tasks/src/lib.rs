@@ -104,3 +104,16 @@ fn classify_join_error(source: JoinError) -> SimulationTaskError {
         SimulationTaskError::TaskCancelled { source }
     }
 }
+
+impl simulation_core::error::ErrorInfo for SimulationTaskError {
+    fn diagnostic(&self) -> simulation_core::error::Diagnostic {
+        use simulation_core::error::ErrorCode;
+        match self {
+            Self::Closed => ErrorCode::ServiceClosed,
+            Self::ResponseTimedOut => ErrorCode::ServiceTimeout,
+            Self::TaskCancelled { .. } => ErrorCode::ServiceCancelled,
+            Self::TaskPanicked { .. } => ErrorCode::Internal,
+        }
+        .diagnostic()
+    }
+}

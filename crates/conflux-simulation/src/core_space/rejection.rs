@@ -152,3 +152,12 @@ impl fmt::Display for CoreSpaceTransactionRejection {
         }
     }
 }
+
+impl simulation_core::error::ErrorInfo for CoreSpaceTransactionRejection {
+    fn diagnostic(&self) -> simulation_core::error::Diagnostic {
+        simulation_core::error::Diagnostic::new(
+            simulation_core::error::ErrorCode::TransactionRejected,
+            self.to_string(),
+        )
+    }
+}

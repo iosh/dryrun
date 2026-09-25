@@ -1,4 +1,3 @@
-use alloy::sol_types::{Panic, Revert, SolError};
 use alloy_primitives::Bytes;
 use cfx_executor::executive::{ExecutionError, ToRepackError, TxDropError};
 use cfx_types::{
@@ -54,7 +53,7 @@ pub(crate) fn build_execution_outcome(
             })
         }
         CoreSpaceFinalStatus::Reverted => {
-            let reason = decode_revert_reason(&executed.output);
+            let reason = CoreSpaceRevertReason::decode(&executed.output);
             Ok(CoreSpaceExecutionOutcome::Reverted {
                 result,
                 revert_data: executed.output.clone(),
@@ -332,18 +331,6 @@ fn map_vm_failure(
             Ok(CoreSpaceExecutionFailure::CreateContractStartingWithEf)
         }
     }
-}
-
-fn decode_revert_reason(output: &Bytes) -> Option<CoreSpaceRevertReason> {
-    Revert::abi_decode_validate(output.as_ref())
-        .map(|revert| CoreSpaceRevertReason::SolidityError {
-            message: revert.reason,
-        })
-        .or_else(|_| {
-            Panic::abi_decode_validate(output.as_ref())
-                .map(|panic| CoreSpaceRevertReason::SolidityPanic { code: panic.code })
-        })
-        .ok()
 }
 
 fn core_address(

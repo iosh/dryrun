@@ -4,7 +4,7 @@ use alloy::{
 };
 
 use crate::espace::{
-    EspaceCallKind, EspaceChangesError, EspaceCommittedFrame, EspaceExecutedTransaction,
+    EspaceCallKind, EspaceChangeDerivationError, EspaceCommittedFrame, EspaceExecutedTransaction,
     EspaceExecutionPosition, EspaceExecutionSpace, EspaceFrameAction, EspaceFrameId,
 };
 
@@ -18,7 +18,7 @@ pub(super) fn verify_erc20_transfer_call(
     to: Address,
     amount: U256,
     position: EspaceExecutionPosition,
-) -> Result<(), EspaceChangesError> {
+) -> Result<(), EspaceChangeDerivationError> {
     let transfer = encode_call(
         "transfer(address,uint256)",
         (to, amount).abi_encode_sequence(),
@@ -43,7 +43,7 @@ pub(super) fn verify_erc20_approval_call(
     spender: Address,
     amount: U256,
     position: EspaceExecutionPosition,
-) -> Result<(), EspaceChangesError> {
+) -> Result<(), EspaceChangeDerivationError> {
     let expected = encode_call(
         "approve(address,uint256)",
         (spender, amount).abi_encode_sequence(),
@@ -68,7 +68,7 @@ pub(super) fn verify_erc721_transfer_call(
     to: Address,
     token_id: U256,
     position: EspaceExecutionPosition,
-) -> Result<(), EspaceChangesError> {
+) -> Result<(), EspaceChangeDerivationError> {
     has_matching_committed_call(execution, frame_id, contract, position, |_, _, _, input| {
         matches_erc721_transfer_call(input, from, Some(to), token_id)
     })
@@ -85,7 +85,7 @@ pub(super) fn verify_erc721_approval_call(
     approved: Option<Address>,
     token_id: U256,
     position: EspaceExecutionPosition,
-) -> Result<(), EspaceChangesError> {
+) -> Result<(), EspaceChangeDerivationError> {
     let expected = encode_call(
         "approve(address,uint256)",
         (approved.unwrap_or(Address::ZERO), token_id).abi_encode_sequence(),
@@ -138,7 +138,7 @@ pub(super) fn verify_operator_approval_call(
     operator: Address,
     approved: bool,
     position: EspaceExecutionPosition,
-) -> Result<(), EspaceChangesError> {
+) -> Result<(), EspaceChangeDerivationError> {
     let expected = encode_call(
         "setApprovalForAll(address,bool)",
         (operator, approved).abi_encode_sequence(),
@@ -164,7 +164,7 @@ pub(super) fn verify_erc1155_transfer_call(
     items: &[(U256, U256)],
     batch: bool,
     position: EspaceExecutionPosition,
-) -> Result<(), EspaceChangesError> {
+) -> Result<(), EspaceChangeDerivationError> {
     let matches =
         has_matching_committed_call(execution, frame_id, contract, position, |_, _, _, input| {
             if batch {

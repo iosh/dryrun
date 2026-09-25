@@ -36,8 +36,8 @@ pub use contract_standards::{
     Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem, StandardChange,
 };
 pub use error::{
-    CoreSpaceChangesError, CoreSpaceExecutionError, CoreSpaceResultIntegrationError,
-    CoreSpaceSimulationError, CoreSpaceStateAccessError,
+    CoreSpaceExecutionError, CoreSpaceProtocolError, CoreSpaceResultIntegrationError,
+    CoreSpaceSimulationError, CoreSpaceStateAccessError, CoreSpaceTransactionCompletionError,
 };
 pub use executed_transaction::{
     CoreSpaceCallKind, CoreSpaceCommittedFrame, CoreSpaceCommittedInternalTransfer,
@@ -59,7 +59,6 @@ pub use state_access::{
 };
 pub use transaction::{
     CoreSpaceAccessListItem, CoreSpacePartialTransactionCommon, CoreSpaceTransactionCommon,
-    CoreSpaceTransactionCompletionError, CoreSpaceTransactionInput, CoreSpaceTransactionInputError,
-    CoreSpaceTransactionRequest, CoreSpaceTransactionType, CoreSpaceTypedTransaction, DynamicFees,
-    FeeInput,
+    CoreSpaceTransactionInput, CoreSpaceTransactionInputError, CoreSpaceTransactionRequest,
+    CoreSpaceTransactionType, CoreSpaceTypedTransaction, DynamicFees, FeeInput,
 };

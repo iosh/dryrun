@@ -1,7 +1,9 @@
 import type { EnvironmentDefinition } from '../../environment.ts';
 import type { AssetFlowItemViewModel } from '../../flowView.ts';
+import type { Diagnostic } from '../../rpc.ts';
 import type {
   SimulationChange,
+  SimulationChanges,
 } from '../../types.ts';
 
 export interface AddressHighlightController {
@@ -46,9 +48,10 @@ export interface SenderImpactItem {
 }
 
 export interface SimulationResultViewModel {
-  anchor: ExecutionAnchor;
+  anchor: ExecutionAnchor | null;
   changes: readonly SimulationChange[];
-  changesError: string | null;
+  changesStatus: SimulationChanges['status'];
+  changesError: Diagnostic | null;
   environment: EnvironmentDefinition;
   execution: SimulationExecution;
   flowItems: readonly SequencedAssetFlowItemViewModel[];
@@ -63,23 +66,18 @@ export type SimulationExecutionStatus =
   | 'failed'
   | 'rejected';
 
-export interface SimulationExecutionFailure {
-  detail?: string;
-  message: string;
-}
-
 export interface SimulationExecution {
   blobGasFee: string | null;
   blobGasPrice: string | null;
   blobGasUsed: string | null;
   burntGasFee: string | null;
-  chainId: string;
+  chainId: string | null;
   contractAddress: string | null;
   effectiveGasPrice: string | null;
-  failure: SimulationExecutionFailure | null;
+  failure: Diagnostic | null;
   gasCoveredBySponsor: boolean | null;
   gasFee: string | null;
-  gasLimit: string;
+  gasLimit: string | null;
   gasUsed: string | null;
   logsCount: number;
   output: { label: string; value: string } | null;

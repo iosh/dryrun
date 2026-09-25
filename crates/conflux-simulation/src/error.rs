@@ -133,3 +133,94 @@ pub enum ConfluxInitializationError {
         actual: ConfluxEndpointIdentity,
     },
 }
+
+use simulation_core::error::{Diagnostic, ErrorCode as Code, ErrorInfo};
+
+impl ErrorInfo for crate::ConfluxRpcError {
+    fn diagnostic(&self) -> Diagnostic {
+        let message = match self {
+            Self::AddressEncoding { .. } => return Code::Internal.diagnostic(),
+            Self::Core { .. } => "Simulation service could not query the upstream Core Space node",
+            Self::Espace { .. } => "Simulation service could not query the upstream eSpace node",
+            Self::InvalidResponse { .. } => "Upstream chain node returned invalid response data",
+        };
+        Diagnostic::new(Code::ProviderRequestFailed, message)
+    }
+}
+
+impl ErrorInfo for crate::ConfluxBlockContextError {
+    fn diagnostic(&self) -> Diagnostic {
+        Diagnostic::new(Code::ContextUnavailable, self.to_string())
+    }
+}
+
+impl ErrorInfo for ConfluxStateAnchorError {
+    fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::Rpc(error) => error.diagnostic(),
+            Self::Mismatch { .. } => Diagnostic::new(Code::InconsistentContext, self.to_string()),
+        }
+    }
+}
+
+pub(crate) fn estimation_diagnostic(error: &crate::ConfluxRpcError) -> Diagnostic {
+    let execution_failed = match error {
+        crate::ConfluxRpcError::Core {
+            source: ConfluxProviderError::JsonRpc { code, .. },
+            ..
+        } => *code == -32015,
+        crate::ConfluxRpcError::Espace {
+            source: TransportError::ErrorResp(error),
+            ..
+        } => error.code == 3,
+        _ => false,
+    };
+    if execution_failed {
+        Code::CompletionFailed.diagnostic()
+    } else {
+        error.diagnostic()
+    }
+}
+
+// Source traversal is limited to erased backend and extension errors. Known
+// transparent wrappers are handled by their typed ErrorInfo implementations.
+pub(crate) fn source_diagnostic(
+    mut error: &(dyn std::error::Error + 'static),
+    fallback: Code,
+) -> Diagnostic {
+    loop {
+        if let Some(error) = error.downcast_ref::<crate::ConfluxRpcError>() {
+            return error.diagnostic();
+        }
+        if let Some(error) = error.downcast_ref::<crate::core_space::CoreSpaceStateAccessError>() {
+            return error.diagnostic();
+        }
+        if let Some(error) = error.downcast_ref::<crate::espace::EspaceStateAccessError>() {
+            return error.diagnostic();
+        }
+        if let Some(error) = error.downcast_ref::<crate::espace::EspaceStateReadError>() {
+            return error.diagnostic();
+        }
+        if let Some(error) = error.downcast_ref::<crate::core_space::CoreSpaceProtocolError>() {
+            return error.diagnostic();
+        }
+        if let Some(error) =
+            error.downcast_ref::<crate::core_space::CoreSpaceChangeDerivationError>()
+        {
+            return error.diagnostic();
+        }
+        if let Some(error) = error.downcast_ref::<crate::espace::EspaceChangeDerivationError>() {
+            return error.diagnostic();
+        }
+        if let Some(error) = error.downcast_ref::<crate::espace::EspaceObservationError>() {
+            return error.diagnostic();
+        }
+        if error.is::<TransportError>() || error.is::<ConfluxProviderError>() {
+            return Code::ProviderRequestFailed.diagnostic();
+        }
+        let Some(source) = error.source() else {
+            return fallback.diagnostic();
+        };
+        error = source;
+    }
+}

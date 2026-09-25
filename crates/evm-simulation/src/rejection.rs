@@ -184,3 +184,12 @@ impl fmt::Display for EvmTransactionRejection {
         }
     }
 }
+
+impl simulation_core::error::ErrorInfo for EvmTransactionRejection {
+    fn diagnostic(&self) -> simulation_core::error::Diagnostic {
+        simulation_core::error::Diagnostic::new(
+            simulation_core::error::ErrorCode::TransactionRejected,
+            self.to_string(),
+        )
+    }
+}

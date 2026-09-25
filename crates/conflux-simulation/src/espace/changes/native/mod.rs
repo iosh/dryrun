@@ -1,31 +1,14 @@
 mod collection;
 
 use super::{ChangeOccurrence, EspaceNativeCurrency};
-use crate::espace::{EspaceChange, EspaceChangesError, EspaceExecutedTransaction};
+use crate::espace::{EspaceChange, EspaceChangeDerivationError, EspaceExecutedTransaction};
 use alloy_primitives::{Address, U256};
-
-use thiserror::Error;
-
-#[derive(Debug, Error)]
-#[error("{details}")]
-pub(super) struct NativeChangeError {
-    details: String,
-}
-
-impl NativeChangeError {
-    pub(super) fn new(details: impl Into<String>) -> Self {
-        Self {
-            details: details.into(),
-        }
-    }
-}
 
 pub(super) fn derive_changes(
     execution: &EspaceExecutedTransaction,
     currency: &EspaceNativeCurrency,
-) -> Result<Vec<ChangeOccurrence>, EspaceChangesError> {
-    let operations = collection::collect_native_operations(execution)
-        .map_err(|error| EspaceChangesError::derivation("native asset", error))?;
+) -> Result<Vec<ChangeOccurrence>, EspaceChangeDerivationError> {
+    let operations = collection::collect_native_operations(execution)?;
     Ok(operations
         .into_iter()
         .map(|operation| {

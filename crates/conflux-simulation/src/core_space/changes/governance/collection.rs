@@ -3,7 +3,7 @@ use cfx_vm_types::CallType;
 
 use super::{VoteEvent, codec::decode_cast_vote, codec::decode_vote_event};
 use crate::{
-    core_space::{CoreSpaceChangesError, CoreSpaceExecutionPosition},
+    core_space::{CoreSpaceExecutionPosition, CoreSpaceProtocolError},
     execution::{CommittedExecutionTrace, FrameAction, TraceEvent},
 };
 
@@ -19,7 +19,7 @@ pub(super) struct GovernanceOperation {
 pub(super) fn collect_operations(
     trace: &CommittedExecutionTrace,
     active: bool,
-) -> Result<Vec<GovernanceOperation>, CoreSpaceChangesError> {
+) -> Result<Vec<GovernanceOperation>, CoreSpaceProtocolError> {
     if !active {
         return Ok(Vec::new());
     }
@@ -52,7 +52,7 @@ pub(super) fn collect_operations(
             || *call_type != CallType::Call
             || !transferred_value.is_zero()
         {
-            return Err(CoreSpaceChangesError::unsupported_operation(
+            return Err(CoreSpaceProtocolError::unsupported_operation(
                 "Core Space governance call did not use the canonical native plain-call form",
             ));
         }

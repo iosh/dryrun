@@ -11,6 +11,7 @@ import {
 } from '../../flowView.ts';
 import type {
   SimulationChange,
+  SimulationChanges,
   SimulationRecord,
 } from '../../types.ts';
 import { AddressValue } from './AddressHighlight.tsx';
@@ -24,12 +25,14 @@ import type { AddressHighlightController } from './resultTypes.ts';
 export function ChangesList({
   addressHighlight,
   changes,
+  changesStatus,
   changesError,
   record,
 }: Readonly<{
   addressHighlight: AddressHighlightController;
   changes: readonly SimulationChange[];
-  changesError: string | null;
+  changesStatus: SimulationChanges['status'];
+  changesError: SimulationChanges['error'];
   record: SimulationRecord;
 }>) {
   return (
@@ -40,7 +43,7 @@ export function ChangesList({
           <h3 className="mt-1 text-lg font-semibold">Changes</h3>
         </div>
         <span className="flex h-7 min-w-7 items-center justify-center rounded-full bg-shell-100 px-2 text-xs font-semibold text-ink-600">
-          {changesError ? '—' : changes.length}
+          {changesStatus === 'complete' ? changes.length : '—'}
         </span>
       </div>
 
@@ -51,10 +54,15 @@ export function ChangesList({
             <div className="min-w-0">
               <p className="text-sm font-semibold">Changes unavailable</p>
               <p className="mt-1 break-words text-sm leading-5 text-amber-900">
-                {changesError}
+                {changesError.message}
               </p>
+              <p className="mt-1 font-mono text-[11px] text-amber-900">{changesError.code}</p>
             </div>
           </div>
+        </div>
+      ) : changesStatus === 'notAnalyzed' ? (
+        <div className="px-5 py-10 text-center text-sm text-ink-600">
+          Changes are analyzed only after successful execution.
         </div>
       ) : changes.length > 0 ? (
         <div>

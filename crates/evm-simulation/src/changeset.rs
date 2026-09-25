@@ -353,6 +353,8 @@ enum StandardChangeKey {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum EvmChangeDerivationError {
+    #[error("unsupported contract behavior: {details}")]
+    Unsupported { details: String },
     #[error(transparent)]
     Observation(#[from] EvmObservationError),
 
@@ -953,6 +955,8 @@ impl EvmChangePosition {
     }
 }
 
+/// Rules run only after successful execution. The configured composition must
+/// account for every supported effect or return an error; partial sets are not published.
 pub trait EvmChangeRules: Send + Sync + 'static {
     fn required_observations(&self) -> EvmObservationRequirements;
 
@@ -971,20 +975,7 @@ pub trait EvmChangeRules: Send + Sync + 'static {
     }
 }
 
-#[derive(Debug)]
-pub enum EvmChanges {
-    Complete(EvmChangeSet),
-    Unavailable(EvmChangeDerivationError),
-}
-
-impl From<Result<EvmChangeSet, EvmChangeDerivationError>> for EvmChanges {
-    fn from(result: Result<EvmChangeSet, EvmChangeDerivationError>) -> Self {
-        match result {
-            Ok(changes) => Self::Complete(changes),
-            Err(error) => Self::Unavailable(error),
-        }
-    }
-}
+pub type EvmChanges = simulation_core::simulation::Changes<EvmChangeSet, EvmChangeDerivationError>;
 
 #[derive(Debug, Clone)]
 pub struct EvmNativeAssetChangeRules {
@@ -1150,4 +1141,29 @@ where
         let second = self.second.derive_changes(execution, state)?;
         first.merge(second)
     }
+}
+
+/// Code without an established implementation scope cannot produce complete changes.
+pub(crate) fn check_contract_support(
+    execution: &EvmTransactionExecution,
+    state: &EvmStateAccess,
+) -> Result<(), EvmChangeDerivationError> {
+    for frame in execution.committed_frames() {
+        let crate::EvmFrameAction::Call {
+            bytecode_address, ..
+        } = frame.action()
+        else {
+            return Err(EvmChangeDerivationError::Unsupported {
+                details: "contract creation requires an implementation-specific analyzer".into(),
+            });
+        };
+        if state.initial().read_account(*bytecode_address)?.has_code
+            || state.finalized().read_account(*bytecode_address)?.has_code
+        {
+            return Err(EvmChangeDerivationError::Unsupported {
+                details: format!("no verified implementation scope for code at {bytecode_address}"),
+            });
+        }
+    }
+    Ok(())
 }

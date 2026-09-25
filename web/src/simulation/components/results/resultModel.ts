@@ -25,7 +25,7 @@ export function createSimulationResultViewModel(
   record: SimulationRecord,
 ): SimulationResultViewModel {
   const environment = getEnvironment(record.environmentId);
-  const { error: changesError, items: changes } = simulationChanges(
+  const { status: changesStatus, error: changesError, items: changes } = simulationChanges(
     record.response,
   );
   const changeFlows = changes.map((change) => ({
@@ -48,6 +48,7 @@ export function createSimulationResultViewModel(
   return {
     anchor: executionAnchor(record),
     changes,
+    changesStatus,
     changesError,
     environment,
     execution,
@@ -144,19 +145,21 @@ export function changeAddressLabel(
   return `${role} / ${item.label}`;
 }
 
-function executionAnchor(record: SimulationRecord): ExecutionAnchor {
-  if ('blockHash' in record.response.state) {
+function executionAnchor(record: SimulationRecord): ExecutionAnchor | null {
+  const state = record.response.state;
+  if (state === null) return null;
+  if ('blockHash' in state) {
     return {
-      hash: record.response.state.blockHash,
+      hash: state.blockHash,
       label: 'Block',
-      number: record.response.state.blockNumber,
+      number: state.blockNumber,
     };
   }
 
   return {
-    hash: record.response.state.pivotHash,
+    hash: state.pivotHash,
     label: 'Epoch',
-    number: record.response.state.epochNumber,
+    number: state.epochNumber,
   };
 }
 
@@ -222,7 +225,7 @@ function simulationExecution(record: SimulationRecord): SimulationExecution {
     blobGasPrice: 'blobGasPrice' in outcome ? outcome.blobGasPrice ?? null : null,
     blobGasUsed: 'blobGasUsed' in outcome ? outcome.blobGasUsed ?? null : null,
     burntGasFee: executed ? outcome.burntGasFee ?? null : null,
-    chainId: response.transaction.chainId,
+    chainId: response.transaction.fields.chainId ?? null,
     contractAddress:
       outcome.status === 'success' && 'contractAddress' in outcome
         ? outcome.contractAddress
@@ -233,7 +236,7 @@ function simulationExecution(record: SimulationRecord): SimulationExecution {
     gasCoveredBySponsor:
       'gasCoveredBySponsor' in outcome ? outcome.gasCoveredBySponsor : null,
     gasFee,
-    gasLimit: response.transaction.gas,
+    gasLimit: response.transaction.fields.gas ?? null,
     gasUsed: executed ? outcome.gasUsed : null,
     logsCount: outcome.status === 'success' ? outcome.logs.length : 0,
     output: outcomeOutput(outcome),
@@ -251,18 +254,7 @@ function simulationExecution(record: SimulationRecord): SimulationExecution {
 }
 
 function outcomeFailure(outcome: EvmOutcome | EspaceOutcome | CoreOutcome) {
-  switch (outcome.status) {
-    case 'reverted':
-      return {
-        detail: outcome.reason,
-        message: 'Execution reverted',
-      };
-    case 'failed':
-    case 'rejected':
-      return { message: outcome.error };
-    case 'success':
-      return null;
-  }
+  return outcome.status === 'success' ? null : outcome.error;
 }
 
 function outcomeOutput(outcome: EvmOutcome | EspaceOutcome | CoreOutcome) {

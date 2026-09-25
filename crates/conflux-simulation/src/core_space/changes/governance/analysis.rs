@@ -7,15 +7,15 @@ use super::{
     collection::{GovernanceOperation, collect_operations},
 };
 use crate::core_space::{
-    CoreSpaceChangeSet, CoreSpaceChangeSetBuilder, CoreSpaceChangesError,
-    CoreSpaceExecutedTransaction, CoreSpaceStateAccess, GovernanceParameter, GovernanceVote,
+    CoreSpaceChangeSet, CoreSpaceChangeSetBuilder, CoreSpaceExecutedTransaction,
+    CoreSpaceProtocolError, CoreSpaceStateAccess, GovernanceParameter, GovernanceVote,
     VoteAllocation,
 };
 
 pub(crate) fn derive_changes(
     execution: &CoreSpaceExecutedTransaction,
     state: &CoreSpaceStateAccess,
-) -> Result<CoreSpaceChangeSet, CoreSpaceChangesError> {
+) -> Result<CoreSpaceChangeSet, CoreSpaceProtocolError> {
     let params = cfx_parameters::internal_contract_addresses::PARAMS_CONTROL_CONTRACT_ADDRESS;
     let operations = collect_operations(
         execution.trace(),
@@ -122,7 +122,7 @@ pub(crate) fn derive_changes(
                     replaced_allocation,
                 })
             })
-            .collect::<Result<Vec<_>, CoreSpaceChangesError>>()?;
+            .collect::<Result<Vec<_>, CoreSpaceProtocolError>>()?;
         builder
             .governance_vote(
                 operation.position,
@@ -152,7 +152,7 @@ fn verify_events(
     operation: &GovernanceOperation,
     previous: [VoteAllocation; 4],
     parameter_count: usize,
-) -> Result<(), CoreSpaceChangesError> {
+) -> Result<(), CoreSpaceProtocolError> {
     let expected_voter = alloy_primitives::Address::from_slice(operation.voter.as_bytes());
     if operation.events.is_empty() && operation.votes.is_empty() {
         // A same-round castVote with an empty input is a committed no-op.
@@ -264,13 +264,13 @@ fn verify_events(
     Ok(())
 }
 
-fn parameter(index: u16) -> Result<GovernanceParameter, CoreSpaceChangesError> {
+fn parameter(index: u16) -> Result<GovernanceParameter, CoreSpaceProtocolError> {
     match index {
         0 => Ok(GovernanceParameter::PowBaseReward),
         1 => Ok(GovernanceParameter::PosRewardInterestRate),
         2 => Ok(GovernanceParameter::StoragePointProportion),
         3 => Ok(GovernanceParameter::BaseFeeShareProportion),
-        _ => Err(CoreSpaceChangesError::unsupported_operation(format!(
+        _ => Err(CoreSpaceProtocolError::unsupported_operation(format!(
             "Core Space governance call used unknown parameter {index}"
         ))),
     }
@@ -279,7 +279,7 @@ fn parameter(index: u16) -> Result<GovernanceParameter, CoreSpaceChangesError> {
 fn core_address(
     address: Address,
     execution: &CoreSpaceExecutedTransaction,
-) -> Result<conflux_provider::CoreAddress, CoreSpaceChangesError> {
+) -> Result<conflux_provider::CoreAddress, CoreSpaceProtocolError> {
     conflux_provider::CoreAddress::from_bytes(address.0, execution.address_network()).map_err(
         |error| {
             inconsistent(format!(
@@ -289,10 +289,10 @@ fn core_address(
     )
 }
 
-fn state_error(error: crate::core_space::CoreSpaceStateAccessError) -> CoreSpaceChangesError {
-    CoreSpaceChangesError::state_access("read Core Space governance state", error)
+fn state_error(error: crate::core_space::CoreSpaceStateAccessError) -> CoreSpaceProtocolError {
+    CoreSpaceProtocolError::state_access("read Core Space governance state", error)
 }
 
-fn inconsistent(details: impl Into<String>) -> CoreSpaceChangesError {
-    CoreSpaceChangesError::inconsistent_execution(details)
+fn inconsistent(details: impl Into<String>) -> CoreSpaceProtocolError {
+    CoreSpaceProtocolError::inconsistent_execution(details)
 }

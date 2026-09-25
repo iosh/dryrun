@@ -2,14 +2,13 @@ mod native;
 mod standards;
 mod wrapped_native;
 
-use std::{collections::BTreeMap, error::Error as StdError, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 use alloy_primitives::{Address, U256};
 use contract_standards::{
     Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem, MetadataCall, StandardChange,
     metadata_calls,
 };
-use thiserror::Error;
 
 use crate::execution::{CommittedExecutionTrace, LogCheckpoint};
 
@@ -18,14 +17,11 @@ use self::{
     wrapped_native::{WrappedNativeOccurrence, decode_wrapped_native_occurrences_in_scope},
 };
 use super::{
-    EspaceAccountState, EspaceChangesError, EspaceExecutedTransaction, EspaceExecutionPosition,
-    EspaceStateAccess,
+    EspaceAccountState, EspaceChangeDerivationError, EspaceExecutedTransaction,
+    EspaceExecutionPosition, EspaceStateAccess,
 };
 
-pub(crate) use standards::{
-    IsolatedReadCallError, MetadataReadError, ReadCallOutcome, execute_isolated_read_call,
-    execute_read_call,
-};
+pub(crate) use standards::{IsolatedReadCallError, ReadCallOutcome, execute_isolated_read_call};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EspaceNativeCurrency {
@@ -283,55 +279,11 @@ impl EspaceChangePosition {
     }
 }
 
-/// Errors raised while a change-rule component is deriving a complete set.
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum EspaceChangeDerivationError {
-    #[error(transparent)]
-    Existing(#[from] EspaceChangesError),
-
-    #[error("conflicting eSpace changes: {details}")]
-    Conflict { details: String },
-
-    #[error("{rules} change rules could not derive complete changes: {source}")]
-    RuleFailure {
-        rules: &'static str,
-        #[source]
-        source: Box<dyn StdError + Send + Sync + 'static>,
-    },
-}
-
-impl EspaceChangeDerivationError {
-    pub fn rule_failure(
-        rules: &'static str,
-        source: impl StdError + Send + Sync + 'static,
-    ) -> Self {
-        Self::RuleFailure {
-            rules,
-            source: Box::new(source),
-        }
-    }
-}
-
 /// A change result is either complete (including a verified empty set) or
 /// unavailable because the required evidence could not be established.
-#[derive(Debug)]
-pub enum EspaceChanges {
-    Complete(EspaceChangeSet),
-    Unavailable(EspaceChangeDerivationError),
-}
+pub type EspaceChanges =
+    simulation_core::simulation::Changes<EspaceChangeSet, EspaceChangeDerivationError>;
 
-impl From<Result<EspaceChangeSet, EspaceChangeDerivationError>> for EspaceChanges {
-    fn from(result: Result<EspaceChangeSet, EspaceChangeDerivationError>) -> Self {
-        match result {
-            Ok(changes) => Self::Complete(changes),
-            Err(error) => Self::Unavailable(error),
-        }
-    }
-}
-
-/// Log/state observations requested by a change-rule component before the
-/// single formal VM execution starts.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EspaceObservationRequirements {
     log_checkpoints: Vec<EspaceLogCheckpoint>,
@@ -389,6 +341,8 @@ impl EspaceObservationRequirements {
 }
 
 /// A replaceable, statically composable eSpace change-rule component.
+/// Rules run only after successful execution. The configured composition must
+/// account for every supported effect or return an error; partial sets are not published.
 pub trait EspaceChangeRules: Send + Sync + 'static {
     fn required_observations(&self) -> EspaceObservationRequirements;
 
@@ -473,7 +427,7 @@ impl EspaceChangeSetBuilder {
             if existing.merge_duplicate(entry) {
                 return Ok(());
             }
-            return Err(EspaceChangeDerivationError::Conflict {
+            return Err(EspaceChangeDerivationError::Validation {
                 details: format!(
                     "different semantic values at execution position {}",
                     position.index()
@@ -486,7 +440,7 @@ impl EspaceChangeSetBuilder {
                 .keys()
                 .any(|(existing_position, _)| *existing_position == position)
         {
-            return Err(EspaceChangeDerivationError::Conflict {
+            return Err(EspaceChangeDerivationError::Validation {
                 details: format!(
                     "multiple semantic changes at execution position {}",
                     position.index()
@@ -1166,8 +1120,7 @@ impl EspaceChangeRules for EspaceNativeAssetChangeRules {
         execution: &EspaceExecutedTransaction,
         _state: &EspaceStateAccess,
     ) -> Result<EspaceChangeSet, EspaceChangeDerivationError> {
-        let occurrences = native::derive_changes(execution, &self.currency)
-            .map_err(EspaceChangeDerivationError::Existing)?;
+        let occurrences = native::derive_changes(execution, &self.currency)?;
         let mut builder = EspaceChangeSetBuilder::new();
         for occurrence in occurrences {
             let (position, change) = occurrence.into_parts();
@@ -1185,7 +1138,7 @@ impl EspaceChangeRules for EspaceNativeAssetChangeRules {
                     currency,
                 } => builder.selfdestruct_burn(position, contract_address, raw_amount, currency)?,
                 _ => {
-                    return Err(EspaceChangeDerivationError::Conflict {
+                    return Err(EspaceChangeDerivationError::Validation {
                         details: "native rules produced a non-native change".to_owned(),
                     });
                 }
@@ -1234,8 +1187,7 @@ impl EspaceChangeRules for EspaceTokenChangeRules {
             return Ok(EspaceChangeSet::default());
         }
         let occurrences =
-            standards::derive_verified_changes(execution, state, self.wrapped_native_token)
-                .map_err(EspaceChangeDerivationError::Existing)?;
+            standards::derive_verified_changes(execution, state, self.wrapped_native_token)?;
         let mut builder = EspaceChangeSetBuilder::new();
         for occurrence in occurrences {
             match occurrence {
@@ -1294,14 +1246,8 @@ impl EspaceChangeRules for EspaceAccountDelegationChangeRules {
 
         let mut builder = EspaceChangeSetBuilder::new();
         for (account, authorizations) in authorizations {
-            let before_account = state
-                .initial()
-                .read_account(account)
-                .map_err(|error| EspaceChangeDerivationError::Existing(error.into()))?;
-            let after_account = state
-                .finalized()
-                .read_account(account)
-                .map_err(|error| EspaceChangeDerivationError::Existing(error.into()))?;
+            let before_account = state.initial().read_account(account)?;
+            let after_account = state.finalized().read_account(account)?;
             let before = delegation_state(account, &before_account)?;
             let after = delegation_state(account, &after_account)?;
 
@@ -1311,7 +1257,7 @@ impl EspaceChangeRules for EspaceAccountDelegationChangeRules {
             let mut expected_nonce = before.nonce;
             if account == execution.transaction_sender() {
                 expected_nonce = expected_nonce.checked_add(1).ok_or_else(|| {
-                    EspaceChangeDerivationError::Conflict {
+                    EspaceChangeDerivationError::Validation {
                         details: format!(
                             "transaction sender nonce overflow for delegation account {account}"
                         ),
@@ -1320,7 +1266,7 @@ impl EspaceChangeRules for EspaceAccountDelegationChangeRules {
             }
             for authorization in &authorizations {
                 if authorization.nonce() != expected_nonce {
-                    return Err(EspaceChangeDerivationError::Conflict {
+                    return Err(EspaceChangeDerivationError::Validation {
                         details: format!(
                             "successful authorization for {account} used nonce {}, expected {expected_nonce}",
                             authorization.nonce()
@@ -1328,7 +1274,7 @@ impl EspaceChangeRules for EspaceAccountDelegationChangeRules {
                     });
                 }
                 expected_nonce = expected_nonce.checked_add(1).ok_or_else(|| {
-                    EspaceChangeDerivationError::Conflict {
+                    EspaceChangeDerivationError::Validation {
                         details: format!(
                             "successful authorization nonce overflow for account {account}"
                         ),
@@ -1340,7 +1286,7 @@ impl EspaceChangeRules for EspaceAccountDelegationChangeRules {
                 (authorization.delegate() != Address::ZERO).then_some(authorization.delegate())
             });
             if after.nonce != expected_nonce || after.delegate != expected_delegate {
-                return Err(EspaceChangeDerivationError::Conflict {
+                return Err(EspaceChangeDerivationError::Validation {
                     details: format!(
                         "final delegation state for {account} does not match successful authorization results"
                     ),
@@ -1357,7 +1303,7 @@ fn delegation_state(
     state: &EspaceAccountState,
 ) -> Result<EspaceAccountDelegation, EspaceChangeDerivationError> {
     let nonce =
-        u64::try_from(state.nonce()).map_err(|_| EspaceChangeDerivationError::Conflict {
+        u64::try_from(state.nonce()).map_err(|_| EspaceChangeDerivationError::Validation {
             details: format!("eSpace nonce for delegation account {account} exceeds u64"),
         })?;
     Ok(EspaceAccountDelegation {
@@ -1431,7 +1377,7 @@ impl NestedEspaceEffects {
         trace: &CommittedExecutionTrace,
         root_frame_ids: &[crate::execution::FrameId],
         wrapped_native_token: Address,
-    ) -> Result<Self, EspaceChangesError> {
+    ) -> Result<Self, EspaceChangeDerivationError> {
         let includes_frame = |frame_id| {
             root_frame_ids
                 .iter()
@@ -1512,4 +1458,34 @@ fn collect_metadata_call_occurrences(
 
     calls.sort_by_key(|(position, _)| *position);
     calls
+}
+
+pub(crate) fn check_contract_support(
+    execution: &EspaceExecutedTransaction,
+    state: &EspaceStateAccess,
+) -> Result<(), EspaceChangeDerivationError> {
+    for frame in execution.committed_frames() {
+        let super::EspaceFrameAction::Call { code_address, .. } = frame.action() else {
+            return Err(EspaceChangeDerivationError::Unsupported {
+                details: "contract creation requires an implementation-specific analyzer".into(),
+            });
+        };
+        if frame.space() != super::EspaceExecutionSpace::Espace {
+            return Err(EspaceChangeDerivationError::Unsupported {
+                details: "Core Space execution in an eSpace transaction".into(),
+            });
+        }
+        for reader in [state.initial(), state.finalized()] {
+            if reader
+                .read_account(*code_address)?
+                .code()
+                .is_some_and(|code| !code.is_empty())
+            {
+                return Err(EspaceChangeDerivationError::Unsupported {
+                    details: format!("no verified implementation scope for code at {code_address}"),
+                });
+            }
+        }
+    }
+    Ok(())
 }

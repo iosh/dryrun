@@ -37,12 +37,12 @@ pub(crate) fn alloy_u256_from_u64(value: u64) -> U256 {
     U256::from_limbs([value, 0, 0, 0])
 }
 
-pub(crate) fn access_list_to_cfx(items: Vec<AccessListItem>) -> Vec<CfxAccessListItem> {
+pub(crate) fn access_list_to_cfx(items: &[AccessListItem]) -> Vec<CfxAccessListItem> {
     items
-        .into_iter()
+        .iter()
         .map(|item| CfxAccessListItem {
             address: address_to_cfx(item.address),
-            storage_keys: item.storage_keys.into_iter().map(b256_to_cfx).collect(),
+            storage_keys: item.storage_keys.iter().copied().map(b256_to_cfx).collect(),
         })
         .collect()
 }

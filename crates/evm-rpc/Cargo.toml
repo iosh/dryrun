@@ -4,8 +4,9 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+simulation-core = { workspace = true, features = ["serde"] }
 jsonrpsee = { workspace = true, features = ["server", "macros"] }
-serde = { workspace = true }
+serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

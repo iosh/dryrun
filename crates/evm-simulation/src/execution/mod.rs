@@ -191,6 +191,10 @@ pub struct EvmTransactionExecution {
 }
 
 impl EvmTransactionExecution {
+    pub(crate) fn is_success(&self) -> bool {
+        matches!(self.status, EvmFinalStatus::Success { .. })
+    }
+
     pub(crate) fn native_movements(&self) -> &[NativeMovement] {
         &self.native_movements
     }

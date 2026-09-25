@@ -4,7 +4,7 @@ use cfx_types::{AddressSpaceUtil, AddressUtil, Space};
 use cfx_vm_types::CallType;
 
 use crate::{
-    core_space::CoreSpaceChangesError,
+    core_space::CoreSpaceProtocolError,
     execution::{CommittedExecutionTrace, FrameAction, FrameId, TraceEvent},
 };
 
@@ -56,7 +56,7 @@ pub(crate) struct CommittedCrossSpaceScopes {
 /// change rules inspect logs or child frames.
 pub(crate) fn collect_committed_espace_scopes(
     trace: &CommittedExecutionTrace,
-) -> Result<CommittedCrossSpaceScopes, CoreSpaceChangesError> {
+) -> Result<CommittedCrossSpaceScopes, CoreSpaceProtocolError> {
     let contract = cfx_parameters::internal_contract_addresses::CROSS_SPACE_CONTRACT_ADDRESS;
     let mut roots = Vec::new();
     let mut transfers = Vec::new();
@@ -147,7 +147,7 @@ pub(crate) fn collect_committed_espace_scopes(
             .collect();
         let parent_transfer_count = trace.internal_transfers_in_scope(Some(*frame_id)).count();
         if bridge_transfers.len() != 1 || parent_transfer_count != 1 {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
+            return Err(CoreSpaceProtocolError::inconsistent_execution(
                 "Core cross-space bridge touch is missing, ambiguous, or accompanied by an unexpected parent transfer",
             ));
         }
@@ -156,7 +156,7 @@ pub(crate) fn collect_committed_espace_scopes(
             let amount = crate::primitive::u256_from_cfx(bridge_transfers[0]);
             unique_withdraw_event(trace, *frame_id, mapped.address, *caller, amount)?;
             if Some(amount) != expected_withdraw_value {
-                return Err(CoreSpaceChangesError::inconsistent_execution(
+                return Err(CoreSpaceProtocolError::inconsistent_execution(
                     "Core cross-space withdrawal value does not match its calldata",
                 ));
             }
@@ -202,7 +202,7 @@ pub(crate) fn collect_committed_espace_scopes(
             })
             .collect();
         if matching_children.len() != 1 {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
+            return Err(CoreSpaceProtocolError::inconsistent_execution(
                 "Core cross-space operation has a missing or ambiguous eSpace child",
             ));
         }
@@ -226,12 +226,12 @@ pub(crate) fn collect_committed_espace_scopes(
             ),
         };
         if child_value != crate::primitive::u256_from_cfx(*transferred_value) {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
+            return Err(CoreSpaceProtocolError::inconsistent_execution(
                 "Core cross-space child value does not match the bridge transfer",
             ));
         }
         if expected_receiver.is_some_and(|receiver| receiver != child_receiver) {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
+            return Err(CoreSpaceProtocolError::inconsistent_execution(
                 "Core cross-space calldata receiver does not match the eSpace child",
             ));
         }
@@ -241,7 +241,7 @@ pub(crate) fn collect_committed_espace_scopes(
                 FrameAction::Create { init_code, .. } => init_code.as_slice(),
             };
             if child_data != expected_data {
-                return Err(CoreSpaceChangesError::inconsistent_execution(
+                return Err(CoreSpaceProtocolError::inconsistent_execution(
                     "Core cross-space calldata payload does not match the eSpace child",
                 ));
             }
@@ -272,7 +272,7 @@ pub(crate) fn collect_committed_espace_scopes(
                 || trace.frame_is_within(child, *root)
                 || trace.frame_is_within(*root, child)
         }) {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
+            return Err(CoreSpaceProtocolError::inconsistent_execution(
                 "Core cross-space eSpace scopes overlap",
             ));
         }
@@ -297,7 +297,7 @@ pub(crate) fn collect_committed_espace_scopes(
                 .iter()
                 .any(|root| trace.frame_is_within(*frame_id, *root))
         {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
+            return Err(CoreSpaceProtocolError::inconsistent_execution(
                 "committed eSpace frame is outside a verified Core cross-space scope",
             ));
         }
@@ -311,7 +311,7 @@ fn unique_call_event(
     sender: cfx_types::Address,
     value: cfx_types::U256,
     receiver: alloy_primitives::Address,
-) -> Result<Call, CoreSpaceChangesError> {
+) -> Result<Call, CoreSpaceProtocolError> {
     let mut matches = Vec::new();
     for event in trace.events() {
         let TraceEvent::Log {
@@ -352,7 +352,7 @@ fn unique_create_event(
     sender: cfx_types::Address,
     value: cfx_types::U256,
     receiver: alloy_primitives::Address,
-) -> Result<Create, CoreSpaceChangesError> {
+) -> Result<Create, CoreSpaceProtocolError> {
     let mut matches = Vec::new();
     for event in trace.events() {
         let TraceEvent::Log {
@@ -393,7 +393,7 @@ fn unique_withdraw_event(
     sender: cfx_types::Address,
     receiver: cfx_types::Address,
     value: alloy_primitives::U256,
-) -> Result<Withdraw, CoreSpaceChangesError> {
+) -> Result<Withdraw, CoreSpaceProtocolError> {
     let mut matches = Vec::new();
     for event in trace.events() {
         let TraceEvent::Log {
@@ -431,32 +431,32 @@ fn unique_withdraw_event(
 fn decode_calldata<C: SolCall>(
     calldata: &[u8],
     operation: &str,
-) -> Result<C, CoreSpaceChangesError> {
+) -> Result<C, CoreSpaceProtocolError> {
     C::abi_decode(calldata).map_err(|error| {
-        CoreSpaceChangesError::inconsistent_execution(format!(
+        CoreSpaceProtocolError::inconsistent_execution(format!(
             "Core cross-space {operation} calldata is malformed: {error}"
         ))
     })
 }
 
-fn unique_protocol_event<T>(events: Vec<T>, operation: &str) -> Result<T, CoreSpaceChangesError> {
+fn unique_protocol_event<T>(events: Vec<T>, operation: &str) -> Result<T, CoreSpaceProtocolError> {
     match events.len() {
         1 => events.into_iter().next().ok_or_else(|| {
-            CoreSpaceChangesError::inconsistent_execution(format!(
+            CoreSpaceProtocolError::inconsistent_execution(format!(
                 "Core cross-space {operation} is missing its matching protocol log"
             ))
         }),
-        0 => Err(CoreSpaceChangesError::inconsistent_execution(format!(
+        0 => Err(CoreSpaceProtocolError::inconsistent_execution(format!(
             "Core cross-space {operation} is missing its matching protocol log"
         ))),
-        _ => Err(CoreSpaceChangesError::inconsistent_execution(format!(
+        _ => Err(CoreSpaceProtocolError::inconsistent_execution(format!(
             "Core cross-space {operation} has ambiguous matching protocol logs"
         ))),
     }
 }
 
-fn invalid_protocol_log(name: &str, error: alloy_sol_types::Error) -> CoreSpaceChangesError {
-    CoreSpaceChangesError::inconsistent_execution(format!(
+fn invalid_protocol_log(name: &str, error: alloy_sol_types::Error) -> CoreSpaceProtocolError {
+    CoreSpaceProtocolError::inconsistent_execution(format!(
         "Core cross-space {name} protocol log is malformed: {error}"
     ))
 }

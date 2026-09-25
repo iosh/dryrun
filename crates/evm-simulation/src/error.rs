@@ -1,7 +1,7 @@
 use alloy::transports::TransportError;
 use revm::database::AlloyDBError;
+use simulation_core::error::{Diagnostic, ErrorCode as Code, ErrorInfo};
 use thiserror::Error;
-use tokio::task::JoinError;
 
 use crate::{EvmBlockSelector, TransactionInputError, chain_spec::EthereumChainSpecError};
 
@@ -47,9 +47,6 @@ impl EvmBlockResolutionError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum EvmTransactionCompletionError {
-    #[error(transparent)]
-    Input(#[from] TransactionInputError),
-
     #[error("failed to fetch the sender nonce at block {block_number}: {source}")]
     NonceLookup {
         block_number: u64,
@@ -82,7 +79,7 @@ pub enum EvmTransactionCompletionError {
     #[error("fixed block {block_number} does not provide blob fee parameters")]
     MissingBlobBaseFee { block_number: u64 },
 
-    #[error("calculated max fee per gas exceeds U256")]
+    #[error("calculated max fee per gas exceeds the EVM u128 range")]
     MaxFeePerGasOverflow,
 }
 
@@ -195,7 +192,7 @@ pub enum EvmSimulationError {
     BlockResolution(#[from] EvmBlockResolutionError),
 
     #[error(transparent)]
-    TransactionCompletion(EvmTransactionCompletionError),
+    TransactionCompletion(#[from] EvmTransactionCompletionError),
 
     #[error(transparent)]
     NotReady(#[from] EvmNotReadyError),
@@ -203,28 +200,121 @@ pub enum EvmSimulationError {
     #[error(transparent)]
     Execution(#[from] EvmExecutionError),
 
-    /// No Tokio runtime was active while polling the simulation future.
-    #[error("EVM simulation requires an active Tokio runtime")]
-    RuntimeUnavailable,
-
-    #[error("blocking EVM simulation task terminated unexpectedly: {source}")]
-    ExecutionTask {
-        #[source]
-        source: JoinError,
-    },
+    #[error(transparent)]
+    Runtime(#[from] simulation_core::simulation::RuntimeError),
 }
 
-impl From<EvmTransactionCompletionError> for EvmSimulationError {
-    fn from(error: EvmTransactionCompletionError) -> Self {
-        match error {
-            EvmTransactionCompletionError::Input(input) => Self::Input(input),
-            error => Self::TransactionCompletion(error),
+impl ErrorInfo for EvmExecutionError {
+    fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::BlockEnvironment(_) => Code::ContextUnavailable.diagnostic(),
+            Self::StateAccess(error) => error.diagnostic(),
+            Self::ResultIntegration(_) | Self::UnmappedTransactionValidation { .. } => {
+                Code::ExecutionIntegrationFailed.diagnostic()
+            }
+            Self::EngineFailure { .. } => Code::ExecutionEngineFailed.diagnostic(),
         }
     }
 }
 
-impl EvmSimulationError {
-    pub(crate) fn execution_task(source: JoinError) -> Self {
-        Self::ExecutionTask { source }
+impl ErrorInfo for EvmSimulationError {
+    fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::Input(error) => error.diagnostic(),
+            Self::BlockResolution(EvmBlockResolutionError::BlockNotFound { .. }) => {
+                Code::ContextNotFound.diagnostic()
+            }
+            Self::BlockResolution(EvmBlockResolutionError::Request { .. }) => {
+                Code::ProviderRequestFailed.diagnostic()
+            }
+            Self::TransactionCompletion(error) => error.diagnostic(),
+            Self::NotReady(_) => Code::UnsupportedSimulation.diagnostic(),
+            Self::Execution(error) => error.diagnostic(),
+            Self::Runtime(error) => error.diagnostic(),
+        }
+    }
+}
+
+impl ErrorInfo for EvmTransactionCompletionError {
+    fn diagnostic(&self) -> Diagnostic {
+        let code = match self {
+            // Code 3 identifies execution failure. Other RPC errors may mean
+            // unavailable node state and must retain their provider identity.
+            Self::GasEstimation {
+                source: TransportError::ErrorResp(error),
+                ..
+            } if error.code == 3 => Code::CompletionFailed,
+            Self::NonceLookup { .. }
+            | Self::GasEstimation { .. }
+            | Self::GasPriceSuggestion { .. }
+            | Self::PriorityFeeSuggestion { .. } => Code::ProviderRequestFailed,
+            Self::MissingBaseFee { .. } | Self::MissingBlobBaseFee { .. } => {
+                Code::ContextUnavailable
+            }
+            Self::MaxFeePerGasOverflow => Code::CompletionFailed,
+        };
+        code.diagnostic()
+    }
+}
+
+impl ErrorInfo for EvmStateAccessError {
+    fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::ProviderRequest { .. } => Code::ProviderRequestFailed,
+            Self::BlockNotFound { .. } => Code::StateUnavailable,
+        }
+        .diagnostic()
+    }
+}
+
+impl ErrorInfo for crate::EvmStateReadError {
+    fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::StateAccess(error) => error.diagnostic(),
+            Self::StateReadLimitExceeded { .. }
+            | Self::ReadCallLimitExceeded { .. }
+            | Self::ReadCallOutputLimitExceeded { .. } => Code::AnalysisLimitExceeded.diagnostic(),
+            Self::ForeignOccurrence | Self::ReadCallFailed { .. } => Code::Internal.diagnostic(),
+        }
+    }
+}
+impl ErrorInfo for crate::EvmObservationError {
+    fn diagnostic(&self) -> Diagnostic {
+        Code::AnalysisLimitExceeded.diagnostic()
+    }
+}
+impl ErrorInfo for crate::EvmChangeDerivationError {
+    fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::Observation(error) => error.diagnostic(),
+            Self::StateRead(error) => error.diagnostic(),
+            Self::Unsupported { .. } => Code::AnalysisUnsupported.diagnostic(),
+            Self::Conflict { .. } => Code::AnalysisValidationFailed.diagnostic(),
+            Self::RuleFailure { source, .. } => source_diagnostic(source.as_ref()),
+        }
+    }
+}
+// Extension errors are erased; known wrappers above are handled by their typed boundary.
+fn source_diagnostic(mut error: &(dyn std::error::Error + 'static)) -> Diagnostic {
+    loop {
+        if let Some(error) = error.downcast_ref::<crate::EvmChangeDerivationError>() {
+            return error.diagnostic();
+        }
+        if let Some(error) = error.downcast_ref::<crate::EvmStateReadError>() {
+            return error.diagnostic();
+        }
+        if let Some(error) = error.downcast_ref::<EvmStateAccessError>() {
+            return error.diagnostic();
+        }
+        if let Some(error) = error.downcast_ref::<crate::EvmObservationError>() {
+            return error.diagnostic();
+        }
+        if error.is::<TransportError>() {
+            return Code::ProviderRequestFailed.diagnostic();
+        }
+        let Some(source) = error.source() else {
+            return Code::AnalysisValidationFailed.diagnostic();
+        };
+        error = source;
     }
 }

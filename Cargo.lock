@@ -2315,6 +2315,7 @@ dependencies = [
  "jsonrpsee",
  "serde",
  "serde_json",
+ "simulation-core",
  "simulation-tasks",
  "thiserror 2.0.18",
  "tracing",
@@ -3165,6 +3166,7 @@ dependencies = [
  "jsonrpsee",
  "serde",
  "serde_json",
+ "simulation-core",
  "simulation-tasks",
  "thiserror 2.0.18",
  "tracing",
@@ -3181,6 +3183,7 @@ dependencies = [
  "alloy-sol-types",
  "contract-standards",
  "revm",
+ "serde",
  "simulation-core",
  "thiserror 2.0.18",
  "tokio",
@@ -7058,15 +7061,18 @@ dependencies = [
  "alloy-eips 1.8.3",
  "alloy-primitives",
  "alloy-serde 1.8.3",
+ "contract-standards",
  "serde",
  "serde_with",
  "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
 name = "simulation-tasks"
 version = "0.1.0"
 dependencies = [
+ "simulation-core",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",

@@ -10,7 +10,7 @@ use super::{
     CoreSpaceChangeSet, CoreSpaceChangeSetBuilder, SPONSORSHIP_POSITION_BASE, StoragePoints,
 };
 use crate::core_space::{
-    CoreSpaceChangesError, CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition,
+    CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition, CoreSpaceProtocolError,
     CoreSpaceStateAccess,
 };
 
@@ -29,7 +29,7 @@ struct Candidate {
 pub(super) fn derive_changes(
     execution: &CoreSpaceExecutedTransaction,
     state: &CoreSpaceStateAccess,
-) -> Result<CoreSpaceChangeSet, CoreSpaceChangesError> {
+) -> Result<CoreSpaceChangeSet, CoreSpaceProtocolError> {
     let mut candidates = BTreeMap::<Address, Candidate>::new();
     let mut max_position = 0usize;
 
@@ -45,7 +45,7 @@ pub(super) fn derive_changes(
             }
             crate::execution::TraceEvent::FrameStart { position, frame_id } => {
                 let Some(frame) = execution.trace().try_frame(*frame_id) else {
-                    return Err(CoreSpaceChangesError::inconsistent_execution(
+                    return Err(CoreSpaceProtocolError::inconsistent_execution(
                         "sponsorship candidate references a missing frame",
                     ));
                 };
@@ -101,13 +101,13 @@ pub(super) fn derive_changes(
     candidates.sort_by_key(|(contract, candidate)| (candidate.position, *contract));
     for (contract, _) in candidates {
         let initial = state.initial().sponsorship(contract).map_err(|source| {
-            CoreSpaceChangesError::state_access("read initial sponsorship state", source)
+            CoreSpaceProtocolError::state_access("read initial sponsorship state", source)
         })?;
         let finalized = state.finalized().sponsorship(contract).map_err(|source| {
-            CoreSpaceChangesError::state_access("read finalized sponsorship state", source)
+            CoreSpaceProtocolError::state_access("read finalized sponsorship state", source)
         })?;
         let contract_address = state.finalized().core_address(contract).map_err(|source| {
-            CoreSpaceChangesError::state_access("convert sponsorship contract address", source)
+            CoreSpaceProtocolError::state_access("convert sponsorship contract address", source)
         })?;
         if initial.gas_sponsor != finalized.gas_sponsor
             || initial.gas_balance != finalized.gas_balance
@@ -118,7 +118,7 @@ pub(super) fn derive_changes(
                 .map(|address| state.finalized().core_address(address))
                 .transpose()
                 .map_err(|source| {
-                    CoreSpaceChangesError::state_access("convert gas sponsor address", source)
+                    CoreSpaceProtocolError::state_access("convert gas sponsor address", source)
                 })?;
             builder
                 .gas_sponsorship(
@@ -129,7 +129,7 @@ pub(super) fn derive_changes(
                     u256_from_cfx(finalized.gas_bound),
                 )
                 .map_err(|error| {
-                    CoreSpaceChangesError::inconsistent_execution(error.to_string())
+                    CoreSpaceProtocolError::inconsistent_execution(error.to_string())
                 })?;
             next_position = next_position.saturating_add(1);
         }
@@ -142,7 +142,7 @@ pub(super) fn derive_changes(
                 .map(|address| state.finalized().core_address(address))
                 .transpose()
                 .map_err(|source| {
-                    CoreSpaceChangesError::state_access("convert storage sponsor address", source)
+                    CoreSpaceProtocolError::state_access("convert storage sponsor address", source)
                 })?;
             builder
                 .storage_sponsorship(
@@ -156,7 +156,7 @@ pub(super) fn derive_changes(
                     }),
                 )
                 .map_err(|error| {
-                    CoreSpaceChangesError::inconsistent_execution(error.to_string())
+                    CoreSpaceProtocolError::inconsistent_execution(error.to_string())
                 })?;
             next_position = next_position.saturating_add(1);
         }
@@ -168,7 +168,7 @@ pub(super) fn derive_changes(
                     u256_from_cfx(finalized.storage_collateral),
                 )
                 .map_err(|error| {
-                    CoreSpaceChangesError::inconsistent_execution(error.to_string())
+                    CoreSpaceProtocolError::inconsistent_execution(error.to_string())
                 })?;
             next_position = next_position.saturating_add(1);
         }
@@ -176,7 +176,7 @@ pub(super) fn derive_changes(
     Ok(builder.finish())
 }
 
-fn decode_sponsored_contract(calldata: &[u8]) -> Result<Option<Address>, CoreSpaceChangesError> {
+fn decode_sponsored_contract(calldata: &[u8]) -> Result<Option<Address>, CoreSpaceProtocolError> {
     if calldata.len() < 36 {
         return Ok(None);
     }
@@ -185,7 +185,7 @@ fn decode_sponsored_contract(calldata: &[u8]) -> Result<Option<Address>, CoreSpa
         SponsorCalls::setSponsorForGasCall::abi_decode_validate(calldata)
             .map(|call| call.contract_address)
             .map_err(|error| {
-                CoreSpaceChangesError::inconsistent_execution(format!(
+                CoreSpaceProtocolError::inconsistent_execution(format!(
                     "invalid setSponsorForGas calldata: {error}"
                 ))
             })?
@@ -193,7 +193,7 @@ fn decode_sponsored_contract(calldata: &[u8]) -> Result<Option<Address>, CoreSpa
         SponsorCalls::setSponsorForCollateralCall::abi_decode_validate(calldata)
             .map(|call| call.contract_address)
             .map_err(|error| {
-                CoreSpaceChangesError::inconsistent_execution(format!(
+                CoreSpaceProtocolError::inconsistent_execution(format!(
                     "invalid setSponsorForCollateral calldata: {error}"
                 ))
             })?

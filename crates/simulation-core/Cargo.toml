@@ -7,6 +7,8 @@ edition = { workspace = true }
 serde = ["dep:serde", "dep:serde_with", "dep:alloy-serde", "alloy-eips/serde", "alloy-primitives/serde"]
 
 [dependencies]
+contract-standards = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
 alloy-consensus = { workspace = true }
 alloy-eips = { workspace = true }
 alloy-primitives = { workspace = true }

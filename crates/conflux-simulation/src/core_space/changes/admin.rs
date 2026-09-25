@@ -9,7 +9,7 @@ use super::{
     ADMIN_POSITION_BASE, ContractAdminState, CoreSpaceChangeSet, CoreSpaceChangeSetBuilder,
 };
 use crate::core_space::{
-    CoreSpaceChangesError, CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition,
+    CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition, CoreSpaceProtocolError,
     CoreSpaceStateAccess,
 };
 
@@ -23,14 +23,14 @@ sol! {
 pub(super) fn derive_changes(
     execution: &CoreSpaceExecutedTransaction,
     state: &CoreSpaceStateAccess,
-) -> Result<CoreSpaceChangeSet, CoreSpaceChangesError> {
+) -> Result<CoreSpaceChangeSet, CoreSpaceProtocolError> {
     let mut candidates = BTreeMap::<Address, usize>::new();
     for event in execution.trace().events() {
         let crate::execution::TraceEvent::FrameStart { position, frame_id } = event else {
             continue;
         };
         let Some(frame) = execution.trace().try_frame(*frame_id) else {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
+            return Err(CoreSpaceProtocolError::inconsistent_execution(
                 "contract-admin candidate references a missing frame",
             ));
         };
@@ -53,7 +53,7 @@ pub(super) fn derive_changes(
         let contract = decode_contract(calldata)?;
         if let Some(contract) = contract {
             if *call_type != CallType::Call {
-                return Err(CoreSpaceChangesError::inconsistent_execution(
+                return Err(CoreSpaceProtocolError::inconsistent_execution(
                     "contract-admin call did not use canonical CALL",
                 ));
             }
@@ -66,13 +66,13 @@ pub(super) fn derive_changes(
     let mut builder = CoreSpaceChangeSetBuilder::new();
     for (index, (contract, _)) in ordered.into_iter().enumerate() {
         let initial = state.initial().contract_admin(contract).map_err(|source| {
-            CoreSpaceChangesError::state_access("read initial Core Space contract admin", source)
+            CoreSpaceProtocolError::state_access("read initial Core Space contract admin", source)
         })?;
         let finalized = state
             .finalized()
             .contract_admin(contract)
             .map_err(|source| {
-                CoreSpaceChangesError::state_access(
+                CoreSpaceProtocolError::state_access(
                     "read finalized Core Space contract admin",
                     source,
                 )
@@ -81,7 +81,7 @@ pub(super) fn derive_changes(
             continue;
         }
         let contract_address = state.finalized().core_address(contract).map_err(|source| {
-            CoreSpaceChangesError::state_access("convert contract-admin address", source)
+            CoreSpaceProtocolError::state_access("convert contract-admin address", source)
         })?;
         let state = finalized
             .exists
@@ -93,7 +93,7 @@ pub(super) fn derive_changes(
             })
             .transpose()
             .map_err(|source| {
-                CoreSpaceChangesError::state_access("convert contract admin address", source)
+                CoreSpaceProtocolError::state_access("convert contract admin address", source)
             })?
             .map(|admin| ContractAdminState { admin });
         builder
@@ -102,12 +102,12 @@ pub(super) fn derive_changes(
                 contract_address,
                 state,
             )
-            .map_err(|error| CoreSpaceChangesError::inconsistent_execution(error.to_string()))?;
+            .map_err(|error| CoreSpaceProtocolError::inconsistent_execution(error.to_string()))?;
     }
     Ok(builder.finish())
 }
 
-fn decode_contract(calldata: &[u8]) -> Result<Option<Address>, CoreSpaceChangesError> {
+fn decode_contract(calldata: &[u8]) -> Result<Option<Address>, CoreSpaceProtocolError> {
     if calldata.len() < 4 {
         return Ok(None);
     }
@@ -116,7 +116,7 @@ fn decode_contract(calldata: &[u8]) -> Result<Option<Address>, CoreSpaceChangesE
         AdminCalls::setAdminCall::abi_decode_validate(calldata)
             .map(|call| call.contract_address)
             .map_err(|error| {
-                CoreSpaceChangesError::inconsistent_execution(format!(
+                CoreSpaceProtocolError::inconsistent_execution(format!(
                     "invalid setAdmin calldata: {error}"
                 ))
             })?
@@ -124,7 +124,7 @@ fn decode_contract(calldata: &[u8]) -> Result<Option<Address>, CoreSpaceChangesE
         AdminCalls::destroyCall::abi_decode_validate(calldata)
             .map(|call| call.contract_address)
             .map_err(|error| {
-                CoreSpaceChangesError::inconsistent_execution(format!(
+                CoreSpaceProtocolError::inconsistent_execution(format!(
                     "invalid destroy calldata: {error}"
                 ))
             })?

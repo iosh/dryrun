@@ -9,7 +9,7 @@ use self::evidence::{CommittedPoSOperation, collect_operations};
 use super::{CoreSpaceChangeSet, CoreSpaceChangeSetBuilder};
 use crate::{
     core_space::{
-        CoreSpaceChangesError, CoreSpaceExecutedTransaction, CoreSpacePoSRegistrationState,
+        CoreSpaceExecutedTransaction, CoreSpacePoSRegistrationState, CoreSpaceProtocolError,
         CoreSpaceStateAccess, CoreSpaceStateAccessError, CoreSpaceStateReader,
     },
     primitive::u256_from_cfx,
@@ -18,7 +18,7 @@ use crate::{
 pub(super) fn derive_changes(
     execution: &CoreSpaceExecutedTransaction,
     state: &CoreSpaceStateAccess,
-) -> Result<CoreSpaceChangeSet, CoreSpaceChangesError> {
+) -> Result<CoreSpaceChangeSet, CoreSpaceProtocolError> {
     let operations = collect_operations(execution)?;
     if operations.is_empty() {
         return Ok(CoreSpaceChangeSet::default());
@@ -151,7 +151,7 @@ impl PoSStateSnapshot {
         identifiers_by_account: BTreeMap<Address, Option<B256>>,
         required_identifiers: &BTreeSet<B256>,
         phase: StatePhase,
-    ) -> Result<Self, CoreSpaceChangesError> {
+    ) -> Result<Self, CoreSpaceProtocolError> {
         let registrations_by_identifier = required_identifiers
             .iter()
             .map(|identifier| {
@@ -163,7 +163,7 @@ impl PoSStateSnapshot {
                     PoSRegistrationSnapshot::from_state(registration),
                 ))
             })
-            .collect::<Result<_, CoreSpaceChangesError>>()?;
+            .collect::<Result<_, CoreSpaceProtocolError>>()?;
         let total_pos_staking = reader
             .total_pos_staking()
             .map_err(|source| state_error(phase, source))?;
@@ -174,7 +174,7 @@ impl PoSStateSnapshot {
         })
     }
 
-    fn verify_account_mappings(&self) -> Result<(), CoreSpaceChangesError> {
+    fn verify_account_mappings(&self) -> Result<(), CoreSpaceProtocolError> {
         for (account, identifier) in &self.identifiers_by_account {
             let Some(identifier) = identifier else {
                 continue;
@@ -192,7 +192,7 @@ impl PoSStateSnapshot {
         Ok(())
     }
 
-    fn identifier_for_account(&self, account: Address) -> Result<B256, CoreSpaceChangesError> {
+    fn identifier_for_account(&self, account: Address) -> Result<B256, CoreSpaceProtocolError> {
         let identifier = self
             .identifiers_by_account
             .get(&account)
@@ -216,7 +216,7 @@ impl PoSStateSnapshot {
         &mut self,
         identifier: B256,
         added_vote_count: u64,
-    ) -> Result<U256, CoreSpaceChangesError> {
+    ) -> Result<U256, CoreSpaceProtocolError> {
         let registration = self
             .registrations_by_identifier
             .get_mut(&identifier)
@@ -274,7 +274,7 @@ fn read_identifiers_by_account(
     accounts: &BTreeSet<Address>,
     execution: &CoreSpaceExecutedTransaction,
     phase: StatePhase,
-) -> Result<BTreeMap<Address, Option<B256>>, CoreSpaceChangesError> {
+) -> Result<BTreeMap<Address, Option<B256>>, CoreSpaceProtocolError> {
     accounts
         .iter()
         .map(|account| {
@@ -290,7 +290,7 @@ fn verify_event_identifier(
     operation: &'static str,
     event_identifier: B256,
     registered_identifier: B256,
-) -> Result<(), CoreSpaceChangesError> {
+) -> Result<(), CoreSpaceProtocolError> {
     if event_identifier != registered_identifier {
         return Err(inconsistent(format!(
             "Core Space PoS {operation} event is not backed by the account registration"
@@ -308,10 +308,10 @@ fn core_address(address: Address, execution: &CoreSpaceExecutedTransaction) -> C
         .expect("executed Core Space addresses retain a validated network")
 }
 
-fn state_error(phase: StatePhase, source: CoreSpaceStateAccessError) -> CoreSpaceChangesError {
-    CoreSpaceChangesError::state_access(phase.read_operation(), source)
+fn state_error(phase: StatePhase, source: CoreSpaceStateAccessError) -> CoreSpaceProtocolError {
+    CoreSpaceProtocolError::state_access(phase.read_operation(), source)
 }
 
-fn inconsistent(details: impl Into<String>) -> CoreSpaceChangesError {
-    CoreSpaceChangesError::inconsistent_execution(details)
+fn inconsistent(details: impl Into<String>) -> CoreSpaceProtocolError {
+    CoreSpaceProtocolError::inconsistent_execution(details)
 }

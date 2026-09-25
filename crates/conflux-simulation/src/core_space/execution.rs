@@ -1,18 +1,20 @@
 use std::fmt;
 
-use alloy::sol_types::Panic;
 use alloy_primitives::{Address, B256, Bytes, U256, U512};
 use conflux_provider::CoreAddress;
 
-use super::{CoreSpaceExecutionResult, CoreSpaceTransactionRejection};
+use super::CoreSpaceExecutionResult;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(untagged))]
 pub enum CoreSpaceLogAddress {
     CoreSpace(CoreAddress),
     Espace(Address),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct CoreSpaceLog {
     pub address: CoreSpaceLogAddress,
     pub topics: Vec<B256>,
@@ -20,34 +22,20 @@ pub struct CoreSpaceLog {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(untagged, rename_all_fields = "camelCase"))]
 pub enum CoreSpaceSuccessOutput {
     Call {
         return_data: Bytes,
     },
     Create {
+        #[cfg_attr(feature = "serde", serde(rename = "contractAddress"))]
         address: CoreAddress,
         runtime_code: Bytes,
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum CoreSpaceRevertReason {
-    SolidityError { message: String },
-    SolidityPanic { code: U256 },
-}
-
-impl fmt::Display for CoreSpaceRevertReason {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::SolidityError { message } if message.is_empty() => formatter.write_str("<empty>"),
-            Self::SolidityError { message } => formatter.write_str(message),
-            Self::SolidityPanic { code } => {
-                formatter.write_str(Panic { code: *code }.as_geth_str().as_ref())
-            }
-        }
-    }
-}
+pub use contract_standards::SolidityRevertReason as CoreSpaceRevertReason;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -194,5 +182,4 @@ pub enum CoreSpaceExecutionOutcome {
         result: CoreSpaceExecutionResult,
         failure: CoreSpaceExecutionFailure,
     },
-    NotExecuted(CoreSpaceTransactionRejection),
 }

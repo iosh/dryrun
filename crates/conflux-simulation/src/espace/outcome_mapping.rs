@@ -1,5 +1,3 @@
-use alloy::sol_types::{Panic, Revert, SolError};
-use alloy_primitives::Bytes;
 use cfx_executor::executive::{ExecutionError, ToRepackError, TxDropError};
 use cfx_types::{
     AddressSpaceUtil, CreateContractAddressType, U256 as CfxU256, U512 as CfxU512,
@@ -22,19 +20,14 @@ use crate::{
 
 pub(crate) fn map_executor_outcome(
     outcome: ConfluxExecutionOutcome,
-    execution: Option<&EspaceExecutedTransaction>,
+    execution: &EspaceExecutedTransaction,
     transaction: &EspaceTypedTransaction,
-    state: Option<&EspaceStateReader>,
+    state: &EspaceStateReader,
     core_space_network: Network,
 ) -> Result<EspaceExecutionOutcome, EspaceExecutionError> {
     let common = transaction.common();
     match outcome {
         ConfluxExecutionOutcome::Success(output) => {
-            let execution = execution.ok_or_else(|| {
-                EspaceResultIntegrationError::new(
-                    "successful transaction has no finalized executed-transaction data",
-                )
-            })?;
             let result = build_execution_result(&output, common.gas_limit)?;
             let logs = map_committed_logs(execution, core_space_network)?;
             let output = build_success_output(execution, &output, transaction, state)?;
@@ -49,7 +42,7 @@ pub(crate) fn map_executor_outcome(
             let return_data = details.common.output.clone();
             match error {
                 ExecutionError::VmError(VmError::Reverted) => {
-                    let reason = decode_revert_reason(&return_data);
+                    let reason = EspaceRevertReason::decode(&return_data);
                     Ok(EspaceExecutionOutcome::Reverted {
                         result,
                         revert_data: return_data,
@@ -62,12 +55,13 @@ pub(crate) fn map_executor_outcome(
                 }),
             }
         }
-        ConfluxExecutionOutcome::NotExecutedDrop(error) => {
-            Ok(EspaceExecutionOutcome::NotExecuted(map_drop_error(error)?))
+        ConfluxExecutionOutcome::NotExecutedDrop(_)
+        | ConfluxExecutionOutcome::NotExecutedToReconsiderPacking(_) => {
+            Err(EspaceResultIntegrationError::invalid_executor_output(
+                "rejected transaction has no executed outcome",
+            )
+            .into())
         }
-        ConfluxExecutionOutcome::NotExecutedToReconsiderPacking(error) => Ok(
-            EspaceExecutionOutcome::NotExecuted(map_reconsider_packing_error(error)?),
-        ),
     }
 }
 
@@ -89,7 +83,7 @@ fn build_success_output(
     execution: &EspaceExecutedTransaction,
     output: &ConfluxExecutionOutput,
     transaction: &EspaceTypedTransaction,
-    state: Option<&EspaceStateReader>,
+    state: &EspaceStateReader,
 ) -> Result<EspaceSuccessOutput, EspaceExecutionError> {
     let common = transaction.common();
     if common.to.is_some() {
@@ -117,11 +111,6 @@ fn build_success_output(
         .into());
     }
 
-    let state = state.ok_or_else(|| {
-        EspaceResultIntegrationError::invalid_executor_output(
-            "successful eSpace contract creation has no finalized state reader",
-        )
-    })?;
     let runtime_code = state
         .read_account(created_address)
         .map_err(map_state_read_error)?
@@ -176,7 +165,9 @@ fn map_committed_logs(
         .collect()
 }
 
-fn map_drop_error(error: TxDropError) -> Result<EspaceTransactionRejection, EspaceExecutionError> {
+pub(crate) fn map_drop_error(
+    error: TxDropError,
+) -> Result<EspaceTransactionRejection, EspaceExecutionError> {
     match error {
         TxDropError::OldNonce(expected, got) => Ok(EspaceTransactionRejection::NonceTooLow {
             transaction_nonce: u256_from_cfx(got),
@@ -200,7 +191,7 @@ fn map_drop_error(error: TxDropError) -> Result<EspaceTransactionRejection, Espa
     }
 }
 
-fn map_reconsider_packing_error(
+pub(crate) fn map_reconsider_packing_error(
     error: ToRepackError,
 ) -> Result<EspaceTransactionRejection, EspaceExecutionError> {
     match error {
@@ -345,16 +336,4 @@ fn map_vm_failure(error: VmError) -> Result<EspaceExecutionFailure, EspaceExecut
         )
         .into()),
     }
-}
-
-fn decode_revert_reason(output: &Bytes) -> Option<EspaceRevertReason> {
-    Revert::abi_decode_validate(output.as_ref())
-        .map(|revert| EspaceRevertReason::SolidityError {
-            message: revert.reason,
-        })
-        .or_else(|_| {
-            Panic::abi_decode_validate(output.as_ref())
-                .map(|panic| EspaceRevertReason::SolidityPanic { code: panic.code })
-        })
-        .ok()
 }

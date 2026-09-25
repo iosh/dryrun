@@ -1,7 +1,7 @@
 use alloy_primitives::Address;
 use contract_standards::{Erc20Metadata, MetadataCall, MetadataValues};
 
-use crate::espace::{EspaceChangesError, EspaceReadCallOutcome, EspaceStateReader};
+use crate::espace::{EspaceChangeDerivationError, EspaceReadCallOutcome, EspaceStateReader};
 
 const MAX_METADATA_CALLS: usize = 64;
 const MAX_METADATA_OUTPUT_BYTES: usize = 4 * 1024;
@@ -30,7 +30,7 @@ impl TokenMetadataOutcomes {
 pub(super) fn load_metadata(
     state: &EspaceStateReader,
     calls: Vec<MetadataCall<Address>>,
-) -> Result<TokenMetadataOutcomes, EspaceChangesError> {
+) -> Result<TokenMetadataOutcomes, EspaceChangeDerivationError> {
     let mut values = MetadataValues::default();
 
     for (index, call) in calls.into_iter().enumerate() {
@@ -41,7 +41,7 @@ pub(super) fn load_metadata(
 
         let outcome = state
             .read_call(*call.contract_address(), call.call_data())
-            .map_err(EspaceChangesError::from)?;
+            .map_err(EspaceChangeDerivationError::from)?;
         match outcome {
             EspaceReadCallOutcome::Success(output) if output.len() <= MAX_METADATA_OUTPUT_BYTES => {
                 values.record_output(call, &output);

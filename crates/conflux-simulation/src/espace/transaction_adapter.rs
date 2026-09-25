@@ -5,8 +5,7 @@ use primitives::transaction::{
 };
 
 use super::{
-    DynamicFees, EspaceTransactionInputError, EspaceTransactionRejection, EspaceTypedTransaction,
-    TxType,
+    EspaceTransactionInputError, EspaceTransactionRejection, EspaceTypedTransaction, TxType,
 };
 use crate::{
     chain_spec::EspaceTransactionValidationRules,
@@ -14,125 +13,75 @@ use crate::{
     primitive::{access_list_to_cfx, address_to_cfx, u256_to_cfx},
 };
 
-pub(crate) fn validate_transaction_for_execution(
-    transaction: &EspaceTypedTransaction,
+pub(crate) fn reject_transaction(
+    transaction: simulation_core::transaction::TransactionRef<'_>,
+    transaction_type: TxType,
     expected_chain_id: u64,
     rules: EspaceTransactionValidationRules,
-) -> Result<Option<EspaceTransactionRejection>, EspaceTransactionInputError> {
-    let common = transaction.common();
-    if common.chain_id != expected_chain_id {
-        return Ok(Some(EspaceTransactionRejection::InvalidChainId {
-            transaction_chain_id: common.chain_id,
-            expected_chain_id,
-        }));
-    }
-
-    let rejection = match transaction {
-        EspaceTypedTransaction::Eip4844 { .. } => {
-            return Err(EspaceTransactionInputError::UnsupportedType {
-                transaction_type: TxType::Eip4844,
-            });
-        }
-        EspaceTypedTransaction::Legacy { gas_price, .. } => {
-            if !rules.legacy_transactions_active {
-                Some(EspaceTransactionRejection::LegacyTransactionNotActivated)
-            } else if gas_price.is_zero() {
-                Some(EspaceTransactionRejection::ZeroGasPrice)
-            } else {
-                None
-            }
-        }
-        EspaceTypedTransaction::Eip2930 { gas_price, .. } => {
-            if !rules.typed_transactions_active {
-                Some(EspaceTransactionRejection::Eip2930NotActivated)
-            } else if gas_price.is_zero() {
-                Some(EspaceTransactionRejection::ZeroGasPrice)
-            } else {
-                None
-            }
-        }
-        EspaceTypedTransaction::Eip1559 {
-            fees:
-                DynamicFees {
-                    max_fee_per_gas,
-                    max_priority_fee_per_gas,
-                },
-            ..
-        } => validate_dynamic_fee(
-            *max_fee_per_gas,
-            *max_priority_fee_per_gas,
-            rules.typed_transactions_active,
-            rules.priority_fee_cap_active,
-            EspaceTransactionRejection::Eip1559NotActivated,
-        ),
-        EspaceTypedTransaction::Eip7702 {
-            fees:
-                DynamicFees {
-                    max_fee_per_gas,
-                    max_priority_fee_per_gas,
-                },
-            ..
-        } => {
-            if !rules.typed_transactions_active || !rules.eip7702_transactions_active {
-                Some(EspaceTransactionRejection::Eip7702NotActivated)
-            } else {
-                validate_dynamic_fee(
-                    *max_fee_per_gas,
-                    *max_priority_fee_per_gas,
-                    true,
-                    rules.priority_fee_cap_active,
-                    EspaceTransactionRejection::Eip7702NotActivated,
-                )
-            }
-        }
-    };
-    if rejection.is_some() {
-        return Ok(rejection);
-    }
-
-    if rules.initcode_size_limit_active
-        && common.to.is_none()
-        && common.input.len() > rules.max_initcode_size
-    {
-        return Ok(Some(EspaceTransactionRejection::CreateInitCodeSizeLimit {
-            size: common.input.len(),
-            limit: rules.max_initcode_size,
-        }));
-    }
-
-    if rules.calldata_floor_active {
-        let required_gas = alloy_primitives::U256::from(common.input.len())
-            * alloy_primitives::U256::from(100_u64);
-        if alloy_primitives::U256::from(common.gas_limit) < required_gas {
-            return Ok(Some(EspaceTransactionRejection::CalldataGasRequirement {
-                required_gas,
-                gas_limit: common.gas_limit,
-            }));
-        }
-    }
-
-    Ok(None)
-}
-
-fn validate_dynamic_fee(
-    max_fee_per_gas: alloy_primitives::U256,
-    max_priority_fee_per_gas: alloy_primitives::U256,
-    active: bool,
-    enforce_priority_cap: bool,
-    inactive_rejection: EspaceTransactionRejection,
 ) -> Option<EspaceTransactionRejection> {
-    if !active {
-        Some(inactive_rejection)
-    } else if max_fee_per_gas.is_zero() {
-        Some(EspaceTransactionRejection::ZeroGasPrice)
-    } else if enforce_priority_cap && max_priority_fee_per_gas > max_fee_per_gas {
-        Some(EspaceTransactionRejection::PriorityFeeGreaterThanMaxFee {
+    use EspaceTransactionRejection as Rejection;
+    if let Some(chain_id) = transaction.chain_id()
+        && chain_id != expected_chain_id
+    {
+        return Some(Rejection::InvalidChainId {
+            transaction_chain_id: chain_id,
+            expected_chain_id,
+        });
+    }
+    let inactive = match transaction_type {
+        TxType::Legacy if !rules.legacy_transactions_active => {
+            Some(Rejection::LegacyTransactionNotActivated)
+        }
+        TxType::Eip2930 if !rules.typed_transactions_active => Some(Rejection::Eip2930NotActivated),
+        TxType::Eip1559 if !rules.typed_transactions_active => Some(Rejection::Eip1559NotActivated),
+        TxType::Eip7702
+            if !rules.typed_transactions_active || !rules.eip7702_transactions_active =>
+        {
+            Some(Rejection::Eip7702NotActivated)
+        }
+        _ => None,
+    };
+    if inactive.is_some() {
+        return inactive;
+    }
+    if transaction
+        .gas_price_cap()
+        .is_some_and(|price| price.is_zero())
+    {
+        return Some(Rejection::ZeroGasPrice);
+    }
+    if rules.priority_fee_cap_active
+        && let (Some(max_fee_per_gas), Some(max_priority_fee_per_gas)) =
+            (transaction.gas_price_cap(), transaction.priority_fee())
+        && max_priority_fee_per_gas > max_fee_per_gas
+    {
+        return Some(Rejection::PriorityFeeGreaterThanMaxFee {
             max_priority_fee_per_gas,
             max_fee_per_gas,
-        })
-    } else {
-        None
+        });
     }
+    if rules.initcode_size_limit_active
+        && transaction.to().is_none()
+        && transaction.input().len() > rules.max_initcode_size
+    {
+        return Some(Rejection::CreateInitCodeSizeLimit {
+            size: transaction.input().len(),
+            limit: rules.max_initcode_size,
+        });
+    }
+    if rules.calldata_floor_active
+        && let Some(gas_limit) = transaction.gas_limit()
+    {
+        let required_gas = alloy_primitives::U256::from(transaction.input().len())
+            * alloy_primitives::U256::from(100_u64);
+        if alloy_primitives::U256::from(gas_limit) < required_gas {
+            return Some(Rejection::CalldataGasRequirement {
+                required_gas,
+                gas_limit,
+            });
+        }
+    }
+    None
 }
 
 pub(crate) fn build_executor_transaction(
@@ -183,11 +132,11 @@ pub(crate) fn build_executor_transaction(
             action,
             value,
             data,
-            access_list: access_list_to_cfx(access_list.clone()),
+            access_list: access_list_to_cfx(access_list),
         }),
         EspaceTypedTransaction::Eip1559 {
             fees:
-                DynamicFees {
+                simulation_core::transaction::DynamicFees {
                     max_fee_per_gas,
                     max_priority_fee_per_gas,
                 },
@@ -202,11 +151,11 @@ pub(crate) fn build_executor_transaction(
             action,
             value,
             data,
-            access_list: access_list_to_cfx(access_list.clone()),
+            access_list: access_list_to_cfx(access_list),
         }),
         EspaceTypedTransaction::Eip7702 {
             fees:
-                DynamicFees {
+                simulation_core::transaction::DynamicFees {
                     max_fee_per_gas,
                     max_priority_fee_per_gas,
                 },
@@ -227,7 +176,7 @@ pub(crate) fn build_executor_transaction(
             )?),
             value,
             data,
-            access_list: access_list_to_cfx(access_list.clone()),
+            access_list: access_list_to_cfx(access_list),
             authorization_list: authorization_list
                 .iter()
                 .map(|authorization| {
@@ -252,14 +201,14 @@ pub(crate) fn build_executor_transaction(
 mod tests {
     use alloy_primitives::{Address, Bytes, U256};
 
-    use super::validate_transaction_for_execution;
+    use super::reject_transaction;
     use crate::{
         chain_spec::ConfluxChainSpec,
         espace::{
-            DynamicFees, EspaceTransactionCommon, EspaceTransactionRejection,
-            EspaceTypedTransaction,
+            EspaceTransactionCommon, EspaceTransactionRejection, EspaceTypedTransaction, TxType,
         },
     };
+    use simulation_core::transaction::TransactionInput;
 
     const CIP645_HEIGHT: u64 = 129_680_000;
     const EIP3860_MAX_INITCODE_SIZE: usize = 49_152;
@@ -273,17 +222,22 @@ mod tests {
         let before_activation =
             chain_spec.espace_transaction_validation_rules(250_000_000, CIP645_HEIGHT - 1);
         assert_eq!(
-            validate_transaction_for_execution(&transaction, 1030, before_activation),
-            Ok(None)
+            reject_transaction(
+                TransactionInput::Complete(&transaction),
+                TxType::Eip1559,
+                1030,
+                before_activation
+            ),
+            None
         );
 
         let active = chain_spec.espace_transaction_validation_rules(250_000_000, CIP645_HEIGHT);
         assert!(matches!(
-            validate_transaction_for_execution(&transaction, 1030, active),
-            Ok(Some(EspaceTransactionRejection::PriorityFeeGreaterThanMaxFee {
+            reject_transaction(TransactionInput::Complete(&transaction), TxType::Eip1559, 1030, active),
+            Some(EspaceTransactionRejection::PriorityFeeGreaterThanMaxFee {
                 max_priority_fee_per_gas,
                 max_fee_per_gas,
-            })) if max_priority_fee_per_gas == U256::from(3) && max_fee_per_gas == U256::from(2)
+            }) if max_priority_fee_per_gas == U256::from(3) && max_fee_per_gas == U256::from(2)
         ));
     }
 
@@ -300,14 +254,19 @@ mod tests {
         transaction.common_mut().gas_limit = 10_000_000;
 
         assert_eq!(
-            validate_transaction_for_execution(&transaction, 1030, rules),
-            Ok(None)
+            reject_transaction(
+                TransactionInput::Complete(&transaction),
+                TxType::Eip1559,
+                1030,
+                rules
+            ),
+            None
         );
 
         transaction.common_mut().input = Bytes::from(vec![0_u8; EIP3860_MAX_INITCODE_SIZE + 1]);
         assert!(matches!(
-            validate_transaction_for_execution(&transaction, 1030, rules),
-            Ok(Some(EspaceTransactionRejection::CreateInitCodeSizeLimit { size, limit }))
+            reject_transaction(TransactionInput::Complete(&transaction), TxType::Eip1559, 1030, rules),
+            Some(EspaceTransactionRejection::CreateInitCodeSizeLimit { size, limit })
                 if size == EIP3860_MAX_INITCODE_SIZE + 1
                     && limit == EIP3860_MAX_INITCODE_SIZE
         ));
@@ -328,7 +287,7 @@ mod tests {
                 input,
                 chain_id: 1030,
             },
-            fees: DynamicFees {
+            fees: simulation_core::transaction::DynamicFees {
                 max_fee_per_gas: U256::from(2),
                 max_priority_fee_per_gas,
             },

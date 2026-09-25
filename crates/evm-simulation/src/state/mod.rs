@@ -291,6 +291,7 @@ impl EvmStateReader {
             balance: info.balance,
             nonce: info.nonce,
             delegation,
+            has_code: info.code.as_ref().is_some_and(|code| !code.is_empty()),
         };
         self.cache.borrow_mut().accounts.insert(address, account);
         Ok(account)
@@ -427,6 +428,7 @@ impl EvmStateReadBudget {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EvmAccountState {
+    pub(crate) has_code: bool,
     balance: U256,
     nonce: u64,
     delegation: Option<Address>,

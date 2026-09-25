@@ -6,8 +6,8 @@ use contract_standards::{
 };
 
 use crate::espace::{
-    EspaceChangesError, EspaceExecutedTransaction, EspaceExecutionPosition, EspaceExecutionSpace,
-    EspaceSemanticLogOccurrence,
+    EspaceChangeDerivationError, EspaceExecutedTransaction, EspaceExecutionPosition,
+    EspaceExecutionSpace, EspaceSemanticLogOccurrence,
     changes::wrapped_native::{WrappedNativeEvent, decode_wrapped_native_log},
 };
 
@@ -81,10 +81,10 @@ impl WrappedPairProof {
 pub(super) fn collect_token_events<'a>(
     execution: &'a EspaceExecutedTransaction,
     wrapped_native_token: Address,
-) -> Result<TokenEventSequence<'a>, EspaceChangesError> {
+) -> Result<TokenEventSequence<'a>, EspaceChangeDerivationError> {
     let occurrences = execution
         .semantic_log_occurrences()
-        .map_err(|error| EspaceChangesError::derivation("token", error))?;
+        .map_err(|error| EspaceChangeDerivationError::rule_failure("token", error))?;
     let mut events = Vec::new();
 
     for occurrence in occurrences {

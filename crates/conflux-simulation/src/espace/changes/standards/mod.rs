@@ -6,16 +6,13 @@ use cfx_types::Space;
 use contract_standards::{DecodedStandardLog, decode_standard_log};
 
 use crate::{
-    espace::EspaceChangesError,
+    espace::EspaceChangeDerivationError,
     execution::{CommittedExecutionTrace, FrameId, TraceEvent},
     primitive::{address_from_cfx, b256_from_cfx},
 };
 
 use metadata::load_metadata;
-pub(crate) use read_call::{
-    IsolatedReadCallError, MetadataReadError, ReadCallOutcome, execute_isolated_read_call,
-    execute_read_call,
-};
+pub(crate) use read_call::{IsolatedReadCallError, ReadCallOutcome, execute_isolated_read_call};
 pub(crate) use token_changes::{VerifiedChange, WrappedOperation, derive_verified_changes};
 
 #[derive(Debug)]
@@ -27,7 +24,7 @@ pub(super) struct DecodedStandardOccurrence {
 pub(super) fn decode_standard_occurrences_in_scope(
     trace: &CommittedExecutionTrace,
     includes_frame: impl Fn(FrameId) -> bool,
-) -> Result<Vec<DecodedStandardOccurrence>, EspaceChangesError> {
+) -> Result<Vec<DecodedStandardOccurrence>, EspaceChangeDerivationError> {
     let mut occurrences = Vec::new();
     for event in trace.events() {
         let TraceEvent::Log {
@@ -53,7 +50,7 @@ pub(super) fn decode_standard_occurrences_in_scope(
             .map(b256_from_cfx)
             .collect::<Vec<_>>();
         let Some(decoded_log) = decode_standard_log(address, &topics, data, |address| address)
-            .map_err(|error| EspaceChangesError::derivation("token", error))?
+            .map_err(|error| EspaceChangeDerivationError::rule_failure("token", error))?
         else {
             continue;
         };

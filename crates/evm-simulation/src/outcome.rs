@@ -1,9 +1,8 @@
 use std::fmt;
 
-use alloy::sol_types::Panic;
-use alloy_primitives::{Address, Bytes, Log, U256};
+use alloy_primitives::{Address, Bytes, Log};
 
-use crate::{EvmExecutionResult, EvmTransactionRejection};
+use crate::EvmExecutionResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvmSuccessReason {
@@ -13,34 +12,20 @@ pub enum EvmSuccessReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(untagged, rename_all_fields = "camelCase"))]
 pub enum EvmSuccessOutput {
     Call {
         return_data: Bytes,
     },
     Create {
+        #[cfg_attr(feature = "serde", serde(rename = "contractAddress"))]
         address: Address,
         runtime_code: Bytes,
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum EvmRevertReason {
-    SolidityError { message: String },
-    SolidityPanic { code: U256 },
-}
-
-impl fmt::Display for EvmRevertReason {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::SolidityError { message } if message.is_empty() => formatter.write_str("<empty>"),
-            Self::SolidityError { message } => formatter.write_str(message),
-            Self::SolidityPanic { code } => {
-                formatter.write_str(Panic { code: *code }.as_geth_str().as_ref())
-            }
-        }
-    }
-}
+pub use contract_standards::SolidityRevertReason as EvmRevertReason;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -148,5 +133,4 @@ pub enum EvmExecutionOutcome {
         result: EvmExecutionResult,
         reason: EvmHaltReason,
     },
-    NotExecuted(EvmTransactionRejection),
 }

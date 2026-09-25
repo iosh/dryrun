@@ -4,10 +4,11 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [features]
-serde = ["simulation-core/serde"]
+serde = ["dep:serde", "simulation-core/serde"]
 
 [dependencies]
-simulation-core = { workspace = true }
+serde = { workspace = true, optional = true }
+simulation-core = { workspace = true, features = ["serde"] }
 alloy = { workspace = true }
 alloy-chains = { workspace = true }
 alloy-hardforks = { workspace = true }

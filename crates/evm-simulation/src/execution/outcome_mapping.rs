@@ -1,4 +1,3 @@
-use alloy::sol_types::{Panic, Revert, SolError};
 use alloy_primitives::Bytes;
 use revm::context_interface::result::{
     ExecutionResult as RevmExecutionResult, HaltReason, OutOfGasError, Output as RevmOutput,
@@ -35,7 +34,7 @@ pub(crate) fn map_executed_status(
             output: map_success_output(output, transaction)?,
         }),
         RevmExecutionResult::Revert { output, .. } => {
-            let reason = decode_revert_reason(&output);
+            let reason = EvmRevertReason::decode(&output);
             Ok(EvmFinalStatus::Reverted {
                 revert_data: output,
                 reason,
@@ -79,18 +78,6 @@ fn map_success_output(
         )
         .into()),
     }
-}
-
-fn decode_revert_reason(output: &Bytes) -> Option<EvmRevertReason> {
-    Revert::abi_decode_validate(output.as_ref())
-        .map(|revert| EvmRevertReason::SolidityError {
-            message: revert.reason,
-        })
-        .or_else(|_| {
-            Panic::abi_decode_validate(output.as_ref())
-                .map(|panic| EvmRevertReason::SolidityPanic { code: panic.code })
-        })
-        .ok()
 }
 
 fn map_halt_reason(reason: HaltReason) -> EvmHaltReason {

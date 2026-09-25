@@ -2,7 +2,7 @@ use alloy_sol_types::{SolCall, SolEvent, sol};
 
 use super::VoteEvent;
 use crate::{
-    core_space::{CoreSpaceChangesError, VoteAllocation},
+    core_space::{CoreSpaceProtocolError, VoteAllocation},
     primitive::b256_from_cfx,
 };
 
@@ -34,7 +34,9 @@ pub(super) struct CastVoteCall {
     pub(super) votes: Vec<(u16, VoteAllocation)>,
 }
 
-pub(super) fn decode_cast_vote(data: &[u8]) -> Result<Option<CastVoteCall>, CoreSpaceChangesError> {
+pub(super) fn decode_cast_vote(
+    data: &[u8],
+) -> Result<Option<CastVoteCall>, CoreSpaceProtocolError> {
     let Some(selector) = data.get(..4) else {
         return Ok(None);
     };
@@ -42,7 +44,7 @@ pub(super) fn decode_cast_vote(data: &[u8]) -> Result<Option<CastVoteCall>, Core
         return Ok(None);
     }
     let call = ParamsControl::castVoteCall::abi_decode_validate(data).map_err(|error| {
-        CoreSpaceChangesError::inconsistent_execution(format!(
+        CoreSpaceProtocolError::inconsistent_execution(format!(
             "Core Space governance castVote call has invalid ABI data: {error}"
         ))
     })?;
@@ -68,7 +70,7 @@ pub(super) fn decode_cast_vote(data: &[u8]) -> Result<Option<CastVoteCall>, Core
 pub(super) fn decode_vote_event(
     topics: &[cfx_types::H256],
     data: &[u8],
-) -> Result<Option<VoteEvent>, CoreSpaceChangesError> {
+) -> Result<Option<VoteEvent>, CoreSpaceProtocolError> {
     let Some(signature) = topics.first().copied().map(b256_from_cfx) else {
         return Ok(None);
     };
@@ -104,8 +106,8 @@ fn allocation(values: [alloy_primitives::U256; 3]) -> VoteAllocation {
     }
 }
 
-fn event_decode_error(name: &str, error: alloy_sol_types::Error) -> CoreSpaceChangesError {
-    CoreSpaceChangesError::inconsistent_execution(format!(
+fn event_decode_error(name: &str, error: alloy_sol_types::Error) -> CoreSpaceProtocolError {
+    CoreSpaceProtocolError::inconsistent_execution(format!(
         "Core Space governance {name} event has invalid ABI data: {error}"
     ))
 }

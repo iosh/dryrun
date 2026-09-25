@@ -1,11 +1,8 @@
-use alloy_primitives::{Address, B256, Bytes, U256};
+use alloy_primitives::{Address, U256};
 use cfx_types::U64;
-use conflux_provider::CoreAddress;
 use conflux_simulation::espace::{
-    EspaceAccountDelegation, EspaceAccountDelegationChange, EspaceBlockContext,
-    EspaceExecutionOutcome, EspaceExecutionResult, EspaceLog, EspaceLogAddress,
-    EspaceNativeTransferChange, EspaceSelfDestructBurnChange, EspaceSimulation,
-    EspaceStandardChange, EspaceStateChange, EspaceSuccessOutput, EspaceTypedTransaction,
+    EspaceAccountDelegation, EspaceAccountDelegationChange, EspaceNativeTransferChange,
+    EspaceSelfDestructBurnChange, EspaceSimulation, EspaceStandardChange, EspaceStateChange,
     EspaceWrappedNativeDepositChange, EspaceWrappedNativeWithdrawalChange,
 };
 use serde::Serialize;
@@ -27,21 +24,21 @@ mod u256_hex {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SimulateEspaceTransactionResponse {
-    state: State,
-    transaction: EspaceTypedTransaction,
-    outcome: Outcome,
-    changes: Changes,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(tag = "status", rename_all = "lowercase")]
-enum Changes {
-    Complete { items: Vec<StandaloneChange> },
-    Unavailable { error: String },
-}
+#[derive(Debug, Clone, Serialize)]
+#[serde(transparent)]
+pub(crate) struct SimulateEspaceTransactionResponse(
+    std::sync::Arc<
+        simulation_core::simulation::Simulation<
+            conflux_simulation::espace::EspaceBlockContext,
+            conflux_simulation::espace::EspaceTypedTransaction,
+            conflux_simulation::espace::EspaceTransactionRequest,
+            conflux_simulation::espace::EspaceExecutionOutcome,
+            conflux_simulation::espace::EspaceTransactionRejection,
+            Vec<StandaloneChange>,
+            conflux_simulation::espace::EspaceChangeDerivationError,
+        >,
+    >,
+);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(
@@ -220,100 +217,11 @@ struct DelegationState {
     nonce: U64,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct State {
-    block_number: U64,
-    block_hash: B256,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(
-    tag = "status",
-    rename_all = "lowercase",
-    rename_all_fields = "camelCase"
-)]
-enum Outcome {
-    Success {
-        #[serde(flatten)]
-        accounting: ExecutionAccounting,
-        #[serde(flatten)]
-        output: SuccessOutput,
-        logs: Vec<SimulationLog>,
-    },
-    Reverted {
-        #[serde(flatten)]
-        accounting: ExecutionAccounting,
-        revert_data: Bytes,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        reason: Option<String>,
-    },
-    Failed {
-        #[serde(flatten)]
-        accounting: ExecutionAccounting,
-        error: String,
-    },
-    Rejected {
-        error: String,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct ExecutionAccounting {
-    gas_used: U64,
-    gas_fee: U256,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    burnt_gas_fee: Option<U256>,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(untagged, rename_all_fields = "camelCase")]
-enum SuccessOutput {
-    Call {
-        return_data: Bytes,
-    },
-    Create {
-        contract_address: Address,
-        runtime_code: Bytes,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct SimulationLog {
-    address: LogAddress,
-    topics: Vec<B256>,
-    data: Bytes,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-#[serde(untagged)]
-enum LogAddress {
-    Espace(Address),
-    CoreSpace(CoreAddress),
-}
-
 impl From<EspaceSimulation> for SimulateEspaceTransactionResponse {
     fn from(simulation: EspaceSimulation) -> Self {
-        Self {
-            state: simulation.context.into(),
-            transaction: simulation.transaction,
-            outcome: simulation.execution.into(),
-            changes: simulation.changes.into(),
-        }
-    }
-}
-
-impl From<conflux_simulation::espace::EspaceChanges> for Changes {
-    fn from(changes: conflux_simulation::espace::EspaceChanges) -> Self {
-        match changes {
-            conflux_simulation::espace::EspaceChanges::Complete(changes) => Self::Complete {
-                items: changes.into_items().into_iter().map(Into::into).collect(),
-            },
-            conflux_simulation::espace::EspaceChanges::Unavailable(error) => Self::Unavailable {
-                error: error.to_string(),
-            },
-        }
+        Self(std::sync::Arc::new(simulation.map_changes(|changes| {
+            changes.into_items().into_iter().map(Into::into).collect()
+        })))
     }
 }
 
@@ -584,81 +492,6 @@ impl From<EspaceStandardChange> for StandaloneChange {
                 from,
                 items: items.into_iter().map(Into::into).collect(),
             },
-        }
-    }
-}
-
-impl From<EspaceBlockContext> for State {
-    fn from(context: EspaceBlockContext) -> Self {
-        Self {
-            block_number: context.number.into(),
-            block_hash: context.hash,
-        }
-    }
-}
-
-impl From<EspaceExecutionOutcome> for Outcome {
-    fn from(outcome: EspaceExecutionOutcome) -> Self {
-        match outcome {
-            EspaceExecutionOutcome::Success {
-                result,
-                output,
-                logs,
-            } => Self::Success {
-                accounting: result.into(),
-                output: match output {
-                    EspaceSuccessOutput::Call { return_data } => {
-                        SuccessOutput::Call { return_data }
-                    }
-                    EspaceSuccessOutput::Create {
-                        address,
-                        runtime_code,
-                    } => SuccessOutput::Create {
-                        contract_address: address,
-                        runtime_code,
-                    },
-                },
-                logs: logs.into_iter().map(Into::into).collect(),
-            },
-            EspaceExecutionOutcome::Reverted {
-                result,
-                revert_data,
-                reason,
-            } => Self::Reverted {
-                accounting: result.into(),
-                revert_data,
-                reason: reason.map(|reason| reason.to_string()),
-            },
-            EspaceExecutionOutcome::Failed { result, failure } => Self::Failed {
-                accounting: result.into(),
-                error: failure.to_string(),
-            },
-            EspaceExecutionOutcome::NotExecuted(rejection) => Self::Rejected {
-                error: rejection.to_string(),
-            },
-        }
-    }
-}
-
-impl From<EspaceExecutionResult> for ExecutionAccounting {
-    fn from(result: EspaceExecutionResult) -> Self {
-        Self {
-            gas_used: result.gas().gas_used().into(),
-            gas_fee: result.fee().charged_amount(),
-            burnt_gas_fee: result.fee().burnt_amount(),
-        }
-    }
-}
-
-impl From<EspaceLog> for SimulationLog {
-    fn from(log: EspaceLog) -> Self {
-        Self {
-            address: match log.address {
-                EspaceLogAddress::Espace(address) => LogAddress::Espace(address),
-                EspaceLogAddress::CoreSpace(address) => LogAddress::CoreSpace(address),
-            },
-            topics: log.topics,
-            data: log.data,
         }
     }
 }

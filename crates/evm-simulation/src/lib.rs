@@ -2,6 +2,8 @@ use alloy::primitives::B256;
 
 mod chain_spec;
 mod changeset;
+#[cfg(feature = "serde")]
+mod codec;
 mod completion;
 mod context;
 mod error;

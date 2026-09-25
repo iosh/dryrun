@@ -4,6 +4,9 @@ mod change;
 mod event_codec;
 pub mod getter_abi;
 mod metadata;
+mod revert;
+
+pub use revert::SolidityRevertReason;
 mod standard_decoder;
 
 pub use change::{Erc1155TransferItem, StandardChange};

@@ -8,7 +8,7 @@ serde = ["dep:alloy-serde", "simulation-core/serde"]
 
 [dependencies]
 alloy-serde = { workspace = true, optional = true }
-simulation-core = { workspace = true }
+simulation-core = { workspace = true, features = ["serde"] }
 alloy = { workspace = true }
 alloy-rpc-types = { workspace = true }
 alloy-primitives = { workspace = true }

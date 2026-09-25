@@ -9,7 +9,7 @@ use cfx_vm_types::CallType;
 
 use crate::{
     core_space::{
-        CoreSpaceChangesError, CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition,
+        CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition, CoreSpaceProtocolError,
         CoreSpaceStateAccess, SponsorshipAccessRuleScope,
     },
     execution::{FrameAction, TraceEvent},
@@ -40,7 +40,7 @@ struct CandidateKey {
 pub(super) fn derive_changes(
     execution: &CoreSpaceExecutedTransaction,
     state: &CoreSpaceStateAccess,
-) -> Result<CoreSpaceChangeSet, CoreSpaceChangesError> {
+) -> Result<CoreSpaceChangeSet, CoreSpaceProtocolError> {
     let mut candidates = BTreeMap::<CandidateKey, usize>::new();
     for event in execution.trace().events() {
         match event {
@@ -62,7 +62,7 @@ pub(super) fn derive_changes(
             }
             TraceEvent::FrameStart { position, frame_id } => {
                 let Some(frame) = execution.trace().try_frame(*frame_id) else {
-                    return Err(CoreSpaceChangesError::inconsistent_execution(
+                    return Err(CoreSpaceProtocolError::inconsistent_execution(
                         "sponsorship access candidate references a missing frame",
                     ));
                 };
@@ -85,11 +85,11 @@ pub(super) fn derive_changes(
                     && is_destroy(calldata)?
                 {
                     if *call_type != CallType::Call {
-                        return Err(CoreSpaceChangesError::inconsistent_execution(
+                        return Err(CoreSpaceProtocolError::inconsistent_execution(
                             "contract-destroy call did not use canonical CALL",
                         ));
                     }
-                    return Err(CoreSpaceChangesError::unsupported_operation(
+                    return Err(CoreSpaceProtocolError::unsupported_operation(
                         "contract destruction may clear an unenumerable sponsorship whitelist range",
                     ));
                 }
@@ -103,7 +103,7 @@ pub(super) fn derive_changes(
                     continue;
                 }
                 if *call_type != CallType::Call {
-                    return Err(CoreSpaceChangesError::inconsistent_execution(
+                    return Err(CoreSpaceProtocolError::inconsistent_execution(
                         "sponsorship access call did not use canonical CALL",
                     ));
                 }
@@ -134,13 +134,13 @@ pub(super) fn derive_changes(
             .initial()
             .sponsorship_access_rule(key)
             .map_err(|source| {
-                CoreSpaceChangesError::state_access("read initial sponsorship access rule", source)
+                CoreSpaceProtocolError::state_access("read initial sponsorship access rule", source)
             })?;
         let finalized = state
             .finalized()
             .sponsorship_access_rule(key)
             .map_err(|source| {
-                CoreSpaceChangesError::state_access(
+                CoreSpaceProtocolError::state_access(
                     "read finalized sponsorship access rule",
                     source,
                 )
@@ -149,14 +149,14 @@ pub(super) fn derive_changes(
             && state
                 .masked_whitelist_keys()
                 .map_err(|source| {
-                    CoreSpaceChangesError::state_access(
+                    CoreSpaceProtocolError::state_access(
                         "snapshot masked sponsorship access rules",
                         source,
                     )
                 })?
                 .contains(&key)
         {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
+            return Err(CoreSpaceProtocolError::inconsistent_execution(
                 "sponsorship access rule depends on a user whitelist entry masked by the all-accounts rule",
             ));
         }
@@ -167,7 +167,7 @@ pub(super) fn derive_changes(
             .finalized()
             .core_address(candidate.contract_address)
             .map_err(|source| {
-                CoreSpaceChangesError::state_access("convert sponsorship contract address", source)
+                CoreSpaceProtocolError::state_access("convert sponsorship contract address", source)
             })?;
         let scope = if candidate.account_address.is_zero() {
             SponsorshipAccessRuleScope::AllAccounts
@@ -177,7 +177,7 @@ pub(super) fn derive_changes(
                     .finalized()
                     .core_address(candidate.account_address)
                     .map_err(|source| {
-                        CoreSpaceChangesError::state_access(
+                        CoreSpaceProtocolError::state_access(
                             "convert sponsorship account address",
                             source,
                         )
@@ -191,7 +191,7 @@ pub(super) fn derive_changes(
                 scope,
                 finalized,
             )
-            .map_err(|error| CoreSpaceChangesError::inconsistent_execution(error.to_string()))?;
+            .map_err(|error| CoreSpaceProtocolError::inconsistent_execution(error.to_string()))?;
     }
     Ok(builder.finish())
 }
@@ -199,7 +199,7 @@ pub(super) fn derive_changes(
 fn decode_access_call(
     calldata: &[u8],
     caller: Address,
-) -> Result<Vec<(Address, Vec<Address>)>, CoreSpaceChangesError> {
+) -> Result<Vec<(Address, Vec<Address>)>, CoreSpaceProtocolError> {
     if calldata.len() < 4 {
         return Ok(Vec::new());
     }
@@ -208,7 +208,7 @@ fn decode_access_call(
         if selector == AccessRuleCalls::addPrivilegeCall::SELECTOR {
             let call = AccessRuleCalls::addPrivilegeCall::abi_decode_validate(calldata).map_err(
                 |error| {
-                    CoreSpaceChangesError::inconsistent_execution(format!(
+                    CoreSpaceProtocolError::inconsistent_execution(format!(
                         "invalid addPrivilege calldata: {error}"
                     ))
                 },
@@ -217,7 +217,7 @@ fn decode_access_call(
         } else if selector == AccessRuleCalls::removePrivilegeCall::SELECTOR {
             let call = AccessRuleCalls::removePrivilegeCall::abi_decode_validate(calldata)
                 .map_err(|error| {
-                    CoreSpaceChangesError::inconsistent_execution(format!(
+                    CoreSpaceProtocolError::inconsistent_execution(format!(
                         "invalid removePrivilege calldata: {error}"
                     ))
                 })?;
@@ -225,7 +225,7 @@ fn decode_access_call(
         } else if selector == AccessRuleCalls::addPrivilegeByAdminCall::SELECTOR {
             let call = AccessRuleCalls::addPrivilegeByAdminCall::abi_decode_validate(calldata)
                 .map_err(|error| {
-                    CoreSpaceChangesError::inconsistent_execution(format!(
+                    CoreSpaceProtocolError::inconsistent_execution(format!(
                         "invalid addPrivilegeByAdmin calldata: {error}"
                     ))
                 })?;
@@ -236,7 +236,7 @@ fn decode_access_call(
         } else if selector == AccessRuleCalls::removePrivilegeByAdminCall::SELECTOR {
             let call = AccessRuleCalls::removePrivilegeByAdminCall::abi_decode_validate(calldata)
                 .map_err(|error| {
-                CoreSpaceChangesError::inconsistent_execution(format!(
+                CoreSpaceProtocolError::inconsistent_execution(format!(
                     "invalid removePrivilegeByAdmin calldata: {error}"
                 ))
             })?;
@@ -256,14 +256,14 @@ fn decode_access_call(
     )])
 }
 
-fn is_destroy(calldata: &[u8]) -> Result<bool, CoreSpaceChangesError> {
+fn is_destroy(calldata: &[u8]) -> Result<bool, CoreSpaceProtocolError> {
     if calldata.len() < 4 || calldata[..4] != AdminCalls::destroyCall::SELECTOR {
         return Ok(false);
     }
     AdminCalls::destroyCall::abi_decode_validate(calldata)
         .map(|_| true)
         .map_err(|error| {
-            CoreSpaceChangesError::inconsistent_execution(format!(
+            CoreSpaceProtocolError::inconsistent_execution(format!(
                 "invalid destroy calldata: {error}"
             ))
         })

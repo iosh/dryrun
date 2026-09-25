@@ -2,13 +2,33 @@ use alloy_primitives::U256;
 use cfx_statedb::Error as StateDbError;
 use cfx_storage::Error as StorageError;
 use conflux_provider::{CoreAddress, Network};
+use simulation_core::error::{Diagnostic, DiagnosticData, ErrorCode as Code, ErrorInfo};
 use thiserror::Error;
-use tokio::task::JoinError;
 
-use super::{
-    CoreSpaceContextError, CoreSpaceTransactionCompletionError, CoreSpaceTransactionInputError,
+use super::{CoreSpaceContextError, CoreSpaceTransactionInputError};
+use crate::{
+    ConfluxRpcError,
+    error::{estimation_diagnostic, source_diagnostic},
 };
-use crate::ConfluxRpcError;
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum CoreSpaceTransactionCompletionError {
+    #[error("failed to estimate Core Space gas and storage collateral: {source}")]
+    GasAndCollateralEstimation {
+        #[source]
+        source: ConfluxRpcError,
+    },
+
+    #[error(transparent)]
+    Provider(#[from] ConfluxRpcError),
+
+    #[error("estimated Core Space storage limit exceeds u64: {value}")]
+    StorageLimitOutOfRange { value: U256 },
+
+    #[error("calculated Core Space max fee per gas exceeds U256")]
+    MaxFeePerGasOverflow,
+}
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -50,7 +70,7 @@ pub enum CoreSpaceStateAccessError {
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum CoreSpaceChangesError {
+pub enum CoreSpaceProtocolError {
     #[error("Core Space changes could not access required state during {operation}: {source}")]
     StateAccess {
         operation: &'static str,
@@ -63,7 +83,7 @@ pub enum CoreSpaceChangesError {
     UnsupportedOperation { details: String },
 }
 
-impl CoreSpaceChangesError {
+impl CoreSpaceProtocolError {
     pub(crate) fn state_access(operation: &'static str, source: CoreSpaceStateAccessError) -> Self {
         Self::StateAccess { operation, source }
     }
@@ -132,31 +152,116 @@ pub enum CoreSpaceSimulationError {
     #[error(transparent)]
     Context(#[from] CoreSpaceContextError),
     #[error(transparent)]
-    Completion(CoreSpaceTransactionCompletionError),
+    Completion(#[from] CoreSpaceTransactionCompletionError),
     #[error(transparent)]
     Execution(#[from] CoreSpaceExecutionError),
     #[error(transparent)]
-    Changes(#[from] CoreSpaceChangesError),
-    #[error("Core Space simulation requires an active Tokio runtime")]
-    RuntimeUnavailable,
-    #[error("blocking Core Space simulation task terminated unexpectedly: {source}")]
-    ExecutionTask {
-        #[source]
-        source: JoinError,
-    },
+    Runtime(#[from] simulation_core::simulation::RuntimeError),
 }
 
-impl From<CoreSpaceTransactionCompletionError> for CoreSpaceSimulationError {
-    fn from(error: CoreSpaceTransactionCompletionError) -> Self {
-        match error {
-            CoreSpaceTransactionCompletionError::Input(input) => Self::Input(input),
-            error => Self::Completion(error),
+impl ErrorInfo for CoreSpaceTransactionInputError {
+    fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::Fields(error) => error.diagnostic(),
+            Self::IncompatibleField { field, .. } => {
+                Diagnostic::new(Code::InvalidInput, self.to_string())
+                    .with_data(DiagnosticData::Field { field })
+            }
+            Self::InvalidType { .. } | Self::AddressNetworkMismatch { .. } => {
+                Diagnostic::new(Code::InvalidInput, self.to_string())
+            }
         }
     }
 }
 
-impl CoreSpaceSimulationError {
-    pub(crate) const fn execution_task(source: JoinError) -> Self {
-        Self::ExecutionTask { source }
+impl ErrorInfo for CoreSpaceTransactionCompletionError {
+    fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::Provider(error) => error.diagnostic(),
+            Self::GasAndCollateralEstimation { source } => estimation_diagnostic(source),
+            Self::StorageLimitOutOfRange { .. } | Self::MaxFeePerGasOverflow => {
+                Code::CompletionFailed.diagnostic()
+            }
+        }
+    }
+}
+
+impl ErrorInfo for CoreSpaceStateAccessError {
+    fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::Provider { source } => source.diagnostic(),
+            Self::Preparation { source } | Self::RecordedState { source, .. } => {
+                source_diagnostic(source, Code::StateUnavailable)
+            }
+            Self::Initialization { source } | Self::Operation { source, .. } => {
+                source_diagnostic(source, Code::StateUnavailable)
+            }
+            Self::Unavailable => Code::StateUnavailable.diagnostic(),
+            Self::AddressNetworkMismatch { .. } | Self::ReadCall { .. } => {
+                Code::Internal.diagnostic()
+            }
+        }
+    }
+}
+
+impl ErrorInfo for CoreSpaceProtocolError {
+    fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::StateAccess { source, .. } => source.diagnostic(),
+            Self::InconsistentExecution { .. } => Code::AnalysisValidationFailed.diagnostic(),
+            Self::UnsupportedOperation { .. } => Code::AnalysisUnsupported.diagnostic(),
+        }
+    }
+}
+
+impl ErrorInfo for CoreSpaceContextError {
+    fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::Rpc(error) => error.diagnostic(),
+            Self::StateAnchor(error) => error.diagnostic(),
+            Self::PivotBlockNotFound { .. } | Self::EspaceBlockNotFound { .. } => {
+                Diagnostic::new(Code::ContextNotFound, self.to_string())
+            }
+            Self::SelectedBlockIsNotPivot { .. } => {
+                Diagnostic::new(Code::InconsistentContext, self.to_string())
+            }
+            Self::BlockContext(error) => error.diagnostic(),
+            Self::ConsensusContextUnavailable { .. } => {
+                Diagnostic::new(Code::ContextUnavailable, self.to_string())
+            }
+        }
+    }
+}
+
+impl ErrorInfo for CoreSpaceExecutionError {
+    fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::StateAccess(error) => error.diagnostic(),
+            Self::ResultIntegration(_) => Code::ExecutionIntegrationFailed.diagnostic(),
+        }
+    }
+}
+
+impl ErrorInfo for CoreSpaceSimulationError {
+    fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::Input(error) => error.diagnostic(),
+            Self::Context(error) => error.diagnostic(),
+            Self::Completion(error) => error.diagnostic(),
+            Self::Execution(error) => error.diagnostic(),
+            Self::Runtime(error) => error.diagnostic(),
+        }
+    }
+}
+
+impl ErrorInfo for super::CoreSpaceChangeDerivationError {
+    fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::Protocol(error) => error.diagnostic(),
+            Self::Conflict { .. } => Code::AnalysisValidationFailed.diagnostic(),
+            Self::RuleFailure { source, .. } => {
+                source_diagnostic(source.as_ref(), Code::AnalysisValidationFailed)
+            }
+        }
     }
 }

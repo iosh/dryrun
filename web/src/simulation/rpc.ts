@@ -1,3 +1,9 @@
+export interface Diagnostic {
+  code: string;
+  message: string;
+  data?: Record<string, unknown>;
+}
+
 interface AssetMetadata {
   name?: string;
   symbol?: string;
@@ -207,7 +213,8 @@ export type EvmChange =
 
 export type EvmChanges =
   | { status: 'complete'; items: EvmChange[] }
-  | { status: 'unavailable'; error: string };
+  | { status: 'notAnalyzed' }
+  | { status: 'unavailable'; error: Diagnostic };
 
 /** Standalone eSpace changes use the same verified wallet wire as EVM. */
 export type EspaceNativeTransferChange = EvmNativeTransferChange;
@@ -530,7 +537,8 @@ export type CoreEspaceChange = { space: 'ESPACE' } & CoreEspaceChangePayload;
 
 export type CoreChanges =
   | { status: 'complete'; items: (CoreChange | CoreEspaceChange)[] }
-  | { status: 'unavailable'; error: string };
+  | { status: 'notAnalyzed' }
+  | { status: 'unavailable'; error: Diagnostic };
 
 export interface EvmState {
   blockNumber: string;
@@ -630,17 +638,17 @@ export interface EvmSuccessCreateOutcome extends EvmExecutionAccounting {
 export interface EvmRevertedOutcome extends EvmExecutionAccounting {
   status: 'reverted';
   revertData: string;
-  reason?: string;
+  error: Diagnostic;
 }
 
 export interface EvmFailedOutcome extends EvmExecutionAccounting {
   status: 'failed';
-  error: string;
+  error: Diagnostic;
 }
 
 export interface EvmRejectedOutcome {
   status: 'rejected';
-  error: string;
+  error: Diagnostic;
 }
 
 export type EvmOutcome =
@@ -688,13 +696,13 @@ export type EspaceOutcome =
   | (EspaceExecutionAccounting & {
       status: 'reverted';
       revertData: string;
-      reason?: string;
+      error: Diagnostic;
     })
   | (EspaceExecutionAccounting & {
       status: 'failed';
-      error: string;
+      error: Diagnostic;
     })
-  | { status: 'rejected'; error: string };
+  | { status: 'rejected'; error: Diagnostic };
 
 export interface CoreState {
   epochNumber: string;
@@ -770,31 +778,54 @@ export type CoreOutcome =
   | (CoreExecutionAccounting & {
       status: 'reverted';
       revertData: string;
-      reason?: string;
+      error: Diagnostic;
     })
   | (CoreExecutionAccounting & {
       status: 'failed';
-      error: string;
+      error: Diagnostic;
     })
-  | { status: 'rejected'; error: string };
+  | { status: 'rejected'; error: Diagnostic };
+
+interface CommonPartialTransaction extends Partial<EvmCompletedTransactionBase> {
+  from: string;
+  gasPrice?: string;
+  maxFeePerGas?: string;
+  maxPriorityFeePerGas?: string;
+  accessList?: EvmAccessListItem[];
+}
+
+export interface EvmPartialTransaction extends CommonPartialTransaction {
+  maxFeePerBlobGas?: string;
+  blobVersionedHashes?: string[];
+  authorizationList?: EvmSignedAuthorization[];
+}
+
+export interface CorePartialTransaction extends CommonPartialTransaction {
+  storageLimit?: string;
+  epochHeight?: string;
+}
+
+export type TransactionInput<Complete, Partial> =
+  | { status: 'complete'; fields: Complete }
+  | { status: 'partial'; fields: Partial };
 
 export interface EthereumResponse {
-  state: EvmState;
-  transaction: EvmCompletedTransaction;
+  state: EvmState | null;
+  transaction: TransactionInput<EvmCompletedTransaction, EvmPartialTransaction>;
   outcome: EvmOutcome;
   changes: EvmChanges;
 }
 
 export interface EspaceResponse {
-  state: EspaceState;
-  transaction: EspaceCompletedTransaction;
+  state: EspaceState | null;
+  transaction: TransactionInput<EspaceCompletedTransaction, EvmPartialTransaction>;
   outcome: EspaceOutcome;
   changes: EspaceChanges;
 }
 
 export interface CoreResponse {
-  state: CoreState;
-  transaction: CoreCompletedTransaction;
+  state: CoreState | null;
+  transaction: TransactionInput<CoreCompletedTransaction, CorePartialTransaction>;
   outcome: CoreOutcome;
   changes: CoreChanges;
 }

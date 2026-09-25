@@ -1,63 +1,14 @@
-use super::{
-    CoreSpaceBlockContext, CoreSpaceChangeDerivationError, CoreSpaceChangeSet,
-    CoreSpaceExecutionOutcome, CoreSpaceTypedTransaction,
-};
+pub type CoreSpaceChanges = simulation_core::simulation::Changes<
+    super::CoreSpaceChangeSet,
+    super::CoreSpaceChangeDerivationError,
+>;
 
-/// Availability of verified Core Space state changes.
-#[derive(Debug)]
-pub enum CoreSpaceChanges {
-    Complete(CoreSpaceChangeSet),
-    Unavailable(CoreSpaceChangeDerivationError),
-}
-
-impl From<Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError>> for CoreSpaceChanges {
-    fn from(result: Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError>) -> Self {
-        match result {
-            Ok(changes) => Self::Complete(changes),
-            Err(error) => Self::Unavailable(error),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct CoreSpaceSimulation {
-    pub context: CoreSpaceBlockContext,
-    pub transaction: CoreSpaceTypedTransaction,
-    outcome: CoreSpaceExecutionOutcome,
-    changes: CoreSpaceChanges,
-}
-
-impl CoreSpaceSimulation {
-    pub(crate) fn new(
-        context: CoreSpaceBlockContext,
-        transaction: CoreSpaceTypedTransaction,
-        outcome: CoreSpaceExecutionOutcome,
-        changes: CoreSpaceChanges,
-    ) -> Self {
-        Self {
-            context,
-            transaction,
-            outcome,
-            changes,
-        }
-    }
-
-    pub fn outcome(&self) -> &CoreSpaceExecutionOutcome {
-        &self.outcome
-    }
-
-    pub fn changes(&self) -> &CoreSpaceChanges {
-        &self.changes
-    }
-
-    pub fn into_parts(
-        self,
-    ) -> (
-        CoreSpaceBlockContext,
-        CoreSpaceTypedTransaction,
-        CoreSpaceExecutionOutcome,
-        CoreSpaceChanges,
-    ) {
-        (self.context, self.transaction, self.outcome, self.changes)
-    }
-}
+pub type CoreSpaceSimulation = simulation_core::simulation::Simulation<
+    super::CoreSpaceBlockContext,
+    super::CoreSpaceTypedTransaction,
+    super::CoreSpaceTransactionRequest,
+    super::CoreSpaceExecutionOutcome,
+    super::CoreSpaceTransactionRejection,
+    super::CoreSpaceChangeSet,
+    super::CoreSpaceChangeDerivationError,
+>;

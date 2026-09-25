@@ -13,7 +13,7 @@ use super::{
 use crate::core_space::cross_space_scope::CommittedCrossSpaceTransfer;
 use crate::{
     core_space::{
-        CoreSpaceChangesError, CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition,
+        CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition, CoreSpaceProtocolError,
         CoreSpaceStateAccess, CoreSpaceStateAccessError,
     },
     execution::{CommittedExecutionTrace, FrameAction, FrameId, TraceEvent},
@@ -28,7 +28,7 @@ pub(super) fn derive_changes(
     execution: &CoreSpaceExecutedTransaction,
     state: &CoreSpaceStateAccess,
     currency: &CoreSpaceNativeCurrency,
-) -> Result<CoreSpaceChangeSet, CoreSpaceChangesError> {
+) -> Result<CoreSpaceChangeSet, CoreSpaceProtocolError> {
     let staking_calls = collect_staking_calls(execution)?;
     let operations = collect_native_operations(execution, &staking_calls)?;
     let mut builder = CoreSpaceChangeSetBuilder::new();
@@ -170,7 +170,7 @@ enum DecodedStakingCall {
 
 fn collect_staking_calls(
     execution: &CoreSpaceExecutedTransaction,
-) -> Result<Vec<StakingCall>, CoreSpaceChangesError> {
+) -> Result<Vec<StakingCall>, CoreSpaceProtocolError> {
     let staking_contract =
         cfx_parameters::internal_contract_addresses::STORAGE_INTEREST_STAKING_CONTRACT_ADDRESS;
     if !execution.is_active_internal_contract(staking_contract) {
@@ -208,7 +208,7 @@ fn collect_staking_calls(
             || *code_address != staking_contract
             || !transferred_value.is_zero()
         {
-            return Err(CoreSpaceChangesError::unsupported_operation(
+            return Err(CoreSpaceProtocolError::unsupported_operation(
                 "Core Space staking call did not use the canonical native plain-call form",
             ));
         }
@@ -225,7 +225,7 @@ fn collect_staking_calls(
 
 fn decode_staking_call(
     calldata: &[u8],
-) -> Result<Option<DecodedStakingCall>, CoreSpaceChangesError> {
+) -> Result<Option<DecodedStakingCall>, CoreSpaceProtocolError> {
     let Some(selector) = calldata.get(..4) else {
         return Ok(None);
     };
@@ -265,10 +265,10 @@ fn read_word(
     calldata: &[u8],
     offset: usize,
     field: &str,
-) -> Result<[u8; 32], CoreSpaceChangesError> {
+) -> Result<[u8; 32], CoreSpaceProtocolError> {
     let end = offset + 32;
     let Some(word) = calldata.get(offset..end) else {
-        return Err(CoreSpaceChangesError::inconsistent_execution(format!(
+        return Err(CoreSpaceProtocolError::inconsistent_execution(format!(
             "Core Space {field} was missing from committed call data"
         )));
     };
@@ -283,7 +283,7 @@ fn collect_staking_call(
     frame_id: FrameId,
     caller: Address,
     call: DecodedStakingCall,
-) -> Result<StakingCall, CoreSpaceChangesError> {
+) -> Result<StakingCall, CoreSpaceProtocolError> {
     let frame_transfers = trace
         .internal_transfers_in_scope(Some(frame_id))
         .collect::<Vec<_>>();
@@ -390,14 +390,14 @@ fn transfer_count_mismatch(
     operation: &str,
     expected: usize,
     actual: usize,
-) -> CoreSpaceChangesError {
-    CoreSpaceChangesError::inconsistent_execution(format!(
+) -> CoreSpaceProtocolError {
+    CoreSpaceProtocolError::inconsistent_execution(format!(
         "Core Space staking {operation} expected {expected} internal transfers in its frame, got {actual}"
     ))
 }
 
-fn invalid_staking_transfer(operation: &str) -> CoreSpaceChangesError {
-    CoreSpaceChangesError::inconsistent_execution(format!(
+fn invalid_staking_transfer(operation: &str) -> CoreSpaceProtocolError {
+    CoreSpaceProtocolError::inconsistent_execution(format!(
         "Core Space staking {operation} did not use the canonical caller, amount, and pocket movement"
     ))
 }
@@ -463,7 +463,7 @@ impl NativeOperation {
 fn collect_native_operations(
     execution: &CoreSpaceExecutedTransaction,
     staking_calls: &[StakingCall],
-) -> Result<Vec<NativeOperation>, CoreSpaceChangesError> {
+) -> Result<Vec<NativeOperation>, CoreSpaceProtocolError> {
     let trace = execution.trace();
     let claimed_positions: BTreeSet<_> = staking_calls
         .iter()
@@ -528,7 +528,7 @@ fn collect_native_operations(
                     )
                 {
                     if execution.nested_espace_scope_roots().is_empty() {
-                        return Err(CoreSpaceChangesError::inconsistent_execution(
+                        return Err(CoreSpaceProtocolError::inconsistent_execution(
                             "committed eSpace selfdestruct burn had no verified Core cross-space scope",
                         ));
                     }
@@ -561,7 +561,7 @@ fn collect_frame_value_transfer(
     position: usize,
     frame_id: FrameId,
     operations: &mut Vec<NativeOperation>,
-) -> Result<(), CoreSpaceChangesError> {
+) -> Result<(), CoreSpaceProtocolError> {
     let frame = trace.frame(frame_id);
     if frame.space != Space::Native {
         return Ok(());
@@ -580,12 +580,12 @@ fn collect_frame_value_transfer(
                 return Ok(());
             }
             if *call_type != CallType::Call {
-                return Err(CoreSpaceChangesError::inconsistent_execution(format!(
+                return Err(CoreSpaceProtocolError::inconsistent_execution(format!(
                     "nonzero Core Space {call_type:?} value is not an ordinary CFX transfer"
                 )));
             }
             if execution.is_active_internal_contract(*code_address) {
-                return Err(CoreSpaceChangesError::unsupported_operation(format!(
+                return Err(CoreSpaceProtocolError::unsupported_operation(format!(
                     "value movement through Core Space internal contract {code_address:?} is outside the current change rules"
                 )));
             }
@@ -622,7 +622,7 @@ fn collect_internal_transfer(
     to: AddressPocket,
     amount: U256,
     operations: &mut Vec<NativeOperation>,
-) -> Result<(), CoreSpaceChangesError> {
+) -> Result<(), CoreSpaceProtocolError> {
     if amount.is_zero() {
         return Ok(());
     }
@@ -652,17 +652,17 @@ fn collect_internal_transfer(
         }
         (AddressPocket::Balance(_), AddressPocket::StakingBalance(_))
         | (AddressPocket::StakingBalance(_), AddressPocket::Balance(_)) => {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
+            return Err(CoreSpaceProtocolError::inconsistent_execution(
                 "Core Space staking movement was not owned by a canonical staking call",
             ));
         }
         (AddressPocket::MintBurn, AddressPocket::Balance(_)) => {
-            return Err(CoreSpaceChangesError::inconsistent_execution(
+            return Err(CoreSpaceProtocolError::inconsistent_execution(
                 "Core Space issuance was not owned by a canonical staking withdrawal",
             ));
         }
         (from, to) => {
-            return Err(CoreSpaceChangesError::unsupported_operation(format!(
+            return Err(CoreSpaceProtocolError::unsupported_operation(format!(
                 "Core Space native rules do not support {} ({}) -> {} ({}) pocket movement",
                 from.pocket(),
                 from.space(),
@@ -675,8 +675,8 @@ fn collect_internal_transfer(
     Ok(())
 }
 
-fn state_error(phase: &'static str, source: CoreSpaceStateAccessError) -> CoreSpaceChangesError {
-    CoreSpaceChangesError::state_access(phase, source)
+fn state_error(phase: &'static str, source: CoreSpaceStateAccessError) -> CoreSpaceProtocolError {
+    CoreSpaceProtocolError::state_access(phase, source)
 }
 
 fn core_address(address: Address, execution: &CoreSpaceExecutedTransaction) -> CoreAddress {
@@ -689,7 +689,7 @@ fn derive_staking_changes(
     state: &CoreSpaceStateAccess,
     calls: &[StakingCall],
     builder: &mut CoreSpaceChangeSetBuilder,
-) -> Result<(), CoreSpaceChangesError> {
+) -> Result<(), CoreSpaceProtocolError> {
     let mut vote_lists = BTreeMap::<Address, VoteStakeList>::new();
     for call in calls {
         match *call {

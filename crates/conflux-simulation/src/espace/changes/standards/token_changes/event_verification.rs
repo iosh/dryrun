@@ -4,7 +4,7 @@ use alloy::primitives::{Address, U256};
 use contract_standards::DecodedStandardEvent;
 
 use crate::espace::{
-    EspaceChangesError, EspaceExecutedTransaction, EspaceExecutionPosition, EspaceFrameId,
+    EspaceChangeDerivationError, EspaceExecutedTransaction, EspaceExecutionPosition, EspaceFrameId,
     EspaceStateReader,
 };
 
@@ -42,7 +42,7 @@ impl TokenEventVerification<'_> {
     pub(super) fn verify_standard_event(
         &mut self,
         event: &DecodedStandardEvent<Address>,
-    ) -> Result<VerifiedTokenChange, EspaceChangesError> {
+    ) -> Result<VerifiedTokenChange, EspaceChangeDerivationError> {
         let change = match event {
             DecodedStandardEvent::Erc20Transfer {
                 token,
@@ -256,7 +256,7 @@ impl TokenEventVerification<'_> {
         from: Address,
         to: Address,
         token_id: U256,
-    ) -> Result<(), EspaceChangesError> {
+    ) -> Result<(), EspaceChangeDerivationError> {
         if from == Address::ZERO && to == Address::ZERO {
             return Err(state_mismatch_at(
                 self.position,
@@ -335,7 +335,7 @@ impl TokenEventVerification<'_> {
         from: Address,
         to: Address,
         amount: U256,
-    ) -> Result<(), EspaceChangesError> {
+    ) -> Result<(), EspaceChangeDerivationError> {
         if from == Address::ZERO && to == Address::ZERO {
             return Err(state_mismatch_at(
                 self.position,
@@ -469,7 +469,7 @@ impl TokenEventVerification<'_> {
         from: Address,
         to: Address,
         amount: U256,
-    ) -> Result<(), EspaceChangesError> {
+    ) -> Result<(), EspaceChangeDerivationError> {
         if let Some((_, pair)) = self.pair {
             let account = match pair.direction {
                 WrappedOperation::Deposit => to,
@@ -508,7 +508,7 @@ impl TokenEventVerification<'_> {
         to: Address,
         items: &[(U256, U256)],
         batch: bool,
-    ) -> Result<(), EspaceChangesError> {
+    ) -> Result<(), EspaceChangeDerivationError> {
         if from == Address::ZERO && to == Address::ZERO {
             return Err(state_mismatch_at(
                 self.position,

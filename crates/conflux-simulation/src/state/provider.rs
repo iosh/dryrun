@@ -15,10 +15,6 @@ mod block;
 mod state;
 mod transaction;
 
-pub(crate) use transaction::{
-    CoreSpaceEstimateTransaction, CoreSpaceResourceEstimate, EspaceEstimateTransaction,
-};
-
 #[derive(Clone)]
 pub(crate) struct ConfluxSimulationProvider {
     core_space_address_network: ProviderNetwork,

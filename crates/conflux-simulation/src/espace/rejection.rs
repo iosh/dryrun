@@ -136,3 +136,12 @@ impl fmt::Display for EspaceTransactionRejection {
         }
     }
 }
+
+impl simulation_core::error::ErrorInfo for EspaceTransactionRejection {
+    fn diagnostic(&self) -> simulation_core::error::Diagnostic {
+        simulation_core::error::Diagnostic::new(
+            simulation_core::error::ErrorCode::TransactionRejected,
+            self.to_string(),
+        )
+    }
+}

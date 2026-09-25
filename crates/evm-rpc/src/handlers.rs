@@ -1,14 +1,10 @@
-use evm_simulation::{
-    EvmBlockResolutionError, EvmSimulationError, EvmSimulationRequest,
-    EvmTransactionCompletionError, EvmTransactionSimulator,
-};
+use evm_simulation::{EvmSimulationRequest, EvmTransactionSimulator};
 use jsonrpsee::core::{RpcResult, async_trait};
-use jsonrpsee::types::ErrorObjectOwned;
-use simulation_tasks::{SimulationTaskError, SimulationTaskSet};
-use tracing::{error, instrument, warn};
+use simulation_tasks::SimulationTaskSet;
+use tracing::instrument;
 
 use crate::{
-    errors::{ValidationError, block_not_found, internal_error, transaction_completion_failed},
+    errors::rpc_error,
     interface::{
         BlockRef, EvmSimulateTransactionRequest, EvmSimulateTransactionResponse,
         SimulateTransactionOptions, Transaction,
@@ -51,8 +47,8 @@ impl RpcHandler {
             .simulation_tasks
             .run(move || async move { simulator.simulate(input).await })
             .await
-            .map_err(simulation_task_error_response)?
-            .map_err(evm_error_response)?;
+            .map_err(rpc_error)?
+            .map_err(rpc_error)?;
 
         Ok(output.into())
     }
@@ -68,73 +64,5 @@ impl DryrunRpcServer for RpcHandler {
     ) -> RpcResult<EvmSimulateTransactionResponse> {
         self.handle_simulate_transaction(transaction, block, options)
             .await
-    }
-}
-
-fn evm_error_response(error: EvmSimulationError) -> ErrorObjectOwned {
-    match error {
-        EvmSimulationError::Input(error) => {
-            ValidationError::invalid_params(error.to_string()).into()
-        }
-        EvmSimulationError::BlockResolution(
-            error @ EvmBlockResolutionError::BlockNotFound { .. },
-        ) => block_not_found(error.to_string()),
-        EvmSimulationError::TransactionCompletion(error) => {
-            warn!(error = ?error, "EVM transaction completion failed");
-            transaction_completion_failed(transaction_completion_message(&error))
-        }
-        EvmSimulationError::NotReady(error) => {
-            ValidationError::not_supported(error.to_string()).into()
-        }
-        error => {
-            error!(error = ?error, "EVM simulation failed");
-            internal_error()
-        }
-    }
-}
-
-fn transaction_completion_message(error: &EvmTransactionCompletionError) -> &'static str {
-    match error {
-        EvmTransactionCompletionError::NonceLookup { .. } => {
-            "Unable to resolve the sender nonce; provide transaction.nonce explicitly"
-        }
-        EvmTransactionCompletionError::GasEstimation { .. } => {
-            "Unable to estimate transaction gas; provide transaction.gas explicitly"
-        }
-        EvmTransactionCompletionError::GasPriceSuggestion { .. } => {
-            "Unable to suggest a gas price; provide transaction.gasPrice explicitly"
-        }
-        EvmTransactionCompletionError::PriorityFeeSuggestion { .. } => {
-            "Unable to suggest a priority fee; provide transaction.maxPriorityFeePerGas explicitly"
-        }
-        EvmTransactionCompletionError::MissingBlobBaseFee { .. } => {
-            "Unable to derive a blob gas fee from the selected block; provide transaction.maxFeePerBlobGas explicitly"
-        }
-        EvmTransactionCompletionError::MissingBaseFee { .. }
-        | EvmTransactionCompletionError::MaxFeePerGasOverflow => {
-            "Unable to derive a max fee per gas; provide transaction.maxFeePerGas explicitly"
-        }
-        _ => "Unable to complete the transaction",
-    }
-}
-
-fn simulation_task_error_response(error: SimulationTaskError) -> ErrorObjectOwned {
-    match error {
-        SimulationTaskError::Closed => {
-            error!("EVM simulation task admission is closed");
-            ErrorObjectOwned::owned(-32005, "Simulation service is closing", None::<()>)
-        }
-        SimulationTaskError::ResponseTimedOut => {
-            warn!("EVM simulation response deadline exceeded");
-            ErrorObjectOwned::owned(-32006, "Simulation response timed out", None::<()>)
-        }
-        SimulationTaskError::TaskCancelled { source } => {
-            warn!(error = ?source, "EVM simulation task was cancelled");
-            ErrorObjectOwned::owned(-32007, "Simulation task was cancelled", None::<()>)
-        }
-        SimulationTaskError::TaskPanicked { source } => {
-            error!(error = ?source, "EVM simulation task panicked");
-            internal_error()
-        }
     }
 }

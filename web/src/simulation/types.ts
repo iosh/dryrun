@@ -1,5 +1,6 @@
 import type { EnvironmentId } from './environment.ts';
 import type {
+  Diagnostic,
   CoreChange,
   CoreEspaceChange,
   EspaceChange,
@@ -84,21 +85,19 @@ export type SimulationChange =
   | CoreChange;
 
 export interface SimulationChanges {
+  status: RpcSimulationResponse['changes']['status'];
   items: readonly SimulationChange[];
-  error: string | null;
+  error: Diagnostic | null;
 }
 
 export function simulationChanges(
   response: RpcSimulationResponse,
 ): SimulationChanges {
   const changes = response.changes;
-  if (changes.status === 'unavailable') {
-    return { items: [], error: changes.error };
-  }
-
   return {
-    items: changes.items,
-    error: null,
+    status: changes.status,
+    items: changes.status === 'complete' ? changes.items : [],
+    error: changes.status === 'unavailable' ? changes.error : null,
   };
 }
 

@@ -13,16 +13,14 @@ mod state_access;
 mod transaction;
 mod transaction_adapter;
 
+pub(crate) use changes::NestedEspaceEffects;
 pub use changes::{
     CombinedEspaceChangeRules, DefaultEspaceChangeRules, EspaceAccountDelegation,
     EspaceAccountDelegationChange, EspaceAccountDelegationChangeRules, EspaceChange,
-    EspaceChangeDerivationError, EspaceChangeRules, EspaceChangeSet, EspaceChangeSetBuilder,
-    EspaceChanges, EspaceNativeAssetChangeRules, EspaceNativeCurrency, EspaceNativeTransferChange,
+    EspaceChangeRules, EspaceChangeSet, EspaceChangeSetBuilder, EspaceChanges,
+    EspaceNativeAssetChangeRules, EspaceNativeCurrency, EspaceNativeTransferChange,
     EspaceObservationRequirements, EspaceSelfDestructBurnChange, EspaceStandardChange,
     EspaceStateChange, EspaceWrappedNativeDepositChange, EspaceWrappedNativeWithdrawalChange,
-};
-pub(crate) use changes::{
-    MetadataReadError, NestedEspaceEffects, ReadCallOutcome, execute_read_call,
 };
 pub(crate) use completion::complete_transaction;
 pub use context::{EspaceBlockContext, EspaceBlockSelector, EspaceContextError};
@@ -31,8 +29,8 @@ pub use contract_standards::{
     Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem, StandardChange,
 };
 pub use error::{
-    EspaceChangesError, EspaceExecutionError, EspaceResultIntegrationError, EspaceSimulationError,
-    EspaceStateAccessError, EspaceTransactionCompletionError,
+    EspaceChangeDerivationError, EspaceExecutionError, EspaceResultIntegrationError,
+    EspaceSimulationError, EspaceStateAccessError, EspaceTransactionCompletionError,
 };
 pub use executed_transaction::{
     EspaceAppliedAuthorization, EspaceCallKind, EspaceCommittedFrame,
@@ -60,9 +58,7 @@ pub use transaction::{
     EspaceTransactionInputError, EspaceTransactionRequest, EspaceTypedTransaction, FeeInput,
     PartialTransactionCommon, SignedAuthorization, TxType,
 };
-pub(crate) use transaction_adapter::{
-    build_executor_transaction, validate_transaction_for_execution,
-};
+pub(crate) use transaction_adapter::build_executor_transaction;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EspaceSimulationRequest {

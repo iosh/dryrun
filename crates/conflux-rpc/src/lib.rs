@@ -11,10 +11,7 @@ use jsonrpsee::{RpcModule, types::ErrorObjectOwned};
 use simulation_tasks::SimulationTaskSet;
 
 use self::{
-    error::{
-        core_space_error_response, core_space_response_error, espace_error_response,
-        invalid_params, simulation_task_error_response,
-    },
+    error::{core_space_response_error, invalid_params, rpc_error},
     request::{SimulateCoreSpaceTransactionRequest, SimulateEspaceTransactionRequest},
     response::{SimulateCoreSpaceTransactionResponse, SimulateEspaceTransactionResponse},
 };
@@ -45,8 +42,8 @@ pub fn build_rpc_module(
                 let output = simulation_tasks
                     .run(move || async move { simulator.simulate(input).await })
                     .await
-                    .map_err(simulation_task_error_response)?
-                    .map_err(espace_error_response)?;
+                    .map_err(rpc_error)?
+                    .map_err(rpc_error)?;
 
                 Ok::<_, ErrorObjectOwned>(SimulateEspaceTransactionResponse::from(output))
             }
@@ -69,8 +66,8 @@ pub fn build_rpc_module(
                     let output = simulation_tasks
                         .run(move || async move { simulator.simulate(input).await })
                         .await
-                        .map_err(simulation_task_error_response)?
-                        .map_err(core_space_error_response)?;
+                        .map_err(rpc_error)?
+                        .map_err(rpc_error)?;
 
                     SimulateCoreSpaceTransactionResponse::try_from_simulation(output, rpc_network)
                         .map_err(|error| core_space_response_error(error.to_string()))

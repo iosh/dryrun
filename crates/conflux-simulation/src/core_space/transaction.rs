@@ -13,7 +13,6 @@ use simulation_core::transaction::{
 use thiserror::Error;
 
 use crate::{
-    ConfluxRpcError,
     execution::CoreSpaceTransactionInput as ExecutorCoreSpaceTransactionInput,
     primitive::{b256_to_cfx, u256_to_cfx},
     state::{ConfluxSimulationProvider, ConfluxStateAnchor},
@@ -278,22 +277,6 @@ pub enum CoreSpaceTransactionInputError {
         address: CoreAddress,
         expected: Network,
     },
-}
-
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum CoreSpaceTransactionCompletionError {
-    #[error(transparent)]
-    Input(#[from] CoreSpaceTransactionInputError),
-
-    #[error(transparent)]
-    Provider(#[from] ConfluxRpcError),
-
-    #[error("estimated Core Space storage limit exceeds u64: {value}")]
-    StorageLimitOutOfRange { value: U256 },
-
-    #[error("calculated Core Space max fee per gas exceeds U256")]
-    MaxFeePerGasOverflow,
 }
 
 #[derive(Debug, Clone, Copy)]

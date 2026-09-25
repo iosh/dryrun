@@ -1,7 +1,7 @@
 use alloy::primitives::{Address, Bytes, U256};
 use contract_standards::getter_abi::{erc20, erc721, erc1155};
 
-use crate::espace::{EspaceChangesError, EspaceReadCallOutcome, EspaceStateReader};
+use crate::espace::{EspaceChangeDerivationError, EspaceReadCallOutcome, EspaceStateReader};
 
 use super::error::token_change_error;
 
@@ -9,7 +9,7 @@ pub(super) fn read_erc20_balance(
     view: &EspaceStateReader,
     contract: Address,
     account: Address,
-) -> Result<U256, EspaceChangesError> {
+) -> Result<U256, EspaceChangeDerivationError> {
     let output = read_call_output(
         view,
         contract,
@@ -23,7 +23,7 @@ pub(super) fn read_erc20_balance(
 pub(super) fn read_erc20_total_supply(
     view: &EspaceStateReader,
     contract: Address,
-) -> Result<U256, EspaceChangesError> {
+) -> Result<U256, EspaceChangeDerivationError> {
     let output = read_call_output(view, contract, erc20::total_supply_call(), "totalSupply()")?;
     erc20::decode_total_supply_output(&output)
         .map_err(|error| token_change_error(format!("invalid totalSupply return data: {error}")))
@@ -34,7 +34,7 @@ pub(super) fn read_erc1155_balance(
     contract: Address,
     account: Address,
     token_id: U256,
-) -> Result<U256, EspaceChangesError> {
+) -> Result<U256, EspaceChangeDerivationError> {
     let output = read_call_output(
         view,
         contract,
@@ -51,7 +51,7 @@ pub(super) fn read_allowance(
     contract: Address,
     owner: Address,
     spender: Address,
-) -> Result<U256, EspaceChangesError> {
+) -> Result<U256, EspaceChangeDerivationError> {
     let output = read_call_output(
         view,
         contract,
@@ -66,7 +66,7 @@ pub(super) fn read_erc721_owner(
     view: &EspaceStateReader,
     contract: Address,
     token_id: U256,
-) -> Result<Option<Address>, EspaceChangesError> {
+) -> Result<Option<Address>, EspaceChangeDerivationError> {
     match view.read_call(contract, erc721::owner_of_call(token_id))? {
         EspaceReadCallOutcome::Success(output) => erc721::decode_owner_of_output(&output)
             .map(Some)
@@ -80,7 +80,7 @@ pub(super) fn read_erc721_approval(
     view: &EspaceStateReader,
     contract: Address,
     token_id: U256,
-) -> Result<Option<Address>, EspaceChangesError> {
+) -> Result<Option<Address>, EspaceChangeDerivationError> {
     let output = read_call_output(
         view,
         contract,
@@ -96,7 +96,7 @@ pub(super) fn read_erc721_approval_optional(
     view: &EspaceStateReader,
     contract: Address,
     token_id: U256,
-) -> Result<Option<Address>, EspaceChangesError> {
+) -> Result<Option<Address>, EspaceChangeDerivationError> {
     match view.read_call(contract, erc721::get_approved_call(token_id))? {
         EspaceReadCallOutcome::Success(output) => {
             let address = erc721::decode_get_approved_output(&output).map_err(|error| {
@@ -114,7 +114,7 @@ pub(super) fn read_operator_approval(
     contract: Address,
     owner: Address,
     operator: Address,
-) -> Result<bool, EspaceChangesError> {
+) -> Result<bool, EspaceChangeDerivationError> {
     let output = read_call_output(
         view,
         contract,
@@ -131,7 +131,7 @@ pub(super) fn read_call_output(
     target: Address,
     calldata: Bytes,
     operation: &'static str,
-) -> Result<Bytes, EspaceChangesError> {
+) -> Result<Bytes, EspaceChangeDerivationError> {
     match view.read_call(target, calldata)? {
         EspaceReadCallOutcome::Success(output) => Ok(output),
         EspaceReadCallOutcome::Reverted(_) => {

@@ -1,18 +1,20 @@
 use std::fmt;
 
-use alloy::sol_types::Panic;
 use alloy_primitives::{Address, B256, Bytes, U256, U512};
 use conflux_provider::CoreAddress;
 
-use super::{EspaceExecutionResult, EspaceTransactionRejection};
+use super::EspaceExecutionResult;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(untagged))]
 pub enum EspaceLogAddress {
     Espace(Address),
     CoreSpace(CoreAddress),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct EspaceLog {
     pub address: EspaceLogAddress,
     pub topics: Vec<B256>,
@@ -20,34 +22,20 @@ pub struct EspaceLog {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(untagged, rename_all_fields = "camelCase"))]
 pub enum EspaceSuccessOutput {
     Call {
         return_data: Bytes,
     },
     Create {
+        #[cfg_attr(feature = "serde", serde(rename = "contractAddress"))]
         address: Address,
         runtime_code: Bytes,
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum EspaceRevertReason {
-    SolidityError { message: String },
-    SolidityPanic { code: U256 },
-}
-
-impl fmt::Display for EspaceRevertReason {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::SolidityError { message } if message.is_empty() => formatter.write_str("<empty>"),
-            Self::SolidityError { message } => formatter.write_str(message),
-            Self::SolidityPanic { code } => {
-                formatter.write_str(Panic { code: *code }.as_geth_str().as_ref())
-            }
-        }
-    }
-}
+pub use contract_standards::SolidityRevertReason as EspaceRevertReason;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
@@ -175,5 +163,4 @@ pub enum EspaceExecutionOutcome {
         result: EspaceExecutionResult,
         failure: EspaceExecutionFailure,
     },
-    NotExecuted(EspaceTransactionRejection),
 }

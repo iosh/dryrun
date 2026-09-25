@@ -1,5 +1,7 @@
 mod backend;
 mod chain_spec;
+#[cfg(feature = "serde")]
+mod codec;
 mod context;
 pub mod core_space;
 mod error;

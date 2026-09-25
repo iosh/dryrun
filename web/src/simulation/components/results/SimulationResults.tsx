@@ -89,7 +89,9 @@ function SimulationResult({ record }: Readonly<{ record: SimulationRecord }>) {
       <ExecutionSummary
         anchor={viewModel.anchor}
         changesCount={
-          viewModel.changesError ? 'Unavailable' : String(viewModel.changes.length)
+          viewModel.changesStatus === 'complete'
+            ? String(viewModel.changes.length)
+            : viewModel.changesStatus === 'notAnalyzed' ? 'Not analyzed' : 'Unavailable'
         }
         execution={execution}
         nativeSymbol={viewModel.environment.nativeSymbol}
@@ -106,20 +108,24 @@ function SimulationResult({ record }: Readonly<{ record: SimulationRecord }>) {
         nativeSymbol={viewModel.environment.nativeSymbol}
       />
 
-      <RawJsonDetails label="Completed transaction" value={record.response.transaction} />
+      <RawJsonDetails
+        label={record.response.transaction.status === 'complete' ? 'Completed transaction' : 'Partial transaction'}
+        value={record.response.transaction.fields}
+      />
 
       {record.response.outcome.status === 'success' ? (
         <RawJsonDetails label="Committed logs" value={record.response.outcome.logs} />
       ) : null}
 
-      <TransactionEffects
+      {viewModel.changesStatus === 'complete' ? <TransactionEffects
         addressHighlight={addressHighlight}
         viewModel={viewModel}
-      />
+      /> : null}
 
       <ChangesList
         addressHighlight={addressHighlight}
         changes={viewModel.changes}
+        changesStatus={viewModel.changesStatus}
         changesError={viewModel.changesError}
         record={record}
       />

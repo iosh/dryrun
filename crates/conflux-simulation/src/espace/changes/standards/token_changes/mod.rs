@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use alloy::primitives::Address;
 
-use crate::espace::{EspaceChangesError, EspaceExecutedTransaction, EspaceStateAccess};
+use crate::espace::{EspaceChangeDerivationError, EspaceExecutedTransaction, EspaceStateAccess};
 
 use super::{super::EspaceStandardChange, load_metadata};
 
@@ -42,7 +42,7 @@ pub(crate) fn derive_verified_changes(
     execution: &EspaceExecutedTransaction,
     state: &EspaceStateAccess,
     wrapped_native_token: Address,
-) -> Result<Vec<VerifiedChange>, EspaceChangesError> {
+) -> Result<Vec<VerifiedChange>, EspaceChangeDerivationError> {
     let sequence = collect_token_events(execution, wrapped_native_token)?;
     let events = sequence.events;
     if events.is_empty() {
