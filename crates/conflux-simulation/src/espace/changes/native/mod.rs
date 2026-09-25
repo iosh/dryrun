@@ -30,16 +30,8 @@ pub(super) fn derive_changes(
 ) -> Result<Vec<ChangeOccurrence>, EspaceChangesError> {
     let operations = collection::collect_native_operations(execution, state.written_accounts())
         .map_err(|error| EspaceChangesError::derivation("native asset", error))?;
-    let before_balances = verification::read_native_balances(
-        state.initial(),
-        "read pre-execution native balances",
-        &operations,
-    )?;
-    let after_balances = verification::read_native_balances(
-        state.finalized(),
-        "read post-execution native balances",
-        &operations,
-    )?;
+    let before_balances = verification::read_native_balances(state.initial(), &operations)?;
+    let after_balances = verification::read_native_balances(state.finalized(), &operations)?;
 
     verification::verify_native_changes(&operations, &before_balances, &after_balances, currency)
         .map_err(|error| EspaceChangesError::derivation("native asset", error))

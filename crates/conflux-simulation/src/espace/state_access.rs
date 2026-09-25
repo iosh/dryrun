@@ -25,7 +25,7 @@ use crate::{
 };
 
 use super::{
-    EspaceChangesError, EspaceStateAccessError,
+    EspaceStateAccessError,
     changes::{IsolatedReadCallError, ReadCallOutcome, execute_isolated_read_call},
 };
 
@@ -535,14 +535,6 @@ pub enum EspaceStateReadError {
 
     #[error("state reader is unavailable after an isolated read-call failure")]
     Poisoned,
-}
-
-impl From<EspaceStateReadError> for EspaceChangesError {
-    fn from(error: EspaceStateReadError) -> Self {
-        Self::StateAccess {
-            details: error.to_string(),
-        }
-    }
 }
 
 fn collect_written_accounts(state: &State) -> Vec<Address> {

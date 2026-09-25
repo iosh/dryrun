@@ -13,19 +13,13 @@ pub(super) type NativeBalances = BTreeMap<Address, U256>;
 
 pub(super) fn read_native_balances(
     state: &EspaceStateReader,
-    operation: &'static str,
     native_operations: &NativeOperations,
 ) -> Result<NativeBalances, EspaceChangesError> {
     native_operations
         .balance_accounts
         .iter()
         .map(|&address| {
-            let balance =
-                state
-                    .native_balance(address)
-                    .map_err(|error| EspaceChangesError::StateAccess {
-                        details: format!("{operation}: {error}"),
-                    })?;
+            let balance = state.native_balance(address)?;
             Ok((address, balance))
         })
         .collect()

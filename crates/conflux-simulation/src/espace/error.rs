@@ -115,8 +115,8 @@ pub enum EspaceChangesError {
         #[source]
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
-    #[error("eSpace state access failed: {details}")]
-    StateAccess { details: String },
+    #[error(transparent)]
+    StateRead(#[from] super::EspaceStateReadError),
 }
 
 impl EspaceChangesError {

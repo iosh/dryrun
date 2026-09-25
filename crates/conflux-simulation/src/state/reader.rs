@@ -10,7 +10,7 @@ use conflux_provider::BlockHashOrEpochNumber;
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::state::{
-    ConfluxRpcError, ConfluxSimulationProvider, ConfluxStateAnchor,
+    ConfluxSimulationProvider, ConfluxStateAnchor,
     core_space_internal::{
         CoreSpaceInternalStateItem, SponsorWhitelistStorageKey, decode_abi_bool,
     },
@@ -155,13 +155,10 @@ impl ConfluxStateSource {
         state_anchor: ConfluxStateAnchor,
         provider: ConfluxSimulationProvider,
     ) -> StorageResult<Self> {
-        let core_space_epoch = state_anchor.core_space_epoch();
         let core_space_globals = provider
-            .load_core_space_globals(core_space_epoch)
+            .load_core_space_globals(state_anchor.core_space_epoch())
             .await
-            .map_err(|error| {
-                Self::provider_error_at(&state_anchor, "load_core_space_globals", error)
-            })?;
+            .map_err(storage_error)?;
 
         Ok(Self {
             state_anchor,
@@ -209,7 +206,7 @@ impl ConfluxStateSource {
                     .provider
                     .cfx_get_deposit_list(address, self.state_anchor.core_space_epoch())
                     .await
-                    .map_err(|error| self.provider_error("cfx_getDepositList", error))?;
+                    .map_err(storage_error)?;
                 self.deposit_lists.record(address, deposit_list.clone())?;
                 Ok(encode_core_space_deposit_list(deposit_list))
             }
@@ -218,7 +215,7 @@ impl ConfluxStateSource {
                     .provider
                     .cfx_get_vote_list(address, self.state_anchor.core_space_epoch())
                     .await
-                    .map_err(|error| self.provider_error("cfx_getVoteList", error))?;
+                    .map_err(storage_error)?;
                 self.vote_lists.record(address, vote_list.clone())?;
                 Ok(encode_core_space_vote_list(vote_list))
             }
@@ -283,7 +280,7 @@ impl ConfluxStateSource {
                 self.provider
                     .cfx_get_storage_at(address, slot, self.core_space_pivot())
                     .await
-                    .map_err(|error| self.provider_error("cfx_getStorageAt", error))
+                    .map_err(storage_error)
                     .map(|value| value.map(encode_storage_slot))
             }
             CoreSpaceStateItem::Code { address, code_hash } => {
@@ -299,7 +296,7 @@ impl ConfluxStateSource {
                 .provider
                 .eth_get_storage_at(address, slot, self.espace_block())
                 .await
-                .map_err(|error| self.provider_error("eth_getStorageAt", error))
+                .map_err(storage_error)
                 .map(|value| value.map(encode_storage_slot)),
             EspaceStateItem::Code { address, code_hash } => {
                 self.fetch_espace_code(address, code_hash).await
@@ -330,7 +327,7 @@ impl ConfluxStateSource {
             self.provider
                 .load_espace_account(address, self.espace_block())
                 .await
-                .map_err(|error| self.provider_error("load_espace_account", error))?,
+                .map_err(storage_error)?,
         );
         let mut cache = self.espace_account_cache.lock().await;
 
@@ -345,19 +342,19 @@ impl ConfluxStateSource {
             .provider
             .load_core_space_account_state(address, self.state_anchor.core_space_epoch())
             .await
-            .map_err(|error| self.provider_error("load_core_space_account_state", error))?;
+            .map_err(storage_error)?;
         let used_storage_point_collateral = used_storage_point_collateral(
             account.total_collateral_for_storage,
             token_collateral_for_storage,
         )
-        .map_err(|error| self.encoding_error("derive_core_space_collateral", error))?;
+        .map_err(storage_error)?;
 
         if should_encode_core_space_contract_account(address, account.code_hash) {
             let sponsor_info = self
                 .provider
                 .cfx_get_sponsor_info(address, self.state_anchor.core_space_epoch())
                 .await
-                .map_err(|error| self.provider_error("cfx_getSponsorInfo", error))?;
+                .map_err(storage_error)?;
 
             return encode_core_space_contract_account(
                 &account,
@@ -365,12 +362,11 @@ impl ConfluxStateSource {
                 used_storage_point_collateral,
                 sponsor_info,
             )
-            .map_err(|error| self.encoding_error("encode_core_space_contract_account", error));
+            .map_err(storage_error);
         }
 
         if !used_storage_point_collateral.is_zero() {
-            return Err(self.encoding_error(
-                "encode_core_space_basic_account",
+            return Err(storage_error(
                 StateValueEncodingError::BasicAccountStoragePointCollateral {
                     value: used_storage_point_collateral,
                 },
@@ -395,7 +391,7 @@ impl ConfluxStateSource {
             .provider
             .cfx_get_code(address, self.core_space_pivot())
             .await
-            .map_err(|error| self.provider_error("cfx_getCode", error))?;
+            .map_err(storage_error)?;
 
         if code.is_empty() {
             return Ok(None);
@@ -404,7 +400,7 @@ impl ConfluxStateSource {
         // Core Space code keeps the state address as the upstream CodeInfo owner.
         encode_code(expected_code_hash, address, Arc::new(code))
             .map(Some)
-            .map_err(|error| self.encoding_error("encode_core_space_code", error))
+            .map_err(storage_error)
     }
 
     async fn fetch_core_space_internal_storage(
@@ -431,7 +427,7 @@ impl ConfluxStateSource {
             )
             .await
             .and_then(|value| decode_abi_bool(value, "cfx_call"))
-            .map_err(|error| self.provider_error("cfx_call", error))?;
+            .map_err(storage_error)?;
 
         if key.is_all_whitelist_key() {
             return Ok(is_all_whitelisted.then_some(encode_storage_slot(U256::one())));
@@ -457,7 +453,7 @@ impl ConfluxStateSource {
             )
             .await
             .and_then(|value| decode_abi_bool(value, "cfx_call"))
-            .map_err(|error| self.provider_error("cfx_call", error))?;
+            .map_err(storage_error)?;
 
         Ok(is_user_whitelisted.then_some(encode_storage_slot(U256::one())))
     }
@@ -490,37 +486,10 @@ impl ConfluxStateSource {
             Arc::clone(&account.code),
         )
         .map(Some)
-        .map_err(|error| self.encoding_error("encode_espace_code", error))
+        .map_err(storage_error)
     }
+}
 
-    fn provider_error(&self, operation: &'static str, error: ConfluxRpcError) -> StorageError {
-        Self::provider_error_at(&self.state_anchor, operation, error)
-    }
-
-    fn provider_error_at(
-        state_anchor: &ConfluxStateAnchor,
-        operation: &'static str,
-        error: ConfluxRpcError,
-    ) -> StorageError {
-        let message = format!(
-            "rpc-backed storage provider error: operation={operation}, state={:?},
-              reason={error}",
-            state_anchor
-        );
-        tracing::warn!("{message}");
-        StorageError::Msg(message)
-    }
-
-    fn encoding_error(
-        &self,
-        operation: &'static str,
-        error: StateValueEncodingError,
-    ) -> StorageError {
-        let message = format!(
-            "rpc-backed storage value encoding error: operation={operation}, state={:?}, reason={error}",
-            self.state_anchor
-        );
-        tracing::warn!("{message}");
-        StorageError::Msg(message)
-    }
+fn storage_error(error: impl std::error::Error + Send + Sync + 'static) -> StorageError {
+    StorageError::External(Box::new(error))
 }

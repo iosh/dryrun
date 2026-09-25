@@ -41,9 +41,7 @@ pub(super) fn load_metadata(
 
         let outcome = state
             .read_call(*call.contract_address(), call.call_data())
-            .map_err(|error| EspaceChangesError::StateAccess {
-                details: format!("metadata probe {call:?}: {error}"),
-            })?;
+            .map_err(EspaceChangesError::from)?;
         match outcome {
             EspaceReadCallOutcome::Success(output) if output.len() <= MAX_METADATA_OUTPUT_BYTES => {
                 values.record_output(call, &output);
