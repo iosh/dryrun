@@ -1,6 +1,6 @@
 use alloy_primitives::{Address, U256};
 
-use super::{NativeChangeError, NativeOperation, NativeOperations};
+use super::{NativeChangeError, NativeOperation};
 use crate::espace::{
     EspaceCallKind, EspaceExecutedTransaction, EspaceExecutionSpace, EspaceFrameAction,
     EspaceTransferPocket,
@@ -13,8 +13,7 @@ struct NativeOperationCollector {
 
 pub(super) fn collect_native_operations(
     execution: &EspaceExecutedTransaction,
-    written_accounts: &[Address],
-) -> Result<NativeOperations, NativeChangeError> {
+) -> Result<Vec<NativeOperation>, NativeChangeError> {
     let mut collector = NativeOperationCollector::default();
 
     for frame in execution.committed_frames() {
@@ -54,10 +53,8 @@ pub(super) fn collect_native_operations(
         )?;
     }
 
-    Ok(NativeOperations::from_operations(
-        collector.operations,
-        written_accounts,
-    ))
+    collector.operations.sort_by_key(NativeOperation::position);
+    Ok(collector.operations)
 }
 
 impl NativeOperationCollector {
@@ -76,20 +73,8 @@ impl NativeOperationCollector {
         let destination = espace_balance_account(to);
         match (source, destination, from, to) {
             (Some(from), Some(to), _, _) => self.push_account_transfer(position, from, to, amount),
-            (Some(payer), None, _, EspaceTransferPocket::GasPayment) => {
-                self.operations.push(NativeOperation::GasPrecharge {
-                    position,
-                    payer,
-                    amount,
-                });
-            }
-            (None, Some(recipient), EspaceTransferPocket::GasPayment, _) => {
-                self.operations.push(NativeOperation::GasRefund {
-                    position,
-                    recipient,
-                    amount,
-                });
-            }
+            (Some(_), None, _, EspaceTransferPocket::GasPayment)
+            | (None, Some(_), EspaceTransferPocket::GasPayment, _) => {}
             (Some(contract), None, _, EspaceTransferPocket::MintBurn) => {
                 self.operations.push(NativeOperation::SelfDestructBurn {
                     position,

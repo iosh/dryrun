@@ -1164,9 +1164,9 @@ impl EspaceChangeRules for EspaceNativeAssetChangeRules {
     fn derive_changes(
         &self,
         execution: &EspaceExecutedTransaction,
-        state: &EspaceStateAccess,
+        _state: &EspaceStateAccess,
     ) -> Result<EspaceChangeSet, EspaceChangeDerivationError> {
-        let occurrences = native::derive_changes(execution, state, &self.currency)
+        let occurrences = native::derive_changes(execution, &self.currency)
             .map_err(EspaceChangeDerivationError::Existing)?;
         let mut builder = EspaceChangeSetBuilder::new();
         for occurrence in occurrences {

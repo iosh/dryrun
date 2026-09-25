@@ -140,10 +140,6 @@ impl CoreSpaceStateAccess {
             })
     }
 
-    pub(crate) fn raw_accumulated_interest_rate(&self) -> U256 {
-        self.source.accumulated_interest_rate()
-    }
-
     pub(crate) fn masked_whitelist_keys(
         &self,
     ) -> Result<std::collections::HashSet<SponsorWhitelistStorageKey>, CoreSpaceStateAccessError>
@@ -177,42 +173,6 @@ impl CoreSpaceStateReader {
             state: RefCell::new(Some(state)),
             context,
         }
-    }
-
-    pub(super) fn account(
-        &self,
-        address: Address,
-    ) -> Result<CoreSpaceAccountState, CoreSpaceStateAccessError> {
-        self.with_state(|state| {
-            let address_with_space = address.with_native_space();
-            let exists = state
-                .exists(&address_with_space)
-                .map_err(|source| operation("read Core Space account existence", source))?;
-            if !exists {
-                return Ok(CoreSpaceAccountState {
-                    exists: false,
-                    balance: U256::zero(),
-                    nonce: U256::zero(),
-                    code: None,
-                });
-            }
-            let balance = state
-                .balance(&address_with_space)
-                .map_err(|source| operation("read Core Space account balance", source))?;
-            let nonce = state
-                .nonce(&address_with_space)
-                .map_err(|source| operation("read Core Space account nonce", source))?;
-            let code = state
-                .code(&address_with_space)
-                .map_err(|source| operation("read Core Space account code", source))?
-                .map(|code| Bytes::copy_from_slice(code.as_slice()));
-            Ok(CoreSpaceAccountState {
-                exists,
-                balance,
-                nonce,
-                code,
-            })
-        })
     }
 
     pub(super) fn espace_balance(
@@ -509,62 +469,6 @@ impl CoreSpaceStateReader {
         })
     }
 
-    pub(super) fn staking(
-        &self,
-        address: Address,
-    ) -> Result<CoreSpaceStakingState, CoreSpaceStateAccessError> {
-        self.with_state(|state| {
-            Ok(CoreSpaceStakingState {
-                staking_balance: state
-                    .staking_balance(&address)
-                    .map_err(|source| operation("read Core Space staking balance", source))?,
-                storage_collateral: state
-                    .collateral_for_storage(&address)
-                    .map_err(|source| operation("read Core Space storage collateral", source))?,
-                pos_locked_staking: state
-                    .pos_locked_staking(&address)
-                    .map_err(|source| operation("read Core Space PoS locked staking", source))?,
-                deposit_count: state
-                    .deposit_list_length(&address)
-                    .map_err(|source| operation("read Core Space deposit list", source))?,
-                vote_lock_count: state
-                    .vote_stake_list_length(&address)
-                    .map_err(|source| operation("read Core Space vote-lock list", source))?,
-            })
-        })
-    }
-
-    pub(super) fn contract(
-        &self,
-        address: Address,
-    ) -> Result<CoreSpaceContractState, CoreSpaceStateAccessError> {
-        self.with_state(|state| {
-            let address_with_space = address.with_native_space();
-            let exists = state
-                .exists(&address_with_space)
-                .map_err(|source| operation("read Core Space contract existence", source))?;
-            if !exists {
-                return Ok(CoreSpaceContractState {
-                    exists: false,
-                    admin: None,
-                    code: None,
-                });
-            }
-            let admin = state
-                .admin(&address)
-                .map_err(|source| operation("read Core Space contract admin", source))?;
-            let code = state
-                .code(&address_with_space)
-                .map_err(|source| operation("read Core Space contract code", source))?
-                .map(|code| Bytes::copy_from_slice(code.as_slice()));
-            Ok(CoreSpaceContractState {
-                exists,
-                admin: Some(admin),
-                code,
-            })
-        })
-    }
-
     pub(super) fn contract_admin(
         &self,
         address: Address,
@@ -637,36 +541,6 @@ impl CoreSpaceStateReader {
                     .token_collateral_for_storage(&contract)
                     .map_err(|source| operation("read Core Space storage collateral", source))?,
             })
-        })
-    }
-
-    pub(super) fn global_state(&self) -> Result<CoreSpaceGlobalState, CoreSpaceStateAccessError> {
-        self.with_state(|state| {
-            Ok(CoreSpaceGlobalState {
-                total_issued: state.total_issued_tokens(),
-                total_staking: state.total_staking_tokens(),
-                total_storage: state.total_storage_tokens(),
-                total_espace_tokens: state.total_espace_tokens(),
-                used_storage_points: state.used_storage_points(),
-                converted_storage_points: state.converted_storage_points(),
-                total_pos_staking: state.total_pos_staking_tokens(),
-                distributable_pos_interest: state.distributable_pos_interest(),
-                last_distribute_block: state.last_distribute_block(),
-                pow_base_reward: state.pow_base_reward(),
-                base_fee_share_proportion: state.get_base_price_prop(),
-            })
-        })
-    }
-
-    pub(super) fn storage_word(
-        &self,
-        address: AddressWithSpace,
-        key: &[u8],
-    ) -> Result<U256, CoreSpaceStateAccessError> {
-        self.with_state(|state| {
-            state
-                .storage_at(&address, key)
-                .map_err(|source| operation("read Conflux storage", source))
         })
     }
 
@@ -770,30 +644,6 @@ impl CoreSpacePoSRegistrationState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct CoreSpaceAccountState {
-    pub(super) exists: bool,
-    pub(super) balance: U256,
-    pub(super) nonce: U256,
-    pub(super) code: Option<Bytes>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct CoreSpaceStakingState {
-    pub(super) staking_balance: U256,
-    pub(super) storage_collateral: U256,
-    pub(super) pos_locked_staking: U256,
-    pub(super) deposit_count: usize,
-    pub(super) vote_lock_count: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct CoreSpaceContractState {
-    pub(super) exists: bool,
-    pub(super) admin: Option<Address>,
-    pub(super) code: Option<Bytes>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct CoreSpaceContractAdminState {
     pub(super) exists: bool,
@@ -815,21 +665,6 @@ pub(super) struct CoreSpaceSponsorshipState {
 pub(super) struct CoreSpaceStoragePoints {
     pub(super) unused: U256,
     pub(super) used: U256,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct CoreSpaceGlobalState {
-    pub(super) total_issued: U256,
-    pub(super) total_staking: U256,
-    pub(super) total_storage: U256,
-    pub(super) total_espace_tokens: U256,
-    pub(super) used_storage_points: U256,
-    pub(super) converted_storage_points: U256,
-    pub(super) total_pos_staking: U256,
-    pub(super) distributable_pos_interest: U256,
-    pub(super) last_distribute_block: u64,
-    pub(super) pow_base_reward: U256,
-    pub(super) base_fee_share_proportion: U256,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

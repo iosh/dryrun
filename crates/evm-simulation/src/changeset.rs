@@ -1,8 +1,4 @@
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    error::Error as StdError,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, error::Error as StdError, sync::Arc};
 
 use alloy::primitives::{Address, U256};
 use contract_standards::{Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem};
@@ -10,10 +6,7 @@ use thiserror::Error;
 
 use crate::{
     EvmObservationRequirements, EvmTokenChangeRules,
-    execution::{
-        EvmCallKind, EvmExecutionPosition, EvmFrameAction, EvmObservationError,
-        EvmTransactionExecution,
-    },
+    execution::{EvmExecutionPosition, EvmObservationError, EvmTransactionExecution},
     state::{EvmStateAccess, EvmStateReadError},
 };
 
@@ -993,39 +986,6 @@ impl From<Result<EvmChangeSet, EvmChangeDerivationError>> for EvmChanges {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum EvmNativeOperation {
-    Transfer {
-        position: EvmExecutionPosition,
-        from: Address,
-        to: Address,
-        amount: U256,
-    },
-    SelfDestructBurn {
-        position: EvmExecutionPosition,
-        contract: Address,
-        amount: U256,
-    },
-}
-
-#[derive(Debug, Error)]
-#[error("{details}")]
-struct NativeAssetChangeError {
-    details: String,
-}
-
-impl NativeAssetChangeError {
-    fn new(details: impl Into<String>) -> Self {
-        Self {
-            details: details.into(),
-        }
-    }
-}
-
-fn native_asset_error(details: impl Into<String>) -> EvmChangeDerivationError {
-    EvmChangeDerivationError::rule_failure("native asset", NativeAssetChangeError::new(details))
-}
-
 #[derive(Debug, Clone)]
 pub struct EvmNativeAssetChangeRules {
     currency: EvmNativeCurrency,
@@ -1045,21 +1005,20 @@ impl EvmChangeRules for EvmNativeAssetChangeRules {
     fn derive_changes(
         &self,
         execution: &EvmTransactionExecution,
-        state: &EvmStateAccess,
+        _state: &EvmStateAccess,
     ) -> Result<EvmChangeSet, EvmChangeDerivationError> {
-        let operations = collect_native_operations(execution);
-        replay_native_balances(execution, state, &operations)?;
+        let operations = execution.native_movements();
 
         let mut builder = EvmChangeSetBuilder::new();
-        for operation in operations {
+        for &operation in operations {
             match operation {
-                EvmNativeOperation::Transfer {
+                crate::execution::NativeMovement::Transfer {
                     position,
                     from,
                     to,
                     amount,
                 } => builder.native_transfer(position, from, to, amount, self.currency.clone())?,
-                EvmNativeOperation::SelfDestructBurn {
+                crate::execution::NativeMovement::SelfDestructBurn {
                     position,
                     contract,
                     amount,
@@ -1071,178 +1030,6 @@ impl EvmChangeRules for EvmNativeAssetChangeRules {
 
         Ok(builder.finish())
     }
-}
-
-fn collect_native_operations(execution: &EvmTransactionExecution) -> Vec<EvmNativeOperation> {
-    let mut operations = Vec::new();
-
-    for frame in execution.committed_frames() {
-        match frame.action() {
-            EvmFrameAction::Call {
-                kind: EvmCallKind::Call,
-                caller,
-                target,
-                value,
-                ..
-            } if !value.is_zero() && caller != target => {
-                operations.push(EvmNativeOperation::Transfer {
-                    position: frame.position(),
-                    from: *caller,
-                    to: *target,
-                    amount: *value,
-                });
-            }
-            EvmFrameAction::Create {
-                caller,
-                value,
-                created_address,
-                ..
-            } if !value.is_zero() => {
-                let to = created_address.unwrap_or_else(|| {
-                    unreachable!(
-                        "successful CREATE frame must have an address after execution commit"
-                    )
-                });
-                if *caller != to {
-                    operations.push(EvmNativeOperation::Transfer {
-                        position: frame.position(),
-                        from: *caller,
-                        to,
-                        amount: *value,
-                    });
-                }
-            }
-            EvmFrameAction::Call { .. } | EvmFrameAction::Create { .. } => {}
-        }
-    }
-
-    for selfdestruct in execution.committed_selfdestructs() {
-        let amount = selfdestruct.value();
-        if amount.is_zero() {
-            continue;
-        }
-
-        if selfdestruct.contract() == selfdestruct.target() {
-            operations.push(EvmNativeOperation::SelfDestructBurn {
-                position: selfdestruct.position(),
-                contract: selfdestruct.contract(),
-                amount,
-            });
-        } else {
-            operations.push(EvmNativeOperation::Transfer {
-                position: selfdestruct.position(),
-                from: selfdestruct.contract(),
-                to: selfdestruct.target(),
-                amount,
-            });
-        }
-    }
-
-    operations.sort_by_key(|operation| match operation {
-        EvmNativeOperation::Transfer { position, .. }
-        | EvmNativeOperation::SelfDestructBurn { position, .. } => *position,
-    });
-    operations
-}
-
-fn replay_native_balances(
-    execution: &EvmTransactionExecution,
-    state: &EvmStateAccess,
-    operations: &[EvmNativeOperation],
-) -> Result<(), EvmChangeDerivationError> {
-    let mut addresses = BTreeSet::new();
-    addresses.insert(execution.fee_payer());
-    addresses.insert(execution.block_beneficiary());
-    for operation in operations {
-        match operation {
-            EvmNativeOperation::Transfer { from, to, .. } => {
-                addresses.insert(*from);
-                addresses.insert(*to);
-            }
-            EvmNativeOperation::SelfDestructBurn { contract, .. } => {
-                addresses.insert(*contract);
-            }
-        }
-    }
-
-    let mut replayed = BTreeMap::new();
-    for address in addresses {
-        let balance = state.initial().read_account(address)?.balance();
-        replayed.insert(address, balance);
-    }
-
-    decrease_native_balance(
-        &mut replayed,
-        execution.fee_payer(),
-        execution.fee().total_charged_amount(),
-    )?;
-
-    for operation in operations {
-        match operation {
-            EvmNativeOperation::Transfer {
-                from, to, amount, ..
-            } => {
-                decrease_native_balance(&mut replayed, *from, *amount)?;
-                increase_native_balance(&mut replayed, *to, *amount)?;
-            }
-            EvmNativeOperation::SelfDestructBurn {
-                contract, amount, ..
-            } => {
-                decrease_native_balance(&mut replayed, *contract, *amount)?;
-            }
-        }
-    }
-
-    increase_native_balance(
-        &mut replayed,
-        execution.block_beneficiary(),
-        execution.fee().beneficiary_reward(),
-    )?;
-
-    for (&address, &replayed_balance) in &replayed {
-        let actual = state.finalized().read_account(address)?.balance();
-        if replayed_balance != actual {
-            return Err(native_asset_error(format!(
-                "finalized native balance differs from replay for {address}: replayed {replayed_balance}, state {actual}"
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-fn decrease_native_balance(
-    balances: &mut BTreeMap<Address, U256>,
-    address: Address,
-    amount: U256,
-) -> Result<(), EvmChangeDerivationError> {
-    let balance = balances.get_mut(&address).unwrap_or_else(|| {
-        unreachable!("native replay address set must contain every operation account")
-    });
-    let current = *balance;
-    *balance = current.checked_sub(amount).ok_or_else(|| {
-        native_asset_error(format!(
-            "native balance replay violated the execution invariant for {address}"
-        ))
-    })?;
-    Ok(())
-}
-
-fn increase_native_balance(
-    balances: &mut BTreeMap<Address, U256>,
-    address: Address,
-    amount: U256,
-) -> Result<(), EvmChangeDerivationError> {
-    let balance = balances.get_mut(&address).unwrap_or_else(|| {
-        unreachable!("native replay address set must contain every operation account")
-    });
-    let current = *balance;
-    *balance = current.checked_add(amount).ok_or_else(|| {
-        native_asset_error(format!(
-            "native balance replay violated the execution invariant for {address}"
-        ))
-    })?;
-    Ok(())
 }
 
 #[derive(Debug, Default, Clone, Copy)]

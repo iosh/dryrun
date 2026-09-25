@@ -1,3 +1,5 @@
+mod native;
+pub(crate) use native::NativeMovement;
 mod env;
 mod events;
 mod fee_settlement;
@@ -73,6 +75,7 @@ impl ExecutedTransaction<EvmExecutionObserver> {
         })?;
         verify_committed_logs(&observation.logs, self.result.logs())?;
         verify_committed_create_addresses(&observation.frames)?;
+        let native_movements = native::collect_movements(&observation, &self.transition);
         let status = map_executed_status(self.result, transaction)?;
 
         let anchor_cache = self.evm.ctx().db().cache.clone();
@@ -132,6 +135,7 @@ impl ExecutedTransaction<EvmExecutionObserver> {
         );
         let execution = EvmTransactionExecution {
             status,
+            native_movements,
             gas: self.gas,
             fee_settlement: self.fee_settlement,
             fee_payer: self.read_call_caller,
@@ -174,6 +178,7 @@ impl EvmSemanticLogOccurrence {
 #[derive(Debug)]
 pub struct EvmTransactionExecution {
     status: EvmFinalStatus,
+    native_movements: Vec<NativeMovement>,
     gas: EvmGas,
     fee_settlement: EvmFeeSettlement,
     fee_payer: Address,
@@ -186,6 +191,10 @@ pub struct EvmTransactionExecution {
 }
 
 impl EvmTransactionExecution {
+    pub(crate) fn native_movements(&self) -> &[NativeMovement] {
+        &self.native_movements
+    }
+
     pub(crate) fn into_outcome(self) -> EvmExecutionOutcome {
         let Self {
             status,

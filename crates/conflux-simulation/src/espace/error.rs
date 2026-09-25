@@ -80,13 +80,6 @@ impl EspaceResultIntegrationError {
         }
     }
 
-    pub(crate) fn invalid_observed_fee_settlement(details: impl Into<String>) -> Self {
-        Self::new(format!(
-            "invalid observed fee settlement: {}",
-            details.into()
-        ))
-    }
-
     pub(crate) fn invalid_executor_output(details: impl Into<String>) -> Self {
         Self::new(format!(
             "executor returned an invalid result: {}",

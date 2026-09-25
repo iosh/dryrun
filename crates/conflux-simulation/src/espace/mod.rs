@@ -8,7 +8,6 @@ mod execution_result;
 mod outcome_mapping;
 mod rejection;
 mod result;
-mod settlement;
 mod simulator;
 mod state_access;
 mod transaction;

@@ -2,7 +2,7 @@ use alloy::primitives::U256;
 
 use crate::{EvmBlobGasFee, EvmExecutionGasFee, EvmFee, EvmGas, EvmResultIntegrationError};
 
-/// Internal balance accounting for protocol fee settlement.
+/// Fee amounts derived from execution gas and effective prices.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct EvmFeeSettlement {
     fee: EvmFee,

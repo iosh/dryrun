@@ -359,7 +359,6 @@ impl EspaceExecutedTransaction {
             }
         };
 
-        verify_fee_settlement(output)?;
         Self::from_output(output, status, state)
     }
 
@@ -880,10 +879,4 @@ fn integration_error(details: impl Into<String>) -> EspaceResultIntegrationError
 
 fn missing_frame(frame: usize) -> EspaceResultIntegrationError {
     integration_error(format!("committed trace references missing frame {frame}"))
-}
-
-fn verify_fee_settlement(
-    output: &ConfluxExecutionOutput,
-) -> Result<(), EspaceResultIntegrationError> {
-    super::settlement::verify_fee_settlement(output)
 }

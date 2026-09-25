@@ -10,8 +10,8 @@ use conflux_provider::{CoreAddress, Network};
 
 use crate::{
     execution::{
-        CommittedExecutionTrace, ConfluxExecutionOutcome, ConfluxExecutionOutput, FrameAction,
-        FrameId, PreparedTransactionExecution, TraceEvent,
+        CommittedExecutionTrace, ConfluxExecutionOutcome, FrameAction, FrameId,
+        PreparedTransactionExecution, TraceEvent,
     },
     primitive::u256_from_cfx,
 };
@@ -236,7 +236,6 @@ impl CoreSpaceExecutedTransaction {
         verify_exposed_frames(&output.trace)?;
         verify_committed_logs(&output.trace, &output.logs)?;
         verify_created_contracts(&output.trace, &output.contracts_created)?;
-        verify_fee_settlement(&output)?;
         // Validate nested eSpace ownership while the finalized execution
         // record is assembled.  Change rules then consume only committed
         // scopes and cannot re-pair bridge logs or child frames themselves.
@@ -623,54 +622,6 @@ fn verify_created_contracts(
         )));
     }
     Ok(())
-}
-
-fn verify_fee_settlement(
-    output: &ConfluxExecutionOutput,
-) -> Result<(), CoreSpaceResultIntegrationError> {
-    let mut precharge = U256::ZERO;
-    let mut refund = U256::ZERO;
-
-    for event in output.trace.events() {
-        let TraceEvent::InternalTransfer {
-            from, to, value, ..
-        } = event
-        else {
-            continue;
-        };
-        let amount = u256_from_cfx(*value);
-        match (from, to) {
-            (payer, AddressPocket::GasPayment) if is_core_fee_payer(payer) => {
-                precharge = precharge.checked_add(amount).ok_or_else(|| {
-                    integration_error("gas precharge accumulation overflowed U256")
-                })?;
-            }
-            (AddressPocket::GasPayment, payer) if is_core_fee_payer(payer) => {
-                refund = refund
-                    .checked_add(amount)
-                    .ok_or_else(|| integration_error("gas refund accumulation overflowed U256"))?;
-            }
-            _ => {}
-        }
-    }
-
-    let settled = precharge
-        .checked_sub(refund)
-        .ok_or_else(|| integration_error("gas refund exceeds gas precharge"))?;
-    if settled != output.common.fee {
-        return Err(integration_error(format!(
-            "committed transfers settle gas fee {settled}, executor reports {}",
-            output.common.fee
-        )));
-    }
-    Ok(())
-}
-
-fn is_core_fee_payer(pocket: &AddressPocket) -> bool {
-    matches!(
-        pocket,
-        AddressPocket::Balance(address) if address.space == Space::Native
-    ) || matches!(pocket, AddressPocket::SponsorBalanceForGas(_))
 }
 
 fn missing_frame(frame_id: FrameId) -> CoreSpaceResultIntegrationError {
