@@ -8,10 +8,7 @@ use cfx_types::{AddressWithSpace, U256};
 use primitives::{LogEntry, receipt::StorageChange};
 use thiserror::Error;
 
-use super::{
-    ExecutionBlockContextError,
-    observer::{CommittedExecutionTrace, ExecutionTraceKey},
-};
+use super::observer::{CommittedExecutionTrace, ExecutionTraceKey};
 use crate::primitive::u256_from_cfx;
 
 /// Conflux execution output owned by this crate rather than by the upstream type map.
@@ -51,9 +48,6 @@ pub(crate) enum ConfluxExecutionOutcome {
 
 #[derive(Debug, Error)]
 pub(crate) enum TransactionExecutionError {
-    #[error("execution block context failed: {0}")]
-    BlockContext(#[from] ExecutionBlockContextError),
-
     #[error("state access failed: {0}")]
     StateAccess(#[source] StateDbError),
 

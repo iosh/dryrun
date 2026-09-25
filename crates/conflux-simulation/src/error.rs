@@ -1,6 +1,9 @@
 use std::fmt;
 
-use alloy::{primitives::U256, transports::TransportError};
+use alloy::{
+    primitives::{B256, U256},
+    transports::TransportError,
+};
 use conflux_provider::ConfluxProviderError;
 use thiserror::Error;
 
@@ -68,6 +71,28 @@ impl fmt::Display for ConfluxCoreStatusIdentityField {
         };
         formatter.write_str(name)
     }
+}
+
+/// A failure to verify the pivot selected for a simulation against its endpoints.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ConfluxStateAnchorError {
+    /// A block lookup failed; the underlying provider error is preserved.
+    #[error(transparent)]
+    Rpc(#[from] crate::ConfluxRpcError),
+
+    /// An endpoint no longer reports the selected pivot at the fixed epoch.
+    #[error("Conflux pivot at selected epoch {epoch_number} changed or is no longer available")]
+    Mismatch {
+        /// The epoch fixed during preparation.
+        epoch_number: u64,
+        /// The pivot fixed during preparation.
+        expected_pivot_hash: B256,
+        /// The current Core Space pivot, or None if the block is unavailable.
+        core_space_pivot_hash: Option<B256>,
+        /// The current eSpace block, or None if the block is unavailable.
+        espace_block_hash: Option<B256>,
+    },
 }
 
 /// An error that prevents construction of a verified Conflux simulation backend.

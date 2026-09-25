@@ -22,12 +22,10 @@ cfx-statedb = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry"
 cfx-internal-common = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-parity-trace-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-parameters = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
-cfx-addr = { workspace = true }
 
 cfx-executor = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-vm-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 
-cfx-rpc-cfx-types = { workspace = true }
 
 cfx-rpc-eth-types = { workspace = true }
 keccak-hash = "0.12"

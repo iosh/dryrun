@@ -1,16 +1,16 @@
 use alloy_primitives::U256;
 
 use super::{
-    DynamicFees, EspaceTransactionCommon, EspaceTransactionCompletionError, EspaceTransactionInput,
-    EspaceTransactionRequest, EspaceTypedTransaction, FeeInput, PartialTransactionCommon,
-    ResolvedEspaceContext, TxType,
+    DynamicFees, EspaceContext, EspaceTransactionCommon, EspaceTransactionCompletionError,
+    EspaceTransactionInput, EspaceTransactionRequest, EspaceTypedTransaction, FeeInput,
+    PartialTransactionCommon, TxType,
 };
 use crate::state::{ConfluxSimulationProvider, EspaceEstimateTransaction};
 
 pub(crate) async fn complete_transaction(
     input: EspaceTransactionInput,
     provider: &ConfluxSimulationProvider,
-    context: &ResolvedEspaceContext,
+    context: &EspaceContext,
     chain_id: u64,
 ) -> Result<EspaceTypedTransaction, EspaceTransactionCompletionError> {
     match input {
@@ -34,10 +34,10 @@ pub(crate) async fn complete_transaction(
 async fn complete_partial_transaction(
     transaction: EspaceTransactionRequest,
     provider: &ConfluxSimulationProvider,
-    context: &ResolvedEspaceContext,
+    context: &EspaceContext,
     chain_id: u64,
 ) -> Result<EspaceTypedTransaction, EspaceTransactionCompletionError> {
-    let default_type = if context.base_fee_per_gas().is_some_and(|fee| !fee.is_zero()) {
+    let default_type = if !context.base_fee_per_gas().is_zero() {
         TxType::Eip1559
     } else {
         TxType::Legacy
@@ -184,7 +184,7 @@ async fn complete_gas_price(
 
 async fn complete_dynamic_fees(
     provider: &ConfluxSimulationProvider,
-    context: &ResolvedEspaceContext,
+    context: &EspaceContext,
     max_fee_per_gas: Option<U256>,
     max_priority_fee_per_gas: Option<U256>,
 ) -> Result<(U256, U256), EspaceTransactionCompletionError> {
@@ -209,15 +209,10 @@ async fn complete_dynamic_fees(
 }
 
 fn suggested_max_fee_per_gas(
-    context: &ResolvedEspaceContext,
+    context: &EspaceContext,
     max_priority_fee_per_gas: U256,
 ) -> Result<U256, EspaceTransactionCompletionError> {
-    let base_fee =
-        context
-            .base_fee_per_gas()
-            .ok_or(EspaceTransactionCompletionError::MissingBaseFee {
-                block_number: context.public_context.number,
-            })?;
+    let base_fee = context.base_fee_per_gas();
     crate::primitive::u256_from_cfx(base_fee)
         .checked_mul(U256::from(2))
         .and_then(|value| value.checked_add(max_priority_fee_per_gas))

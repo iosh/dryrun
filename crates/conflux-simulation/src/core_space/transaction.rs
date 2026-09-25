@@ -292,9 +292,6 @@ pub enum CoreSpaceTransactionCompletionError {
     #[error("estimated Core Space storage limit exceeds u64: {value}")]
     StorageLimitOutOfRange { value: U256 },
 
-    #[error("Core Space epoch {epoch_number} has no base fee for dynamic-fee completion")]
-    MissingBaseFee { epoch_number: u64 },
-
     #[error("calculated Core Space max fee per gas exceeds U256")]
     MaxFeePerGasOverflow,
 }

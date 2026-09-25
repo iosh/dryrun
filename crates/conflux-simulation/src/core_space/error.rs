@@ -8,7 +8,7 @@ use tokio::task::JoinError;
 use super::{
     CoreSpaceContextError, CoreSpaceTransactionCompletionError, CoreSpaceTransactionInputError,
 };
-use crate::{ConfluxRpcError, execution::ExecutionBlockContextError};
+use crate::ConfluxRpcError;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -122,11 +122,6 @@ pub enum CoreSpaceExecutionError {
     StateAccess(#[from] CoreSpaceStateAccessError),
     #[error(transparent)]
     ResultIntegration(#[from] CoreSpaceResultIntegrationError),
-    #[error("failed to construct the Core Space execution context: {source}")]
-    Context {
-        #[source]
-        source: ExecutionBlockContextError,
-    },
 }
 
 #[derive(Debug, Error)]

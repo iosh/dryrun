@@ -7,25 +7,15 @@ use cfx_types::Space;
 use cfx_vm_types::{Env, Spec};
 use primitives::SignedTransaction;
 
-mod context;
+use crate::context::ExecutionBlockContext;
+
 mod env;
 mod observer;
 mod outcome;
 mod transaction;
 
-pub use context::ExecutionBlockContextError;
-pub(crate) use context::{
-    CoreSpacePivotBlockContext, ExecutionBlockContext, ExecutionConsensusContext,
-};
-pub(crate) use context::{
-    build_core_space_pivot_block_context, build_espace_execution_block_context,
-    build_execution_block_context,
-};
 pub(crate) use env::build_conflux_state;
-pub(crate) use env::{
-    build_execution_spec, build_transaction_env, next_execution_block_number,
-    next_execution_epoch_height,
-};
+use env::build_transaction_env;
 pub(crate) use observer::{
     CommittedExecutionTrace, ExecutionTraceObserver, FrameAction, FrameId, LogCheckpoint,
     TraceEvent,
@@ -70,7 +60,7 @@ impl<'a> ConfluxTransactionExecutor<'a> {
         input: TransactionExecutionInput,
         observer: ExecutionTraceObserver,
     ) -> Result<ConfluxTransactionExecution, TransactionExecutionError> {
-        let prepared = self.prepare(input)?;
+        let prepared = self.prepare(input);
         let options = transact_options_for(prepared.transaction.space(), observer);
 
         let outcome =
@@ -90,20 +80,17 @@ impl<'a> ConfluxTransactionExecutor<'a> {
         })
     }
 
-    fn prepare(
-        &self,
-        input: TransactionExecutionInput,
-    ) -> Result<PreparedTransactionExecution, ExecutionBlockContextError> {
+    fn prepare(&self, input: TransactionExecutionInput) -> PreparedTransactionExecution {
         let transaction = signed_transaction_for_dryrun(input.transaction);
         let env =
-            build_transaction_env(self.machine, self.state, &transaction, &input.block_context)?;
-        let spec = build_execution_spec(self.machine, &env);
+            build_transaction_env(self.machine, self.state, &transaction, &input.block_context);
+        let spec = self.machine.spec(env.number, env.epoch_height);
 
-        Ok(PreparedTransactionExecution {
+        PreparedTransactionExecution {
             transaction,
             env,
             spec,
-        })
+        }
     }
 }
 

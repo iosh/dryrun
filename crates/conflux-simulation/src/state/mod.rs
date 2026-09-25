@@ -7,9 +7,8 @@ mod state_value_encoding;
 mod storage;
 
 use alloy::{eips::BlockId as EspaceBlockId, primitives::B256};
-use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;
-use cfx_types::{H256, U64};
-use conflux_provider::BlockHashOrEpochNumber;
+use cfx_types::H256;
+use conflux_provider::{BlockHashOrEpochNumber, EpochNumber};
 
 pub use self::provider::ConfluxRpcError;
 
@@ -57,7 +56,7 @@ impl ConfluxStateAnchor {
         }
     }
 
-    pub(crate) fn core_space_epoch(&self) -> CfxEpochNumber {
-        CfxEpochNumber::Num(U64::from(self.epoch_number))
+    pub(crate) fn core_space_epoch(&self) -> EpochNumber {
+        EpochNumber::Number(self.epoch_number)
     }
 }

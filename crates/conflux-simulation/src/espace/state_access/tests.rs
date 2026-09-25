@@ -21,12 +21,11 @@ use tower::Service;
 use super::{EspaceReadCallOutcome, EspaceSimulationLimits, EspaceStateAccess};
 use crate::{
     chain_spec::ConfluxChainSpec,
+    context::{ConsensusContext, ExecutionBlockContext, PivotBlock},
     espace::{EspaceExecutedTransaction, EspaceExecutionStatus, EspaceFrameAction},
     execution::{
-        ConfluxTransactionExecutor, CoreSpacePivotBlockContext, DryRunTransactionInput,
-        EspaceTransactionInput, ExecutionConsensusContext, ExecutionTraceObserver, LogCheckpoint,
-        TransactionExecutionInput, build_conflux_state, build_espace_execution_block_context,
-        build_execution_block_context,
+        ConfluxTransactionExecutor, DryRunTransactionInput, EspaceTransactionInput,
+        ExecutionTraceObserver, LogCheckpoint, TransactionExecutionInput, build_conflux_state,
     },
     primitive::{address_to_cfx, b256_to_cfx},
     state::{ConfluxSimulationProvider, ConfluxStateAnchor, ConfluxStateSource, EspaceRpcBlock},
@@ -269,25 +268,27 @@ fn execute(
     let mut execution_state = build_conflux_state(Arc::clone(&source), handle.clone()).unwrap();
     let machine = Arc::new(ConfluxChainSpec::mainnet().build_machine());
     // A fixed mainnet context after eSpace activation and before CIP-1559.
-    let pivot = CoreSpacePivotBlockContext {
-        block_number: 240_000_000,
-        epoch_height: EPOCH,
+    let pivot = PivotBlock {
+        number: 240_000_000,
+        epoch_number: EPOCH,
         author: address_to_cfx(SENDER),
         timestamp: 1_700_000_000,
         hash: b256_to_cfx(PIVOT_HASH),
         base_fee_per_gas: None,
     };
-    let espace = build_espace_execution_block_context(&EspaceRpcBlock {
+    let espace = EspaceRpcBlock {
         hash: PIVOT_HASH,
         number: EPOCH,
         base_fee_per_gas: None,
-    });
+    };
     let input = TransactionExecutionInput {
-        block_context: build_execution_block_context(
+        block_context: ExecutionBlockContext::from_pivot(
             &pivot,
             &espace,
-            ExecutionConsensusContext::default(),
-        ),
+            ConsensusContext::default(),
+            machine.params(),
+        )
+        .unwrap(),
         transaction: DryRunTransactionInput::Espace(EspaceTransactionInput {
             sender: address_to_cfx(SENDER),
             tx: EthereumTransaction::Eip155(Eip155Transaction {

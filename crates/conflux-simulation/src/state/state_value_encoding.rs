@@ -89,7 +89,7 @@ pub(crate) fn encode_core_space_contract_account(
         && account.staking_balance.is_zero()
         && token_collateral_for_storage.is_zero()
         && account.accumulated_interest_return.is_zero()
-        && account.admin.hex_address.is_zero()
+        && account.admin.is_zero()
         && sponsor_info == SponsorInfo::default()
     {
         return Ok(None);
@@ -103,7 +103,7 @@ pub(crate) fn encode_core_space_contract_account(
             staking_balance: account.staking_balance,
             collateral_for_storage: token_collateral_for_storage,
             accumulated_interest_return: account.accumulated_interest_return,
-            admin: account.admin.hex_address,
+            admin: account.admin,
             sponsor_info,
         })
         .to_vec()
@@ -180,8 +180,8 @@ fn core_space_sponsor_info_from_rpc(
         )?;
 
     Ok(SponsorInfo {
-        sponsor_for_gas: info.sponsor_for_gas.into(),
-        sponsor_for_collateral: info.sponsor_for_collateral.into(),
+        sponsor_for_gas: info.sponsor_for_gas,
+        sponsor_for_collateral: info.sponsor_for_collateral,
         sponsor_gas_bound: info.sponsor_gas_bound,
         sponsor_balance_for_gas: info.sponsor_balance_for_gas,
         sponsor_balance_for_collateral: info.sponsor_balance_for_collateral,

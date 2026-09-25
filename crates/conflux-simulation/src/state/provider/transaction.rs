@@ -10,12 +10,11 @@ use alloy::{
     rpc::client::NoParams,
 };
 use alloy_rpc_types::TransactionInput as AlloyTransactionInput;
-use cfx_rpc_cfx_types::EpochNumber;
 use cfx_rpc_eth_types::TransactionRequest as EspaceRpcTransactionRequest;
 use cfx_types::{U64, U256};
 use conflux_provider::{
     BalanceCheckRequest, BlockHashOrEpochNumber, CoreAccessListItem, CoreAddress,
-    CoreTransactionType, EstimateGasAndCollateralRequest,
+    CoreTransactionType, EpochNumber, EstimateGasAndCollateralRequest,
 };
 use primitives::transaction::AuthorizationListItem;
 use serde::Deserialize;
@@ -48,9 +47,9 @@ impl ConfluxSimulationProvider {
             .espace_provider_at(block)
             .get_transaction_count(address)
             .await
-            .map_err(|error| ConfluxRpcError {
+            .map_err(|error| ConfluxRpcError::Espace {
                 operation: "eth_getTransactionCount",
-                reason: error.to_string(),
+                source: error,
             })?;
         Ok(U256::from(nonce))
     }
@@ -59,9 +58,9 @@ impl ConfluxSimulationProvider {
         self.espace_provider
             .raw_request("eth_gasPrice".into(), NoParams::default())
             .await
-            .map_err(|error| ConfluxRpcError {
+            .map_err(|error| ConfluxRpcError::Espace {
                 operation: "eth_gasPrice",
-                reason: error.to_string(),
+                source: error,
             })
     }
 
@@ -69,9 +68,9 @@ impl ConfluxSimulationProvider {
         self.espace_provider
             .raw_request("eth_maxPriorityFeePerGas".into(), NoParams::default())
             .await
-            .map_err(|error| ConfluxRpcError {
+            .map_err(|error| ConfluxRpcError::Espace {
                 operation: "eth_maxPriorityFeePerGas",
-                reason: error.to_string(),
+                source: error,
             })
     }
 
@@ -87,9 +86,9 @@ impl ConfluxSimulationProvider {
                 (espace_estimate_gas_request(transaction), block),
             )
             .await
-            .map_err(|error| ConfluxRpcError {
+            .map_err(|error| ConfluxRpcError::Espace {
                 operation: "eth_estimateGas",
-                reason: error.to_string(),
+                source: error,
             })?;
         Ok(estimate)
     }
@@ -132,7 +131,7 @@ impl ConfluxSimulationProvider {
         let estimate = Self::core_request(
             "cfx_estimateGasAndCollateral",
             self.core_space_provider
-                .cfx_estimate_gas_and_collateral(request, Self::provider_epoch(epoch)?),
+                .cfx_estimate_gas_and_collateral(request, epoch),
         )
         .await?;
 
@@ -161,7 +160,7 @@ impl ConfluxSimulationProvider {
         let result = Self::core_request(
             "cfx_checkBalanceAgainstTransaction",
             self.core_space_provider
-                .cfx_check_balance_against_transaction(request, Self::provider_epoch(epoch)?),
+                .cfx_check_balance_against_transaction(request, epoch),
         )
         .await?;
         Ok(CoreSpaceBalanceCheck {

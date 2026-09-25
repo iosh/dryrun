@@ -1,9 +1,9 @@
 use alloy_primitives::U256;
 
 use super::{
-    CoreSpacePartialTransactionCommon, CoreSpaceTransactionCommon,
+    CoreSpaceContext, CoreSpacePartialTransactionCommon, CoreSpaceTransactionCommon,
     CoreSpaceTransactionCompletionError, CoreSpaceTransactionInput, CoreSpaceTransactionRequest,
-    CoreSpaceTransactionType, CoreSpaceTypedTransaction, DynamicFees, ResolvedCoreSpaceContext,
+    CoreSpaceTransactionType, CoreSpaceTypedTransaction, DynamicFees,
 };
 use crate::{
     primitive::u256_from_cfx,
@@ -13,7 +13,7 @@ use crate::{
 pub(crate) async fn complete_transaction(
     input: CoreSpaceTransactionInput,
     provider: &ConfluxSimulationProvider,
-    context: &ResolvedCoreSpaceContext,
+    context: &CoreSpaceContext,
     chain_id: u32,
 ) -> Result<CoreSpaceTypedTransaction, CoreSpaceTransactionCompletionError> {
     match input {
@@ -27,7 +27,7 @@ pub(crate) async fn complete_transaction(
 async fn complete_partial_transaction(
     transaction: CoreSpaceTransactionRequest,
     provider: &ConfluxSimulationProvider,
-    context: &ResolvedCoreSpaceContext,
+    context: &CoreSpaceContext,
     chain_id: u32,
 ) -> Result<CoreSpaceTypedTransaction, CoreSpaceTransactionCompletionError> {
     let transaction_type = transaction.transaction_type()?;
@@ -40,7 +40,7 @@ async fn complete_partial_transaction(
         ..
     } = transaction;
     let gas_limit = common.gas_limit;
-    let epoch_height = epoch_height.unwrap_or_else(|| context.epoch_height());
+    let epoch_height = epoch_height.unwrap_or_else(|| context.state_anchor.epoch_number());
     let access_list = access_list.unwrap_or_default();
 
     let mut completed = match transaction_type {
@@ -96,7 +96,7 @@ async fn complete_partial_transaction(
                     gas_limit,
                     storage_limit,
                 },
-                context.state_epoch(),
+                context.state_anchor.core_space_epoch(),
             )
             .await?;
         let (gas_limit, storage_limit) =
@@ -124,7 +124,7 @@ async fn complete_partial_transaction(
 async fn complete_transaction_common(
     transaction: CoreSpacePartialTransactionCommon,
     provider: &ConfluxSimulationProvider,
-    context: &ResolvedCoreSpaceContext,
+    context: &CoreSpaceContext,
     chain_id: u32,
 ) -> Result<CoreSpaceTransactionCommon, CoreSpaceTransactionCompletionError> {
     let nonce = match transaction.nonce {
@@ -174,15 +174,10 @@ async fn complete_gas_price(
 }
 
 fn suggested_max_fee_per_gas(
-    context: &ResolvedCoreSpaceContext,
+    context: &CoreSpaceContext,
     max_priority_fee_per_gas: U256,
 ) -> Result<U256, CoreSpaceTransactionCompletionError> {
-    let base_fee =
-        context
-            .base_fee_per_gas()
-            .ok_or(CoreSpaceTransactionCompletionError::MissingBaseFee {
-                epoch_number: context.public_context.epoch_number,
-            })?;
+    let base_fee = context.base_fee_per_gas();
     u256_from_cfx(base_fee)
         .checked_mul(U256::from(2))
         .and_then(|value| value.checked_add(max_priority_fee_per_gas))

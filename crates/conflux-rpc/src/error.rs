@@ -1,4 +1,5 @@
 use conflux_simulation::{
+    ConfluxRpcError, ConfluxStateAnchorError,
     core_space::{CoreSpaceContextError, CoreSpaceSimulationError},
     espace::{EspaceContextError, EspaceSimulationError, EspaceTransactionCompletionError},
 };
@@ -63,6 +64,50 @@ fn transaction_completion_failed(details: &'static str) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(TRANSACTION_COMPLETION_FAILED_CODE, details, None::<()>)
 }
 
+fn inconsistent_context(message: impl Into<String>) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(
+        -32003,
+        message.into(),
+        Some(serde_json::json!({"code": "context.inconsistent"})),
+    )
+}
+
+fn unavailable_context(message: impl Into<String>) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(
+        -32003,
+        message.into(),
+        Some(serde_json::json!({"code": "context.unavailable"})),
+    )
+}
+
+fn provider_error_response(error: ConfluxRpcError) -> ErrorObjectOwned {
+    let message = match error {
+        ConfluxRpcError::AddressEncoding { .. } => return internal_error(),
+        ConfluxRpcError::Core { .. } => {
+            "Simulation service could not query the upstream Core Space node"
+        }
+        ConfluxRpcError::Espace { .. } => {
+            "Simulation service could not query the upstream eSpace node"
+        }
+        ConfluxRpcError::InvalidResponse { .. } => {
+            "Upstream chain node returned invalid response data"
+        }
+    };
+    ErrorObjectOwned::owned(
+        -32008,
+        message,
+        Some(serde_json::json!({"code": "provider.request_failed"})),
+    )
+}
+
+fn state_anchor_error_response(error: ConfluxStateAnchorError) -> ErrorObjectOwned {
+    match error {
+        ConfluxStateAnchorError::Rpc(error) => provider_error_response(error),
+        ConfluxStateAnchorError::Mismatch { .. } => inconsistent_context(error.to_string()),
+        _ => internal_error(),
+    }
+}
+
 pub(super) fn core_space_response_error(details: impl Into<String>) -> ErrorObjectOwned {
     let details = details.into();
     error!(details, "Conflux Core Space response mapping failed");
@@ -72,10 +117,27 @@ pub(super) fn core_space_response_error(details: impl Into<String>) -> ErrorObje
 pub(super) fn core_space_error_response(error: CoreSpaceSimulationError) -> ErrorObjectOwned {
     match error {
         CoreSpaceSimulationError::Input(error) => invalid_params(error.to_string()),
-        CoreSpaceSimulationError::Context(
-            error @ (CoreSpaceContextError::PivotBlockNotFound { .. }
-            | CoreSpaceContextError::EspaceBlockNotFound { .. }),
-        ) => context_not_found(error.to_string()),
+        CoreSpaceSimulationError::Context(error) => {
+            warn!(error = ?error, "Conflux Core Space context failed");
+            match error {
+                CoreSpaceContextError::Rpc(error) => provider_error_response(error),
+                CoreSpaceContextError::StateAnchor(error) => state_anchor_error_response(error),
+                CoreSpaceContextError::PivotBlockNotFound { .. }
+                | CoreSpaceContextError::EspaceBlockNotFound { .. } => {
+                    context_not_found(error.to_string())
+                }
+                CoreSpaceContextError::SelectedBlockIsNotPivot { .. } => {
+                    inconsistent_context(error.to_string())
+                }
+                CoreSpaceContextError::BlockContext(error) => {
+                    unavailable_context(error.to_string())
+                }
+                CoreSpaceContextError::ConsensusContextUnavailable { .. } => {
+                    unavailable_context(error.to_string())
+                }
+                _ => internal_error(),
+            }
+        }
         CoreSpaceSimulationError::Completion(error) => {
             warn!(error = ?error, "Conflux Core Space transaction completion failed");
             transaction_completion_failed("Unable to complete the transaction")
@@ -90,8 +152,21 @@ pub(super) fn core_space_error_response(error: CoreSpaceSimulationError) -> Erro
 pub(super) fn espace_error_response(error: EspaceSimulationError) -> ErrorObjectOwned {
     match error {
         EspaceSimulationError::Input(error) => invalid_params(error.to_string()),
-        EspaceSimulationError::Context(error @ EspaceContextError::EspaceBlockNotFound { .. }) => {
-            context_not_found(error.to_string())
+        EspaceSimulationError::Context(error) => {
+            warn!(error = ?error, "Conflux eSpace context failed");
+            match error {
+                EspaceContextError::Rpc(error) => provider_error_response(error),
+                EspaceContextError::StateAnchor(error) => state_anchor_error_response(error),
+                EspaceContextError::EspaceBlockNotFound { .. }
+                | EspaceContextError::CoreSpacePivotNotFound { .. } => {
+                    context_not_found(error.to_string())
+                }
+                EspaceContextError::CoreSpacePivotMismatch { .. } => {
+                    inconsistent_context(error.to_string())
+                }
+                EspaceContextError::BlockContext(error) => unavailable_context(error.to_string()),
+                _ => internal_error(),
+            }
         }
         EspaceSimulationError::Completion(
             error @ EspaceTransactionCompletionError::UnsupportedTransactionType { .. },

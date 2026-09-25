@@ -6,9 +6,10 @@ use tokio::runtime::Handle;
 
 use crate::{
     ConfluxSimulationBackend,
+    context::ExecutionBlockContext,
     execution::{
-        ConfluxTransactionExecutor, DryRunTransactionInput, ExecutionBlockContext,
-        ExecutionTraceObserver, TransactionExecutionInput, build_conflux_state,
+        ConfluxTransactionExecutor, DryRunTransactionInput, ExecutionTraceObserver,
+        TransactionExecutionInput, build_conflux_state,
     },
     state::ConfluxStateSource,
 };
@@ -129,9 +130,6 @@ fn map_execution_error(
     use crate::execution::TransactionExecutionError;
 
     match error {
-        TransactionExecutionError::BlockContext(source) => {
-            CoreSpaceExecutionError::Context { source }
-        }
         TransactionExecutionError::StateAccess(source) => {
             CoreSpaceExecutionError::StateAccess(CoreSpaceStateAccessError::Operation {
                 operation: "execute Core Space transaction",

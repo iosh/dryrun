@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use alloy::{eips::BlockId, primitives::U256 as AlloyU256, providers::Provider};
-use cfx_rpc_cfx_types::EpochNumber;
 use cfx_types::{Address, H256, U256};
-use conflux_provider::{BlockHashOrEpochNumber, CoreTransactionRequest};
+use conflux_provider::{BlockHashOrEpochNumber, CoreTransactionRequest, EpochNumber};
 use primitives::{DepositInfo, VoteStakeInfo};
 
 use crate::{
@@ -34,9 +33,9 @@ impl ConfluxSimulationProvider {
                 AlloyU256::from_be_slice(slot.as_bytes()),
             )
             .await
-            .map_err(|error| ConfluxRpcError {
+            .map_err(|error| ConfluxRpcError::Espace {
                 operation: "eth_getStorageAt",
-                reason: error.to_string(),
+                source: error,
             })?;
         let value = crate::primitive::u256_to_cfx(value);
         Ok((!value.is_zero()).then_some(value))
@@ -51,23 +50,23 @@ impl ConfluxSimulationProvider {
         let balance = provider
             .get_balance(address_from_cfx(address))
             .await
-            .map_err(|error| ConfluxRpcError {
+            .map_err(|error| ConfluxRpcError::Espace {
                 operation: "eth_getBalance",
-                reason: error.to_string(),
+                source: error,
             })?;
         let nonce = provider
             .get_transaction_count(address_from_cfx(address))
             .await
-            .map_err(|error| ConfluxRpcError {
+            .map_err(|error| ConfluxRpcError::Espace {
                 operation: "eth_getTransactionCount",
-                reason: error.to_string(),
+                source: error,
             })?;
         let code = provider
             .get_code_at(address_from_cfx(address))
             .await
-            .map_err(|error| ConfluxRpcError {
+            .map_err(|error| ConfluxRpcError::Espace {
                 operation: "eth_getCode",
-                reason: error.to_string(),
+                source: error,
             })?;
 
         Ok(EspaceAccountData {
@@ -82,7 +81,6 @@ impl ConfluxSimulationProvider {
         epoch: EpochNumber,
     ) -> Result<CoreSpaceGlobals, ConfluxRpcError> {
         const BATCH_NAME: &str = "Core Space globals";
-        let epoch = Self::provider_epoch(epoch)?;
         let mut batch = self.core_space_provider.batch();
         let interest_rate = batch
             .cfx_get_interest_rate(epoch)
@@ -165,7 +163,6 @@ impl ConfluxSimulationProvider {
     ) -> Result<CoreSpaceAccountState, ConfluxRpcError> {
         const BATCH_NAME: &str = "Core Space account state";
         let address = self.core_address(address)?;
-        let epoch = Self::provider_epoch(epoch)?;
         let mut batch = self.core_space_provider.batch();
         let account = batch
             .cfx_get_account(address, epoch)
@@ -189,7 +186,7 @@ impl ConfluxSimulationProvider {
                 accumulated_interest_return: crate::primitive::u256_to_cfx(
                     account.accumulated_interest_return,
                 ),
-                admin: Self::provider_address_to_rpc(account.admin)?,
+                admin: Address::from(account.admin.bytes()),
             },
             token_collateral_for_storage: crate::primitive::u256_to_cfx(collateral),
         })
@@ -203,7 +200,7 @@ impl ConfluxSimulationProvider {
         let values = Self::core_request(
             "cfx_getDepositList",
             self.core_space_provider
-                .cfx_get_deposit_list(self.core_address(address)?, Self::provider_epoch(epoch)?),
+                .cfx_get_deposit_list(self.core_address(address)?, epoch),
         )
         .await?;
         Ok(values
@@ -226,7 +223,7 @@ impl ConfluxSimulationProvider {
         let values = Self::core_request(
             "cfx_getVoteList",
             self.core_space_provider
-                .cfx_get_vote_list(self.core_address(address)?, Self::provider_epoch(epoch)?),
+                .cfx_get_vote_list(self.core_address(address)?, epoch),
         )
         .await?;
         Ok(values
@@ -246,12 +243,12 @@ impl ConfluxSimulationProvider {
         let value = Self::core_request(
             "cfx_getSponsorInfo",
             self.core_space_provider
-                .cfx_get_sponsor_info(self.core_address(address)?, Self::provider_epoch(epoch)?),
+                .cfx_get_sponsor_info(self.core_address(address)?, epoch),
         )
         .await?;
         Ok(CoreSpaceSponsorInfo {
-            sponsor_for_gas: Self::provider_address_to_rpc(value.sponsor_for_gas)?,
-            sponsor_for_collateral: Self::provider_address_to_rpc(value.sponsor_for_collateral)?,
+            sponsor_for_gas: Address::from(value.sponsor_for_gas.bytes()),
+            sponsor_for_collateral: Address::from(value.sponsor_for_collateral.bytes()),
             sponsor_gas_bound: crate::primitive::u256_to_cfx(value.sponsor_gas_bound),
             sponsor_balance_for_gas: crate::primitive::u256_to_cfx(value.sponsor_balance_for_gas),
             sponsor_balance_for_collateral: crate::primitive::u256_to_cfx(

@@ -1,16 +1,14 @@
 use std::fmt;
 
 use alloy::{eips::BlockId, primitives::B256};
-use cfx_types::U256;
+use cfx_executor::spec::CommonParams;
+use cfx_types::{Space, U256};
+use conflux_provider::EpochNumber;
 use thiserror::Error;
 
 use crate::{
     ConfluxRpcError,
-    execution::{
-        ExecutionBlockContext, ExecutionBlockContextError, ExecutionConsensusContext,
-        build_core_space_pivot_block_context, build_espace_execution_block_context,
-        build_execution_block_context,
-    },
+    context::{ConfluxBlockContextError, ConsensusContext, ExecutionBlockContext, PivotBlock},
     primitive::{b256_from_cfx, b256_to_cfx},
     state::{ConfluxSimulationProvider, ConfluxStateAnchor, CoreSpaceRpcBlock, EspaceRpcBlock},
 };
@@ -60,6 +58,15 @@ pub struct EspaceBlockContext {
     pub core_space_pivot_hash: B256,
 }
 
+impl EspaceBlockContext {
+    pub(crate) fn state_anchor(&self) -> ConfluxStateAnchor {
+        ConfluxStateAnchor::new(
+            self.core_space_epoch_number,
+            b256_to_cfx(self.core_space_pivot_hash),
+        )
+    }
+}
+
 /// An error resolving the fixed context for an eSpace simulation.
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -67,6 +74,10 @@ pub enum EspaceContextError {
     /// A provider request required to resolve the context failed.
     #[error(transparent)]
     Rpc(#[from] ConfluxRpcError),
+
+    /// The fixed pivot could not be verified before execution or result delivery.
+    #[error(transparent)]
+    StateAnchor(#[from] crate::ConfluxStateAnchorError),
 
     /// The selected eSpace block does not exist.
     #[error("eSpace block selected by {selector} was not found")]
@@ -95,26 +106,20 @@ pub enum EspaceContextError {
         actual_pivot_hash: B256,
     },
 
-    /// The resolved blocks cannot form an execution context.
-    #[error("invalid eSpace execution block context: {source}")]
-    ExecutionBlockContext {
-        /// The invalid execution-context detail.
-        #[source]
-        source: ExecutionBlockContextError,
-    },
+    /// The selected blocks cannot provide the required execution context.
+    #[error(transparent)]
+    BlockContext(#[from] ConfluxBlockContextError),
 }
 
-pub(crate) struct ResolvedEspaceContext {
+pub(crate) struct EspaceContext {
     pub(crate) execution_block_context: ExecutionBlockContext,
     pub(crate) state_anchor: ConfluxStateAnchor,
     pub(crate) public_context: EspaceBlockContext,
 }
 
-impl ResolvedEspaceContext {
-    pub(crate) fn base_fee_per_gas(&self) -> Option<U256> {
-        self.execution_block_context
-            .base_fees
-            .espace_base_fee_per_gas
+impl EspaceContext {
+    pub(crate) fn base_fee_per_gas(&self) -> U256 {
+        self.execution_block_context.base_gas_price[Space::Ethereum]
     }
 
     pub(crate) fn state_block(&self) -> BlockId {
@@ -122,31 +127,32 @@ impl ResolvedEspaceContext {
     }
 }
 
-pub(crate) async fn resolve_espace_context(
+pub(crate) async fn prepare_espace_context(
     provider: &ConfluxSimulationProvider,
     selector: EspaceBlockSelector,
-) -> Result<ResolvedEspaceContext, EspaceContextError> {
+    params: &CommonParams,
+) -> Result<EspaceContext, EspaceContextError> {
     let espace_block = load_espace_block(provider, selector).await?;
 
     let state_anchor = ConfluxStateAnchor::new(espace_block.number, b256_to_cfx(espace_block.hash));
     let core_space_pivot_block =
         load_core_space_pivot(provider, state_anchor.epoch_number()).await?;
-    let core_space_pivot = build_validated_core_space_pivot(state_anchor, &core_space_pivot_block)?;
+    let core_space_pivot = verify_core_space_pivot(state_anchor, &core_space_pivot_block)?;
 
     let public_context = EspaceBlockContext {
         number: espace_block.number,
         hash: espace_block.hash,
-        core_space_epoch_number: core_space_pivot.epoch_height,
+        core_space_epoch_number: core_space_pivot.epoch_number,
         core_space_pivot_hash: b256_from_cfx(core_space_pivot.hash),
     };
-    let espace_execution_block = build_espace_execution_block_context(&espace_block);
-    let execution_block_context = build_execution_block_context(
+    let execution_block_context = ExecutionBlockContext::from_pivot(
         &core_space_pivot,
-        &espace_execution_block,
-        ExecutionConsensusContext::default(),
-    );
+        &espace_block,
+        ConsensusContext::default(),
+        params,
+    )?;
 
-    Ok(ResolvedEspaceContext {
+    Ok(EspaceContext {
         execution_block_context,
         state_anchor,
         public_context,
@@ -168,17 +174,16 @@ async fn load_core_space_pivot(
     epoch_number: u64,
 ) -> Result<CoreSpaceRpcBlock, EspaceContextError> {
     provider
-        .cfx_get_block_by_epoch_number(cfx_rpc_cfx_types::EpochNumber::Num(epoch_number.into()))
+        .cfx_get_block_by_epoch_number(EpochNumber::Number(epoch_number))
         .await?
         .ok_or(EspaceContextError::CoreSpacePivotNotFound { epoch_number })
 }
 
-fn build_validated_core_space_pivot(
+fn verify_core_space_pivot(
     expected: ConfluxStateAnchor,
     block: &CoreSpaceRpcBlock,
-) -> Result<crate::execution::CoreSpacePivotBlockContext, EspaceContextError> {
-    let actual = build_core_space_pivot_block_context(block)
-        .map_err(|source| EspaceContextError::ExecutionBlockContext { source })?;
+) -> Result<PivotBlock, EspaceContextError> {
+    let actual = PivotBlock::try_from(block)?;
     let expected_pivot_hash = b256_from_cfx(expected.pivot_hash());
     let actual_pivot_hash = b256_from_cfx(actual.hash);
     if actual_pivot_hash != expected_pivot_hash {

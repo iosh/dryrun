@@ -3,9 +3,7 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 
 use crate::{
-    ConfluxSimulationBackend,
-    chain_spec::CoreSpaceTransactionValidationRules,
-    execution::{next_execution_block_number, next_execution_epoch_height},
+    ConfluxSimulationBackend, chain_spec::CoreSpaceTransactionValidationRules,
     state::ConfluxStateSource,
 };
 
@@ -13,7 +11,7 @@ use super::{
     CoreSpaceChanges, CoreSpaceExecutionError, CoreSpaceExecutionOutcome, CoreSpaceSimulation,
     CoreSpaceSimulationError, CoreSpaceSimulationRequest, CoreSpaceStateAccessError,
     CoreSpaceTransactionRejection, CoreSpaceTypedTransaction, DynamicFees,
-    check_storage_sponsorship, complete_transaction, resolve_core_space_context,
+    check_storage_sponsorship, complete_transaction, prepare_core_space_context,
     session::CoreSpaceExecutionSession,
 };
 
@@ -79,6 +77,8 @@ where
     R: super::CoreSpaceChangeRules,
 {
     /// Simulates one Core Space transaction inside the caller's active Tokio runtime.
+    /// Uses a fixed epoch and checks its pivot before execution and result delivery.
+    /// Separate state RPCs do not provide an atomic snapshot during a reorganization.
     pub async fn simulate(
         &self,
         request: CoreSpaceSimulationRequest,
@@ -90,16 +90,17 @@ where
         )?;
         let runtime_handle =
             Handle::try_current().map_err(|_| CoreSpaceSimulationError::RuntimeUnavailable)?;
-        let context = resolve_core_space_context(self.backend.provider(), block).await?;
+        let context = prepare_core_space_context(
+            self.backend.provider(),
+            block,
+            self.backend.chain_spec().common_params(),
+        )
+        .await?;
+        let execution_block_number = context.execution_block_context.number;
+        let execution_epoch_height = context.execution_block_context.epoch_height;
         let chain_id = self.backend.chain_spec().core_space_chain_id();
         let transaction =
             complete_transaction(transaction, self.backend.provider(), &context, chain_id).await?;
-        let execution_block_number =
-            next_execution_block_number(context.execution_block_context.pivot_block_number)
-                .map_err(|source| CoreSpaceExecutionError::Context { source })?;
-        let execution_epoch_height =
-            next_execution_epoch_height(context.execution_block_context.pivot_epoch_height)
-                .map_err(|source| CoreSpaceExecutionError::Context { source })?;
         let rules = self
             .backend
             .chain_spec()
@@ -109,6 +110,11 @@ where
             );
 
         if let Some(rejection) = validate_transaction_for_execution(&transaction, chain_id, rules) {
+            self.backend
+                .provider()
+                .validate_state_anchor(context.state_anchor)
+                .await
+                .map_err(super::CoreSpaceContextError::from)?;
             return Ok(CoreSpaceSimulation::new(
                 context.public_context,
                 transaction,
@@ -142,11 +148,16 @@ where
                         source,
                     })
                 })?;
+        self.backend
+            .provider()
+            .validate_state_anchor(context.state_anchor)
+            .await
+            .map_err(super::CoreSpaceContextError::from)?;
         let backend = self.backend.clone();
         let change_rules = Arc::clone(&self.change_rules);
         let blocking_runtime_handle = runtime_handle.clone();
 
-        runtime_handle
+        let simulation = runtime_handle
             .spawn_blocking(move || {
                 simulate_blocking(
                     backend,
@@ -159,14 +170,20 @@ where
                 )
             })
             .await
-            .map_err(CoreSpaceSimulationError::execution_task)?
+            .map_err(CoreSpaceSimulationError::execution_task)??;
+        self.backend
+            .provider()
+            .validate_state_anchor(simulation.context.state_anchor())
+            .await
+            .map_err(super::CoreSpaceContextError::from)?;
+        Ok(simulation)
     }
 }
 
 fn simulate_blocking<R>(
     backend: ConfluxSimulationBackend,
     runtime_handle: Handle,
-    context: super::ResolvedCoreSpaceContext,
+    context: super::CoreSpaceContext,
     transaction: CoreSpaceTypedTransaction,
     storage_sponsorship: Option<super::StorageSponsorship>,
     state_source: ConfluxStateSource,

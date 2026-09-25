@@ -5,7 +5,6 @@ use std::{
 
 use alloy::eips::BlockId as EspaceBlockId;
 use cfx_parameters::staking::DRIPS_PER_STORAGE_COLLATERAL_UNIT;
-use cfx_rpc_cfx_types::EpochNumber as CfxEpochNumber;
 use cfx_storage::{Error as StorageError, Result as StorageResult};
 use conflux_provider::BlockHashOrEpochNumber;
 use tokio::sync::Mutex as AsyncMutex;
@@ -208,7 +207,7 @@ impl ConfluxStateSource {
             CoreSpaceStateItem::DepositList { address } => {
                 let deposit_list = self
                     .provider
-                    .cfx_get_deposit_list(address, self.core_space_epoch())
+                    .cfx_get_deposit_list(address, self.state_anchor.core_space_epoch())
                     .await
                     .map_err(|error| self.provider_error("cfx_getDepositList", error))?;
                 self.deposit_lists.record(address, deposit_list.clone())?;
@@ -217,7 +216,7 @@ impl ConfluxStateSource {
             CoreSpaceStateItem::VoteList { address } => {
                 let vote_list = self
                     .provider
-                    .cfx_get_vote_list(address, self.core_space_epoch())
+                    .cfx_get_vote_list(address, self.state_anchor.core_space_epoch())
                     .await
                     .map_err(|error| self.provider_error("cfx_getVoteList", error))?;
                 self.vote_lists.record(address, vote_list.clone())?;
@@ -308,10 +307,6 @@ impl ConfluxStateSource {
         }
     }
 
-    fn core_space_epoch(&self) -> CfxEpochNumber {
-        self.state_anchor.core_space_epoch()
-    }
-
     fn espace_block(&self) -> EspaceBlockId {
         self.state_anchor.espace_block()
     }
@@ -348,7 +343,7 @@ impl ConfluxStateSource {
             token_collateral_for_storage,
         } = self
             .provider
-            .load_core_space_account_state(address, self.core_space_epoch())
+            .load_core_space_account_state(address, self.state_anchor.core_space_epoch())
             .await
             .map_err(|error| self.provider_error("load_core_space_account_state", error))?;
         let used_storage_point_collateral = used_storage_point_collateral(
@@ -360,7 +355,7 @@ impl ConfluxStateSource {
         if should_encode_core_space_contract_account(address, account.code_hash) {
             let sponsor_info = self
                 .provider
-                .cfx_get_sponsor_info(address, self.core_space_epoch())
+                .cfx_get_sponsor_info(address, self.state_anchor.core_space_epoch())
                 .await
                 .map_err(|error| self.provider_error("cfx_getSponsorInfo", error))?;
 

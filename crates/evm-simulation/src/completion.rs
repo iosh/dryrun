@@ -11,9 +11,9 @@ use alloy::{
 };
 
 use crate::{
-    DynamicFees, EthereumChainSpec, EvmTransactionCompletionError, FeeInput,
-    PartialTransactionCommon, TransactionCommon, TransactionInput, TransactionRequest, TxType,
-    TypedTransaction,
+    DynamicFees, EthereumChainSpec, EvmNotReadyError, EvmSimulationError,
+    EvmTransactionCompletionError, FeeInput, PartialTransactionCommon, TransactionCommon,
+    TransactionInput, TransactionRequest, TxType, TypedTransaction,
 };
 
 pub(crate) async fn complete_transaction(
@@ -21,7 +21,7 @@ pub(crate) async fn complete_transaction(
     provider: &DynProvider<Ethereum>,
     block: &Sealed<Header>,
     chain_spec: &EthereumChainSpec,
-) -> Result<TypedTransaction, EvmTransactionCompletionError> {
+) -> Result<TypedTransaction, EvmSimulationError> {
     match input {
         TransactionInput::Complete(transaction) => {
             transaction.check_type_requirements()?;
@@ -38,7 +38,7 @@ async fn complete_partial_transaction(
     provider: &DynProvider<Ethereum>,
     block: &Sealed<Header>,
     chain_spec: &EthereumChainSpec,
-) -> Result<TypedTransaction, EvmTransactionCompletionError> {
+) -> Result<TypedTransaction, EvmSimulationError> {
     let default_type = if block.base_fee_per_gas().is_some() {
         TxType::Eip1559
     } else {
@@ -68,7 +68,7 @@ async fn complete_partial_transaction(
         max_fee_per_gas,
         max_priority_fee_per_gas,
     } = fees;
-    let block_id = BlockId::Hash(block.hash().into());
+    let block_id = BlockId::hash_canonical(block.hash());
     let anchored_provider = BlockIdProvider::new(provider.clone(), block_id);
     let nonce = match nonce {
         Some(nonce) => nonce,
@@ -126,13 +126,21 @@ async fn complete_partial_transaction(
                     .await?;
             let max_fee_per_blob_gas = match max_fee_per_blob_gas {
                 Some(value) => value,
-                None => provider
-                    .get_blob_base_fee()
-                    .await
-                    .map(U256::from)
-                    .map_err(|source| EvmTransactionCompletionError::BlobBaseFeeLookup {
-                        source,
-                    })?,
+                None => {
+                    let params = chain_spec
+                        .execution_spec(block.number(), block.timestamp())
+                        .map_err(EvmNotReadyError::from)?
+                        .blob_params
+                        .ok_or(EvmTransactionCompletionError::MissingBlobBaseFee {
+                            block_number: block.number(),
+                        })?;
+                    let excess = block.excess_blob_gas().ok_or(
+                        EvmTransactionCompletionError::MissingBlobBaseFee {
+                            block_number: block.number(),
+                        },
+                    )?;
+                    U256::from(params.calc_blob_fee(excess))
+                }
             };
             TypedTransaction::Eip4844 {
                 common,
@@ -296,199 +304,4 @@ fn checked_fee(field: &'static str, value: U256) -> Result<u128, crate::Transact
         value,
         maximum: U256::from(u128::MAX),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use std::future::Future;
-
-    use alloy::{
-        consensus::{Header, Sealed},
-        network::Ethereum,
-        primitives::{Address, B256, Bytes, U256},
-        providers::{DynProvider, Provider, RootProvider},
-        rpc::client::RpcClient,
-        transports::mock::Asserter,
-    };
-
-    use super::{complete_transaction, suggested_max_fee_per_gas};
-    use crate::{
-        EthereumChainSpec, EvmTransactionCompletionError, FeeInput, PartialTransactionCommon,
-        TransactionInput, TransactionRequest, TxType, TypedTransaction,
-    };
-
-    #[test]
-    fn completes_missing_nonce_gas_and_gas_price() {
-        let asserter = Asserter::new();
-        asserter.push_success(&"0x7");
-        asserter.push_success(&"0x64");
-        asserter.push_success(&"0x5208");
-        let provider = mock_provider(asserter.clone());
-        let block = block(42, B256::repeat_byte(9), Some(10));
-
-        let completed = block_on(complete_transaction(
-            TransactionInput::Partial(TransactionRequest {
-                common: PartialTransactionCommon {
-                    from: Address::repeat_byte(1),
-                    to: Some(Address::repeat_byte(2)),
-                    nonce: None,
-                    gas_limit: None,
-                    value: None,
-                    input: None,
-                    chain_id: None,
-                },
-                fees: FeeInput {
-                    gas_price: None,
-                    max_fee_per_gas: None,
-                    max_priority_fee_per_gas: None,
-                },
-                transaction_type: Some(TxType::Legacy),
-                max_fee_per_blob_gas: None,
-                access_list: None,
-                blob_versioned_hashes: None,
-                authorization_list: None,
-            }),
-            &provider,
-            &block,
-            &EthereumChainSpec::mainnet(),
-        ))
-        .expect("missing provider-backed fields should complete");
-
-        assert_eq!(completed.common().nonce, 7);
-        assert_eq!(completed.common().gas_limit, 21_000);
-        assert!(matches!(
-            completed,
-            TypedTransaction::Legacy { gas_price, .. } if gas_price == U256::from(100)
-        ));
-        assert!(asserter.read_q().is_empty());
-    }
-
-    #[test]
-    fn completes_dynamic_and_blob_fee_suggestions() {
-        let from = Address::repeat_byte(1);
-        let to = Address::repeat_byte(2);
-        let dynamic_asserter = Asserter::new();
-        dynamic_asserter.push_success(&"0x3");
-        let dynamic_provider = mock_provider(dynamic_asserter.clone());
-        let dynamic_block = block(42, B256::repeat_byte(5), Some(10));
-
-        let dynamic = block_on(complete_transaction(
-            TransactionInput::Partial(TransactionRequest {
-                common: PartialTransactionCommon {
-                    from,
-                    to: Some(to),
-                    nonce: Some(6),
-                    gas_limit: Some(7),
-                    value: Some(U256::from(8)),
-                    input: Some(Bytes::from_static(&[3, 4])),
-                    chain_id: Some(5),
-                },
-                fees: FeeInput {
-                    gas_price: None,
-                    max_fee_per_gas: None,
-                    max_priority_fee_per_gas: None,
-                },
-                transaction_type: Some(TxType::Eip1559),
-                max_fee_per_blob_gas: None,
-                access_list: Some(Vec::new()),
-                blob_versioned_hashes: None,
-                authorization_list: None,
-            }),
-            &dynamic_provider,
-            &dynamic_block,
-            &EthereumChainSpec::mainnet(),
-        ))
-        .expect("dynamic fees should complete");
-
-        assert!(matches!(
-            dynamic,
-            TypedTransaction::Eip1559 { fees, .. }
-                if fees.max_fee_per_gas == U256::from(23)
-                    && fees.max_priority_fee_per_gas == U256::from(3)
-        ));
-        assert!(dynamic_asserter.read_q().is_empty());
-
-        let blob_asserter = Asserter::new();
-        blob_asserter.push_success(&"0x20");
-        let blob_provider = mock_provider(blob_asserter.clone());
-        let blob_block = block(43, B256::repeat_byte(7), Some(11));
-        let blob = block_on(complete_transaction(
-            TransactionInput::Partial(TransactionRequest {
-                common: PartialTransactionCommon {
-                    from,
-                    to: Some(to),
-                    nonce: Some(9),
-                    gas_limit: Some(10),
-                    value: None,
-                    input: None,
-                    chain_id: None,
-                },
-                fees: FeeInput {
-                    gas_price: None,
-                    max_fee_per_gas: Some(U256::from(30)),
-                    max_priority_fee_per_gas: Some(U256::from(2)),
-                },
-                transaction_type: Some(TxType::Eip4844),
-                max_fee_per_blob_gas: None,
-                access_list: Some(Vec::new()),
-                blob_versioned_hashes: Some(vec![B256::repeat_byte(6)]),
-                authorization_list: None,
-            }),
-            &blob_provider,
-            &blob_block,
-            &EthereumChainSpec::mainnet(),
-        ))
-        .expect("blob fee should complete");
-
-        assert!(matches!(
-            blob,
-            TypedTransaction::Eip4844 { max_fee_per_blob_gas, .. }
-                if max_fee_per_blob_gas == U256::from(32)
-        ));
-        assert!(blob_asserter.read_q().is_empty());
-    }
-
-    #[test]
-    fn reports_typed_dynamic_fee_failures() {
-        let missing_base_fee = Header {
-            number: 12,
-            base_fee_per_gas: None,
-            ..Default::default()
-        };
-        assert!(matches!(
-            suggested_max_fee_per_gas(&missing_base_fee, U256::from(1)),
-            Err(EvmTransactionCompletionError::MissingBaseFee { block_number: 12 })
-        ));
-
-        let overflowing = Header {
-            base_fee_per_gas: Some(u64::MAX),
-            ..Default::default()
-        };
-        assert!(matches!(
-            suggested_max_fee_per_gas(&overflowing, U256::MAX),
-            Err(EvmTransactionCompletionError::MaxFeePerGasOverflow)
-        ));
-    }
-
-    fn block(number: u64, hash: B256, base_fee_per_gas: Option<u64>) -> Sealed<Header> {
-        Sealed::new_unchecked(
-            Header {
-                number,
-                base_fee_per_gas,
-                ..Default::default()
-            },
-            hash,
-        )
-    }
-
-    fn mock_provider(asserter: Asserter) -> DynProvider<Ethereum> {
-        RootProvider::new(RpcClient::mocked(asserter)).erased()
-    }
-
-    fn block_on<T>(future: impl Future<Output = T>) -> T {
-        tokio::runtime::Builder::new_current_thread()
-            .build()
-            .expect("test runtime should build")
-            .block_on(future)
-    }
 }

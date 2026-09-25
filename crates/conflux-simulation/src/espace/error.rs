@@ -5,7 +5,7 @@ use thiserror::Error;
 use tokio::task::JoinError;
 
 use super::{EspaceContextError, EspaceTransactionInputError, TxType};
-use crate::{ConfluxRpcError, ExecutionBlockContextError};
+use crate::ConfluxRpcError;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -42,8 +42,6 @@ pub enum EspaceTransactionCompletionError {
         #[source]
         source: ConfluxRpcError,
     },
-    #[error("eSpace block {block_number} has no base fee for dynamic-fee completion")]
-    MissingBaseFee { block_number: u64 },
     #[error("calculated eSpace max fee per gas exceeds U256")]
     MaxFeePerGasOverflow,
 }
@@ -104,11 +102,6 @@ pub enum EspaceExecutionError {
     StateAccess(#[from] EspaceStateAccessError),
     #[error(transparent)]
     ResultIntegration(#[from] EspaceResultIntegrationError),
-    #[error("failed to construct the eSpace execution context: {source}")]
-    Context {
-        #[source]
-        source: ExecutionBlockContextError,
-    },
 }
 
 #[derive(Debug, Error)]

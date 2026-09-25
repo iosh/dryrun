@@ -55,7 +55,7 @@ impl EvmStateSource {
     }
 
     fn create_database(&self, cache: Cache) -> EvmDatabase {
-        let block_id = BlockId::Hash(self.block_hash.into());
+        let block_id = BlockId::hash_canonical(self.block_hash);
         let database = AlloyDB::new(self.provider.clone(), block_id);
         let database = WrapDatabaseAsync::with_handle(database, self.runtime_handle.clone());
 

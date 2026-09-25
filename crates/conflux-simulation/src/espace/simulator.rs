@@ -7,7 +7,7 @@ use super::{
     EspaceExecutedTransaction, EspaceExecutionError, EspaceExecutionOutcome,
     EspaceResultIntegrationError, EspaceSimulation, EspaceSimulationError, EspaceSimulationLimits,
     EspaceSimulationRequest, EspaceStateAccess, EspaceStateAccessError, build_executor_transaction,
-    complete_transaction, map_executor_outcome, resolve_espace_context,
+    complete_transaction, map_executor_outcome, prepare_espace_context,
     validate_transaction_for_execution,
 };
 use crate::{
@@ -15,7 +15,6 @@ use crate::{
     execution::{
         ConfluxExecutionOutcome, ConfluxTransactionExecutor, DryRunTransactionInput,
         ExecutionTraceObserver, TransactionExecutionInput, build_conflux_state,
-        next_execution_block_number, next_execution_epoch_height,
     },
     state::ConfluxStateSource,
 };
@@ -86,6 +85,8 @@ where
     R: super::EspaceChangeRules,
 {
     /// Simulates one eSpace transaction inside the caller's active Tokio runtime.
+    /// Uses a fixed epoch and checks its pivot before execution and result delivery.
+    /// Separate state RPCs do not provide an atomic snapshot during a reorganization.
     pub async fn simulate(
         &self,
         request: EspaceSimulationRequest,
@@ -93,32 +94,14 @@ where
         let EspaceSimulationRequest { block, transaction } = request;
         let runtime_handle =
             Handle::try_current().map_err(|_| EspaceSimulationError::RuntimeUnavailable)?;
-        let mut context = resolve_espace_context(self.backend.provider(), block).await?;
-        let execution_block_number =
-            next_execution_block_number(context.execution_block_context.pivot_block_number)
-                .map_err(|error| {
-                    EspaceSimulationError::Execution(super::EspaceExecutionError::Context {
-                        source: error,
-                    })
-                })?;
-        let execution_epoch_height =
-            next_execution_epoch_height(context.execution_block_context.pivot_epoch_height)
-                .map_err(|error| {
-                    EspaceSimulationError::Execution(super::EspaceExecutionError::Context {
-                        source: error,
-                    })
-                })?;
-        context
-            .execution_block_context
-            .resolve_base_fees(
-                self.backend.chain_spec().common_params(),
-                execution_epoch_height,
-            )
-            .map_err(|error| {
-                EspaceSimulationError::Execution(super::EspaceExecutionError::Context {
-                    source: error,
-                })
-            })?;
+        let context = prepare_espace_context(
+            self.backend.provider(),
+            block,
+            self.backend.chain_spec().common_params(),
+        )
+        .await?;
+        let execution_block_number = context.execution_block_context.number;
+        let execution_epoch_height = context.execution_block_context.epoch_height;
         let chain_id = u64::from(self.backend.chain_spec().espace_chain_id());
         let transaction =
             complete_transaction(transaction, self.backend.provider(), &context, chain_id).await?;
@@ -128,6 +111,11 @@ where
             .espace_transaction_validation_rules(execution_block_number, execution_epoch_height);
         if let Some(rejection) = validate_transaction_for_execution(&transaction, chain_id, rules)?
         {
+            self.backend
+                .provider()
+                .validate_state_anchor(context.state_anchor)
+                .await
+                .map_err(super::EspaceContextError::from)?;
             return Ok(EspaceSimulation {
                 context: context.public_context,
                 transaction,
@@ -144,12 +132,17 @@ where
                         source,
                     })
                 })?;
+        self.backend
+            .provider()
+            .validate_state_anchor(context.state_anchor)
+            .await
+            .map_err(super::EspaceContextError::from)?;
         let backend = self.backend.clone();
         let limits = self.limits;
         let change_rules = Arc::clone(&self.change_rules);
         let blocking_runtime_handle = runtime_handle.clone();
 
-        runtime_handle
+        let simulation = runtime_handle
             .spawn_blocking(move || {
                 simulate_blocking(
                     backend,
@@ -162,14 +155,20 @@ where
                 )
             })
             .await
-            .map_err(EspaceSimulationError::execution_task)?
+            .map_err(EspaceSimulationError::execution_task)??;
+        self.backend
+            .provider()
+            .validate_state_anchor(simulation.context.state_anchor())
+            .await
+            .map_err(super::EspaceContextError::from)?;
+        Ok(simulation)
     }
 }
 
 fn simulate_blocking<R>(
     backend: ConfluxSimulationBackend,
     runtime_handle: Handle,
-    context: super::ResolvedEspaceContext,
+    context: super::EspaceContext,
     transaction: super::EspaceTypedTransaction,
     state_source: Arc<ConfluxStateSource>,
     limits: EspaceSimulationLimits,
@@ -253,9 +252,6 @@ fn map_execution_error(
     use crate::execution::TransactionExecutionError;
 
     match error {
-        TransactionExecutionError::BlockContext(source) => {
-            super::EspaceExecutionError::Context { source }
-        }
         TransactionExecutionError::StateAccess(source) => EspaceStateAccessError::Operation {
             operation: "execute eSpace transaction",
             source,

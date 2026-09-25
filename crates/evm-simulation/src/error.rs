@@ -76,14 +76,11 @@ pub enum EvmTransactionCompletionError {
         source: TransportError,
     },
 
-    #[error("failed to fetch the current blob base fee: {source}")]
-    BlobBaseFeeLookup {
-        #[source]
-        source: TransportError,
-    },
-
     #[error("block {block_number} does not provide a base fee for dynamic fee completion")]
     MissingBaseFee { block_number: u64 },
+
+    #[error("fixed block {block_number} does not provide blob fee parameters")]
+    MissingBlobBaseFee { block_number: u64 },
 
     #[error("calculated max fee per gas exceeds U256")]
     MaxFeePerGasOverflow,

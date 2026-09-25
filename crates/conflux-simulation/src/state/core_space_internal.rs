@@ -57,7 +57,7 @@ pub(crate) fn decode_abi_bool(
     field: &'static str,
 ) -> Result<bool, ConfluxRpcError> {
     if value.len() != ABI_WORD_BYTES {
-        return Err(ConfluxRpcError {
+        return Err(ConfluxRpcError::InvalidResponse {
             operation: field,
             reason: format!("expected 32-byte ABI bool, got {} bytes", value.len()),
         });
@@ -67,7 +67,7 @@ pub(crate) fn decode_abi_bool(
     match decoded {
         value if value.is_zero() => Ok(false),
         value if value == U256::one() => Ok(true),
-        _ => Err(ConfluxRpcError {
+        _ => Err(ConfluxRpcError::InvalidResponse {
             operation: field,
             reason: "expected ABI bool value 0 or 1".to_owned(),
         }),

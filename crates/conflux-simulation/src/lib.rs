@@ -1,5 +1,6 @@
 mod backend;
 mod chain_spec;
+mod context;
 pub mod core_space;
 mod error;
 pub mod espace;
@@ -8,8 +9,9 @@ mod primitive;
 mod state;
 
 pub use backend::ConfluxSimulationBackend;
+pub use context::ConfluxBlockContextError;
 pub use error::{
     ConfluxCoreStatusIdentityField, ConfluxEndpointIdentity, ConfluxInitializationError,
+    ConfluxStateAnchorError,
 };
-pub use execution::ExecutionBlockContextError;
 pub use state::ConfluxRpcError;

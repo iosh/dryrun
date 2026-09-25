@@ -107,8 +107,8 @@ fn transaction_completion_message(error: &EvmTransactionCompletionError) -> &'st
         EvmTransactionCompletionError::PriorityFeeSuggestion { .. } => {
             "Unable to suggest a priority fee; provide transaction.maxPriorityFeePerGas explicitly"
         }
-        EvmTransactionCompletionError::BlobBaseFeeLookup { .. } => {
-            "Unable to suggest a blob gas fee; provide transaction.maxFeePerBlobGas explicitly"
+        EvmTransactionCompletionError::MissingBlobBaseFee { .. } => {
+            "Unable to derive a blob gas fee from the selected block; provide transaction.maxFeePerBlobGas explicitly"
         }
         EvmTransactionCompletionError::MissingBaseFee { .. }
         | EvmTransactionCompletionError::MaxFeePerGasOverflow => {
