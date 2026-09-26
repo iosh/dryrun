@@ -35,7 +35,7 @@ pub(crate) struct SimulateEspaceTransactionResponse(
             conflux_simulation::espace::EspaceExecutionOutcome,
             conflux_simulation::espace::EspaceTransactionRejection,
             Vec<StandaloneChange>,
-            conflux_simulation::espace::EspaceChangeDerivationError,
+            conflux_simulation::espace::EspaceAnalysisError,
         >,
     >,
 );

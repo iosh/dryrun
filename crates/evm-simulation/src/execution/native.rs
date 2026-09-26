@@ -1,5 +1,4 @@
 use alloy::primitives::{Address, U256};
-use revm::state::EvmState;
 
 use super::{EvmCallKind, EvmExecutionPosition, EvmFrameAction, events::EvmExecutionObservation};
 
@@ -18,10 +17,7 @@ pub(crate) enum NativeMovement {
     },
 }
 
-pub(super) fn collect_movements(
-    observation: &EvmExecutionObservation,
-    transition: &EvmState,
-) -> Vec<NativeMovement> {
+pub(super) fn collect_movements(observation: &EvmExecutionObservation) -> Vec<NativeMovement> {
     let mut operations = Vec::new();
 
     for frame in &observation.frames {
@@ -68,9 +64,7 @@ pub(super) fn collect_movements(
         let amount = selfdestruct.value();
         if amount.is_zero()
             || (selfdestruct.contract() == selfdestruct.target()
-                && !transition
-                    .get(&selfdestruct.contract())
-                    .is_some_and(|account| account.is_selfdestructed()))
+                && !selfdestruct.destroys_contract())
         {
             continue;
         }

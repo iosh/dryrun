@@ -34,7 +34,7 @@ pub(crate) struct SimulateCoreSpaceTransactionResponse(
             simulation_core_space::CoreSpaceExecutionOutcome,
             simulation_core_space::CoreSpaceTransactionRejection,
             Vec<core_space_change::WireChangeItem>,
-            simulation_core_space::CoreSpaceChangeDerivationError,
+            simulation_core_space::CoreSpaceAnalysisError,
         >,
     >,
 );

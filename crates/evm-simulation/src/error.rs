@@ -271,22 +271,15 @@ impl ErrorInfo for crate::EvmStateReadError {
     fn diagnostic(&self) -> Diagnostic {
         match self {
             Self::StateAccess(error) => error.diagnostic(),
-            Self::StateReadLimitExceeded { .. }
-            | Self::ReadCallLimitExceeded { .. }
-            | Self::ReadCallOutputLimitExceeded { .. } => Code::AnalysisLimitExceeded.diagnostic(),
-            Self::ForeignOccurrence | Self::ReadCallFailed { .. } => Code::Internal.diagnostic(),
+            Self::LimitExceeded(error) => error.diagnostic(),
+            Self::ReadCallFailed { .. } => Code::Internal.diagnostic(),
         }
     }
 }
-impl ErrorInfo for crate::EvmObservationError {
-    fn diagnostic(&self) -> Diagnostic {
-        Code::AnalysisLimitExceeded.diagnostic()
-    }
-}
-impl ErrorInfo for crate::EvmChangeDerivationError {
+impl ErrorInfo for crate::EvmAnalysisError {
     fn diagnostic(&self) -> Diagnostic {
         match self {
-            Self::Observation(error) => error.diagnostic(),
+            Self::LimitExceeded(error) => error.diagnostic(),
             Self::StateRead(error) => error.diagnostic(),
             Self::Unsupported { .. } => Code::AnalysisUnsupported.diagnostic(),
             Self::Conflict { .. } => Code::AnalysisValidationFailed.diagnostic(),
@@ -297,7 +290,7 @@ impl ErrorInfo for crate::EvmChangeDerivationError {
 // Extension errors are erased; known wrappers above are handled by their typed boundary.
 fn source_diagnostic(mut error: &(dyn std::error::Error + 'static)) -> Diagnostic {
     loop {
-        if let Some(error) = error.downcast_ref::<crate::EvmChangeDerivationError>() {
+        if let Some(error) = error.downcast_ref::<crate::EvmAnalysisError>() {
             return error.diagnostic();
         }
         if let Some(error) = error.downcast_ref::<crate::EvmStateReadError>() {
@@ -306,7 +299,9 @@ fn source_diagnostic(mut error: &(dyn std::error::Error + 'static)) -> Diagnosti
         if let Some(error) = error.downcast_ref::<EvmStateAccessError>() {
             return error.diagnostic();
         }
-        if let Some(error) = error.downcast_ref::<crate::EvmObservationError>() {
+        if let Some(error) =
+            error.downcast_ref::<simulation_core::observation::AnalysisLimitExceeded>()
+        {
             return error.diagnostic();
         }
         if error.is::<TransportError>() {

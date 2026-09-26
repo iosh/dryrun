@@ -1,7 +1,7 @@
 use alloy_primitives::{Address, U256};
 
 use super::NativeOperation;
-use crate::espace::EspaceChangeDerivationError;
+use crate::espace::EspaceAnalysisError;
 use crate::espace::{
     EspaceCallKind, EspaceExecutedTransaction, EspaceExecutionSpace, EspaceFrameAction,
     EspaceTransferPocket,
@@ -14,7 +14,7 @@ struct NativeOperationCollector {
 
 pub(super) fn collect_native_operations(
     execution: &EspaceExecutedTransaction,
-) -> Result<Vec<NativeOperation>, EspaceChangeDerivationError> {
+) -> Result<Vec<NativeOperation>, EspaceAnalysisError> {
     let mut collector = NativeOperationCollector::default();
 
     for frame in execution.committed_frames() {
@@ -65,7 +65,7 @@ impl NativeOperationCollector {
         from: EspaceTransferPocket,
         to: EspaceTransferPocket,
         amount: U256,
-    ) -> Result<(), EspaceChangeDerivationError> {
+    ) -> Result<(), EspaceAnalysisError> {
         if amount.is_zero() {
             return Ok(());
         }
@@ -85,7 +85,7 @@ impl NativeOperationCollector {
             }
             (None, None, from, to) if !involves_non_espace_balance(from, to) => {}
             _ => {
-                return Err(EspaceChangeDerivationError::Unsupported {
+                return Err(EspaceAnalysisError::Unsupported {
                     details: format!(
                         "native effect {from:?} -> {to:?} is outside the eSpace native-change scope"
                     ),

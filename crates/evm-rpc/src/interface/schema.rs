@@ -59,7 +59,7 @@ pub struct EvmSimulateTransactionResponse(
             evm_simulation::EvmExecutionOutcome,
             evm_simulation::EvmTransactionRejection,
             Vec<StateChange>,
-            evm_simulation::EvmChangeDerivationError,
+            evm_simulation::EvmAnalysisError,
         >,
     >,
 );

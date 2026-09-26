@@ -2,5 +2,6 @@
 pub mod codec;
 pub mod completion;
 pub mod error;
+pub mod observation;
 pub mod simulation;
 pub mod transaction;

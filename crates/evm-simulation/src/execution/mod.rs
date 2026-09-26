@@ -1,12 +1,11 @@
-mod native;
-pub(crate) use native::NativeMovement;
 mod env;
 mod events;
 mod fee_settlement;
+mod native;
 mod outcome_mapping;
 mod rejection_mapping;
 
-use std::sync::Arc;
+use simulation_core::observation::AnalysisLimitExceeded;
 
 use self::{
     env::{create_block_env, create_cfg_env, create_tx_env},
@@ -19,8 +18,8 @@ use crate::{
     EvmSimulationError, EvmSimulationLimits, EvmStateAccessError, EvmTransactionRejection,
     TypedTransaction,
     state::{
-        EvmDatabase, EvmExecutionIdentity, EvmOccurrenceHandle, EvmStateAccess,
-        EvmStateAccessFactory, EvmStateSource, MainnetEvm,
+        EvmDatabase, EvmStateAccess, EvmStateAccessFactory, EvmStateReader, EvmStateSource,
+        MainnetEvm,
     },
 };
 use alloy::{
@@ -44,8 +43,9 @@ use revm::{
 pub(crate) use events::EvmExecutionObserver;
 pub use events::{
     EvmCallKind, EvmCommittedFrame, EvmCommittedLog, EvmCommittedSelfdestruct,
-    EvmExecutionPosition, EvmFrameAction, EvmFrameId, EvmObservationError,
+    EvmExecutionPosition, EvmFrameAction, EvmFrameId, EvmStorageWrite,
 };
+pub(crate) use native::NativeMovement;
 
 #[derive(Debug)]
 pub(crate) enum EvmTransactionExecutionResult<INSP> {
@@ -69,73 +69,40 @@ impl ExecutedTransaction<EvmExecutionObserver> {
     pub(crate) fn commit(
         mut self,
         transaction: &TypedTransaction,
-    ) -> Result<(EvmTransactionExecution, EvmStateAccess), EvmExecutionError> {
+    ) -> Result<EvmTransactionExecution, EvmExecutionError> {
         let observation = self.evm.inspector.take_observation().map_err(|error| {
             EvmResultIntegrationError::new(format!("execution observation: {error}"))
         })?;
-        verify_committed_logs(&observation.logs, self.result.logs())?;
+        if observation.limit_exceeded.is_none() {
+            verify_committed_logs(&observation.logs, self.result.logs())?;
+        }
         verify_committed_create_addresses(&observation.frames)?;
-        let native_movements = native::collect_movements(&observation, &self.transition);
+        let native_movements = native::collect_movements(&observation);
         let status = map_executed_status(self.result, transaction)?;
 
         let anchor_cache = self.evm.ctx().db().cache.clone();
-        let identity = Arc::new(EvmExecutionIdentity);
         let events::EvmExecutionObservation {
             applied_authorization_accounts,
             frames,
             logs,
             selfdestructs,
-            semantic_logs,
+            storage_writes,
             checkpoints,
-            limit_error,
+            limit_exceeded,
         } = observation;
-        let semantic_log_occurrences = match limit_error {
-            Some(error) => Err(error),
-            None => Ok(semantic_logs
-                .into_iter()
-                .map(|semantic_log| {
-                    let checkpoint_index = semantic_log.checkpoint_index.ok_or_else(|| {
-                        EvmResultIntegrationError::new(format!(
-                            "semantic log at index {} has no occurrence checkpoint",
-                            semantic_log.log_index
-                        ))
-                    })?;
-                    if checkpoint_index >= checkpoints.len() {
-                        return Err(EvmResultIntegrationError::new(format!(
-                            "semantic log at index {} references missing occurrence checkpoint {}",
-                            semantic_log.log_index, checkpoint_index
-                        )));
-                    }
-                    let committed_log =
-                        logs.get(semantic_log.log_index).cloned().ok_or_else(|| {
-                            EvmResultIntegrationError::new(format!(
-                                "semantic log at index {} has no retained log",
-                                semantic_log.log_index
-                            ))
-                        })?;
-                    Ok(EvmSemanticLogOccurrence {
-                        committed_log,
-                        handle: EvmOccurrenceHandle::new(Arc::clone(&identity), checkpoint_index),
-                    })
-                })
-                .collect::<Result<Vec<_>, EvmResultIntegrationError>>()?),
-        };
-        let occurrence_states = if semantic_log_occurrences.is_ok() {
-            checkpoints
-        } else {
-            Vec::new()
-        };
-        let state_access = EvmStateAccess::new(
+        let state = EvmStateAccess::new(
             self.state_access_factory,
             anchor_cache,
-            Arc::clone(&identity),
             self.read_call_caller,
-            occurrence_states,
+            if limit_exceeded.is_none() {
+                checkpoints
+            } else {
+                Vec::new()
+            },
             self.transition,
         );
         let execution = EvmTransactionExecution {
             status,
-            native_movements,
             gas: self.gas,
             fee_settlement: self.fee_settlement,
             fee_payer: self.read_call_caller,
@@ -144,59 +111,75 @@ impl ExecutedTransaction<EvmExecutionObserver> {
             committed_frames: frames,
             committed_logs: logs,
             committed_selfdestructs: selfdestructs,
-            semantic_log_occurrences,
+            storage_writes,
+            state,
+            limit_exceeded,
+            native_movements,
         };
 
-        Ok((execution, state_access))
+        Ok(execution)
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EvmSemanticLogOccurrence {
-    committed_log: EvmCommittedLog,
-    handle: EvmOccurrenceHandle,
+#[derive(Debug, Clone, Copy)]
+pub struct EvmLogCheckpoint<'a> {
+    committed_log: &'a EvmCommittedLog,
+    previous_state: &'a EvmStateReader,
+    state: &'a EvmStateReader,
 }
 
-impl EvmSemanticLogOccurrence {
-    pub const fn position(&self) -> EvmExecutionPosition {
+impl<'a> EvmLogCheckpoint<'a> {
+    pub const fn position(self) -> EvmExecutionPosition {
         self.committed_log.position()
     }
 
-    pub const fn frame_id(&self) -> EvmFrameId {
+    pub const fn frame_id(self) -> EvmFrameId {
         self.committed_log.frame_id()
     }
 
-    pub const fn log(&self) -> &Log {
+    pub const fn log(self) -> &'a Log {
         self.committed_log.log()
     }
 
-    pub const fn handle(&self) -> &EvmOccurrenceHandle {
-        &self.handle
+    /// The preceding retained checkpoint, or the transaction's initial state.
+    pub const fn previous_state(self) -> &'a EvmStateReader {
+        self.previous_state
+    }
+
+    /// Persistent state at the log emission point.
+    pub const fn state(self) -> &'a EvmStateReader {
+        self.state
     }
 }
 
 #[derive(Debug)]
 pub struct EvmTransactionExecution {
     status: EvmFinalStatus,
-    native_movements: Vec<NativeMovement>,
     gas: EvmGas,
     fee_settlement: EvmFeeSettlement,
     fee_payer: Address,
     block_beneficiary: Address,
+    native_movements: Vec<NativeMovement>,
     applied_authorization_accounts: Vec<Address>,
     committed_frames: Vec<EvmCommittedFrame>,
     committed_logs: Vec<EvmCommittedLog>,
     committed_selfdestructs: Vec<EvmCommittedSelfdestruct>,
-    semantic_log_occurrences: Result<Vec<EvmSemanticLogOccurrence>, EvmObservationError>,
+    storage_writes: Vec<EvmStorageWrite>,
+    state: EvmStateAccess,
+    limit_exceeded: Option<AnalysisLimitExceeded>,
 }
 
 impl EvmTransactionExecution {
-    pub(crate) fn is_success(&self) -> bool {
-        matches!(self.status, EvmFinalStatus::Success { .. })
-    }
-
     pub(crate) fn native_movements(&self) -> &[NativeMovement] {
         &self.native_movements
+    }
+
+    pub fn storage_writes(&self) -> &[EvmStorageWrite] {
+        &self.storage_writes
+    }
+
+    pub fn is_success(&self) -> bool {
+        matches!(self.status, EvmFinalStatus::Success { .. })
     }
 
     pub(crate) fn into_outcome(self) -> EvmExecutionOutcome {
@@ -204,19 +187,19 @@ impl EvmTransactionExecution {
             status,
             gas,
             fee_settlement,
-            committed_logs,
             ..
         } = self;
         let result = EvmExecutionResult::new(gas, fee_settlement.into_fee());
         match status {
-            EvmFinalStatus::Success { reason, output } => EvmExecutionOutcome::Success {
+            EvmFinalStatus::Success {
+                reason,
+                output,
+                logs,
+            } => EvmExecutionOutcome::Success {
                 result,
                 reason,
                 output,
-                logs: committed_logs
-                    .into_iter()
-                    .map(|log| log.log().clone())
-                    .collect(),
+                logs,
             },
             EvmFinalStatus::Reverted {
                 revert_data,
@@ -258,12 +241,22 @@ impl EvmTransactionExecution {
         &self.committed_selfdestructs
     }
 
-    pub fn semantic_log_occurrences(
-        &self,
-    ) -> Result<&[EvmSemanticLogOccurrence], EvmObservationError> {
-        self.semantic_log_occurrences
-            .as_deref()
-            .map_err(Clone::clone)
+    pub(crate) fn state(&self) -> &EvmStateAccess {
+        &self.state
+    }
+
+    pub(crate) fn check_observation_limit(&self) -> Result<(), AnalysisLimitExceeded> {
+        self.limit_exceeded.map_or(Ok(()), Err)
+    }
+
+    pub(crate) fn log_checkpoints(&self) -> impl Iterator<Item = EvmLogCheckpoint<'_>> {
+        self.state
+            .log_checkpoints()
+            .map(|(log_index, previous_state, state)| EvmLogCheckpoint {
+                committed_log: &self.committed_logs[log_index],
+                previous_state,
+                state,
+            })
     }
 }
 

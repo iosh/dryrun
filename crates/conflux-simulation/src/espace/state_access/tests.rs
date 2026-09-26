@@ -11,10 +11,11 @@ use alloy::{
 };
 use alloy_json_rpc::{RequestPacket, Response, ResponsePacket, ResponsePayload, SerializedRequest};
 use alloy_primitives::{Address, B256, Bytes, U256, hex, keccak256};
-use cfx_types::{AddressSpaceUtil, H256, Space, U256 as CfxU256};
+use cfx_types::{AddressSpaceUtil, Space, U256 as CfxU256};
 use conflux_provider::{ConfluxProvider, CoreAddress, Network};
 use primitives::transaction::{Action, Eip155Transaction, EthereumTransaction};
 use serde_json::{Value, json};
+use simulation_core::observation::LogFilter;
 use tokio::runtime::Handle;
 use tower::Service;
 
@@ -25,7 +26,7 @@ use crate::{
     espace::{EspaceExecutedTransaction, EspaceExecutionStatus, EspaceFrameAction},
     execution::{
         ConfluxTransactionExecutor, DryRunTransactionInput, EspaceTransactionInput,
-        ExecutionTraceObserver, LogCheckpoint, TransactionExecutionInput, build_conflux_state,
+        ExecutionTraceObserver, TransactionExecutionInput, build_conflux_state, filters_for_space,
     },
     primitive::{address_to_cfx, b256_to_cfx},
     state::{ConfluxSimulationProvider, ConfluxStateAnchor, ConfluxStateSource, EspaceRpcBlock},
@@ -37,12 +38,18 @@ const CHILD: Address = Address::repeat_byte(0x33);
 const PIVOT_HASH: B256 = B256::repeat_byte(0x99);
 const EPOCH: u64 = 100_000_000;
 const SENDER_NONCE: u64 = 7;
-const LIMITS: EspaceSimulationLimits = EspaceSimulationLimits::new(3, 64, 16, 500_000, 1024);
+const LIMITS: EspaceSimulationLimits = EspaceSimulationLimits {
+    max_observed_facts: 256,
+    max_state_reads: 64,
+    max_read_calls: 16,
+    read_call_gas_limit: 500_000,
+    max_read_call_output_bytes: 1024,
+};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn log_snapshots_preserve_state_and_follow_nested_and_transaction_rollback() {
-    // The successful child returns 7. Its parent emits two more logs, exceeding
-    // the checkpoint limit, then reverts with the child's return data.
+    // The successful child returns 7. Its parent emits two more logs,
+    // then reverts with the child's return data.
     let child_code = hex!("6002600055600160006000a1600760005260206000f3");
     let mut parent_code = Vec::new();
     append_call(&mut parent_code, CHILD, 0);
@@ -92,17 +99,15 @@ async fn log_snapshots_preserve_state_and_follow_nested_and_transaction_rollback
         let source = rpc.source().await;
 
         tokio::task::spawn_blocking(move || {
-            let (record, state) = execute(source, Action::Create, init_code.clone());
-            let occurrences = record
-                .semantic_log_occurrences()
-                .unwrap()
-                .collect::<Vec<_>>();
+            let record = execute(source, Action::Create, init_code.clone());
+            let state = record.state();
+            let checkpoints = record.log_checkpoints().collect::<Vec<_>>();
 
             if revert_transaction {
                 assert_eq!(record.status(), EspaceExecutionStatus::Reverted);
                 assert!(record.committed_frames().is_empty());
                 assert!(record.committed_logs().is_empty());
-                assert!(occurrences.is_empty());
+                assert!(checkpoints.is_empty());
                 assert_eq!(
                     state.finalized().storage_word(created, B256::ZERO).unwrap(),
                     B256::ZERO,
@@ -118,36 +123,40 @@ async fn log_snapshots_preserve_state_and_follow_nested_and_transaction_rollback
                     if *actual_address == created && recorded_code.as_ref() == init_code.as_slice()
             ));
             assert_eq!(record.committed_logs().len(), 2);
-            assert_eq!(occurrences.len(), 2);
-            assert!(occurrences[0].position() < occurrences[1].position());
+            assert_eq!(checkpoints.len(), 2);
+            assert!(checkpoints[0].position() < checkpoints[1].position());
             assert!(
-                occurrences
+                checkpoints
                     .iter()
-                    .all(|occurrence| occurrence.log().address() == created)
+                    .all(|checkpoint| checkpoint.log().address() == created)
             );
-            assert_eq!(occurrences[1].log().data().as_ref(), word(7).as_slice());
+            assert_eq!(checkpoints[1].log().data().as_ref(), word(7).as_slice());
 
             assert_eq!(
                 state.initial().storage_word(created, B256::ZERO).unwrap(),
                 B256::ZERO,
             );
-            for (occurrence, expected) in occurrences.iter().zip([1, 9]) {
+            for (checkpoint, expected) in checkpoints.iter().zip([1, 9]) {
                 assert_eq!(
-                    state
-                        .at(occurrence.handle())
-                        .unwrap()
+                    checkpoint
+                        .state()
                         .storage_word(created, B256::ZERO)
                         .unwrap(),
                     word(expected),
                 );
             }
-            let around = state.around(occurrences[1].handle()).unwrap();
             assert_eq!(
-                around.previous().storage_word(created, B256::ZERO).unwrap(),
+                checkpoints[1]
+                    .previous_state()
+                    .storage_word(created, B256::ZERO)
+                    .unwrap(),
                 word(1),
             );
             assert_eq!(
-                around.current().storage_word(created, B256::ZERO).unwrap(),
+                checkpoints[1]
+                    .state()
+                    .storage_word(created, B256::ZERO)
+                    .unwrap(),
                 word(9),
             );
             assert_eq!(
@@ -194,14 +203,12 @@ async fn anchored_read_calls_leave_storage_balances_and_nonce_unchanged() {
     let source = rpc.source().await;
 
     tokio::task::spawn_blocking(move || {
-        let (record, state) = execute(source, Action::Call(address_to_cfx(CONTRACT)), Vec::new());
+        let record = execute(source, Action::Call(address_to_cfx(CONTRACT)), Vec::new());
         assert_eq!(record.status(), EspaceExecutionStatus::Success);
-        let occurrences = record
-            .semantic_log_occurrences()
-            .unwrap()
-            .collect::<Vec<_>>();
-        assert_eq!(occurrences.len(), 1);
-        let at_log = state.at(occurrences[0].handle()).unwrap();
+        let state = record.state();
+        let checkpoints = record.log_checkpoints().collect::<Vec<_>>();
+        assert_eq!(checkpoints.len(), 1);
+        let at_log = checkpoints[0].state();
 
         for (reader, expected_storage, expected_balance, expected_nonce) in [
             (state.initial(), 5_u64, 100_u64, SENDER_NONCE),
@@ -263,7 +270,7 @@ fn execute(
     source: Arc<ConfluxStateSource>,
     action: Action,
     data: Vec<u8>,
-) -> (EspaceExecutedTransaction, EspaceStateAccess) {
+) -> EspaceExecutedTransaction {
     let handle = Handle::current();
     let mut execution_state = build_conflux_state(Arc::clone(&source), handle.clone()).unwrap();
     let machine = Arc::new(ConfluxChainSpec::mainnet().build_machine());
@@ -302,18 +309,16 @@ fn execute(
             }),
         }),
     };
-    let observer = ExecutionTraceObserver::new(Space::Ethereum).with_log_checkpoints(
-        vec![LogCheckpoint {
-            space: Space::Ethereum,
-            address: None,
-            topic0: H256::from_low_u64_be(1),
-        }],
-        LIMITS.max_occurrence_checkpoints,
-    );
+    let filters = [LogFilter {
+        address: None,
+        topic0: word(1),
+    }];
+    let observer = ExecutionTraceObserver::new(Space::Ethereum)
+        .with_checkpoint_filters(filters_for_space(&filters, Space::Ethereum), LIMITS);
     let mut execution = ConfluxTransactionExecutor::new(&mut execution_state, &machine)
         .execute(input, observer)
         .unwrap();
-    let mut state = EspaceStateAccess::new(
+    let state = EspaceStateAccess::new(
         source,
         handle,
         execution_state,
@@ -323,9 +328,7 @@ fn execute(
         LIMITS,
     )
     .unwrap();
-    let record =
-        EspaceExecutedTransaction::from_outcome(&mut execution.outcome, &mut state).unwrap();
-    (record, state)
+    EspaceExecutedTransaction::from_outcome(&mut execution.outcome, state).unwrap()
 }
 
 // CALL with no input and a 32-byte return buffer at memory offset zero.

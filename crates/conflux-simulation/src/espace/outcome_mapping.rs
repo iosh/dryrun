@@ -29,7 +29,7 @@ pub(crate) fn map_executor_outcome(
     match outcome {
         ConfluxExecutionOutcome::Success(output) => {
             let result = build_execution_result(&output, common.gas_limit)?;
-            let logs = map_committed_logs(execution, core_space_network)?;
+            let logs = map_committed_logs(&output.logs, core_space_network)?;
             let output = build_success_output(execution, &output, transaction, state)?;
             Ok(EspaceExecutionOutcome::Success {
                 result,
@@ -135,17 +135,17 @@ fn map_state_read_error(error: EspaceStateReadError) -> EspaceExecutionError {
 }
 
 fn map_committed_logs(
-    execution: &EspaceExecutedTransaction,
+    logs: &[primitives::LogEntry],
     core_space_network: Network,
 ) -> Result<Vec<EspaceLog>, EspaceResultIntegrationError> {
-    execution
-        .committed_logs()
-        .iter()
+    logs.iter()
         .map(|log| {
-            let address = match log.space() {
-                EspaceExecutionSpace::Espace => EspaceLogAddress::Espace(log.address()),
-                EspaceExecutionSpace::Core => {
-                    let bytes = log.address().into_array();
+            let address = match log.space {
+                cfx_types::Space::Ethereum => {
+                    EspaceLogAddress::Espace(address_from_cfx(log.address))
+                }
+                cfx_types::Space::Native => {
+                    let bytes = log.address.0;
                     let address =
                         conflux_provider::CoreAddress::from_bytes(bytes, core_space_network)
                             .map_err(|source| {
@@ -158,8 +158,13 @@ fn map_committed_logs(
             };
             Ok(EspaceLog {
                 address,
-                topics: log.topics().to_vec(),
-                data: log.data().clone(),
+                topics: log
+                    .topics
+                    .iter()
+                    .copied()
+                    .map(crate::primitive::b256_from_cfx)
+                    .collect(),
+                data: log.data.clone().into(),
             })
         })
         .collect()

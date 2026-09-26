@@ -1,3 +1,5 @@
+use crate::EvmAnalysisView;
+use simulation_core::observation::LogFilter;
 mod call_evidence;
 mod error;
 mod event_verification;
@@ -12,8 +14,7 @@ use std::{collections::HashMap, sync::LazyLock};
 use alloy::primitives::{Address, B256, keccak256};
 
 use crate::{
-    EvmChangeDerivationError, EvmChangeRules, EvmChangeSet, EvmChangeSetBuilder,
-    EvmObservationRequirements,
+    EvmAnalysisError, EvmChangeRules, EvmChangeSet, EvmChangeSetBuilder,
     changeset::{EvmWrappedNativeDepositChange, EvmWrappedNativeWithdrawalChange},
     execution::EvmTransactionExecution,
     state::EvmStateAccess,
@@ -47,7 +48,7 @@ impl EvmTokenChangeRules {
         &self,
         execution: &EvmTransactionExecution,
         state: &EvmStateAccess,
-    ) -> Result<EvmChangeSet, EvmChangeDerivationError> {
+    ) -> Result<EvmChangeSet, EvmAnalysisError> {
         let sequence = collect_token_events(execution, self.wrapped_native_token)?;
         let events = sequence.events;
         if events.is_empty() {
@@ -62,7 +63,6 @@ impl EvmTokenChangeRules {
                 event_index,
                 event,
                 execution,
-                state,
                 &sequence.pairs,
                 &mut wrapped_pair_proofs,
                 &mut final_state_expectations,
@@ -86,15 +86,15 @@ impl EvmTokenChangeRules {
         for (event, verified_event) in events.into_iter().zip(verified_events) {
             match (event, verified_event) {
                 (
-                    ObservedTokenEvent::Standard { occurrence, .. },
+                    ObservedTokenEvent::Standard { checkpoint, .. },
                     VerifiedTokenEvent::Standard(change),
                 ) => {
                     let change = change.into_change(&metadata_values);
-                    builder.standard(occurrence.position(), change)?;
+                    builder.standard(checkpoint.position(), change)?;
                 }
                 (
                     ObservedTokenEvent::Wrapped {
-                        occurrence,
+                        checkpoint,
                         contract,
                         account,
                         amount,
@@ -105,7 +105,7 @@ impl EvmTokenChangeRules {
                     let token_metadata = metadata_values.erc20(&contract);
                     match direction {
                         WrappedOperation::Deposit => builder.wrapped_native_deposit(
-                            occurrence.position(),
+                            checkpoint.position(),
                             EvmWrappedNativeDepositChange {
                                 contract_address: contract,
                                 account,
@@ -114,7 +114,7 @@ impl EvmTokenChangeRules {
                             },
                         )?,
                         WrappedOperation::Withdrawal => builder.wrapped_native_withdrawal(
-                            occurrence.position(),
+                            checkpoint.position(),
                             EvmWrappedNativeWithdrawalChange {
                                 contract_address: contract,
                                 account,
@@ -133,23 +133,30 @@ impl EvmTokenChangeRules {
 }
 
 impl EvmChangeRules for EvmTokenChangeRules {
-    fn required_observations(&self) -> EvmObservationRequirements {
-        let mut requirements = EvmObservationRequirements::new();
+    fn checkpoint_filters(&self) -> Vec<LogFilter> {
+        let mut filters = Vec::new();
         for topic0 in contract_standards::supported_event_topics() {
-            requirements.checkpoint_any_address(*topic0);
+            filters.push(LogFilter {
+                address: None,
+                topic0: *topic0,
+            });
         }
         if let Some(address) = self.wrapped_native_token {
-            requirements.checkpoint_at(address, *DEPOSIT_TOPIC0);
-            requirements.checkpoint_at(address, *WITHDRAWAL_TOPIC0);
+            filters.push(LogFilter {
+                address: Some(address),
+                topic0: *DEPOSIT_TOPIC0,
+            });
+            filters.push(LogFilter {
+                address: Some(address),
+                topic0: *WITHDRAWAL_TOPIC0,
+            });
         }
-        requirements
+        filters
     }
 
-    fn derive_changes(
-        &self,
-        execution: &EvmTransactionExecution,
-        state: &EvmStateAccess,
-    ) -> Result<EvmChangeSet, EvmChangeDerivationError> {
+    fn derive_changes(&self, view: EvmAnalysisView<'_>) -> Result<EvmChangeSet, EvmAnalysisError> {
+        let execution = view.execution();
+        let state = view.state();
         self.derive_verified_changes(execution, state)
     }
 }

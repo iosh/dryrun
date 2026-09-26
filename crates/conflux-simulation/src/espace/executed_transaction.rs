@@ -4,7 +4,6 @@ use alloy_primitives::{Address, B256, Bytes, U256};
 use cfx_executor::{executive::ExecutionError, executive_observer::AddressPocket};
 use cfx_types::Space;
 use cfx_vm_types::Error as VmError;
-use thiserror::Error;
 
 use crate::{
     execution::{
@@ -15,7 +14,7 @@ use crate::{
 };
 
 use super::{
-    EspaceExecutionError, EspaceOccurrenceHandle, EspaceResultIntegrationError, EspaceStateAccess,
+    EspaceExecutionError, EspaceResultIntegrationError, EspaceStateAccess, EspaceStateReader,
 };
 
 /// A stable position in one finalized eSpace execution.
@@ -23,12 +22,12 @@ use super::{
 pub struct EspaceExecutionPosition(usize);
 
 impl EspaceExecutionPosition {
-    pub const fn index(self) -> usize {
-        self.0
-    }
-
     pub(crate) const fn from_index(index: usize) -> Self {
         Self(index)
+    }
+
+    pub const fn index(self) -> usize {
+        self.0
     }
 }
 
@@ -62,6 +61,7 @@ pub enum EspaceFrameAction {
         kind: EspaceCallKind,
         caller: Address,
         target: Address,
+        /// Code lookup account, before any account delegation.
         code_address: Address,
         value: U256,
         calldata: Bytes,
@@ -82,6 +82,7 @@ pub struct EspaceCommittedFrame {
     position: EspaceExecutionPosition,
     space: EspaceExecutionSpace,
     action: EspaceFrameAction,
+    code_hash: B256,
 }
 
 impl EspaceCommittedFrame {
@@ -99,6 +100,10 @@ impl EspaceCommittedFrame {
 
     pub const fn space(&self) -> EspaceExecutionSpace {
         self.space
+    }
+
+    pub const fn code_hash(&self) -> B256 {
+        self.code_hash
     }
 
     pub const fn action(&self) -> &EspaceFrameAction {
@@ -144,12 +149,13 @@ impl EspaceCommittedLog {
 
 /// A candidate log and its state, borrowing the execution's single log record.
 #[derive(Debug, Clone, Copy)]
-pub struct EspaceSemanticLogOccurrence<'a> {
+pub struct EspaceLogCheckpoint<'a> {
     log: &'a EspaceCommittedLog,
-    handle: &'a EspaceOccurrenceHandle,
+    previous_state: &'a EspaceStateReader,
+    state: &'a EspaceStateReader,
 }
 
-impl<'a> EspaceSemanticLogOccurrence<'a> {
+impl<'a> EspaceLogCheckpoint<'a> {
     pub const fn position(self) -> EspaceExecutionPosition {
         self.log.position()
     }
@@ -162,17 +168,18 @@ impl<'a> EspaceSemanticLogOccurrence<'a> {
         self.log
     }
 
-    pub const fn handle(self) -> &'a EspaceOccurrenceHandle {
-        self.handle
+    /// The preceding retained checkpoint, or the transaction's initial state.
+    pub const fn previous_state(self) -> &'a EspaceStateReader {
+        self.previous_state
+    }
+
+    /// Persistent state at the log emission point.
+    pub const fn state(self) -> &'a EspaceStateReader {
+        self.state
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[non_exhaustive]
-pub enum EspaceObservationError {
-    #[error("semantic occurrence checkpoint limit {limit} exceeded")]
-    CheckpointLimitExceeded { limit: usize },
-}
+use simulation_core::observation::AnalysisLimitExceeded;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EspaceCommittedStorageWrite {
@@ -318,8 +325,7 @@ pub enum EspaceExecutionStatus {
     Failed,
 }
 
-/// Immutable data produced after one eSpace transaction reaches its finalized
-/// execution boundary. It contains no mutable State or provider handle.
+/// Facts and read-only state access produced by one finalized eSpace execution.
 #[derive(Debug)]
 pub struct EspaceExecutedTransaction {
     transaction_sender: Address,
@@ -328,17 +334,19 @@ pub struct EspaceExecutedTransaction {
     committed_logs: Vec<EspaceCommittedLog>,
     internal_transfers: Vec<EspaceCommittedInternalTransfer>,
     storage_writes: Vec<EspaceCommittedStorageWrite>,
+    pub(crate) removed_contracts: Vec<(usize, cfx_types::AddressWithSpace)>,
     storage_collateralized: Vec<EspaceStorageChange>,
     storage_released: Vec<EspaceStorageChange>,
     contracts_created: Vec<EspaceContractAddress>,
     applied_authorizations: Vec<EspaceAppliedAuthorization>,
-    semantic_log_occurrences: Result<Vec<(usize, EspaceOccurrenceHandle)>, EspaceObservationError>,
+    state: EspaceStateAccess,
+    limit_exceeded: Option<AnalysisLimitExceeded>,
 }
 
 impl EspaceExecutedTransaction {
     pub(crate) fn from_outcome(
         outcome: &mut ConfluxExecutionOutcome,
-        state: &mut EspaceStateAccess,
+        state: EspaceStateAccess,
     ) -> Result<Self, EspaceExecutionError> {
         let (status, output) = match outcome {
             ConfluxExecutionOutcome::Success(output) => (EspaceExecutionStatus::Success, output),
@@ -365,14 +373,25 @@ impl EspaceExecutedTransaction {
     fn from_output(
         output: &mut ConfluxExecutionOutput,
         status: EspaceExecutionStatus,
-        state: &mut EspaceStateAccess,
+        mut state: EspaceStateAccess,
     ) -> Result<Self, EspaceExecutionError> {
         let transaction_sender = state.caller();
-        verify_committed_logs(&output.trace, &output.logs)?;
+        if output.trace.limit_exceeded().is_none() {
+            verify_committed_logs(&output.trace, &output.logs)?;
+        }
         let committed_frames = convert_frames(&output.trace)?;
         let (committed_logs, internal_transfers) =
             convert_events(&output.trace, &committed_frames)?;
         let storage_writes = convert_storage_writes(&output.trace, &committed_frames)?;
+        let removed_contracts = output
+            .trace
+            .events()
+            .iter()
+            .filter_map(|event| match event {
+                TraceEvent::ContractRemoved { position, address } => Some((*position, *address)),
+                _ => None,
+            })
+            .collect();
         let contracts_created = convert_created_contracts(output, &committed_frames)?;
         let applied_authorizations = output
             .trace
@@ -394,15 +413,10 @@ impl EspaceExecutedTransaction {
             .iter()
             .map(convert_storage_change)
             .collect();
-        let snapshots = output.trace.take_snapshots().ok_or_else(|| {
-            integration_error("execution state snapshots have already been consumed")
-        })?;
-        let semantic_log_occurrences = if let Some(limit) = snapshots.limit_exceeded {
-            Err(EspaceObservationError::CheckpointLimitExceeded { limit })
-        } else {
-            let mut occurrences: Vec<(usize, EspaceOccurrenceHandle)> =
-                Vec::with_capacity(snapshots.entries.len());
-            for (position, snapshot) in snapshots.entries {
+        let limit_exceeded = output.trace.limit_exceeded();
+        let snapshots = output.trace.take_snapshots();
+        if limit_exceeded.is_none() {
+            for (position, snapshot) in snapshots {
                 let log_index = committed_logs
                     .binary_search_by_key(&position, |log| log.position().index())
                     .map_err(|_| {
@@ -410,19 +424,9 @@ impl EspaceExecutedTransaction {
                             "state snapshot at position {position} has no committed log"
                         ))
                     })?;
-                if occurrences
-                    .last()
-                    .is_some_and(|(previous, _)| log_index <= *previous)
-                {
-                    return Err(integration_error(
-                        "state snapshots are not in committed log order",
-                    )
-                    .into());
-                }
-                occurrences.push((log_index, state.retain_occurrence(snapshot)?));
+                state.restore_checkpoint(log_index, snapshot)?;
             }
-            Ok(occurrences)
-        };
+        }
 
         Ok(Self {
             transaction_sender,
@@ -431,11 +435,13 @@ impl EspaceExecutedTransaction {
             committed_logs,
             internal_transfers,
             storage_writes,
+            removed_contracts,
             storage_collateralized,
             storage_released,
             contracts_created,
             applied_authorizations,
-            semantic_log_occurrences,
+            state,
+            limit_exceeded,
         })
     }
 
@@ -459,20 +465,22 @@ impl EspaceExecutedTransaction {
         &self.committed_logs
     }
 
-    pub fn semantic_log_occurrences(
-        &self,
-    ) -> Result<impl Iterator<Item = EspaceSemanticLogOccurrence<'_>> + Clone, EspaceObservationError>
-    {
-        let occurrences = self
-            .semantic_log_occurrences
-            .as_ref()
-            .map_err(Clone::clone)?;
-        Ok(occurrences
-            .iter()
-            .map(move |(log_index, handle)| EspaceSemanticLogOccurrence {
-                log: &self.committed_logs[*log_index],
-                handle,
-            }))
+    pub(crate) fn state(&self) -> &EspaceStateAccess {
+        &self.state
+    }
+
+    pub(crate) fn check_observation_limit(&self) -> Result<(), AnalysisLimitExceeded> {
+        self.limit_exceeded.map_or(Ok(()), Err)
+    }
+
+    pub(crate) fn log_checkpoints(&self) -> impl Iterator<Item = EspaceLogCheckpoint<'_>> {
+        self.state
+            .log_checkpoints()
+            .map(|(log_index, previous_state, state)| EspaceLogCheckpoint {
+                log: &self.committed_logs[log_index],
+                previous_state,
+                state,
+            })
     }
 
     pub fn internal_transfers(&self) -> &[EspaceCommittedInternalTransfer] {
@@ -481,6 +489,20 @@ impl EspaceExecutedTransaction {
 
     pub fn storage_writes(&self) -> &[EspaceCommittedStorageWrite] {
         &self.storage_writes
+    }
+
+    pub fn removed_contracts(
+        &self,
+    ) -> impl Iterator<Item = (EspaceExecutionPosition, EspaceContractAddress)> + '_ {
+        self.removed_contracts.iter().map(|(position, address)| {
+            (
+                EspaceExecutionPosition(*position),
+                EspaceContractAddress {
+                    space: map_space(address.space),
+                    address: address_from_cfx(address.address),
+                },
+            )
+        })
     }
 
     pub fn storage_collateralized(&self) -> &[EspaceStorageChange] {
@@ -586,6 +608,7 @@ fn convert_frames(
                     return Err(missing_frame(frame_id.index()));
                 }
             }
+            TraceEvent::ContractRemoved { .. } => {}
         }
     }
 
@@ -615,35 +638,25 @@ fn convert_frames(
                 target,
                 code_address,
                 transferred_value,
-                calldata_len,
                 calldata,
-                calldata_prefix,
-            } => {
-                if *calldata_len != calldata.len() || calldata_prefix.len() > calldata.len() {
-                    return Err(integration_error(format!(
-                        "committed frame {} has an invalid calldata length",
-                        id.index()
-                    )));
-                }
-                EspaceFrameAction::Call {
-                    kind: match call_type {
-                        cfx_vm_types::CallType::Call => EspaceCallKind::Call,
-                        cfx_vm_types::CallType::CallCode => EspaceCallKind::CallCode,
-                        cfx_vm_types::CallType::DelegateCall => EspaceCallKind::DelegateCall,
-                        cfx_vm_types::CallType::StaticCall => EspaceCallKind::StaticCall,
-                        cfx_vm_types::CallType::None => {
-                            return Err(EspaceResultIntegrationError::invalid_executor_output(
-                                format!("committed call frame {} has CallType::None", id.index()),
-                            ));
-                        }
-                    },
-                    caller: address_from_cfx(*caller),
-                    target: address_from_cfx(*target),
-                    code_address: address_from_cfx(*code_address),
-                    value: u256_from_cfx(*transferred_value),
-                    calldata: Bytes::copy_from_slice(calldata),
-                }
-            }
+            } => EspaceFrameAction::Call {
+                kind: match call_type {
+                    cfx_vm_types::CallType::Call => EspaceCallKind::Call,
+                    cfx_vm_types::CallType::CallCode => EspaceCallKind::CallCode,
+                    cfx_vm_types::CallType::DelegateCall => EspaceCallKind::DelegateCall,
+                    cfx_vm_types::CallType::StaticCall => EspaceCallKind::StaticCall,
+                    cfx_vm_types::CallType::None => {
+                        return Err(EspaceResultIntegrationError::invalid_executor_output(
+                            format!("committed call frame {} has CallType::None", id.index()),
+                        ));
+                    }
+                },
+                caller: address_from_cfx(*caller),
+                target: address_from_cfx(*target),
+                code_address: address_from_cfx(*code_address),
+                value: u256_from_cfx(*transferred_value),
+                calldata: Bytes::copy_from_slice(calldata),
+            },
             FrameAction::Create {
                 creator,
                 created_address,
@@ -670,6 +683,7 @@ fn convert_frames(
             parent,
             position,
             space: map_space(frame.space),
+            code_hash: b256_from_cfx(frame.code_hash),
             action,
         });
     }
@@ -732,7 +746,7 @@ fn convert_events(
                     value: u256_from_cfx(*value),
                 });
             }
-            TraceEvent::StorageWrite { .. } => {}
+            TraceEvent::StorageWrite { .. } | TraceEvent::ContractRemoved { .. } => {}
         }
     }
     Ok((logs, transfers))
@@ -801,6 +815,9 @@ fn convert_created_contracts(
             address: address_from_cfx(address.address),
         })
         .collect::<Vec<_>>();
+    if output.trace.limit_exceeded().is_some() {
+        return Ok(contracts);
+    }
     if created.len() != contracts.len() {
         return Err(integration_error(format!(
             "executor returned {} contracts-created entries for {} committed CREATE frames",

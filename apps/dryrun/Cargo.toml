@@ -4,6 +4,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+simulation-core = { workspace = true, features = ["serde"] }
 conflux-simulation = { workspace = true }
 conflux-rpc = { workspace = true }
 evm-simulation = { workspace = true }

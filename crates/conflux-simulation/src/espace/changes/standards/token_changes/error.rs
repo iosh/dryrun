@@ -1,16 +1,16 @@
 use thiserror::Error;
 
-use crate::espace::{EspaceChangeDerivationError, EspaceExecutionPosition};
+use crate::espace::{EspaceAnalysisError, EspaceExecutionPosition};
 
 pub(super) fn state_mismatch_at(
     position: EspaceExecutionPosition,
     details: &'static str,
-) -> EspaceChangeDerivationError {
+) -> EspaceAnalysisError {
     token_change_error_at(position, details)
 }
 
-pub(super) fn token_change_error(details: impl Into<String>) -> EspaceChangeDerivationError {
-    EspaceChangeDerivationError::rule_failure(
+pub(super) fn token_change_error(details: impl Into<String>) -> EspaceAnalysisError {
+    EspaceAnalysisError::rule_failure(
         "token",
         TokenChangeError {
             details: details.into(),
@@ -21,7 +21,7 @@ pub(super) fn token_change_error(details: impl Into<String>) -> EspaceChangeDeri
 pub(super) fn token_change_error_at(
     position: EspaceExecutionPosition,
     details: impl Into<String>,
-) -> EspaceChangeDerivationError {
+) -> EspaceAnalysisError {
     token_change_error(format!(
         "at execution position {}: {}",
         position.index(),

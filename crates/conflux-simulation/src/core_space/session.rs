@@ -1,3 +1,4 @@
+use simulation_core::observation::LogFilter;
 use std::sync::Arc;
 
 use cfx_executor::{machine::Machine, state::State};
@@ -33,7 +34,6 @@ pub(super) struct CoreSpaceExecutionSession {
 pub(super) struct CoreSpaceExecutionEvidence {
     pub(super) outcome: CoreSpaceExecutionOutcome,
     pub(super) record: CoreSpaceExecutedTransaction,
-    pub(super) state: super::CoreSpaceStateAccess,
 }
 
 impl CoreSpaceExecutionSession {
@@ -64,6 +64,8 @@ impl CoreSpaceExecutionSession {
         transaction: &CoreSpaceTypedTransaction,
         block_context: ExecutionBlockContext,
         storage_sponsorship: Option<StorageSponsorship>,
+        checkpoint_filters: &[LogFilter<super::CrossSpaceAddress>],
+        limits: super::CoreSpaceSimulationLimits,
     ) -> Result<
         simulation_core::simulation::Execution<
             CoreSpaceExecutionEvidence,
@@ -78,7 +80,9 @@ impl CoreSpaceExecutionSession {
                 self.chain_id,
             )),
         };
-        let observer = ExecutionTraceObserver::new(Space::Native);
+        let filters = filters_for_network(checkpoint_filters, transaction.common().from.network());
+        let observer =
+            ExecutionTraceObserver::new(Space::Native).with_checkpoint_filters(filters, limits);
         let execution = ConfluxTransactionExecutor::new(&mut self.state, &self.machine)
             .execute(execution_input, observer)
             .map_err(map_execution_error)?;
@@ -106,6 +110,7 @@ impl CoreSpaceExecutionSession {
             Arc::clone(&self.machine),
             &prepared,
             transaction.common().from.network(),
+            limits,
         )
         .map_err(CoreSpaceExecutionError::from)?;
         let record = CoreSpaceExecutedTransaction::from_outcome(
@@ -114,14 +119,50 @@ impl CoreSpaceExecutionSession {
             &self.machine,
             transaction.common().from,
             transaction.common().to,
+            state,
         )?;
-        let outcome = build_execution_outcome(&record, transaction, &state, storage_sponsorship)?;
+        let outcome =
+            build_execution_outcome(&record, transaction, record.state(), storage_sponsorship)?;
         Ok(Execution::Executed(CoreSpaceExecutionEvidence {
             outcome,
             record,
-            state,
         }))
     }
+}
+
+fn filters_for_network(
+    filters: &[LogFilter<super::CrossSpaceAddress>],
+    network: conflux_provider::Network,
+) -> Vec<(Space, LogFilter)> {
+    use super::CrossSpaceAddress;
+
+    filters
+        .iter()
+        .flat_map(|filter| {
+            let locations = match filter.address {
+                None => vec![(Space::Native, None), (Space::Ethereum, None)],
+                Some(CrossSpaceAddress::CoreSpace(address)) if address.network() == network => {
+                    vec![(
+                        Space::Native,
+                        Some(alloy_primitives::Address::from(address.bytes())),
+                    )]
+                }
+                Some(CrossSpaceAddress::CoreSpace(_)) => Vec::new(),
+                Some(CrossSpaceAddress::Espace(address)) => {
+                    vec![(Space::Ethereum, Some(address))]
+                }
+            };
+            locations.into_iter().map(|(space, address)| {
+                (
+                    space,
+                    LogFilter {
+                        address,
+                        topic0: filter.topic0,
+                    },
+                )
+            })
+        })
+        .collect()
 }
 
 fn map_execution_error(

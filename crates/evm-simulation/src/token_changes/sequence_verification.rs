@@ -6,7 +6,7 @@ use alloy::{
 };
 
 use crate::{
-    EvmChangeDerivationError,
+    EvmAnalysisError,
     execution::{EvmExecutionPosition, EvmFrameId, EvmTransactionExecution},
     state::{EvmStateAccess, EvmStateReader},
 };
@@ -29,29 +29,27 @@ use super::{
 
 pub(super) fn verify_event(
     event_index: usize,
-    event: &ObservedTokenEvent,
+    event: &ObservedTokenEvent<'_>,
     execution: &EvmTransactionExecution,
-    state: &EvmStateAccess,
     pairs: &[WrappedEventPair],
     wrapped_pair_proofs: &mut HashMap<usize, WrappedPairProof>,
     final_state_expectations: &mut HashMap<FinalStateQuery, ExpectedFinalValue>,
-) -> Result<VerifiedTokenEvent, EvmChangeDerivationError> {
+) -> Result<VerifiedTokenEvent, EvmAnalysisError> {
     let pair = pairs.iter().enumerate().find_map(|(index, pair)| {
         (pair.transfer_event_index == event_index || pair.wrapped_event_index == event_index)
             .then_some((index, *pair))
     });
     match event {
         ObservedTokenEvent::Standard {
-            occurrence,
+            checkpoint,
             decoded,
         } => {
-            let around = state.around(occurrence.handle())?;
             let mut verification = TokenEventVerification {
-                position: occurrence.position(),
+                position: checkpoint.position(),
                 execution,
-                previous: around.previous(),
-                current: around.current(),
-                frame_id: occurrence.frame_id(),
+                previous: checkpoint.previous_state(),
+                current: checkpoint.state(),
+                frame_id: checkpoint.frame_id(),
                 pair,
                 wrapped_pair_proofs,
                 final_state_expectations,
@@ -61,19 +59,18 @@ pub(super) fn verify_event(
             ))
         }
         ObservedTokenEvent::Wrapped {
-            occurrence,
+            checkpoint,
             contract,
             account,
             amount,
             direction,
         } => {
-            let around = state.around(occurrence.handle())?;
             let (after, total_supply_after) = verify_wrapped_event(
                 execution,
-                occurrence.frame_id(),
-                occurrence.position(),
-                around.previous(),
-                around.current(),
+                checkpoint.frame_id(),
+                checkpoint.position(),
+                checkpoint.previous_state(),
+                checkpoint.state(),
                 *contract,
                 *account,
                 *amount,
@@ -112,7 +109,7 @@ pub(super) fn verify_wrapped_event(
     direction: WrappedOperation,
     pair: Option<(usize, WrappedEventPair)>,
     wrapped_pair_proofs: &mut HashMap<usize, WrappedPairProof>,
-) -> Result<(U256, U256), EvmChangeDerivationError> {
+) -> Result<(U256, U256), EvmAnalysisError> {
     verify_wrapped_call_and_value(
         execution, frame_id, contract, account, amount, direction, position,
     )?;
@@ -163,7 +160,7 @@ pub(super) fn verify_wrapped_call_and_value(
     amount: U256,
     direction: WrappedOperation,
     position: EvmExecutionPosition,
-) -> Result<(), EvmChangeDerivationError> {
+) -> Result<(), EvmAnalysisError> {
     let has_evidence = match direction {
         WrappedOperation::Deposit => has_matching_committed_call(
             execution,
@@ -208,7 +205,7 @@ pub(super) fn expect_increase(
     amount: U256,
     position: EvmExecutionPosition,
     label: &'static str,
-) -> Result<(), EvmChangeDerivationError> {
+) -> Result<(), EvmAnalysisError> {
     let expected = before
         .checked_add(amount)
         .ok_or_else(|| state_mismatch_at(position, "balance increase overflow"))?;
@@ -223,7 +220,7 @@ pub(super) fn expect_decrease(
     amount: U256,
     position: EvmExecutionPosition,
     label: &'static str,
-) -> Result<(), EvmChangeDerivationError> {
+) -> Result<(), EvmAnalysisError> {
     let expected = before
         .checked_sub(amount)
         .ok_or_else(|| state_mismatch_at(position, "balance decrease underflow"))?;
@@ -276,7 +273,7 @@ pub(super) enum ExpectedFinalValue {
 pub(super) fn verify_final_state(
     expectations: &HashMap<FinalStateQuery, ExpectedFinalValue>,
     state: &EvmStateAccess,
-) -> Result<(), EvmChangeDerivationError> {
+) -> Result<(), EvmAnalysisError> {
     for (query, expected) in expectations {
         let actual = match query {
             FinalStateQuery::Erc20Balance { contract, account } => ExpectedFinalValue::Amount(
@@ -335,7 +332,7 @@ pub(super) fn verify_final_state(
         };
         if &actual != expected {
             return Err(token_change_error(
-                "finalized state differs from the last verified occurrence",
+                "finalized state differs from the last verified checkpoint",
             ));
         }
     }

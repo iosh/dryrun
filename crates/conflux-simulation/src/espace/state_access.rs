@@ -1,11 +1,10 @@
+use crate::execution::{IsolatedReadCallError, ReadCallInput, execute_isolated_read_call};
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
     fmt,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    rc::Rc,
+    sync::Arc,
 };
 
 use alloy_primitives::{Address, B256, Bytes, U256};
@@ -15,83 +14,26 @@ use cfx_executor::{
 };
 use cfx_types::AddressSpaceUtil;
 use cfx_vm_types::{Env, Spec};
+use simulation_core::observation::{AnalysisLimitExceeded, ReadBudget};
 use thiserror::Error;
 use tokio::runtime::Handle;
 
 use crate::{
-    execution::{
-        IsolatedReadCallError, PreparedTransactionExecution, ReadCallInput, ReadCallOutcome,
-        build_conflux_state, execute_isolated_read_call,
-    },
+    execution::{PreparedTransactionExecution, build_conflux_state},
     primitive::{address_to_cfx, b256_to_cfx, u256_from_cfx},
     state::ConfluxStateSource,
 };
 
 use super::EspaceStateAccessError;
 
-/// Resource limits enforced by eSpace state readers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EspaceSimulationLimits {
-    pub max_occurrence_checkpoints: usize,
-    pub max_state_reads: usize,
-    pub max_read_calls: usize,
-    pub read_call_gas_limit: u64,
-    pub max_read_call_output_bytes: usize,
-}
-
-impl EspaceSimulationLimits {
-    pub const fn new(
-        max_occurrence_checkpoints: usize,
-        max_state_reads: usize,
-        max_read_calls: usize,
-        read_call_gas_limit: u64,
-        max_read_call_output_bytes: usize,
-    ) -> Self {
-        Self {
-            max_occurrence_checkpoints,
-            max_state_reads,
-            max_read_calls,
-            read_call_gas_limit,
-            max_read_call_output_bytes,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct EspaceExecutionIdentity;
-
-/// A retained log state belonging to exactly one finalized execution.
-#[derive(Clone)]
-pub struct EspaceOccurrenceHandle {
-    identity: Arc<EspaceExecutionIdentity>,
-    checkpoint_index: usize,
-}
-
-impl fmt::Debug for EspaceOccurrenceHandle {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("EspaceOccurrenceHandle")
-            .field("checkpoint_index", &self.checkpoint_index)
-            .finish_non_exhaustive()
-    }
-}
-
-impl PartialEq for EspaceOccurrenceHandle {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.identity, &other.identity)
-            && self.checkpoint_index == other.checkpoint_index
-    }
-}
-
-impl Eq for EspaceOccurrenceHandle {}
+pub use simulation_core::observation::AnalysisLimits as EspaceSimulationLimits;
 
 /// Initial, committed log and finalized states over one fixed RPC anchor.
 pub struct EspaceStateAccess {
-    identity: Arc<EspaceExecutionIdentity>,
     source: Arc<ConfluxStateSource>,
     runtime_handle: Handle,
     initial: EspaceStateReader,
-    occurrences: Vec<EspaceStateReader>,
+    checkpoints: Vec<(usize, EspaceStateReader)>,
     finalized: EspaceStateReader,
 }
 
@@ -115,40 +57,41 @@ impl EspaceStateAccess {
     ) -> Result<Self, EspaceStateAccessError> {
         let initial_state = build_conflux_state(Arc::clone(&source), runtime_handle.clone())
             .map_err(|source| EspaceStateAccessError::Initialization { source })?;
-        let context = Arc::new(EspaceReadContext {
+        let context = Rc::new(EspaceReadContext {
             machine,
             env: prepared.env.clone(),
             spec: prepared.spec.clone(),
             caller,
-            budget: EspaceStateReadBudget::new(limits),
+            budget: ReadBudget::new(limits),
+            analysis_started: Cell::new(false),
         });
 
         Ok(Self {
-            identity: Arc::new(EspaceExecutionIdentity),
             source,
             runtime_handle,
-            initial: EspaceStateReader::new(initial_state, Arc::clone(&context)),
-            occurrences: Vec::new(),
+            initial: EspaceStateReader::new(initial_state, Rc::clone(&context)),
+            checkpoints: Vec::new(),
             finalized: EspaceStateReader::new(finalized_state, context),
         })
     }
 
-    pub(crate) fn retain_occurrence(
+    pub(crate) fn restore_checkpoint(
         &mut self,
+        log_index: usize,
         snapshot: SavedState,
-    ) -> Result<EspaceOccurrenceHandle, EspaceStateAccessError> {
+    ) -> Result<(), EspaceStateAccessError> {
         let mut state = build_conflux_state(Arc::clone(&self.source), self.runtime_handle.clone())
             .map_err(|source| EspaceStateAccessError::Initialization { source })?;
         state.restore(snapshot);
-        let checkpoint_index = self.occurrences.len();
-        self.occurrences.push(EspaceStateReader::new(
-            state,
-            Arc::clone(&self.finalized.context),
+        self.checkpoints.push((
+            log_index,
+            EspaceStateReader::new(state, Rc::clone(&self.finalized.context)),
         ));
-        Ok(EspaceOccurrenceHandle {
-            identity: Arc::clone(&self.identity),
-            checkpoint_index,
-        })
+        Ok(())
+    }
+
+    pub(crate) fn start_analysis(&self) {
+        self.finalized.context.analysis_started.set(true);
     }
 
     pub const fn initial(&self) -> &EspaceStateReader {
@@ -163,58 +106,15 @@ impl EspaceStateAccess {
         &self.finalized
     }
 
-    pub fn at(
+    pub(crate) fn log_checkpoints(
         &self,
-        occurrence: &EspaceOccurrenceHandle,
-    ) -> Result<&EspaceStateReader, EspaceStateReadError> {
-        let index = self.checkpoint_index(occurrence)?;
-        Ok(&self.occurrences[index])
-    }
-
-    /// The previous retained log state (or S0), and this log's state.
-    /// The previous point is not necessarily immediately before the LOG opcode.
-    pub fn around(
-        &self,
-        occurrence: &EspaceOccurrenceHandle,
-    ) -> Result<EspaceOccurrenceStateReaders<'_>, EspaceStateReadError> {
-        let index = self.checkpoint_index(occurrence)?;
-        let previous = if index == 0 {
-            &self.initial
-        } else {
-            &self.occurrences[index - 1]
-        };
-        Ok(EspaceOccurrenceStateReaders {
-            previous,
-            current: &self.occurrences[index],
+    ) -> impl Iterator<Item = (usize, &EspaceStateReader, &EspaceStateReader)> {
+        let mut previous = self.initial();
+        self.checkpoints.iter().map(move |(log_index, current)| {
+            let checkpoint = (*log_index, previous, current);
+            previous = current;
+            checkpoint
         })
-    }
-
-    fn checkpoint_index(
-        &self,
-        occurrence: &EspaceOccurrenceHandle,
-    ) -> Result<usize, EspaceStateReadError> {
-        if !Arc::ptr_eq(&self.identity, &occurrence.identity) {
-            return Err(EspaceStateReadError::ForeignOccurrence);
-        }
-        // Handles are created only after retaining a reader, and readers are
-        // never removed from the finalized state access.
-        Ok(occurrence.checkpoint_index)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct EspaceOccurrenceStateReaders<'a> {
-    previous: &'a EspaceStateReader,
-    current: &'a EspaceStateReader,
-}
-
-impl<'a> EspaceOccurrenceStateReaders<'a> {
-    pub const fn previous(self) -> &'a EspaceStateReader {
-        self.previous
-    }
-
-    pub const fn current(self) -> &'a EspaceStateReader {
-        self.current
     }
 }
 
@@ -223,13 +123,14 @@ struct EspaceReadContext {
     env: Env,
     spec: Spec,
     caller: Address,
-    budget: EspaceStateReadBudget,
+    budget: ReadBudget,
+    analysis_started: Cell<bool>,
 }
 
 /// A controlled reader over one fixed eSpace state point.
 pub struct EspaceStateReader {
     state: RefCell<State>,
-    context: Arc<EspaceReadContext>,
+    context: Rc<EspaceReadContext>,
     poisoned: Cell<bool>,
     cache: RefCell<EspaceStateReaderCache>,
 }
@@ -244,7 +145,7 @@ impl fmt::Debug for EspaceStateReader {
 }
 
 impl EspaceStateReader {
-    fn new(state: State, context: Arc<EspaceReadContext>) -> Self {
+    fn new(state: State, context: Rc<EspaceReadContext>) -> Self {
         Self {
             state: RefCell::new(state),
             context,
@@ -261,7 +162,9 @@ impl EspaceStateReader {
         if let Some(account) = self.cache.borrow().accounts.get(&address) {
             return Ok(account.clone());
         }
-        self.context.budget.consume_state_read()?;
+        if self.context.analysis_started.get() {
+            self.context.budget.state_read()?;
+        }
 
         let address = address_to_cfx(address).with_evm_space();
         let state = self.state.borrow();
@@ -314,7 +217,9 @@ impl EspaceStateReader {
         if let Some(value) = self.cache.borrow().storage.get(&(contract, slot)) {
             return Ok(*value);
         }
-        self.context.budget.consume_state_read()?;
+        if self.context.analysis_started.get() {
+            self.context.budget.state_read()?;
+        }
 
         let address = address_to_cfx(contract).with_evm_space();
         let key = b256_to_cfx(slot).as_bytes().to_vec();
@@ -345,7 +250,7 @@ impl EspaceStateReader {
         {
             return Ok(outcome.clone());
         }
-        self.context.budget.consume_read_call()?;
+        self.context.budget.read_call()?;
 
         let mut state = self.state.borrow_mut();
         let outcome = execute_isolated_read_call(
@@ -357,7 +262,7 @@ impl EspaceStateReader {
                 sender: address_to_cfx(self.context.caller).with_evm_space(),
                 target: address_to_cfx(target),
                 data: calldata.clone(),
-                gas_limit: self.context.budget.limits.read_call_gas_limit,
+                gas_limit: self.context.budget.limits().read_call_gas_limit,
             },
         )
         .map_err(|error| match error {
@@ -371,19 +276,15 @@ impl EspaceStateReader {
         drop(state);
 
         let outcome = match outcome {
-            Ok(ReadCallOutcome::Success(output)) => EspaceReadCallOutcome::Success(output),
-            Ok(ReadCallOutcome::Reverted(output)) => EspaceReadCallOutcome::Reverted(output),
-            Ok(ReadCallOutcome::Failed) => EspaceReadCallOutcome::Failed,
+            Ok(outcome) => outcome,
             Err(error) => {
                 self.poisoned.set(true);
                 return Err(error);
             }
         };
-        if outcome.output_len() > self.context.budget.limits.max_read_call_output_bytes {
-            return Err(EspaceStateReadError::ReadCallOutputLimitExceeded {
-                limit: self.context.budget.limits.max_read_call_output_bytes,
-            });
-        }
+        self.context
+            .budget
+            .check_output(outcome.output().map_or(0, |output| output.len()))?;
         self.cache
             .borrow_mut()
             .read_calls
@@ -441,25 +342,7 @@ impl EspaceAccountState {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EspaceReadCallOutcome {
-    Success(Bytes),
-    Reverted(Bytes),
-    Failed,
-}
-
-impl EspaceReadCallOutcome {
-    pub fn output(&self) -> Option<&Bytes> {
-        match self {
-            Self::Success(output) | Self::Reverted(output) => Some(output),
-            Self::Failed => None,
-        }
-    }
-
-    fn output_len(&self) -> usize {
-        self.output().map_or(0, |output| output.len())
-    }
-}
+pub use crate::execution::ReadCallOutcome as EspaceReadCallOutcome;
 
 #[derive(Debug, Default)]
 struct EspaceStateReaderCache {
@@ -468,62 +351,14 @@ struct EspaceStateReaderCache {
     read_calls: HashMap<(Address, Bytes), EspaceReadCallOutcome>,
 }
 
-#[derive(Debug)]
-struct EspaceStateReadBudget {
-    state_reads: AtomicUsize,
-    read_calls: AtomicUsize,
-    limits: EspaceSimulationLimits,
-}
-
-impl EspaceStateReadBudget {
-    fn new(limits: EspaceSimulationLimits) -> Self {
-        Self {
-            state_reads: AtomicUsize::new(0),
-            read_calls: AtomicUsize::new(0),
-            limits,
-        }
-    }
-
-    fn consume_state_read(&self) -> Result<(), EspaceStateReadError> {
-        self.state_reads
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
-                (used < self.limits.max_state_reads).then_some(used + 1)
-            })
-            .map(|_| ())
-            .map_err(|_| EspaceStateReadError::StateReadLimitExceeded {
-                limit: self.limits.max_state_reads,
-            })
-    }
-
-    fn consume_read_call(&self) -> Result<(), EspaceStateReadError> {
-        self.read_calls
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |used| {
-                (used < self.limits.max_read_calls).then_some(used + 1)
-            })
-            .map(|_| ())
-            .map_err(|_| EspaceStateReadError::ReadCallLimitExceeded {
-                limit: self.limits.max_read_calls,
-            })
-    }
-}
-
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum EspaceStateReadError {
     #[error(transparent)]
     StateAccess(#[from] EspaceStateAccessError),
 
-    #[error("occurrence handle belongs to a different execution")]
-    ForeignOccurrence,
-
-    #[error("state-read limit {limit} exceeded")]
-    StateReadLimitExceeded { limit: usize },
-
-    #[error("read-call limit {limit} exceeded")]
-    ReadCallLimitExceeded { limit: usize },
-
-    #[error("read-call output limit {limit} bytes exceeded")]
-    ReadCallOutputLimitExceeded { limit: usize },
+    #[error(transparent)]
+    LimitExceeded(#[from] AnalysisLimitExceeded),
 
     #[error("read call failed: {details}")]
     ReadCallFailed { details: String },

@@ -1,3 +1,4 @@
+use crate::observation::{AnalysisLimitExceeded, AnalysisResource};
 use alloy_primitives::U256;
 #[cfg(feature = "serde")]
 use serde::Serialize;
@@ -80,7 +81,7 @@ pub enum DiagnosticData {
         actual: U256,
     },
     AnalysisLimit {
-        resource: &'static str,
+        resource: AnalysisResource,
         limit: usize,
     },
     ExecutionPosition {
@@ -143,6 +144,17 @@ impl ErrorInfo for crate::transaction::TransactionInputError {
             }
         };
         Diagnostic::new(ErrorCode::InvalidInput, self.to_string()).with_data(data)
+    }
+}
+
+impl ErrorInfo for AnalysisLimitExceeded {
+    fn diagnostic(&self) -> Diagnostic {
+        ErrorCode::AnalysisLimitExceeded
+            .diagnostic()
+            .with_data(DiagnosticData::AnalysisLimit {
+                resource: self.resource,
+                limit: self.limit,
+            })
     }
 }
 

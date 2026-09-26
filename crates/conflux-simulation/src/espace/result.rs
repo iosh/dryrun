@@ -5,5 +5,5 @@ pub type EspaceSimulation = simulation_core::simulation::Simulation<
     super::EspaceExecutionOutcome,
     super::EspaceTransactionRejection,
     super::EspaceChangeSet,
-    super::EspaceChangeDerivationError,
+    super::EspaceAnalysisError,
 >;

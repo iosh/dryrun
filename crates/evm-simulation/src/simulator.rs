@@ -118,10 +118,10 @@ impl<R: EvmChangeRules> simulation_core::simulation::SimulationBackend for Ether
     type TransactionRequest = crate::TransactionRequest;
     type Rejection = crate::EvmTransactionRejection;
     type Prepared = Sealed<Header>;
-    type Evidence = (crate::EvmTransactionExecution, crate::EvmStateAccess);
+    type Evidence = crate::EvmTransactionExecution;
     type Outcome = EvmExecutionOutcome;
     type ChangeSet = EvmChangeSet;
-    type AnalysisError = crate::EvmChangeDerivationError;
+    type AnalysisError = crate::EvmAnalysisError;
     type Error = EvmSimulationError;
 
     async fn prepare(
@@ -170,15 +170,15 @@ impl<R: EvmChangeRules> simulation_core::simulation::SimulationBackend for Ether
     ) -> Result<simulation_core::simulation::Execution<Self::Evidence, Self::Rejection>, Self::Error>
     {
         use simulation_core::simulation::Execution;
-        let requirements = self.0.change_rules.required_observations();
+        let checkpoint_filters = self.0.change_rules.checkpoint_filters();
         let state_source =
             EvmStateSource::new(self.0.provider.clone(), runtime_handle, block.hash());
         let executor = EvmTransactionExecutor::new(
             state_source,
             block,
             &self.0.chain_spec,
-            EvmExecutionObserver::with_requirements(requirements, self.0.limits.clone()),
-            self.0.limits.clone(),
+            EvmExecutionObserver::new(checkpoint_filters, self.0.limits),
+            self.0.limits,
         )?;
         match executor.execute(transaction)? {
             EvmTransactionExecutionResult::Executed(output) => {
@@ -191,7 +191,7 @@ impl<R: EvmChangeRules> simulation_core::simulation::SimulationBackend for Ether
     }
 
     fn is_success(&self, evidence: &Self::Evidence) -> bool {
-        evidence.0.is_success()
+        evidence.is_success()
     }
 
     fn analyze(
@@ -203,13 +203,19 @@ impl<R: EvmChangeRules> simulation_core::simulation::SimulationBackend for Ether
             Self::Evidence,
         >,
     ) -> Result<Self::ChangeSet, Self::AnalysisError> {
-        let (execution, state) = view.execution();
-        crate::changeset::check_contract_support(execution, state)?;
-        self.0.change_rules.derive_changes(execution, state)
+        let execution = view.execution();
+        execution.check_observation_limit()?;
+        let view = crate::EvmAnalysisView {
+            context: view.context(),
+            transaction: view.transaction(),
+            execution,
+        };
+        crate::changeset::check_contract_support(execution, view.state())?;
+        self.0.change_rules.derive_changes(view)
     }
 
     fn into_outcome(&self, evidence: Self::Evidence) -> Self::Outcome {
-        evidence.0.into_outcome()
+        evidence.into_outcome()
     }
 }
 
@@ -262,14 +268,7 @@ mod tests {
     }
 
     fn test_limits() -> EvmSimulationLimits {
-        EvmSimulationLimits::new(
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            u64::MAX,
-            usize::MAX,
-        )
+        EvmSimulationLimits::default()
     }
 
     fn block_on<T>(future: impl Future<Output = T>) -> T {

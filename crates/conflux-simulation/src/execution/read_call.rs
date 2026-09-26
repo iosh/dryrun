@@ -15,10 +15,19 @@ use primitives::transaction::{
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ReadCallOutcome {
+pub enum ReadCallOutcome {
     Success(Bytes),
     Reverted(Bytes),
     Failed,
+}
+
+impl ReadCallOutcome {
+    pub fn output(&self) -> Option<&Bytes> {
+        match self {
+            Self::Success(output) | Self::Reverted(output) => Some(output),
+            Self::Failed => None,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

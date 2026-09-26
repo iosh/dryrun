@@ -1,11 +1,20 @@
-use std::{cell::RefCell, sync::Arc};
+use crate::execution::{
+    IsolatedReadCallError, ReadCallInput, ReadCallOutcome, execute_isolated_read_call,
+};
+use simulation_core::observation::{AnalysisLimits, ReadBudget};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+    sync::Arc,
+};
 
 use alloy_primitives::{Address as AlloyAddress, B256, Bytes, U256 as AlloyU256};
 use alloy_sol_types::{SolCall, sol};
 use cfx_executor::{
     internal_contract::pos_internal_entries::{address_entry, identifier_entry, index_entry},
     machine::Machine,
-    state::State,
+    state::{SavedState, State},
 };
 use cfx_types::{Address, AddressSpaceUtil, AddressWithSpace, BigEndianHash, H256, U256};
 use conflux_provider::{CoreAddress, Network};
@@ -13,17 +22,14 @@ use tokio::runtime::Handle;
 
 use crate::state::SponsorWhitelistStorageKey;
 use crate::{
-    execution::{
-        IsolatedReadCallError, PreparedTransactionExecution, ReadCallInput, ReadCallOutcome,
-        build_conflux_state, execute_isolated_read_call,
-    },
+    execution::{PreparedTransactionExecution, build_conflux_state},
     primitive::{b256_from_cfx, b256_to_cfx, u256_from_cfx},
     state::ConfluxStateSource,
 };
 
 use super::CoreSpaceStateAccessError;
 
-const READ_CALL_GAS_LIMIT: u64 = 100_000;
+pub use simulation_core::observation::AnalysisLimits as CoreSpaceSimulationLimits;
 
 sol! {
     interface ParamsControlView {
@@ -38,8 +44,18 @@ sol! {
 
 pub struct CoreSpaceStateAccess {
     source: Arc<ConfluxStateSource>,
+    runtime_handle: Handle,
+    checkpoints: Vec<(usize, CoreSpaceStateReader)>,
     initial: CoreSpaceStateReader,
     finalized: CoreSpaceStateReader,
+}
+
+impl std::fmt::Debug for CoreSpaceStateAccess {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CoreSpaceStateAccess")
+            .finish_non_exhaustive()
+    }
 }
 
 impl CoreSpaceStateAccess {
@@ -50,20 +66,55 @@ impl CoreSpaceStateAccess {
         machine: Arc<Machine>,
         prepared: &PreparedTransactionExecution,
         address_network: Network,
+        limits: AnalysisLimits,
     ) -> Result<Self, CoreSpaceStateAccessError> {
-        let initial_state = build_conflux_state(Arc::clone(&source), runtime_handle)
+        let initial_state = build_conflux_state(Arc::clone(&source), runtime_handle.clone())
             .map_err(|source| CoreSpaceStateAccessError::Initialization { source })?;
-        let context = Arc::new(CoreSpaceReadContext {
+        let context = Rc::new(CoreSpaceReadContext {
             machine,
             env: prepared.env.clone(),
             spec: prepared.spec.clone(),
             caller: prepared.transaction.sender().address,
             address_network,
+            budget: ReadBudget::new(limits),
+            analysis_started: Cell::new(false),
         });
+        let initial = CoreSpaceStateReader::new(initial_state, Rc::clone(&context));
+        let finalized = CoreSpaceStateReader::new(finalized_state, context);
         Ok(Self {
             source,
-            initial: CoreSpaceStateReader::new(initial_state, Arc::clone(&context)),
-            finalized: CoreSpaceStateReader::new(finalized_state, context),
+            runtime_handle,
+            checkpoints: Vec::new(),
+            initial,
+            finalized,
+        })
+    }
+
+    pub(crate) fn start_analysis(&self) {
+        self.finalized.context.analysis_started.set(true);
+    }
+
+    pub(crate) fn restore_checkpoint(
+        &mut self,
+        event_index: usize,
+        snapshot: SavedState,
+    ) -> Result<(), CoreSpaceStateAccessError> {
+        let mut state = build_conflux_state(Arc::clone(&self.source), self.runtime_handle.clone())
+            .map_err(|source| CoreSpaceStateAccessError::Initialization { source })?;
+        state.restore(snapshot);
+        let reader = CoreSpaceStateReader::new(state, Rc::clone(&self.finalized.context));
+        self.checkpoints.push((event_index, reader));
+        Ok(())
+    }
+
+    pub(crate) fn log_checkpoints(
+        &self,
+    ) -> impl Iterator<Item = (usize, &CoreSpaceStateReader, &CoreSpaceStateReader)> {
+        let mut previous = self.initial();
+        self.checkpoints.iter().map(move |(event_index, current)| {
+            let checkpoint = (*event_index, previous, current);
+            previous = current;
+            checkpoint
         })
     }
 
@@ -116,6 +167,7 @@ impl CoreSpaceStateAccess {
         &self,
         address: Address,
     ) -> Result<Vec<primitives::DepositInfo>, CoreSpaceStateAccessError> {
+        self.finalized.context.state_read()?;
         self.source
             .deposit_lists()
             .for_account(address)
@@ -129,6 +181,7 @@ impl CoreSpaceStateAccess {
         &self,
         address: Address,
     ) -> Result<Vec<primitives::VoteStakeInfo>, CoreSpaceStateAccessError> {
+        self.finalized.context.state_read()?;
         self.source
             .vote_lists()
             .for_account(address)
@@ -142,6 +195,7 @@ impl CoreSpaceStateAccess {
         &self,
     ) -> Result<std::collections::HashSet<SponsorWhitelistStorageKey>, CoreSpaceStateAccessError>
     {
+        self.finalized.context.state_read()?;
         self.source
             .masked_whitelist_keys()
             .snapshot()
@@ -158,18 +212,31 @@ struct CoreSpaceReadContext {
     spec: cfx_vm_types::Spec,
     caller: Address,
     address_network: Network,
+    budget: ReadBudget,
+    analysis_started: Cell<bool>,
+}
+
+impl CoreSpaceReadContext {
+    fn state_read(&self) -> Result<(), CoreSpaceStateAccessError> {
+        if self.analysis_started.get() {
+            self.budget.state_read()?;
+        }
+        Ok(())
+    }
 }
 
 pub struct CoreSpaceStateReader {
     state: RefCell<Option<State>>,
-    context: Arc<CoreSpaceReadContext>,
+    context: Rc<CoreSpaceReadContext>,
+    calls: RefCell<HashMap<(AddressWithSpace, Bytes), ReadCallOutcome>>,
 }
 
 impl CoreSpaceStateReader {
-    fn new(state: State, context: Arc<CoreSpaceReadContext>) -> Self {
+    fn new(state: State, context: Rc<CoreSpaceReadContext>) -> Self {
         Self {
             state: RefCell::new(Some(state)),
             context,
+            calls: RefCell::new(HashMap::new()),
         }
     }
 
@@ -329,8 +396,9 @@ impl CoreSpaceStateReader {
         voter: Address,
     ) -> Result<CoreSpaceGovernanceState, CoreSpaceStateAccessError> {
         let params = cfx_parameters::internal_contract_addresses::PARAMS_CONTROL_CONTRACT_ADDRESS;
+        let target = super::CrossSpaceAddress::CoreSpace(self.core_address(params)?);
         let current_round = match self.read_call(
-            params,
+            target,
             ParamsControlView::currentRoundCall {}.abi_encode().into(),
         )? {
             ReadCallOutcome::Success(output) => {
@@ -359,7 +427,7 @@ impl CoreSpaceStateReader {
                 .map_err(|source| operation("read Core Space governance vote version", source))
         })?;
         let votes = match self.read_call(
-            params,
+            target,
             ParamsControlView::readVoteCall {
                 voter: AlloyAddress::from(voter.0),
             }
@@ -542,6 +610,27 @@ impl CoreSpaceStateReader {
         })
     }
 
+    pub fn read_storage(
+        &self,
+        address: super::CrossSpaceAddress,
+        slot: B256,
+    ) -> Result<B256, CoreSpaceStateAccessError> {
+        let address = self.address_with_space(address)?;
+        self.with_state(|state| {
+            state
+                .storage_at(&address, slot.as_slice())
+                .map(|value| B256::from(u256_from_cfx(value)))
+                .map_err(|source| operation("read Conflux storage", source))
+        })
+    }
+
+    pub fn read_code(
+        &self,
+        address: super::CrossSpaceAddress,
+    ) -> Result<Option<Bytes>, CoreSpaceStateAccessError> {
+        self.code(self.address_with_space(address)?)
+    }
+
     pub(super) fn code(
         &self,
         address: AddressWithSpace,
@@ -554,47 +643,84 @@ impl CoreSpaceStateReader {
         })
     }
 
-    pub(super) fn read_call(
+    pub fn read_call(
         &self,
-        target: Address,
+        target: super::CrossSpaceAddress,
         calldata: Bytes,
     ) -> Result<ReadCallOutcome, CoreSpaceStateAccessError> {
+        self.read_call_in(self.address_with_space(target)?, calldata)
+    }
+
+    fn address_with_space(
+        &self,
+        address: super::CrossSpaceAddress,
+    ) -> Result<AddressWithSpace, CoreSpaceStateAccessError> {
+        match address {
+            super::CrossSpaceAddress::CoreSpace(address) => self
+                .validate_address(address)
+                .map(|address| address.with_native_space()),
+            super::CrossSpaceAddress::Espace(address) => {
+                Ok(crate::primitive::address_to_cfx(address).with_evm_space())
+            }
+        }
+    }
+
+    pub(crate) fn read_call_in(
+        &self,
+        target: AddressWithSpace,
+        calldata: Bytes,
+    ) -> Result<ReadCallOutcome, CoreSpaceStateAccessError> {
+        if let Some(outcome) = self.calls.borrow().get(&(target, calldata.clone())) {
+            return Ok(outcome.clone());
+        }
+        self.context.budget.read_call()?;
         let mut state_slot = self.state.borrow_mut();
         let state = state_slot
             .as_mut()
             .ok_or(CoreSpaceStateAccessError::Unavailable)?;
         let input = ReadCallInput {
-            sender: self.context.caller.with_native_space(),
-            target,
-            data: calldata,
-            gas_limit: READ_CALL_GAS_LIMIT,
+            sender: AddressWithSpace {
+                address: self.context.caller,
+                space: target.space,
+            },
+            target: target.address,
+            data: calldata.clone(),
+            gas_limit: self.context.budget.limits().read_call_gas_limit,
         };
-        match execute_isolated_read_call(
+        let outcome = match execute_isolated_read_call(
             state,
             &self.context.machine,
             &self.context.env,
             &self.context.spec,
             input,
         ) {
-            Ok(outcome) => Ok(outcome),
+            Ok(outcome) => outcome,
             Err(error) => {
                 state_slot.take();
-                Err(match error {
+                return Err(match error {
                     IsolatedReadCallError::StateAccess(source) => {
                         operation("execute Core Space read call", source)
                     }
                     IsolatedReadCallError::Execution(details) => {
                         CoreSpaceStateAccessError::ReadCall { details }
                     }
-                })
+                });
             }
+        };
+        if let ReadCallOutcome::Success(output) | ReadCallOutcome::Reverted(output) = &outcome {
+            self.context.budget.check_output(output.len())?;
         }
+        self.calls
+            .borrow_mut()
+            .insert((target, calldata), outcome.clone());
+        Ok(outcome)
     }
 
     fn with_state<T>(
         &self,
         read: impl FnOnce(&State) -> Result<T, CoreSpaceStateAccessError>,
     ) -> Result<T, CoreSpaceStateAccessError> {
+        self.context.state_read()?;
         let state = self.state.borrow();
         let state = state
             .as_ref()

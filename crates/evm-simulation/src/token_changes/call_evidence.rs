@@ -4,7 +4,7 @@ use alloy::{
 };
 
 use crate::{
-    EvmChangeDerivationError,
+    EvmAnalysisError,
     execution::{
         EvmCommittedFrame, EvmExecutionPosition, EvmFrameAction, EvmFrameId,
         EvmTransactionExecution,
@@ -21,7 +21,7 @@ pub(super) fn verify_erc20_transfer_call(
     to: Address,
     amount: U256,
     position: EvmExecutionPosition,
-) -> Result<(), EvmChangeDerivationError> {
+) -> Result<(), EvmAnalysisError> {
     let transfer = encode_call(
         "transfer(address,uint256)",
         (to, amount).abi_encode_sequence(),
@@ -45,7 +45,7 @@ pub(super) fn verify_erc20_approval_call(
     spender: Address,
     amount: U256,
     position: EvmExecutionPosition,
-) -> Result<(), EvmChangeDerivationError> {
+) -> Result<(), EvmAnalysisError> {
     let expected = encode_call(
         "approve(address,uint256)",
         (spender, amount).abi_encode_sequence(),
@@ -69,7 +69,7 @@ pub(super) fn verify_erc721_transfer_call(
     to: Address,
     token_id: U256,
     position: EvmExecutionPosition,
-) -> Result<(), EvmChangeDerivationError> {
+) -> Result<(), EvmAnalysisError> {
     has_matching_committed_call(execution, frame_id, contract, position, |_, _, input| {
         matches_erc721_transfer_call(input, from, Some(to), token_id)
     })
@@ -85,7 +85,7 @@ pub(super) fn verify_erc721_approval_call(
     approved: Option<Address>,
     token_id: U256,
     position: EvmExecutionPosition,
-) -> Result<(), EvmChangeDerivationError> {
+) -> Result<(), EvmAnalysisError> {
     let expected = encode_call(
         "approve(address,uint256)",
         (approved.unwrap_or(Address::ZERO), token_id).abi_encode_sequence(),
@@ -138,7 +138,7 @@ pub(super) fn verify_operator_approval_call(
     operator: Address,
     approved: bool,
     position: EvmExecutionPosition,
-) -> Result<(), EvmChangeDerivationError> {
+) -> Result<(), EvmAnalysisError> {
     let expected = encode_call(
         "setApprovalForAll(address,bool)",
         (operator, approved).abi_encode_sequence(),
@@ -164,7 +164,7 @@ pub(super) fn verify_erc1155_transfer_call(
     items: &[(U256, U256)],
     batch: bool,
     position: EvmExecutionPosition,
-) -> Result<(), EvmChangeDerivationError> {
+) -> Result<(), EvmAnalysisError> {
     let matches =
         has_matching_committed_call(execution, frame_id, contract, position, |_, _, input| {
             if batch {

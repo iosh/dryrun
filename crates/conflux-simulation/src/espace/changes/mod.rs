@@ -1,3 +1,5 @@
+use crate::espace::EspaceAnalysisView;
+use simulation_core::observation::LogFilter;
 mod native;
 mod standards;
 mod wrapped_native;
@@ -6,19 +8,15 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use alloy_primitives::{Address, U256};
 use contract_standards::{
-    Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem, MetadataCall, StandardChange,
-    metadata_calls,
+    Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem, StandardChange,
+    decode_standard_log,
 };
 
-use crate::execution::{CommittedExecutionTrace, LogCheckpoint};
+use crate::execution::{CommittedExecutionTrace, TraceEvent};
 
-use self::{
-    standards::{DecodedStandardOccurrence, decode_standard_occurrences_in_scope},
-    wrapped_native::{WrappedNativeOccurrence, decode_wrapped_native_occurrences_in_scope},
-};
 use super::{
-    EspaceAccountState, EspaceChangeDerivationError, EspaceExecutedTransaction,
-    EspaceExecutionPosition, EspaceStateAccess,
+    EspaceAccountState, EspaceAnalysisError, EspaceExecutedTransaction, EspaceExecutionPosition,
+    EspaceStateAccess,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,7 +237,7 @@ impl EspaceChangeSet {
         self.items.is_empty()
     }
 
-    fn merge(self, other: Self) -> Result<Self, EspaceChangeDerivationError> {
+    fn merge(self, other: Self) -> Result<Self, EspaceAnalysisError> {
         let mut builder = EspaceChangeSetBuilder::new();
         for entry in self.entries.into_iter().chain(other.entries) {
             builder.insert_entry(entry)?;
@@ -279,76 +277,18 @@ impl EspaceChangePosition {
 
 /// A change result is either complete (including a verified empty set) or
 /// unavailable because the required evidence could not be established.
-pub type EspaceChanges =
-    simulation_core::simulation::Changes<EspaceChangeSet, EspaceChangeDerivationError>;
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct EspaceObservationRequirements {
-    log_checkpoints: Vec<EspaceLogCheckpoint>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct EspaceLogCheckpoint {
-    address: Option<Address>,
-    topic0: alloy_primitives::B256,
-}
-
-impl EspaceObservationRequirements {
-    pub const fn new() -> Self {
-        Self {
-            log_checkpoints: Vec::new(),
-        }
-    }
-
-    pub fn checkpoint_any_address(&mut self, topic0: alloy_primitives::B256) {
-        self.insert(EspaceLogCheckpoint {
-            address: None,
-            topic0,
-        });
-    }
-
-    pub fn checkpoint_at(&mut self, address: Address, topic0: alloy_primitives::B256) {
-        self.insert(EspaceLogCheckpoint {
-            address: Some(address),
-            topic0,
-        });
-    }
-
-    fn insert(&mut self, checkpoint: EspaceLogCheckpoint) {
-        if !self.log_checkpoints.contains(&checkpoint) {
-            self.log_checkpoints.push(checkpoint);
-        }
-    }
-
-    pub(crate) fn into_log_checkpoints(self) -> Vec<LogCheckpoint> {
-        self.log_checkpoints
-            .into_iter()
-            .map(|checkpoint| LogCheckpoint {
-                space: cfx_types::Space::Ethereum,
-                address: checkpoint.address.map(crate::primitive::address_to_cfx),
-                topic0: crate::primitive::b256_to_cfx(checkpoint.topic0),
-            })
-            .collect()
-    }
-
-    fn merge(&mut self, other: Self) {
-        for checkpoint in other.log_checkpoints {
-            self.insert(checkpoint);
-        }
-    }
-}
+pub type EspaceChanges = simulation_core::simulation::Changes<EspaceChangeSet, EspaceAnalysisError>;
 
 /// A replaceable, statically composable eSpace change-rule component.
 /// Rules run only after successful execution. The configured composition must
 /// account for every supported effect or return an error; partial sets are not published.
 pub trait EspaceChangeRules: Send + Sync + 'static {
-    fn required_observations(&self) -> EspaceObservationRequirements;
+    fn checkpoint_filters(&self) -> Vec<LogFilter>;
 
     fn derive_changes(
         &self,
-        execution: &EspaceExecutedTransaction,
-        state: &EspaceStateAccess,
-    ) -> Result<EspaceChangeSet, EspaceChangeDerivationError>;
+        view: EspaceAnalysisView<'_>,
+    ) -> Result<EspaceChangeSet, EspaceAnalysisError>;
 
     fn combine<R>(self, other: R) -> CombinedEspaceChangeRules<Self, R>
     where
@@ -386,19 +326,22 @@ where
     A: EspaceChangeRules,
     B: EspaceChangeRules,
 {
-    fn required_observations(&self) -> EspaceObservationRequirements {
-        let mut requirements = self.first.required_observations();
-        requirements.merge(self.second.required_observations());
-        requirements
+    fn checkpoint_filters(&self) -> Vec<LogFilter> {
+        let mut filters = self.first.checkpoint_filters();
+        for filter in self.second.checkpoint_filters() {
+            if !filters.contains(&filter) {
+                filters.push(filter);
+            }
+        }
+        filters
     }
 
     fn derive_changes(
         &self,
-        execution: &EspaceExecutedTransaction,
-        state: &EspaceStateAccess,
-    ) -> Result<EspaceChangeSet, EspaceChangeDerivationError> {
-        let first = self.first.derive_changes(execution, state)?;
-        let second = self.second.derive_changes(execution, state)?;
+        view: EspaceAnalysisView<'_>,
+    ) -> Result<EspaceChangeSet, EspaceAnalysisError> {
+        let first = self.first.derive_changes(view)?;
+        let second = self.second.derive_changes(view)?;
         first.merge(second)
     }
 }
@@ -414,10 +357,7 @@ impl EspaceChangeSetBuilder {
         Self::default()
     }
 
-    fn insert_entry(
-        &mut self,
-        entry: EspaceChangeEntry,
-    ) -> Result<(), EspaceChangeDerivationError> {
+    fn insert_entry(&mut self, entry: EspaceChangeEntry) -> Result<(), EspaceAnalysisError> {
         let key = entry.change.key();
         let position = entry.position;
         let map_key = (position, key.clone());
@@ -425,7 +365,7 @@ impl EspaceChangeSetBuilder {
             if existing.merge_duplicate(entry) {
                 return Ok(());
             }
-            return Err(EspaceChangeDerivationError::Validation {
+            return Err(EspaceAnalysisError::Validation {
                 details: format!(
                     "different semantic values at execution position {}",
                     position.index()
@@ -438,7 +378,7 @@ impl EspaceChangeSetBuilder {
                 .keys()
                 .any(|(existing_position, _)| *existing_position == position)
         {
-            return Err(EspaceChangeDerivationError::Validation {
+            return Err(EspaceAnalysisError::Validation {
                 details: format!(
                     "multiple semantic changes at execution position {}",
                     position.index()
@@ -456,7 +396,7 @@ impl EspaceChangeSetBuilder {
         to: Address,
         raw_amount: U256,
         currency: EspaceNativeCurrency,
-    ) -> Result<(), EspaceChangeDerivationError> {
+    ) -> Result<(), EspaceAnalysisError> {
         if raw_amount.is_zero() || from == to {
             return Ok(());
         }
@@ -478,7 +418,7 @@ impl EspaceChangeSetBuilder {
         contract_address: Address,
         raw_amount: U256,
         currency: EspaceNativeCurrency,
-    ) -> Result<(), EspaceChangeDerivationError> {
+    ) -> Result<(), EspaceAnalysisError> {
         if raw_amount.is_zero() {
             return Ok(());
         }
@@ -497,7 +437,7 @@ impl EspaceChangeSetBuilder {
         &mut self,
         position: EspaceExecutionPosition,
         change: EspaceStandardChange,
-    ) -> Result<(), EspaceChangeDerivationError> {
+    ) -> Result<(), EspaceAnalysisError> {
         self.insert_entry(EspaceChangeEntry {
             position: EspaceChangePosition::Execution(position),
             change: EspaceStateChange::Standard(change),
@@ -512,7 +452,7 @@ impl EspaceChangeSetBuilder {
         account: Address,
         raw_amount: U256,
         metadata: Erc20Metadata,
-    ) -> Result<(), EspaceChangeDerivationError> {
+    ) -> Result<(), EspaceAnalysisError> {
         self.insert_entry(EspaceChangeEntry {
             position: EspaceChangePosition::Execution(position),
             change: EspaceStateChange::WrappedNativeDeposit(EspaceWrappedNativeDepositChange {
@@ -532,7 +472,7 @@ impl EspaceChangeSetBuilder {
         account: Address,
         raw_amount: U256,
         metadata: Erc20Metadata,
-    ) -> Result<(), EspaceChangeDerivationError> {
+    ) -> Result<(), EspaceAnalysisError> {
         self.insert_entry(EspaceChangeEntry {
             position: EspaceChangePosition::Execution(position),
             change: EspaceStateChange::WrappedNativeWithdrawal(
@@ -552,7 +492,7 @@ impl EspaceChangeSetBuilder {
         account: Address,
         before: EspaceAccountDelegation,
         after: EspaceAccountDelegation,
-    ) -> Result<(), EspaceChangeDerivationError> {
+    ) -> Result<(), EspaceAnalysisError> {
         if before == after {
             return Ok(());
         }
@@ -1109,15 +1049,15 @@ impl EspaceNativeAssetChangeRules {
 }
 
 impl EspaceChangeRules for EspaceNativeAssetChangeRules {
-    fn required_observations(&self) -> EspaceObservationRequirements {
-        EspaceObservationRequirements::new()
+    fn checkpoint_filters(&self) -> Vec<LogFilter> {
+        Vec::new()
     }
 
     fn derive_changes(
         &self,
-        execution: &EspaceExecutedTransaction,
-        _state: &EspaceStateAccess,
-    ) -> Result<EspaceChangeSet, EspaceChangeDerivationError> {
+        view: EspaceAnalysisView<'_>,
+    ) -> Result<EspaceChangeSet, EspaceAnalysisError> {
+        let execution = view.execution();
         let occurrences = native::derive_changes(execution, &self.currency)?;
         let mut builder = EspaceChangeSetBuilder::new();
         for occurrence in occurrences {
@@ -1136,7 +1076,7 @@ impl EspaceChangeRules for EspaceNativeAssetChangeRules {
                     currency,
                 } => builder.selfdestruct_burn(position, contract_address, raw_amount, currency)?,
                 _ => {
-                    return Err(EspaceChangeDerivationError::Validation {
+                    return Err(EspaceAnalysisError::Validation {
                         details: "native rules produced a non-native change".to_owned(),
                     });
                 }
@@ -1160,27 +1100,26 @@ impl EspaceTokenChangeRules {
 }
 
 impl EspaceChangeRules for EspaceTokenChangeRules {
-    fn required_observations(&self) -> EspaceObservationRequirements {
-        let mut requirements = EspaceObservationRequirements::new();
+    fn checkpoint_filters(&self) -> Vec<LogFilter> {
+        let mut filters = Vec::new();
         for topic0 in contract_standards::supported_event_topics() {
-            requirements.checkpoint_any_address(*topic0);
-        }
-        for checkpoint in wrapped_native::log_checkpoints(self.wrapped_native_token) {
-            requirements.insert(EspaceLogCheckpoint {
-                address: checkpoint
-                    .address
-                    .map(|address| Address::from_slice(address.as_bytes())),
-                topic0: alloy_primitives::B256::from_slice(checkpoint.topic0.as_bytes()),
+            filters.push(LogFilter {
+                address: None,
+                topic0: *topic0,
             });
         }
-        requirements
+        filters.extend(wrapped_native::checkpoint_filters(
+            self.wrapped_native_token,
+        ));
+        filters
     }
 
     fn derive_changes(
         &self,
-        execution: &EspaceExecutedTransaction,
-        state: &EspaceStateAccess,
-    ) -> Result<EspaceChangeSet, EspaceChangeDerivationError> {
+        view: EspaceAnalysisView<'_>,
+    ) -> Result<EspaceChangeSet, EspaceAnalysisError> {
+        let execution = view.execution();
+        let state = view.state();
         if !execution.is_success() {
             return Ok(EspaceChangeSet::default());
         }
@@ -1225,15 +1164,16 @@ impl EspaceChangeRules for EspaceTokenChangeRules {
 pub struct EspaceAccountDelegationChangeRules;
 
 impl EspaceChangeRules for EspaceAccountDelegationChangeRules {
-    fn required_observations(&self) -> EspaceObservationRequirements {
-        EspaceObservationRequirements::new()
+    fn checkpoint_filters(&self) -> Vec<LogFilter> {
+        Vec::new()
     }
 
     fn derive_changes(
         &self,
-        execution: &EspaceExecutedTransaction,
-        state: &EspaceStateAccess,
-    ) -> Result<EspaceChangeSet, EspaceChangeDerivationError> {
+        view: EspaceAnalysisView<'_>,
+    ) -> Result<EspaceChangeSet, EspaceAnalysisError> {
+        let execution = view.execution();
+        let state = view.state();
         let mut authorizations = BTreeMap::<Address, Vec<_>>::new();
         for authorization in execution.applied_authorizations() {
             authorizations
@@ -1255,7 +1195,7 @@ impl EspaceChangeRules for EspaceAccountDelegationChangeRules {
             let mut expected_nonce = before.nonce;
             if account == execution.transaction_sender() {
                 expected_nonce = expected_nonce.checked_add(1).ok_or_else(|| {
-                    EspaceChangeDerivationError::Validation {
+                    EspaceAnalysisError::Validation {
                         details: format!(
                             "transaction sender nonce overflow for delegation account {account}"
                         ),
@@ -1264,7 +1204,7 @@ impl EspaceChangeRules for EspaceAccountDelegationChangeRules {
             }
             for authorization in &authorizations {
                 if authorization.nonce() != expected_nonce {
-                    return Err(EspaceChangeDerivationError::Validation {
+                    return Err(EspaceAnalysisError::Validation {
                         details: format!(
                             "successful authorization for {account} used nonce {}, expected {expected_nonce}",
                             authorization.nonce()
@@ -1272,7 +1212,7 @@ impl EspaceChangeRules for EspaceAccountDelegationChangeRules {
                     });
                 }
                 expected_nonce = expected_nonce.checked_add(1).ok_or_else(|| {
-                    EspaceChangeDerivationError::Validation {
+                    EspaceAnalysisError::Validation {
                         details: format!(
                             "successful authorization nonce overflow for account {account}"
                         ),
@@ -1284,7 +1224,7 @@ impl EspaceChangeRules for EspaceAccountDelegationChangeRules {
                 (authorization.delegate() != Address::ZERO).then_some(authorization.delegate())
             });
             if after.nonce != expected_nonce || after.delegate != expected_delegate {
-                return Err(EspaceChangeDerivationError::Validation {
+                return Err(EspaceAnalysisError::Validation {
                     details: format!(
                         "final delegation state for {account} does not match successful authorization results"
                     ),
@@ -1299,11 +1239,10 @@ impl EspaceChangeRules for EspaceAccountDelegationChangeRules {
 fn delegation_state(
     account: Address,
     state: &EspaceAccountState,
-) -> Result<EspaceAccountDelegation, EspaceChangeDerivationError> {
-    let nonce =
-        u64::try_from(state.nonce()).map_err(|_| EspaceChangeDerivationError::Validation {
-            details: format!("eSpace nonce for delegation account {account} exceeds u64"),
-        })?;
+) -> Result<EspaceAccountDelegation, EspaceAnalysisError> {
+    let nonce = u64::try_from(state.nonce()).map_err(|_| EspaceAnalysisError::Validation {
+        details: format!("eSpace nonce for delegation account {account} exceeds u64"),
+    })?;
     Ok(EspaceAccountDelegation {
         delegate: state.delegation(),
         nonce,
@@ -1336,16 +1275,15 @@ impl DefaultEspaceChangeRules {
 }
 
 impl EspaceChangeRules for DefaultEspaceChangeRules {
-    fn required_observations(&self) -> EspaceObservationRequirements {
-        self.components.required_observations()
+    fn checkpoint_filters(&self) -> Vec<LogFilter> {
+        self.components.checkpoint_filters()
     }
 
     fn derive_changes(
         &self,
-        execution: &EspaceExecutedTransaction,
-        state: &EspaceStateAccess,
-    ) -> Result<EspaceChangeSet, EspaceChangeDerivationError> {
-        self.components.derive_changes(execution, state)
+        view: EspaceAnalysisView<'_>,
+    ) -> Result<EspaceChangeSet, EspaceAnalysisError> {
+        self.components.derive_changes(view)
     }
 }
 
@@ -1365,111 +1303,61 @@ impl ChangeOccurrence {
     }
 }
 
-pub(crate) struct NestedEspaceEffects {
-    standard_occurrences: Vec<DecodedStandardOccurrence>,
-    wrapped_native_occurrences: Vec<WrappedNativeOccurrence>,
-}
-
-impl NestedEspaceEffects {
-    pub(crate) fn from_trace(
-        trace: &CommittedExecutionTrace,
-        root_frame_ids: &[crate::execution::FrameId],
-        wrapped_native_token: Address,
-    ) -> Result<Self, EspaceChangeDerivationError> {
-        let includes_frame = |frame_id| {
-            root_frame_ids
-                .iter()
-                .any(|root_id| trace.frame_is_within(frame_id, *root_id))
+pub(crate) fn has_nested_token_logs(
+    trace: &CommittedExecutionTrace,
+    root_frame_ids: &[crate::execution::FrameId],
+    wrapped_native_token: Address,
+) -> Result<bool, EspaceAnalysisError> {
+    let mut has_token_logs = false;
+    for event in trace.events() {
+        let TraceEvent::Log {
+            frame_id,
+            address,
+            topics,
+            data,
+            ..
+        } = event
+        else {
+            continue;
         };
-        Ok(Self {
-            standard_occurrences: decode_standard_occurrences_in_scope(trace, includes_frame)?,
-            wrapped_native_occurrences: decode_wrapped_native_occurrences_in_scope(
-                trace,
-                wrapped_native_token,
-                includes_frame,
-            ),
-        })
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.standard_occurrences.is_empty() && self.wrapped_native_occurrences.is_empty()
-    }
-
-    pub(crate) fn metadata_call_occurrences(&self) -> Vec<(usize, MetadataCall<Address>)> {
-        collect_metadata_call_occurrences(
-            &self.standard_occurrences,
-            &self.wrapped_native_occurrences,
-        )
-    }
-
-    pub(crate) fn into_changes(
-        self,
-        metadata: &contract_standards::MetadataValues<Address>,
-    ) -> Vec<ChangeOccurrence> {
-        let mut changes = Vec::new();
-        for occurrence in self.wrapped_native_occurrences {
-            let change_metadata = metadata
-                .erc20_metadata(&occurrence.contract_address())
-                .unwrap_or_else(|_| {
-                    unreachable!("nested eSpace metadata collection records every outcome")
-                });
-            changes.push(occurrence.into_change(change_metadata));
+        if trace.frame(*frame_id).space != cfx_types::Space::Ethereum
+            || !root_frame_ids
+                .iter()
+                .any(|root_id| trace.frame_is_within(*frame_id, *root_id))
+        {
+            continue;
         }
-        for occurrence in self.standard_occurrences {
-            let change = occurrence
-                .decoded_log
-                .into_change(metadata)
-                .unwrap_or_else(|_| {
-                    unreachable!("nested eSpace metadata collection records every outcome")
-                });
-            changes.push(ChangeOccurrence::new(
-                occurrence.position,
-                EspaceChange::Standard(change),
-            ));
+        let address = crate::primitive::address_from_cfx(*address);
+        let topics = topics
+            .iter()
+            .copied()
+            .map(crate::primitive::b256_from_cfx)
+            .collect::<Vec<_>>();
+        let standard = decode_standard_log(address, &topics, data, |address| address)
+            .map_err(|error| EspaceAnalysisError::rule_failure("token", error))?;
+        has_token_logs |= standard.is_some();
+        if address == wrapped_native_token {
+            has_token_logs |= wrapped_native::decode_wrapped_native_log(&topics, data)
+                .ok()
+                .flatten()
+                .is_some();
         }
-        changes
     }
-}
-
-fn collect_metadata_call_occurrences(
-    standard_occurrences: &[DecodedStandardOccurrence],
-    wrapped_native_occurrences: &[WrappedNativeOccurrence],
-) -> Vec<(usize, MetadataCall<Address>)> {
-    let mut calls = Vec::new();
-
-    for occurrence in standard_occurrences {
-        calls.extend(
-            metadata_calls(std::iter::once(&occurrence.decoded_log))
-                .into_iter()
-                .map(|call| (occurrence.position, call)),
-        );
-    }
-    for occurrence in wrapped_native_occurrences {
-        let position = occurrence.position();
-        let contract_address = occurrence.contract_address();
-        calls.extend([
-            (position, MetadataCall::Name { contract_address }),
-            (position, MetadataCall::Symbol { contract_address }),
-            (position, MetadataCall::Decimals { contract_address }),
-        ]);
-    }
-
-    calls.sort_by_key(|(position, _)| *position);
-    calls
+    Ok(has_token_logs)
 }
 
 pub(crate) fn check_contract_support(
     execution: &EspaceExecutedTransaction,
     state: &EspaceStateAccess,
-) -> Result<(), EspaceChangeDerivationError> {
+) -> Result<(), EspaceAnalysisError> {
     for frame in execution.committed_frames() {
         let super::EspaceFrameAction::Call { code_address, .. } = frame.action() else {
-            return Err(EspaceChangeDerivationError::Unsupported {
+            return Err(EspaceAnalysisError::Unsupported {
                 details: "contract creation requires an implementation-specific analyzer".into(),
             });
         };
         if frame.space() != super::EspaceExecutionSpace::Espace {
-            return Err(EspaceChangeDerivationError::Unsupported {
+            return Err(EspaceAnalysisError::Unsupported {
                 details: "Core Space execution in an eSpace transaction".into(),
             });
         }
@@ -1479,7 +1367,7 @@ pub(crate) fn check_contract_support(
                 .code()
                 .is_some_and(|code| !code.is_empty())
             {
-                return Err(EspaceChangeDerivationError::Unsupported {
+                return Err(EspaceAnalysisError::Unsupported {
                     details: format!("no verified implementation scope for code at {code_address}"),
                 });
             }

@@ -1,3 +1,4 @@
+mod analysis;
 mod changes;
 mod completion;
 mod context;
@@ -13,14 +14,14 @@ mod state_access;
 mod transaction;
 mod transaction_adapter;
 
-pub(crate) use changes::NestedEspaceEffects;
+pub(crate) use changes::has_nested_token_logs;
 pub use changes::{
     CombinedEspaceChangeRules, DefaultEspaceChangeRules, EspaceAccountDelegation,
     EspaceAccountDelegationChange, EspaceAccountDelegationChangeRules, EspaceChange,
     EspaceChangeRules, EspaceChangeSet, EspaceChangeSetBuilder, EspaceChanges,
     EspaceNativeAssetChangeRules, EspaceNativeCurrency, EspaceNativeTransferChange,
-    EspaceObservationRequirements, EspaceSelfDestructBurnChange, EspaceStandardChange,
-    EspaceStateChange, EspaceWrappedNativeDepositChange, EspaceWrappedNativeWithdrawalChange,
+    EspaceSelfDestructBurnChange, EspaceStandardChange, EspaceStateChange,
+    EspaceWrappedNativeDepositChange, EspaceWrappedNativeWithdrawalChange,
 };
 pub(crate) use completion::complete_transaction;
 pub use context::{EspaceBlockContext, EspaceBlockSelector, EspaceContextError};
@@ -29,15 +30,15 @@ pub use contract_standards::{
     Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem, StandardChange,
 };
 pub use error::{
-    EspaceChangeDerivationError, EspaceExecutionError, EspaceResultIntegrationError,
-    EspaceSimulationError, EspaceStateAccessError, EspaceTransactionCompletionError,
+    EspaceAnalysisError, EspaceExecutionError, EspaceResultIntegrationError, EspaceSimulationError,
+    EspaceStateAccessError, EspaceTransactionCompletionError,
 };
 pub use executed_transaction::{
     EspaceAppliedAuthorization, EspaceCallKind, EspaceCommittedFrame,
     EspaceCommittedInternalTransfer, EspaceCommittedLog, EspaceCommittedStorageWrite,
     EspaceContractAddress, EspaceExecutedTransaction, EspaceExecutionPosition,
     EspaceExecutionSpace, EspaceExecutionStatus, EspaceFrameAction, EspaceFrameId,
-    EspaceObservationError, EspaceSemanticLogOccurrence, EspaceStorageChange, EspaceTransferPocket,
+    EspaceLogCheckpoint, EspaceStorageChange, EspaceTransferPocket,
 };
 pub use execution::{
     EspaceExecutionFailure, EspaceExecutionOutcome, EspaceLog, EspaceLogAddress,
@@ -49,9 +50,8 @@ pub use rejection::EspaceTransactionRejection;
 pub use result::EspaceSimulation;
 pub use simulator::EspaceTransactionSimulator;
 pub use state_access::{
-    EspaceAccountState, EspaceOccurrenceHandle, EspaceOccurrenceStateReaders,
-    EspaceReadCallOutcome, EspaceSimulationLimits, EspaceStateAccess, EspaceStateReadError,
-    EspaceStateReader,
+    EspaceAccountState, EspaceReadCallOutcome, EspaceSimulationLimits, EspaceStateAccess,
+    EspaceStateReadError, EspaceStateReader,
 };
 pub use transaction::{
     AccessListItem, Authorization, DynamicFees, EspaceTransactionCommon, EspaceTransactionInput,
@@ -65,3 +65,6 @@ pub struct EspaceSimulationRequest {
     pub block: EspaceBlockSelector,
     pub transaction: EspaceTransactionInput,
 }
+
+pub use analysis::EspaceAnalysisView;
+pub use simulation_core::observation::LogFilter;

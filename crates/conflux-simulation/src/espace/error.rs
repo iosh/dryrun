@@ -2,6 +2,7 @@ use alloy_primitives::U256;
 use cfx_statedb::Error as StateDbError;
 use cfx_storage::Error as StorageError;
 use simulation_core::error::{Diagnostic, ErrorCode as Code, ErrorInfo};
+use simulation_core::observation::AnalysisLimitExceeded;
 use thiserror::Error;
 
 use super::{EspaceContextError, EspaceTransactionInputError, TxType};
@@ -97,11 +98,11 @@ pub enum EspaceExecutionError {
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum EspaceChangeDerivationError {
+pub enum EspaceAnalysisError {
     #[error(transparent)]
     StateRead(#[from] super::EspaceStateReadError),
     #[error(transparent)]
-    Observation(#[from] super::EspaceObservationError),
+    LimitExceeded(#[from] AnalysisLimitExceeded),
     #[error("eSpace changes could not be verified: {details}")]
     Validation { details: String },
     #[error("unsupported eSpace contract behavior: {details}")]
@@ -114,7 +115,7 @@ pub enum EspaceChangeDerivationError {
     },
 }
 
-impl EspaceChangeDerivationError {
+impl EspaceAnalysisError {
     pub fn rule_failure(
         rules: &'static str,
         source: impl std::error::Error + Send + Sync + 'static,
@@ -171,11 +172,9 @@ impl ErrorInfo for super::EspaceStateReadError {
     fn diagnostic(&self) -> Diagnostic {
         match self {
             Self::StateAccess(error) => error.diagnostic(),
-            Self::StateReadLimitExceeded { .. }
-            | Self::ReadCallLimitExceeded { .. }
-            | Self::ReadCallOutputLimitExceeded { .. } => Code::AnalysisLimitExceeded.diagnostic(),
+            Self::LimitExceeded(error) => error.diagnostic(),
             Self::Poisoned => Code::StateUnavailable.diagnostic(),
-            Self::ForeignOccurrence | Self::ReadCallFailed { .. } => Code::Internal.diagnostic(),
+            Self::ReadCallFailed { .. } => Code::Internal.diagnostic(),
         }
     }
 }
@@ -217,22 +216,16 @@ impl ErrorInfo for EspaceSimulationError {
     }
 }
 
-impl ErrorInfo for super::EspaceChangeDerivationError {
+impl ErrorInfo for super::EspaceAnalysisError {
     fn diagnostic(&self) -> Diagnostic {
         match self {
             Self::StateRead(error) => error.diagnostic(),
-            Self::Observation(error) => error.diagnostic(),
+            Self::LimitExceeded(error) => error.diagnostic(),
             Self::Validation { .. } => Code::AnalysisValidationFailed.diagnostic(),
             Self::Unsupported { .. } => Code::AnalysisUnsupported.diagnostic(),
             Self::RuleFailure { source, .. } => {
                 source_diagnostic(source.as_ref(), Code::AnalysisValidationFailed)
             }
         }
-    }
-}
-
-impl ErrorInfo for super::EspaceObservationError {
-    fn diagnostic(&self) -> Diagnostic {
-        Code::AnalysisLimitExceeded.diagnostic()
     }
 }

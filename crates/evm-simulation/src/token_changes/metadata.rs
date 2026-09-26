@@ -28,7 +28,7 @@ impl TokenMetadataOutcomes {
 }
 
 pub(super) fn load_metadata(
-    events: &[ObservedTokenEvent],
+    events: &[ObservedTokenEvent<'_>],
     state: &EvmStateAccess,
 ) -> TokenMetadataOutcomes {
     let decoded = events.iter().filter_map(|event| match event {

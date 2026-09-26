@@ -3,6 +3,7 @@ use cfx_statedb::Error as StateDbError;
 use cfx_storage::Error as StorageError;
 use conflux_provider::{CoreAddress, Network};
 use simulation_core::error::{Diagnostic, DiagnosticData, ErrorCode as Code, ErrorInfo};
+use simulation_core::observation::AnalysisLimitExceeded;
 use thiserror::Error;
 
 use super::{CoreSpaceContextError, CoreSpaceTransactionInputError};
@@ -33,6 +34,8 @@ pub enum CoreSpaceTransactionCompletionError {
 #[derive(Debug, Error)]
 #[non_exhaustive]
 pub enum CoreSpaceStateAccessError {
+    #[error(transparent)]
+    LimitExceeded(#[from] AnalysisLimitExceeded),
     #[error("Core Space state provider request failed: {source}")]
     Provider {
         #[source]
@@ -189,6 +192,7 @@ impl ErrorInfo for CoreSpaceTransactionCompletionError {
 impl ErrorInfo for CoreSpaceStateAccessError {
     fn diagnostic(&self) -> Diagnostic {
         match self {
+            Self::LimitExceeded(error) => error.diagnostic(),
             Self::Provider { source } => source.diagnostic(),
             Self::Preparation { source } | Self::RecordedState { source, .. } => {
                 source_diagnostic(source, Code::StateUnavailable)
@@ -254,10 +258,11 @@ impl ErrorInfo for CoreSpaceSimulationError {
     }
 }
 
-impl ErrorInfo for super::CoreSpaceChangeDerivationError {
+impl ErrorInfo for super::CoreSpaceAnalysisError {
     fn diagnostic(&self) -> Diagnostic {
         match self {
             Self::Protocol(error) => error.diagnostic(),
+            Self::LimitExceeded(error) => error.diagnostic(),
             Self::Conflict { .. } => Code::AnalysisValidationFailed.diagnostic(),
             Self::RuleFailure { source, .. } => {
                 source_diagnostic(source.as_ref(), Code::AnalysisValidationFailed)

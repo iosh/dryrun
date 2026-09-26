@@ -1,16 +1,19 @@
-use alloy::primitives::{Address, Bytes, Log, U256};
+use alloy::primitives::{Address, B256, Bytes, Log, U256, keccak256};
 use revm::{
     Inspector,
     context::{ContextTr, JournalEntry},
     inspector::JournalExt,
     interpreter::{
-        CallInputs, CallOutcome, CallScheme, CreateInputs, CreateOutcome, InterpreterTypes,
+        CallInputs, CallOutcome, CallScheme, CreateInputs, CreateOutcome, InstructionResult,
+        Interpreter, InterpreterTypes,
+        interpreter_types::{InputsTr, Jumps, LegacyBytecode, LoopControl, StackTr},
     },
     state::EvmState,
 };
 use thiserror::Error;
 
-use crate::{EvmObservationRequirements, EvmSimulationLimits};
+use crate::EvmSimulationLimits;
+use simulation_core::observation::{AnalysisLimitExceeded, LogFilter};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EvmExecutionPosition(usize);
@@ -62,6 +65,7 @@ pub struct EvmCommittedFrame {
     parent: Option<EvmFrameId>,
     position: EvmExecutionPosition,
     action: EvmFrameAction,
+    code_hash: Option<B256>,
 }
 
 impl EvmCommittedFrame {
@@ -75,6 +79,10 @@ impl EvmCommittedFrame {
 
     pub const fn position(&self) -> EvmExecutionPosition {
         self.position
+    }
+
+    pub const fn code_hash(&self) -> Option<B256> {
+        self.code_hash
     }
 
     pub const fn action(&self) -> &EvmFrameAction {
@@ -96,6 +104,7 @@ pub struct EvmCommittedSelfdestruct {
     contract: Address,
     target: Address,
     value: U256,
+    destroys_contract: bool,
 }
 
 impl EvmCommittedSelfdestruct {
@@ -118,6 +127,11 @@ impl EvmCommittedSelfdestruct {
     pub const fn value(&self) -> U256 {
         self.value
     }
+
+    /// Whether this operation schedules actual contract deletion under the active fork rules.
+    pub const fn destroys_contract(&self) -> bool {
+        self.destroys_contract
+    }
 }
 
 impl EvmCommittedLog {
@@ -134,14 +148,32 @@ impl EvmCommittedLog {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[non_exhaustive]
-pub enum EvmObservationError {
-    #[error("semantic occurrence checkpoint limit {limit} exceeded")]
-    CheckpointLimitExceeded { limit: usize },
+/// A committed persistent write, including writes that restore an earlier value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvmStorageWrite {
+    pub(crate) position: EvmExecutionPosition,
+    pub(crate) frame_id: EvmFrameId,
+    pub(crate) address: Address,
+    pub(crate) slot: U256,
+    pub(crate) value: U256,
+}
 
-    #[error("semantic occurrence retained state limit {limit} exceeded")]
-    RetainedStateLimitExceeded { limit: usize },
+impl EvmStorageWrite {
+    pub const fn position(&self) -> EvmExecutionPosition {
+        self.position
+    }
+    pub const fn frame_id(&self) -> EvmFrameId {
+        self.frame_id
+    }
+    pub const fn address(&self) -> Address {
+        self.address
+    }
+    pub const fn slot(&self) -> U256 {
+        self.slot
+    }
+    pub const fn value(&self) -> U256 {
+        self.value
+    }
 }
 
 #[derive(Debug)]
@@ -150,15 +182,9 @@ pub(crate) struct EvmExecutionObservation {
     pub(crate) frames: Vec<EvmCommittedFrame>,
     pub(crate) logs: Vec<EvmCommittedLog>,
     pub(crate) selfdestructs: Vec<EvmCommittedSelfdestruct>,
-    pub(crate) semantic_logs: Vec<ObservedSemanticLog>,
-    pub(crate) checkpoints: Vec<EvmState>,
-    pub(crate) limit_error: Option<EvmObservationError>,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ObservedSemanticLog {
-    pub(crate) log_index: usize,
-    pub(crate) checkpoint_index: Option<usize>,
+    pub(crate) storage_writes: Vec<EvmStorageWrite>,
+    pub(crate) checkpoints: Vec<(usize, EvmState)>,
+    pub(crate) limit_exceeded: Option<AnalysisLimitExceeded>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,22 +198,24 @@ struct FrameRollbackPoint {
     frames_len: usize,
     logs_len: usize,
     selfdestructs_len: usize,
-    semantic_logs_len: usize,
+    storage_writes_len: usize,
     checkpoints_len: usize,
-    retained_state_units: usize,
-    limit_error: Option<EvmObservationError>,
+    limit_exceeded: Option<AnalysisLimitExceeded>,
 }
 
 #[derive(Debug)]
 struct OpenFrame {
     id: EvmFrameId,
     kind: FrameKind,
-    frame_index: usize,
+    frame_index: Option<usize>,
     rollback: FrameRollbackPoint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub(crate) enum EvmExecutionObservationError {
+    #[error("EVM inspector cannot find the executing account {address}")]
+    MissingExecutingAccount { address: Address },
+
     #[error("EVM inspector observed an unbalanced {callback} frame callback")]
     UnbalancedFrame { callback: &'static str },
 
@@ -203,41 +231,40 @@ pub(crate) enum EvmExecutionObservationError {
 
 #[derive(Debug)]
 pub(crate) struct EvmExecutionObserver {
-    requirements: EvmObservationRequirements,
+    checkpoint_filters: Vec<LogFilter>,
     limits: EvmSimulationLimits,
     applied_authorization_accounts: Option<Vec<Address>>,
     frames: Vec<EvmCommittedFrame>,
     logs: Vec<EvmCommittedLog>,
     selfdestructs: Vec<EvmCommittedSelfdestruct>,
-    semantic_logs: Vec<ObservedSemanticLog>,
-    checkpoints: Vec<EvmState>,
+    storage_writes: Vec<EvmStorageWrite>,
+    pending_storage_write: Option<(Address, U256, U256)>,
+    pending_selfdestruct: Option<(Address, Address, U256)>,
+    checkpoints: Vec<(usize, EvmState)>,
     open_frames: Vec<OpenFrame>,
     next_frame_id: usize,
     next_position: usize,
-    retained_state_units: usize,
-    limit_error: Option<EvmObservationError>,
+    limit_exceeded: Option<AnalysisLimitExceeded>,
     observation_error: Option<EvmExecutionObservationError>,
 }
 
 impl EvmExecutionObserver {
-    pub(crate) fn with_requirements(
-        requirements: EvmObservationRequirements,
-        limits: EvmSimulationLimits,
-    ) -> Self {
+    pub(crate) fn new(checkpoint_filters: Vec<LogFilter>, limits: EvmSimulationLimits) -> Self {
         Self {
-            requirements,
+            checkpoint_filters,
             limits,
             applied_authorization_accounts: None,
             frames: Vec::new(),
             logs: Vec::new(),
             selfdestructs: Vec::new(),
-            semantic_logs: Vec::new(),
+            storage_writes: Vec::new(),
+            pending_storage_write: None,
+            pending_selfdestruct: None,
             checkpoints: Vec::new(),
             open_frames: Vec::new(),
             next_frame_id: 0,
             next_position: 0,
-            retained_state_units: 0,
-            limit_error: None,
+            limit_exceeded: None,
             observation_error: None,
         }
     }
@@ -245,8 +272,7 @@ impl EvmExecutionObserver {
     pub(crate) fn take_observation(
         &mut self,
     ) -> Result<EvmExecutionObservation, EvmExecutionObservationError> {
-        let replacement =
-            Self::with_requirements(EvmObservationRequirements::new(), self.limits.clone());
+        let replacement = Self::new(Vec::new(), self.limits);
         std::mem::replace(self, replacement).finish()
     }
 
@@ -265,9 +291,9 @@ impl EvmExecutionObserver {
             frames: self.frames,
             logs: self.logs,
             selfdestructs: self.selfdestructs,
-            semantic_logs: self.semantic_logs,
+            storage_writes: self.storage_writes,
             checkpoints: self.checkpoints,
-            limit_error: self.limit_error,
+            limit_exceeded: self.limit_exceeded,
         })
     }
 
@@ -291,6 +317,13 @@ impl EvmExecutionObserver {
             .collect::<Vec<_>>();
         accounts.sort_unstable();
         accounts.dedup();
+        if accounts.len() > self.limits.max_observed_facts {
+            accounts.truncate(self.limits.max_observed_facts);
+            self.limit_exceeded = Some(AnalysisLimitExceeded {
+                resource: simulation_core::observation::AnalysisResource::Facts,
+                limit: self.limits.max_observed_facts,
+            });
+        }
         self.applied_authorization_accounts = Some(accounts);
     }
 
@@ -302,19 +335,24 @@ impl EvmExecutionObserver {
             frames_len: self.frames.len(),
             logs_len: self.logs.len(),
             selfdestructs_len: self.selfdestructs.len(),
-            semantic_logs_len: self.semantic_logs.len(),
+            storage_writes_len: self.storage_writes.len(),
             checkpoints_len: self.checkpoints.len(),
-            retained_state_units: self.retained_state_units,
-            limit_error: self.limit_error.clone(),
+            limit_exceeded: self.limit_exceeded.clone(),
         };
-        let frame_index = self.frames.len();
         let position = self.next_position();
-        self.frames.push(EvmCommittedFrame {
-            id,
-            parent,
-            position,
-            action,
-        });
+        let frame_index = if self.reserve_fact() {
+            let index = self.frames.len();
+            self.frames.push(EvmCommittedFrame {
+                id,
+                parent,
+                position,
+                action,
+                code_hash: None,
+            });
+            Some(index)
+        } else {
+            None
+        };
         self.open_frames.push(OpenFrame {
             id,
             kind,
@@ -345,20 +383,22 @@ impl EvmExecutionObserver {
         }
 
         if !successful {
+            self.storage_writes
+                .truncate(frame.rollback.storage_writes_len);
             self.frames.truncate(frame.rollback.frames_len);
             self.logs.truncate(frame.rollback.logs_len);
             self.selfdestructs
                 .truncate(frame.rollback.selfdestructs_len);
-            self.semantic_logs
-                .truncate(frame.rollback.semantic_logs_len);
             self.checkpoints.truncate(frame.rollback.checkpoints_len);
-            self.retained_state_units = frame.rollback.retained_state_units;
-            self.limit_error = frame.rollback.limit_error;
+            self.limit_exceeded = frame.rollback.limit_exceeded;
             return;
         }
 
         if expected_kind == FrameKind::Create {
-            let Some(committed_frame) = self.frames.get_mut(frame.frame_index) else {
+            let Some(frame_index) = frame.frame_index else {
+                return;
+            };
+            let Some(committed_frame) = self.frames.get_mut(frame_index) else {
                 self.record_observation_error(EvmExecutionObservationError::UnbalancedFrame {
                     callback: "create_end",
                 });
@@ -392,30 +432,34 @@ impl EvmExecutionObserver {
         };
 
         let position = self.next_position();
+        if !self.reserve_fact() {
+            return;
+        }
         let log_index = self.logs.len();
-        let checkpoint_candidate = log
-            .data
-            .topics()
-            .first()
-            .is_some_and(|topic| self.requirements.matches_log(log.address, topic));
+        let checkpoint_candidate = log.data.topics().first().is_some_and(|topic| {
+            self.checkpoint_filters
+                .iter()
+                .any(|filter| filter.matches(log.address, *topic))
+        });
         self.logs.push(EvmCommittedLog {
             position,
             frame_id,
             log,
         });
 
-        if !checkpoint_candidate {
-            return;
+        if checkpoint_candidate {
+            self.checkpoints
+                .push((log_index, context.journal().evm_state().clone()));
         }
-
-        let checkpoint_index = self.capture_checkpoint(context.journal().evm_state());
-        self.semantic_logs.push(ObservedSemanticLog {
-            log_index,
-            checkpoint_index,
-        });
     }
 
-    fn observe_selfdestruct(&mut self, contract: Address, target: Address, value: U256) {
+    fn observe_selfdestruct(
+        &mut self,
+        contract: Address,
+        target: Address,
+        value: U256,
+        destroys_contract: bool,
+    ) {
         let Some(frame_id) = self.open_frames.last().map(|frame| frame.id) else {
             self.record_observation_error(EvmExecutionObservationError::UnbalancedFrame {
                 callback: "selfdestruct",
@@ -424,44 +468,35 @@ impl EvmExecutionObserver {
         };
 
         let position = self.next_position();
+        if !self.reserve_fact() {
+            return;
+        }
         self.selfdestructs.push(EvmCommittedSelfdestruct {
             position,
             frame_id,
             contract,
             target,
             value,
+            destroys_contract,
         });
     }
 
-    fn capture_checkpoint(&mut self, state: &EvmState) -> Option<usize> {
-        if self.limit_error.is_some() {
-            return None;
-        }
-        if self.checkpoints.len() >= self.limits.max_occurrence_checkpoints {
-            self.limit_error = Some(EvmObservationError::CheckpointLimitExceeded {
-                limit: self.limits.max_occurrence_checkpoints,
+    fn reserve_fact(&mut self) -> bool {
+        let facts = self.frames.len()
+            + self.logs.len()
+            + self.selfdestructs.len()
+            + self.storage_writes.len()
+            + self
+                .applied_authorization_accounts
+                .as_ref()
+                .map_or(0, Vec::len);
+        if facts >= self.limits.max_observed_facts {
+            self.limit_exceeded.get_or_insert(AnalysisLimitExceeded {
+                resource: simulation_core::observation::AnalysisResource::Facts,
+                limit: self.limits.max_observed_facts,
             });
-            return None;
         }
-
-        let state_units = retained_state_units(state);
-        let Some(retained_state_units) = self.retained_state_units.checked_add(state_units) else {
-            self.limit_error = Some(EvmObservationError::RetainedStateLimitExceeded {
-                limit: self.limits.max_retained_state_entries,
-            });
-            return None;
-        };
-        if retained_state_units > self.limits.max_retained_state_entries {
-            self.limit_error = Some(EvmObservationError::RetainedStateLimitExceeded {
-                limit: self.limits.max_retained_state_entries,
-            });
-            return None;
-        }
-
-        let checkpoint_index = self.checkpoints.len();
-        self.checkpoints.push(state.clone());
-        self.retained_state_units = retained_state_units;
-        Some(checkpoint_index)
+        self.limit_exceeded.is_none()
     }
 
     fn next_position(&mut self) -> EvmExecutionPosition {
@@ -503,6 +538,95 @@ where
     CTX::Journal: JournalExt,
     INTR: InterpreterTypes,
 {
+    fn initialize_interp(&mut self, interpreter: &mut Interpreter<INTR>, context: &mut CTX) {
+        if let Some(frame) = self.open_frames.last() {
+            if let Some(record) = frame
+                .frame_index
+                .and_then(|index| self.frames.get_mut(index))
+            {
+                record.code_hash = Some(keccak256(interpreter.bytecode.bytecode_slice()));
+                if let EvmFrameAction::Call {
+                    bytecode_address, ..
+                } = &mut record.action
+                {
+                    if let Some(actual) = interpreter.input.bytecode_address() {
+                        *bytecode_address = context
+                            .journal()
+                            .evm_state()
+                            .get(actual)
+                            .and_then(|account| account.info.code.as_ref())
+                            .and_then(|code| code.eip7702_address())
+                            .unwrap_or(*actual);
+                    }
+                }
+            }
+        }
+    }
+
+    fn step(&mut self, interpreter: &mut Interpreter<INTR>, context: &mut CTX) {
+        self.pending_storage_write = None;
+        self.pending_selfdestruct = None;
+        if interpreter.bytecode.opcode() == revm::bytecode::opcode::SSTORE {
+            if let [.., value, slot] = interpreter.stack.data() {
+                self.pending_storage_write =
+                    Some((interpreter.input.target_address(), *slot, *value));
+            }
+        } else if interpreter.bytecode.opcode() == revm::bytecode::opcode::SELFDESTRUCT {
+            if let Some(target) = interpreter.stack.data().last() {
+                let contract = interpreter.input.target_address();
+                if let Some(account) = context.journal().evm_state().get(&contract) {
+                    self.pending_selfdestruct = Some((
+                        contract,
+                        Address::from_word(B256::from(*target)),
+                        account.info.balance,
+                    ));
+                } else {
+                    self.record_observation_error(
+                        EvmExecutionObservationError::MissingExecutingAccount { address: contract },
+                    );
+                }
+            }
+        }
+    }
+
+    fn step_end(&mut self, interpreter: &mut Interpreter<INTR>, context: &mut CTX) {
+        if let Some((contract, target, value)) = self.pending_selfdestruct.take() {
+            // REVM's generic callback reads the last journal entry. A Cancun self-call
+            // creates no entry, so that callback can describe an earlier operation.
+            if interpreter.bytecode.instruction_result() == Some(InstructionResult::SelfDestruct) {
+                if let Some(account) = context.journal().evm_state().get(&contract) {
+                    self.observe_selfdestruct(contract, target, value, account.is_selfdestructed());
+                } else {
+                    self.record_observation_error(
+                        EvmExecutionObservationError::MissingExecutingAccount { address: contract },
+                    );
+                }
+            }
+        }
+        let Some((address, slot, value)) = self.pending_storage_write.take() else {
+            return;
+        };
+        if !interpreter.bytecode.is_not_end() {
+            return;
+        }
+        let Some(frame_id) = self.open_frames.last().map(|frame| frame.id) else {
+            self.record_observation_error(EvmExecutionObservationError::UnbalancedFrame {
+                callback: "storage write",
+            });
+            return;
+        };
+        let position = self.next_position();
+        if self.reserve_fact() {
+            self.storage_writes.push(EvmStorageWrite {
+                position,
+                frame_id,
+                address,
+                slot,
+                value,
+            });
+        }
+    }
+
     fn call(&mut self, context: &mut CTX, inputs: &mut CallInputs) -> Option<CallOutcome> {
         self.observe_transaction_start(context);
         self.start_frame(
@@ -553,16 +677,6 @@ where
     fn log(&mut self, context: &mut CTX, log: Log) {
         self.observe_log(context, log);
     }
-
-    fn selfdestruct(&mut self, contract: Address, target: Address, value: U256) {
-        self.observe_selfdestruct(contract, target, value);
-    }
-}
-
-fn retained_state_units(state: &EvmState) -> usize {
-    state.values().fold(state.len(), |units, account| {
-        units.saturating_add(account.storage.len())
-    })
 }
 
 #[cfg(test)]
@@ -576,11 +690,9 @@ mod tests {
         state::{AccountInfo, Bytecode, bytecode::opcode},
     };
 
-    use crate::EvmObservationRequirements;
+    use simulation_core::observation::LogFilter;
 
-    use super::{EvmExecutionObservation, EvmExecutionObserver, EvmObservationError};
-
-    const TEST_MAX_OCCURRENCE_CHECKPOINTS: usize = 2;
+    use super::{EvmExecutionObservation, EvmExecutionObserver};
 
     #[test]
     fn committed_candidate_retains_its_state_checkpoint() {
@@ -593,15 +705,15 @@ mod tests {
 
         assert_eq!(result_logs, 2);
         assert_eq!(observation.logs.len(), 2);
-        assert_eq!(observation.semantic_logs.len(), 1);
         assert_eq!(observation.checkpoints.len(), 1);
-        let stored = observation.checkpoints[0][&BENCH_TARGET].storage[&U256::ZERO].present_value();
+        let stored =
+            observation.checkpoints[0].1[&BENCH_TARGET].storage[&U256::ZERO].present_value();
         assert_eq!(stored, U256::from(100));
     }
 
     #[test]
     fn parent_revert_discards_a_successful_child_occurrence() {
-        let child = Address::with_last_byte(1);
+        let child = Address::repeat_byte(0x11);
         let mut child_code = vec![opcode::PUSH1, 100, opcode::PUSH0, opcode::SSTORE];
         push_log(
             &mut child_code,
@@ -651,86 +763,33 @@ mod tests {
         assert_eq!(result_logs, 0);
         assert!(observation.frames.is_empty());
         assert!(observation.logs.is_empty());
-        assert!(observation.semantic_logs.is_empty());
         assert!(observation.checkpoints.is_empty());
     }
 
-    #[test]
-    fn committed_checkpoint_limit_makes_occurrence_evidence_unavailable() {
-        let mut code = Vec::new();
-        for _ in 0..=TEST_MAX_OCCURRENCE_CHECKPOINTS {
-            push_log(&mut code, keccak256("Approval(address,address,uint256)"));
-        }
-        code.push(opcode::STOP);
-
-        let (result_logs, observation) = execute_with_limits(
-            code,
-            crate::EvmSimulationLimits {
-                max_occurrence_checkpoints: TEST_MAX_OCCURRENCE_CHECKPOINTS,
-                max_retained_state_entries: usize::MAX,
-                max_state_reads: usize::MAX,
-                max_read_calls: usize::MAX,
-                read_call_gas_limit: u64::MAX,
-                max_read_call_output_bytes: usize::MAX,
-            },
-        );
-
-        assert_eq!(result_logs, TEST_MAX_OCCURRENCE_CHECKPOINTS + 1);
-        assert_eq!(
-            observation.semantic_logs.len(),
-            TEST_MAX_OCCURRENCE_CHECKPOINTS + 1
-        );
-        assert_eq!(
-            observation.checkpoints.len(),
-            TEST_MAX_OCCURRENCE_CHECKPOINTS
-        );
-        assert!(matches!(
-            observation.limit_error,
-            Some(EvmObservationError::CheckpointLimitExceeded {
-                limit: TEST_MAX_OCCURRENCE_CHECKPOINTS
-            })
-        ));
-    }
-
     fn execute(code: Vec<u8>) -> (usize, EvmExecutionObservation) {
-        execute_with_limits(code, test_limits())
-    }
-
-    fn execute_with_limits(
-        code: Vec<u8>,
-        limits: crate::EvmSimulationLimits,
-    ) -> (usize, EvmExecutionObservation) {
         let database = BenchmarkDB::new_bytecode(Bytecode::new_raw(Bytes::from(code)));
         let context = Context::mainnet().with_db(database);
-        let mut evm = context.build_mainnet_with_inspector(
-            EvmExecutionObserver::with_requirements(approval_requirements(), limits),
-        );
+        let mut evm = context.build_mainnet_with_inspector(EvmExecutionObserver::new(
+            approval_checkpoint_filters(),
+            crate::EvmSimulationLimits::default(),
+        ));
         execute_evm(&mut evm)
     }
 
     fn execute_database(database: InMemoryDB) -> (usize, EvmExecutionObservation) {
         let context = Context::mainnet().with_db(database);
-        let mut evm = context.build_mainnet_with_inspector(
-            EvmExecutionObserver::with_requirements(approval_requirements(), test_limits()),
-        );
+        let mut evm = context.build_mainnet_with_inspector(EvmExecutionObserver::new(
+            approval_checkpoint_filters(),
+            crate::EvmSimulationLimits::default(),
+        ));
         execute_evm(&mut evm)
     }
 
-    fn test_limits() -> crate::EvmSimulationLimits {
-        crate::EvmSimulationLimits::new(
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            usize::MAX,
-            u64::MAX,
-            usize::MAX,
-        )
-    }
-
-    fn approval_requirements() -> EvmObservationRequirements {
-        let mut requirements = EvmObservationRequirements::new();
-        requirements.checkpoint_any_address(keccak256("Approval(address,address,uint256)"));
-        requirements
+    fn approval_checkpoint_filters() -> Vec<LogFilter> {
+        vec![LogFilter {
+            address: None,
+            topic0: keccak256("Approval(address,address,uint256)"),
+        }]
     }
 
     fn execute_evm<DB>(

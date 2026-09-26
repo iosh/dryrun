@@ -10,7 +10,7 @@ use std::collections::HashMap;
 
 use alloy::primitives::Address;
 
-use crate::espace::{EspaceChangeDerivationError, EspaceExecutedTransaction, EspaceStateAccess};
+use crate::espace::{EspaceAnalysisError, EspaceExecutedTransaction, EspaceStateAccess};
 
 use super::{super::EspaceStandardChange, load_metadata};
 
@@ -42,7 +42,7 @@ pub(crate) fn derive_verified_changes(
     execution: &EspaceExecutedTransaction,
     state: &EspaceStateAccess,
     wrapped_native_token: Address,
-) -> Result<Vec<VerifiedChange>, EspaceChangeDerivationError> {
+) -> Result<Vec<VerifiedChange>, EspaceAnalysisError> {
     let sequence = collect_token_events(execution, wrapped_native_token)?;
     let events = sequence.events;
     if events.is_empty() {
@@ -57,7 +57,6 @@ pub(crate) fn derive_verified_changes(
             event_index,
             event,
             execution,
-            state,
             &sequence.pairs,
             &mut wrapped_pair_proofs,
             &mut final_state_expectations,
@@ -81,15 +80,15 @@ pub(crate) fn derive_verified_changes(
     for (event, verified) in events.into_iter().zip(verified_events) {
         match (event, verified) {
             (
-                ObservedTokenEvent::Standard { occurrence, .. },
+                ObservedTokenEvent::Standard { checkpoint, .. },
                 VerifiedTokenChange::Standard(verified),
             ) => changes.push(VerifiedChange::Standard {
-                position: occurrence.position().index(),
+                position: checkpoint.position().index(),
                 change: verified.into_change(&metadata_values),
             }),
             (
                 ObservedTokenEvent::Wrapped {
-                    occurrence,
+                    checkpoint,
                     contract,
                     account,
                     amount,
@@ -99,7 +98,7 @@ pub(crate) fn derive_verified_changes(
             ) => {
                 let token_metadata = metadata_values.erc20(&contract);
                 changes.push(VerifiedChange::Wrapped {
-                    position: occurrence.position().index(),
+                    position: checkpoint.position().index(),
                     contract,
                     account,
                     amount,

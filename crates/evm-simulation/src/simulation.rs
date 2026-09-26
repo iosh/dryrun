@@ -13,5 +13,5 @@ pub type EvmSimulation = simulation_core::simulation::Simulation<
     crate::EvmExecutionOutcome,
     crate::EvmTransactionRejection,
     crate::EvmChangeSet,
-    crate::EvmChangeDerivationError,
+    crate::EvmAnalysisError,
 >;

@@ -14,16 +14,14 @@ mod observer;
 mod outcome;
 mod read_call;
 mod transaction;
-
-pub(crate) use read_call::{
-    IsolatedReadCallError, ReadCallInput, ReadCallOutcome, execute_isolated_read_call,
-};
+pub use read_call::ReadCallOutcome;
+pub(crate) use read_call::{IsolatedReadCallError, ReadCallInput, execute_isolated_read_call};
 
 pub(crate) use env::build_conflux_state;
 use env::build_transaction_env;
 pub(crate) use observer::{
-    CommittedExecutionTrace, ExecutionTraceObserver, FrameAction, FrameId, LogCheckpoint,
-    TraceEvent,
+    CommittedExecutionTrace, ExecutionTraceObserver, FrameAction, FrameId, TraceEvent,
+    filters_for_space,
 };
 pub(crate) use outcome::{
     ConfluxExecutionOutcome, ConfluxExecutionOutput, TransactionExecutionError,

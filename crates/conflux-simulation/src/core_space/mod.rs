@@ -1,3 +1,4 @@
+mod analysis;
 mod changes;
 mod completion;
 mod context;
@@ -20,9 +21,10 @@ mod transaction_codec;
 pub(crate) use completion::complete_transaction;
 pub(crate) use transaction::{StorageSponsorship, check_storage_sponsorship};
 
+pub use crate::execution::ReadCallOutcome as CoreSpaceReadCallOutcome;
 pub use changes::{
     CombinedCoreSpaceChangeRules, ContractAdminState, CoreSpaceAccessRuleChangeRules,
-    CoreSpaceChange, CoreSpaceChangeDerivationError, CoreSpaceChangeRules, CoreSpaceChangeSet,
+    CoreSpaceAnalysisError, CoreSpaceChange, CoreSpaceChangeRules, CoreSpaceChangeSet,
     CoreSpaceChangeSetBuilder, CoreSpaceContractChangeRules, CoreSpaceGovernanceChangeRules,
     CoreSpaceNativeAndStakingChangeRules, CoreSpaceNativeCurrency, CoreSpacePoSChangeRules,
     CoreSpaceSponsorshipChangeRules, CrossSpaceAddress, DefaultCoreSpaceChangeRules,
@@ -42,7 +44,8 @@ pub use error::{
 pub use executed_transaction::{
     CoreSpaceCallKind, CoreSpaceCommittedFrame, CoreSpaceCommittedInternalTransfer,
     CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition, CoreSpaceExecutionSpace,
-    CoreSpaceExecutionStatus, CoreSpaceFrameAction, CoreSpaceFrameId, CoreSpaceTransferPocket,
+    CoreSpaceExecutionStatus, CoreSpaceFrameAction, CoreSpaceFrameId, CoreSpaceLogCheckpoint,
+    CoreSpaceTransferPocket,
 };
 pub use execution::{
     CoreSpaceExecutionFailure, CoreSpaceExecutionOutcome, CoreSpaceLog, CoreSpaceLogAddress,
@@ -54,11 +57,14 @@ pub use request::CoreSpaceSimulationRequest;
 pub use result::{CoreSpaceChanges, CoreSpaceSimulation};
 pub use simulator::CoreSpaceTransactionSimulator;
 pub use state_access::{
-    CoreSpaceDepositLot, CoreSpacePoSRegistrationState, CoreSpaceStateAccess, CoreSpaceStateReader,
-    CoreSpaceVoteLockInfo,
+    CoreSpaceDepositLot, CoreSpacePoSRegistrationState, CoreSpaceSimulationLimits,
+    CoreSpaceStateAccess, CoreSpaceStateReader, CoreSpaceVoteLockInfo,
 };
 pub use transaction::{
     CoreSpaceAccessListItem, CoreSpacePartialTransactionCommon, CoreSpaceTransactionCommon,
     CoreSpaceTransactionInput, CoreSpaceTransactionInputError, CoreSpaceTransactionRequest,
     CoreSpaceTransactionType, CoreSpaceTypedTransaction, DynamicFees, FeeInput,
 };
+
+pub use analysis::CoreSpaceAnalysisView;
+pub use simulation_core::observation::LogFilter;

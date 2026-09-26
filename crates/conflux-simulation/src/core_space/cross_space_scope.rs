@@ -72,9 +72,7 @@ pub(crate) fn collect_committed_espace_scopes(
             target,
             code_address,
             transferred_value,
-            calldata_len,
             calldata,
-            calldata_prefix,
             ..
         } = &frame.action
         else {
@@ -87,7 +85,7 @@ pub(crate) fn collect_committed_espace_scopes(
         {
             continue;
         }
-        let Some(selector) = calldata_prefix.get(..4).filter(|_| *calldata_len >= 4) else {
+        let Some(selector) = calldata.get(..4) else {
             continue;
         };
         let mut expected_withdraw_value = None;

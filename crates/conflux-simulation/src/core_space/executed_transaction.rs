@@ -7,6 +7,7 @@ use cfx_executor::{
 use cfx_types::{Address, AddressSpaceUtil, AddressWithSpace, Space};
 use cfx_vm_types::CallType;
 use conflux_provider::{CoreAddress, Network};
+use simulation_core::observation::AnalysisLimitExceeded;
 
 use crate::{
     execution::{
@@ -18,7 +19,7 @@ use crate::{
 
 use super::{
     CoreSpaceExecutionError, CoreSpaceExecutionFailure, CoreSpaceResultIntegrationError,
-    outcome::map_execution_failure,
+    CoreSpaceStateAccess, CoreSpaceStateReader, outcome::map_execution_failure,
 };
 
 #[derive(Debug)]
@@ -125,6 +126,7 @@ pub enum CoreSpaceFrameAction<'a> {
         kind: CoreSpaceCallKind,
         caller: alloy_primitives::Address,
         target: alloy_primitives::Address,
+        /// Code lookup account, before any nested eSpace account delegation.
         code_address: alloy_primitives::Address,
         value: U256,
         calldata: &'a [u8],
@@ -144,6 +146,7 @@ pub struct CoreSpaceCommittedFrame<'a> {
     parent: Option<CoreSpaceFrameId>,
     position: CoreSpaceExecutionPosition,
     space: CoreSpaceExecutionSpace,
+    code_hash: alloy_primitives::B256,
     action: CoreSpaceFrameAction<'a>,
 }
 
@@ -167,6 +170,55 @@ impl<'a> CoreSpaceCommittedFrame<'a> {
     pub const fn action(self) -> CoreSpaceFrameAction<'a> {
         self.action
     }
+
+    pub const fn code_hash(self) -> alloy_primitives::B256 {
+        self.code_hash
+    }
+}
+
+/// A retained log and its state point from the same execution.
+#[derive(Clone, Copy)]
+pub struct CoreSpaceLogCheckpoint<'a> {
+    position: CoreSpaceExecutionPosition,
+    frame_id: CoreSpaceFrameId,
+    space: CoreSpaceExecutionSpace,
+    address: alloy_primitives::Address,
+    topics: &'a [cfx_types::H256],
+    data: &'a [u8],
+    previous_state: &'a CoreSpaceStateReader,
+    state: &'a CoreSpaceStateReader,
+}
+
+impl<'a> CoreSpaceLogCheckpoint<'a> {
+    pub const fn position(self) -> CoreSpaceExecutionPosition {
+        self.position
+    }
+    pub const fn frame_id(self) -> CoreSpaceFrameId {
+        self.frame_id
+    }
+    pub const fn space(self) -> CoreSpaceExecutionSpace {
+        self.space
+    }
+    pub const fn address(self) -> alloy_primitives::Address {
+        self.address
+    }
+    pub fn topics(self) -> impl Iterator<Item = alloy_primitives::B256> + 'a {
+        self.topics
+            .iter()
+            .copied()
+            .map(crate::primitive::b256_from_cfx)
+    }
+    pub const fn data(self) -> &'a [u8] {
+        self.data
+    }
+    /// The preceding retained checkpoint, or the transaction's initial state.
+    pub const fn previous_state(self) -> &'a CoreSpaceStateReader {
+        self.previous_state
+    }
+    /// Persistent state at the log emission point.
+    pub const fn state(self) -> &'a CoreSpaceStateReader {
+        self.state
+    }
 }
 
 /// Immutable facts retained from one finalized Core Space execution.
@@ -188,6 +240,7 @@ pub struct CoreSpaceExecutedTransaction {
     pub(super) storage_released: Vec<primitives::receipt::StorageChange>,
     pub(super) contracts_created: Vec<AddressWithSpace>,
     pub(super) committed_trace: CommittedExecutionTrace,
+    state: CoreSpaceStateAccess,
     pub(super) committed_logs: Vec<primitives::LogEntry>,
     pub(super) cip78a: bool,
     pub(super) cip78b: bool,
@@ -209,8 +262,9 @@ impl CoreSpaceExecutedTransaction {
         machine: &Machine,
         transaction_sender: CoreAddress,
         transaction_recipient: Option<CoreAddress>,
+        mut state: CoreSpaceStateAccess,
     ) -> Result<Self, CoreSpaceExecutionError> {
-        let (status, output) = match outcome {
+        let (status, mut output) = match outcome {
             ConfluxExecutionOutcome::Success(output) => (CoreSpaceFinalStatus::Success, output),
             ConfluxExecutionOutcome::Failed { error, details } => {
                 let status = match error {
@@ -233,16 +287,17 @@ impl CoreSpaceExecutedTransaction {
             }
         };
 
-        verify_exposed_frames(&output.trace)?;
-        verify_committed_logs(&output.trace, &output.logs)?;
-        verify_created_contracts(&output.trace, &output.contracts_created)?;
-        // Validate nested eSpace ownership while the finalized execution
-        // record is assembled.  Change rules then consume only committed
-        // scopes and cannot re-pair bridge logs or child frames themselves.
-        let cross_space_scopes =
+        let cross_space_scopes = if output.trace.limit_exceeded().is_none() {
+            verify_exposed_frames(&output.trace)?;
+            verify_committed_logs(&output.trace, &output.logs)?;
+            verify_created_contracts(&output.trace, &output.contracts_created)?;
             super::cross_space_scope::collect_committed_espace_scopes(&output.trace).map_err(
                 |error| CoreSpaceResultIntegrationError::invalid_executor_output(error.to_string()),
-            )?;
+            )?
+        } else {
+            // Analysis will report the limit before consuming these scopes.
+            super::cross_space_scope::CommittedCrossSpaceScopes::default()
+        };
 
         let storage_collateralized =
             match output.storage_collateralized.as_slice() {
@@ -271,6 +326,30 @@ impl CoreSpaceExecutedTransaction {
             })
             .collect();
 
+        let snapshots = output.trace.take_snapshots();
+        if output.trace.limit_exceeded().is_none() {
+            for (position, snapshot) in snapshots {
+                let event_index = output
+                    .trace
+                    .events()
+                    .binary_search_by_key(&position, TraceEvent::position)
+                    .map_err(|_| {
+                        CoreSpaceResultIntegrationError::invalid_executor_output(format!(
+                            "state snapshot at position {position} has no committed log"
+                        ))
+                    })?;
+                if !matches!(output.trace.events()[event_index], TraceEvent::Log { .. }) {
+                    return Err(
+                        CoreSpaceResultIntegrationError::invalid_executor_output(format!(
+                            "state snapshot at position {position} does not refer to a log"
+                        ))
+                        .into(),
+                    );
+                }
+                state.restore_checkpoint(event_index, snapshot)?;
+            }
+        }
+
         Ok(Self {
             status,
             sender: prepared.transaction.sender().address,
@@ -288,6 +367,7 @@ impl CoreSpaceExecutedTransaction {
             storage_released: output.storage_released,
             contracts_created: output.contracts_created,
             committed_trace: output.trace,
+            state,
             committed_logs: output.logs,
             cip78a: prepared.spec.cip78a,
             cip78b: prepared.spec.cip78b,
@@ -300,6 +380,41 @@ impl CoreSpaceExecutedTransaction {
             cross_space_transfers: cross_space_scopes.transfers,
             active_internal_contracts,
         })
+    }
+
+    pub(crate) fn state(&self) -> &CoreSpaceStateAccess {
+        &self.state
+    }
+
+    pub(crate) fn check_observation_limit(&self) -> Result<(), AnalysisLimitExceeded> {
+        self.committed_trace.limit_exceeded().map_or(Ok(()), Err)
+    }
+
+    pub(crate) fn log_checkpoints(&self) -> impl Iterator<Item = CoreSpaceLogCheckpoint<'_>> {
+        self.state
+            .log_checkpoints()
+            .map(|(event_index, previous_state, state)| {
+                let TraceEvent::Log {
+                    position,
+                    frame_id,
+                    address,
+                    topics,
+                    data,
+                } = &self.committed_trace.events()[event_index]
+                else {
+                    unreachable!("checkpoint log was checked during construction")
+                };
+                CoreSpaceLogCheckpoint {
+                    position: CoreSpaceExecutionPosition(*position),
+                    frame_id: CoreSpaceFrameId(frame_id.index()),
+                    space: execution_space(self.committed_trace.frame(*frame_id).space),
+                    address: alloy_primitives::Address::from_slice(address.as_bytes()),
+                    topics,
+                    data,
+                    previous_state,
+                    state,
+                }
+            })
     }
 
     pub const fn status(&self) -> CoreSpaceExecutionStatus {
@@ -362,6 +477,7 @@ impl CoreSpaceExecutedTransaction {
                     .map(|parent| CoreSpaceFrameId(parent.index())),
                 position: CoreSpaceExecutionPosition::from_index(*position),
                 space: execution_space(frame.space),
+                code_hash: crate::primitive::b256_from_cfx(frame.code_hash),
                 action: frame_action(&frame.action),
             })
         })

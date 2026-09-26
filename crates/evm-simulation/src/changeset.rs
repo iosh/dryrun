@@ -1,3 +1,5 @@
+use crate::EvmAnalysisView;
+use simulation_core::observation::{AnalysisLimitExceeded, LogFilter};
 use std::{collections::BTreeMap, error::Error as StdError, sync::Arc};
 
 use alloy::primitives::{Address, U256};
@@ -5,8 +7,8 @@ use contract_standards::{Erc20Metadata, Erc721CollectionMetadata, Erc1155Transfe
 use thiserror::Error;
 
 use crate::{
-    EvmObservationRequirements, EvmTokenChangeRules,
-    execution::{EvmExecutionPosition, EvmObservationError, EvmTransactionExecution},
+    EvmTokenChangeRules,
+    execution::{EvmExecutionPosition, EvmTransactionExecution},
     state::{EvmStateAccess, EvmStateReadError},
 };
 
@@ -36,7 +38,7 @@ impl EvmChangeSet {
         self.items.is_empty()
     }
 
-    fn merge(self, other: Self) -> Result<Self, EvmChangeDerivationError> {
+    fn merge(self, other: Self) -> Result<Self, EvmAnalysisError> {
         let mut builder = EvmChangeSetBuilder::new();
         for entry in self.entries.into_iter().chain(other.entries) {
             builder.insert_entry(entry)?;
@@ -352,11 +354,11 @@ enum StandardChangeKey {
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum EvmChangeDerivationError {
+pub enum EvmAnalysisError {
     #[error("unsupported contract behavior: {details}")]
     Unsupported { details: String },
     #[error(transparent)]
-    Observation(#[from] EvmObservationError),
+    LimitExceeded(#[from] AnalysisLimitExceeded),
 
     #[error(transparent)]
     StateRead(#[from] EvmStateReadError),
@@ -372,7 +374,7 @@ pub enum EvmChangeDerivationError {
     },
 }
 
-impl EvmChangeDerivationError {
+impl EvmAnalysisError {
     pub fn rule_failure(
         rules: &'static str,
         source: impl StdError + Send + Sync + 'static,
@@ -404,7 +406,7 @@ impl EvmChangeSetBuilder {
         &mut self,
         position: EvmChangePosition,
         item: EvmStateChange,
-    ) -> Result<(), EvmChangeDerivationError> {
+    ) -> Result<(), EvmAnalysisError> {
         self.insert_entry(EvmChangeEntry {
             position,
             change: item,
@@ -412,7 +414,7 @@ impl EvmChangeSetBuilder {
         })
     }
 
-    fn insert_entry(&mut self, entry: EvmChangeEntry) -> Result<(), EvmChangeDerivationError> {
+    fn insert_entry(&mut self, entry: EvmChangeEntry) -> Result<(), EvmAnalysisError> {
         let key = entry.change.key();
         let position = entry.position;
         let map_key = (position, key.clone());
@@ -429,7 +431,7 @@ impl EvmChangeSetBuilder {
                     position.index()
                 ),
             };
-            return Err(EvmChangeDerivationError::conflict(details));
+            return Err(EvmAnalysisError::conflict(details));
         }
         if matches!(position, EvmChangePosition::Execution(_))
             && self
@@ -437,7 +439,7 @@ impl EvmChangeSetBuilder {
                 .keys()
                 .any(|(existing_position, _)| *existing_position == position)
         {
-            return Err(EvmChangeDerivationError::conflict(format!(
+            return Err(EvmAnalysisError::conflict(format!(
                 "multiple semantic changes at execution position {}",
                 position.index()
             )));
@@ -453,7 +455,7 @@ impl EvmChangeSetBuilder {
         to: Address,
         raw_amount: U256,
         currency: EvmNativeCurrency,
-    ) -> Result<(), EvmChangeDerivationError> {
+    ) -> Result<(), EvmAnalysisError> {
         if raw_amount.is_zero() || from == to {
             return Ok(());
         }
@@ -474,7 +476,7 @@ impl EvmChangeSetBuilder {
         contract_address: Address,
         raw_amount: U256,
         currency: EvmNativeCurrency,
-    ) -> Result<(), EvmChangeDerivationError> {
+    ) -> Result<(), EvmAnalysisError> {
         if raw_amount.is_zero() {
             return Ok(());
         }
@@ -493,7 +495,7 @@ impl EvmChangeSetBuilder {
         account: Address,
         before: EvmAccountDelegation,
         after: EvmAccountDelegation,
-    ) -> Result<(), EvmChangeDerivationError> {
+    ) -> Result<(), EvmAnalysisError> {
         if before != after {
             self.insert_at(
                 EvmChangePosition::PreExecution(0),
@@ -511,7 +513,7 @@ impl EvmChangeSetBuilder {
         &mut self,
         position: EvmExecutionPosition,
         change: EvmStandardChange,
-    ) -> Result<(), EvmChangeDerivationError> {
+    ) -> Result<(), EvmAnalysisError> {
         self.insert_at(
             EvmChangePosition::Execution(position),
             EvmStateChange::Standard(change),
@@ -522,7 +524,7 @@ impl EvmChangeSetBuilder {
         &mut self,
         position: EvmExecutionPosition,
         change: EvmWrappedNativeDepositChange,
-    ) -> Result<(), EvmChangeDerivationError> {
+    ) -> Result<(), EvmAnalysisError> {
         self.insert_at(
             EvmChangePosition::Execution(position),
             EvmStateChange::WrappedNativeDeposit(change),
@@ -533,7 +535,7 @@ impl EvmChangeSetBuilder {
         &mut self,
         position: EvmExecutionPosition,
         change: EvmWrappedNativeWithdrawalChange,
-    ) -> Result<(), EvmChangeDerivationError> {
+    ) -> Result<(), EvmAnalysisError> {
         self.insert_at(
             EvmChangePosition::Execution(position),
             EvmStateChange::WrappedNativeWithdrawal(change),
@@ -958,13 +960,9 @@ impl EvmChangePosition {
 /// Rules run only after successful execution. The configured composition must
 /// account for every supported effect or return an error; partial sets are not published.
 pub trait EvmChangeRules: Send + Sync + 'static {
-    fn required_observations(&self) -> EvmObservationRequirements;
+    fn checkpoint_filters(&self) -> Vec<LogFilter>;
 
-    fn derive_changes(
-        &self,
-        execution: &EvmTransactionExecution,
-        state: &EvmStateAccess,
-    ) -> Result<EvmChangeSet, EvmChangeDerivationError>;
+    fn derive_changes(&self, view: EvmAnalysisView<'_>) -> Result<EvmChangeSet, EvmAnalysisError>;
 
     fn combine<R>(self, other: R) -> CombinedEvmChangeRules<Self, R>
     where
@@ -975,7 +973,7 @@ pub trait EvmChangeRules: Send + Sync + 'static {
     }
 }
 
-pub type EvmChanges = simulation_core::simulation::Changes<EvmChangeSet, EvmChangeDerivationError>;
+pub type EvmChanges = simulation_core::simulation::Changes<EvmChangeSet, EvmAnalysisError>;
 
 #[derive(Debug, Clone)]
 pub struct EvmNativeAssetChangeRules {
@@ -989,15 +987,12 @@ impl EvmNativeAssetChangeRules {
 }
 
 impl EvmChangeRules for EvmNativeAssetChangeRules {
-    fn required_observations(&self) -> EvmObservationRequirements {
-        EvmObservationRequirements::new()
+    fn checkpoint_filters(&self) -> Vec<LogFilter> {
+        Vec::new()
     }
 
-    fn derive_changes(
-        &self,
-        execution: &EvmTransactionExecution,
-        _state: &EvmStateAccess,
-    ) -> Result<EvmChangeSet, EvmChangeDerivationError> {
+    fn derive_changes(&self, view: EvmAnalysisView<'_>) -> Result<EvmChangeSet, EvmAnalysisError> {
+        let execution = view.execution();
         let operations = execution.native_movements();
 
         let mut builder = EvmChangeSetBuilder::new();
@@ -1027,15 +1022,13 @@ impl EvmChangeRules for EvmNativeAssetChangeRules {
 pub struct EvmAccountDelegationChangeRules;
 
 impl EvmChangeRules for EvmAccountDelegationChangeRules {
-    fn required_observations(&self) -> EvmObservationRequirements {
-        EvmObservationRequirements::new()
+    fn checkpoint_filters(&self) -> Vec<LogFilter> {
+        Vec::new()
     }
 
-    fn derive_changes(
-        &self,
-        execution: &EvmTransactionExecution,
-        state: &EvmStateAccess,
-    ) -> Result<EvmChangeSet, EvmChangeDerivationError> {
+    fn derive_changes(&self, view: EvmAnalysisView<'_>) -> Result<EvmChangeSet, EvmAnalysisError> {
+        let execution = view.execution();
+        let state = view.state();
         let mut builder = EvmChangeSetBuilder::new();
         for &account in execution.applied_authorization_accounts() {
             let before = state.initial().read_account(account)?;
@@ -1086,16 +1079,12 @@ impl DefaultEvmChangeRules {
 }
 
 impl EvmChangeRules for DefaultEvmChangeRules {
-    fn required_observations(&self) -> EvmObservationRequirements {
-        self.components.required_observations()
+    fn checkpoint_filters(&self) -> Vec<LogFilter> {
+        self.components.checkpoint_filters()
     }
 
-    fn derive_changes(
-        &self,
-        execution: &EvmTransactionExecution,
-        state: &EvmStateAccess,
-    ) -> Result<EvmChangeSet, EvmChangeDerivationError> {
-        self.components.derive_changes(execution, state)
+    fn derive_changes(&self, view: EvmAnalysisView<'_>) -> Result<EvmChangeSet, EvmAnalysisError> {
+        self.components.derive_changes(view)
     }
 }
 
@@ -1126,19 +1115,19 @@ where
     A: EvmChangeRules,
     B: EvmChangeRules,
 {
-    fn required_observations(&self) -> EvmObservationRequirements {
-        self.first
-            .required_observations()
-            .merge(&self.second.required_observations())
+    fn checkpoint_filters(&self) -> Vec<LogFilter> {
+        let mut filters = self.first.checkpoint_filters();
+        for filter in self.second.checkpoint_filters() {
+            if !filters.contains(&filter) {
+                filters.push(filter);
+            }
+        }
+        filters
     }
 
-    fn derive_changes(
-        &self,
-        execution: &EvmTransactionExecution,
-        state: &EvmStateAccess,
-    ) -> Result<EvmChangeSet, EvmChangeDerivationError> {
-        let first = self.first.derive_changes(execution, state)?;
-        let second = self.second.derive_changes(execution, state)?;
+    fn derive_changes(&self, view: EvmAnalysisView<'_>) -> Result<EvmChangeSet, EvmAnalysisError> {
+        let first = self.first.derive_changes(view)?;
+        let second = self.second.derive_changes(view)?;
         first.merge(second)
     }
 }
@@ -1147,20 +1136,20 @@ where
 pub(crate) fn check_contract_support(
     execution: &EvmTransactionExecution,
     state: &EvmStateAccess,
-) -> Result<(), EvmChangeDerivationError> {
+) -> Result<(), EvmAnalysisError> {
     for frame in execution.committed_frames() {
         let crate::EvmFrameAction::Call {
             bytecode_address, ..
         } = frame.action()
         else {
-            return Err(EvmChangeDerivationError::Unsupported {
+            return Err(EvmAnalysisError::Unsupported {
                 details: "contract creation requires an implementation-specific analyzer".into(),
             });
         };
-        if state.initial().read_account(*bytecode_address)?.has_code
-            || state.finalized().read_account(*bytecode_address)?.has_code
+        if !state.initial().code(*bytecode_address)?.is_empty()
+            || !state.finalized().code(*bytecode_address)?.is_empty()
         {
-            return Err(EvmChangeDerivationError::Unsupported {
+            return Err(EvmAnalysisError::Unsupported {
                 details: format!("no verified implementation scope for code at {bytecode_address}"),
             });
         }

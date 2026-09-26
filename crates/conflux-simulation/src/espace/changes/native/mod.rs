@@ -1,13 +1,13 @@
 mod collection;
 
 use super::{ChangeOccurrence, EspaceNativeCurrency};
-use crate::espace::{EspaceChange, EspaceChangeDerivationError, EspaceExecutedTransaction};
+use crate::espace::{EspaceAnalysisError, EspaceChange, EspaceExecutedTransaction};
 use alloy_primitives::{Address, U256};
 
 pub(super) fn derive_changes(
     execution: &EspaceExecutedTransaction,
     currency: &EspaceNativeCurrency,
-) -> Result<Vec<ChangeOccurrence>, EspaceChangeDerivationError> {
+) -> Result<Vec<ChangeOccurrence>, EspaceAnalysisError> {
     let operations = collection::collect_native_operations(execution)?;
     Ok(operations
         .into_iter()

@@ -114,7 +114,6 @@ struct PreparedEspaceExecution {
 struct EspaceExecutionEvidence {
     outcome: EspaceExecutionOutcome,
     record: EspaceExecutedTransaction,
-    state: EspaceStateAccess,
 }
 
 impl<R: super::EspaceChangeRules> simulation_core::simulation::SimulationBackend
@@ -129,7 +128,7 @@ impl<R: super::EspaceChangeRules> simulation_core::simulation::SimulationBackend
     type Evidence = EspaceExecutionEvidence;
     type Outcome = EspaceExecutionOutcome;
     type ChangeSet = super::EspaceChangeSet;
-    type AnalysisError = super::EspaceChangeDerivationError;
+    type AnalysisError = super::EspaceAnalysisError;
     type Error = EspaceSimulationError;
 
     async fn prepare(
@@ -205,12 +204,12 @@ impl<R: super::EspaceChangeRules> simulation_core::simulation::SimulationBackend
             block_context: prepared.context,
             transaction: DryRunTransactionInput::Espace(build_executor_transaction(transaction)?),
         };
-        let observer = ExecutionTraceObserver::new(Space::Ethereum).with_log_checkpoints(
-            self.0
-                .change_rules
-                .required_observations()
-                .into_log_checkpoints(),
-            self.0.limits.max_occurrence_checkpoints,
+        let observer = ExecutionTraceObserver::new(Space::Ethereum).with_checkpoint_filters(
+            crate::execution::filters_for_space(
+                &self.0.change_rules.checkpoint_filters(),
+                Space::Ethereum,
+            ),
+            self.0.limits,
         );
         let mut execution = ConfluxTransactionExecutor::new(&mut execution_state, &machine)
             .execute(input, observer)
@@ -228,7 +227,7 @@ impl<R: super::EspaceChangeRules> simulation_core::simulation::SimulationBackend
             }
             _ => {}
         }
-        let mut state = EspaceStateAccess::new(
+        let state = EspaceStateAccess::new(
             prepared.state,
             runtime,
             execution_state,
@@ -238,18 +237,17 @@ impl<R: super::EspaceChangeRules> simulation_core::simulation::SimulationBackend
             self.0.limits,
         )
         .map_err(EspaceExecutionError::from)?;
-        let record = EspaceExecutedTransaction::from_outcome(&mut execution.outcome, &mut state)?;
+        let record = EspaceExecutedTransaction::from_outcome(&mut execution.outcome, state)?;
         let outcome = map_executor_outcome(
             execution.outcome,
             &record,
             transaction,
-            &state.finalized(),
+            record.state().finalized(),
             backend.core_space_address_network(),
         )?;
         Ok(Execution::Executed(EspaceExecutionEvidence {
             outcome,
             record,
-            state,
         }))
     }
 
@@ -267,10 +265,15 @@ impl<R: super::EspaceChangeRules> simulation_core::simulation::SimulationBackend
         >,
     ) -> Result<Self::ChangeSet, Self::AnalysisError> {
         let evidence = view.execution();
-        super::changes::check_contract_support(&evidence.record, &evidence.state)?;
-        self.0
-            .change_rules
-            .derive_changes(&evidence.record, &evidence.state)
+        evidence.record.check_observation_limit()?;
+        evidence.record.state().start_analysis();
+        let view = super::EspaceAnalysisView {
+            context: view.context(),
+            transaction: view.transaction(),
+            execution: &evidence.record,
+        };
+        super::changes::check_contract_support(view.execution(), view.state())?;
+        self.0.change_rules.derive_changes(view)
     }
 
     fn into_outcome(&self, evidence: Self::Evidence) -> Self::Outcome {

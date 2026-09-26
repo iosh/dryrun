@@ -204,15 +204,15 @@ pub(crate) fn source_diagnostic(
         if let Some(error) = error.downcast_ref::<crate::core_space::CoreSpaceProtocolError>() {
             return error.diagnostic();
         }
+        if let Some(error) = error.downcast_ref::<crate::core_space::CoreSpaceAnalysisError>() {
+            return error.diagnostic();
+        }
+        if let Some(error) = error.downcast_ref::<crate::espace::EspaceAnalysisError>() {
+            return error.diagnostic();
+        }
         if let Some(error) =
-            error.downcast_ref::<crate::core_space::CoreSpaceChangeDerivationError>()
+            error.downcast_ref::<simulation_core::observation::AnalysisLimitExceeded>()
         {
-            return error.diagnostic();
-        }
-        if let Some(error) = error.downcast_ref::<crate::espace::EspaceChangeDerivationError>() {
-            return error.diagnostic();
-        }
-        if let Some(error) = error.downcast_ref::<crate::espace::EspaceObservationError>() {
             return error.diagnostic();
         }
         if error.is::<TransportError>() || error.is::<ConfluxProviderError>() {

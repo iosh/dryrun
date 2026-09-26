@@ -1,4 +1,4 @@
-use alloy_primitives::Bytes;
+use alloy_primitives::{Bytes, Log};
 use revm::context_interface::result::{
     ExecutionResult as RevmExecutionResult, HaltReason, OutOfGasError, Output as RevmOutput,
     SuccessReason,
@@ -14,6 +14,7 @@ pub(crate) enum EvmFinalStatus {
     Success {
         reason: EvmSuccessReason,
         output: EvmSuccessOutput,
+        logs: Vec<Log>,
     },
     Reverted {
         revert_data: Bytes,
@@ -29,9 +30,15 @@ pub(crate) fn map_executed_status(
     transaction: &TypedTransaction,
 ) -> Result<EvmFinalStatus, EvmExecutionError> {
     match result {
-        RevmExecutionResult::Success { reason, output, .. } => Ok(EvmFinalStatus::Success {
+        RevmExecutionResult::Success {
+            reason,
+            output,
+            logs,
+            ..
+        } => Ok(EvmFinalStatus::Success {
             reason: map_success_reason(reason),
             output: map_success_output(output, transaction)?,
+            logs,
         }),
         RevmExecutionResult::Revert { output, .. } => {
             let reason = EvmRevertReason::decode(&output);

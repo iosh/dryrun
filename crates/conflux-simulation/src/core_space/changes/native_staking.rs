@@ -549,7 +549,9 @@ fn collect_native_operations(
                     &mut operations,
                 )?
             }
-            TraceEvent::Log { .. } | TraceEvent::StorageWrite { .. } => {}
+            TraceEvent::Log { .. }
+            | TraceEvent::StorageWrite { .. }
+            | TraceEvent::ContractRemoved { .. } => {}
         }
     }
     Ok(operations)

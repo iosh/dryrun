@@ -5,11 +5,11 @@ use cfx_types::Space;
 
 use crate::{
     core_space::{
-        CoreSpaceChangeDerivationError, CoreSpaceChangeSet, CoreSpaceChangeSetBuilder,
+        CoreSpaceAnalysisError, CoreSpaceChangeSet, CoreSpaceChangeSetBuilder,
         CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition, CoreSpaceProtocolError,
         CoreSpaceStateAccess,
     },
-    espace::{EspaceChange, EspaceNativeCurrency, NestedEspaceEffects},
+    espace::{EspaceChange, EspaceNativeCurrency, has_nested_token_logs},
     execution::{FrameAction, TraceEvent},
     primitive::{u256_from_cfx, u256_to_cfx},
 };
@@ -25,19 +25,17 @@ pub(super) fn derive_native_changes(
     state: &CoreSpaceStateAccess,
     currency: &EspaceNativeCurrency,
     wrapped_native_token: alloy_primitives::Address,
-) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
+) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
     let trace = execution.trace();
     let roots = execution.nested_espace_scope_roots();
-    let token_effects = NestedEspaceEffects::from_trace(trace, roots, wrapped_native_token)
-        .map_err(|error| {
-            CoreSpaceChangeDerivationError::Protocol(
-                CoreSpaceProtocolError::inconsistent_execution(format!(
-                    "nested eSpace token occurrence is invalid: {error}"
-                )),
-            )
+    let has_token_logs =
+        has_nested_token_logs(trace, roots, wrapped_native_token).map_err(|error| {
+            CoreSpaceAnalysisError::Protocol(CoreSpaceProtocolError::inconsistent_execution(
+                format!("nested eSpace token occurrence is invalid: {error}"),
+            ))
         })?;
-    if !token_effects.is_empty() {
-        return Err(CoreSpaceChangeDerivationError::Protocol(
+    if has_token_logs {
+        return Err(CoreSpaceAnalysisError::Protocol(
             CoreSpaceProtocolError::unsupported_operation(
                 "nested eSpace token changes require a dedicated eSpace state view",
             ),
@@ -66,7 +64,7 @@ pub(super) fn derive_native_changes(
                     } if !transferred_value.is_zero() => {
                         let amount = u256_from_cfx(*transferred_value);
                         record_transfer(&mut deltas, caller, target, u256_to_cfx(amount))
-                            .map_err(CoreSpaceChangeDerivationError::Protocol)?;
+                            .map_err(CoreSpaceAnalysisError::Protocol)?;
                         builder.espace(
                             CoreSpaceExecutionPosition::from_index(*position),
                             EspaceChange::NativeTransfer {
@@ -82,7 +80,7 @@ pub(super) fn derive_native_changes(
                         transferred_value,
                         ..
                     } if !transferred_value.is_zero() => {
-                        return Err(CoreSpaceChangeDerivationError::Protocol(
+                        return Err(CoreSpaceAnalysisError::Protocol(
                             CoreSpaceProtocolError::inconsistent_execution(format!(
                                 "nonzero nested eSpace {call_type:?} value is not a balance transfer"
                             )),
@@ -96,7 +94,7 @@ pub(super) fn derive_native_changes(
                     } if !value.is_zero() => {
                         let amount = u256_from_cfx(*value);
                         record_transfer(&mut deltas, creator, created, u256_to_cfx(amount))
-                            .map_err(CoreSpaceChangeDerivationError::Protocol)?;
+                            .map_err(CoreSpaceAnalysisError::Protocol)?;
                         builder.espace(
                             CoreSpaceExecutionPosition::from_index(*position),
                             EspaceChange::NativeTransfer {
@@ -108,7 +106,7 @@ pub(super) fn derive_native_changes(
                         )?;
                     }
                     FrameAction::Create { value, .. } if !value.is_zero() => {
-                        return Err(CoreSpaceChangeDerivationError::Protocol(
+                        return Err(CoreSpaceAnalysisError::Protocol(
                             CoreSpaceProtocolError::inconsistent_execution(
                                 "committed eSpace create is missing its actual address",
                             ),
@@ -133,7 +131,7 @@ pub(super) fn derive_native_changes(
                 }
                 let amount = u256_from_cfx(*value);
                 record_transfer(&mut deltas, &from.address, &to.address, u256_to_cfx(amount))
-                    .map_err(CoreSpaceChangeDerivationError::Protocol)?;
+                    .map_err(CoreSpaceAnalysisError::Protocol)?;
                 builder.espace(
                     CoreSpaceExecutionPosition::from_index(*position),
                     EspaceChange::NativeTransfer {
@@ -158,7 +156,7 @@ pub(super) fn derive_native_changes(
                 let amount = u256_from_cfx(*value);
                 let delta = deltas.entry(from.address).or_default();
                 delta.debited = delta.debited.checked_add(*value).ok_or_else(|| {
-                    CoreSpaceChangeDerivationError::Protocol(
+                    CoreSpaceAnalysisError::Protocol(
                         CoreSpaceProtocolError::inconsistent_execution(
                             "nested eSpace balance delta overflows",
                         ),
@@ -187,7 +185,7 @@ pub(super) fn derive_native_changes(
                 let amount = u256_from_cfx(*value);
                 let delta = deltas.entry(from.address).or_default();
                 delta.debited = delta.debited.checked_add(*value).ok_or_else(|| {
-                    CoreSpaceChangeDerivationError::Protocol(
+                    CoreSpaceAnalysisError::Protocol(
                         CoreSpaceProtocolError::inconsistent_execution(
                             "nested eSpace balance delta overflows",
                         ),
@@ -208,13 +206,13 @@ pub(super) fn derive_native_changes(
 
     for (address, delta) in deltas {
         let before = state.initial().espace_balance(address).map_err(|error| {
-            CoreSpaceChangeDerivationError::Protocol(CoreSpaceProtocolError::state_access(
+            CoreSpaceAnalysisError::Protocol(CoreSpaceProtocolError::state_access(
                 "read nested eSpace initial balance",
                 error,
             ))
         })?;
         let after = state.finalized().espace_balance(address).map_err(|error| {
-            CoreSpaceChangeDerivationError::Protocol(CoreSpaceProtocolError::state_access(
+            CoreSpaceAnalysisError::Protocol(CoreSpaceProtocolError::state_access(
                 "read nested eSpace finalized balance",
                 error,
             ))
@@ -223,14 +221,12 @@ pub(super) fn derive_native_changes(
             .checked_add(delta.credited)
             .and_then(|value| value.checked_sub(delta.debited))
             .ok_or_else(|| {
-                CoreSpaceChangeDerivationError::Protocol(
-                    CoreSpaceProtocolError::inconsistent_execution(
-                        "nested eSpace balance delta underflows",
-                    ),
-                )
+                CoreSpaceAnalysisError::Protocol(CoreSpaceProtocolError::inconsistent_execution(
+                    "nested eSpace balance delta underflows",
+                ))
             })?;
         if expected != after {
-            return Err(CoreSpaceChangeDerivationError::Protocol(
+            return Err(CoreSpaceAnalysisError::Protocol(
                 CoreSpaceProtocolError::inconsistent_execution(
                     "nested eSpace native balance delta does not match finalized state",
                 ),

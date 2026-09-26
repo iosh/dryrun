@@ -1,3 +1,5 @@
+use crate::core_space::CoreSpaceAnalysisView;
+use simulation_core::observation::{AnalysisLimitExceeded, LogFilter};
 mod access;
 mod admin;
 mod governance;
@@ -222,7 +224,7 @@ impl CoreSpaceChangeSet {
         self.items
     }
 
-    fn merge(self, other: Self) -> Result<Self, CoreSpaceChangeDerivationError> {
+    fn merge(self, other: Self) -> Result<Self, CoreSpaceAnalysisError> {
         let mut builder = CoreSpaceChangeSetBuilder::new();
         for (position, change) in self.entries.into_iter().chain(other.entries) {
             builder.insert(position, change)?;
@@ -246,12 +248,12 @@ impl CoreSpaceChangeSetBuilder {
         &mut self,
         position: CoreSpaceExecutionPosition,
         change: CoreSpaceChange,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         if let Some(existing) = self.entries.get(&position) {
             if existing == &change {
                 return Ok(());
             }
-            return Err(CoreSpaceChangeDerivationError::Conflict {
+            return Err(CoreSpaceAnalysisError::Conflict {
                 details: format!(
                     "multiple semantic changes were produced at Core Space execution position {}",
                     position.index()
@@ -269,7 +271,7 @@ impl CoreSpaceChangeSetBuilder {
         to: CoreAddress,
         raw_amount: U256,
         currency: CoreSpaceNativeCurrency,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         if raw_amount.is_zero() || from == to {
             return Ok(());
         }
@@ -290,7 +292,7 @@ impl CoreSpaceChangeSetBuilder {
         from: CoreAddress,
         raw_amount: U256,
         currency: CoreSpaceNativeCurrency,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         if raw_amount.is_zero() {
             return Ok(());
         }
@@ -309,7 +311,7 @@ impl CoreSpaceChangeSetBuilder {
         position: CoreSpaceExecutionPosition,
         account: CoreAddress,
         amount: U256,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         if amount.is_zero() {
             return Ok(());
         }
@@ -325,7 +327,7 @@ impl CoreSpaceChangeSetBuilder {
         account: CoreAddress,
         principal_amount: U256,
         reward_amount: U256,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         if principal_amount.is_zero() && reward_amount.is_zero() {
             return Ok(());
         }
@@ -345,7 +347,7 @@ impl CoreSpaceChangeSetBuilder {
         account: CoreAddress,
         required_locked_amount: U256,
         unlock_block_number: u64,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         self.insert(
             position,
             CoreSpaceChange::StakingVoteLock {
@@ -369,7 +371,7 @@ impl CoreSpaceChangeSetBuilder {
         vrf_public_key: Bytes,
         initial_vote_count: u64,
         locked_amount: U256,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         self.insert(
             position,
             CoreSpaceChange::PoSRegistration {
@@ -390,7 +392,7 @@ impl CoreSpaceChangeSetBuilder {
         identifier: B256,
         added_vote_count: u64,
         added_locked_amount: U256,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         self.insert(
             position,
             CoreSpaceChange::PoSStakeIncrease {
@@ -408,7 +410,7 @@ impl CoreSpaceChangeSetBuilder {
         account: CoreAddress,
         identifier: B256,
         requested_vote_count: u64,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         self.insert(
             position,
             CoreSpaceChange::PoSRetirementRequest {
@@ -425,7 +427,7 @@ impl CoreSpaceChangeSetBuilder {
         voter: CoreAddress,
         round: u64,
         votes: Vec<GovernanceVote>,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         if votes.is_empty() {
             return Ok(());
         }
@@ -446,7 +448,7 @@ impl CoreSpaceChangeSetBuilder {
         sponsor: Option<CoreAddress>,
         balance: U256,
         gas_fee_upper_bound: U256,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         self.insert(
             position,
             CoreSpaceChange::GasSponsorship {
@@ -465,7 +467,7 @@ impl CoreSpaceChangeSetBuilder {
         sponsor: Option<CoreAddress>,
         balance: U256,
         storage_points: Option<StoragePoints>,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         self.insert(
             position,
             CoreSpaceChange::StorageSponsorship {
@@ -482,7 +484,7 @@ impl CoreSpaceChangeSetBuilder {
         position: CoreSpaceExecutionPosition,
         contract_address: CoreAddress,
         raw_amount: U256,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         self.insert(
             position,
             CoreSpaceChange::StorageCollateral {
@@ -497,7 +499,7 @@ impl CoreSpaceChangeSetBuilder {
         position: CoreSpaceExecutionPosition,
         contract_address: CoreAddress,
         state: Option<ContractAdminState>,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         self.insert(
             position,
             CoreSpaceChange::ContractAdmin {
@@ -513,7 +515,7 @@ impl CoreSpaceChangeSetBuilder {
         contract_address: CoreAddress,
         scope: SponsorshipAccessRuleScope,
         enabled: bool,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         self.insert(
             position,
             CoreSpaceChange::SponsorshipAccessRule {
@@ -528,7 +530,7 @@ impl CoreSpaceChangeSetBuilder {
         &mut self,
         position: CoreSpaceExecutionPosition,
         change: crate::espace::EspaceChange,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         self.insert(position, CoreSpaceChange::Espace(change))
     }
 
@@ -538,7 +540,7 @@ impl CoreSpaceChangeSetBuilder {
         from: CrossSpaceAddress,
         to: CrossSpaceAddress,
         raw_amount: U256,
-    ) -> Result<(), CoreSpaceChangeDerivationError> {
+    ) -> Result<(), CoreSpaceAnalysisError> {
         if raw_amount.is_zero() {
             return Ok(());
         }
@@ -561,7 +563,9 @@ impl CoreSpaceChangeSetBuilder {
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
-pub enum CoreSpaceChangeDerivationError {
+pub enum CoreSpaceAnalysisError {
+    #[error(transparent)]
+    LimitExceeded(#[from] AnalysisLimitExceeded),
     #[error(transparent)]
     Protocol(#[from] CoreSpaceProtocolError),
     #[error("Core Space change rules produced conflicting results: {details}")]
@@ -574,7 +578,7 @@ pub enum CoreSpaceChangeDerivationError {
     },
 }
 
-impl CoreSpaceChangeDerivationError {
+impl CoreSpaceAnalysisError {
     pub fn rule_failure(
         rules: &'static str,
         source: impl StdError + Send + Sync + 'static,
@@ -589,11 +593,14 @@ impl CoreSpaceChangeDerivationError {
 /// Rules run only after successful execution. The configured composition must
 /// account for every supported effect or return an error; partial sets are not published.
 pub trait CoreSpaceChangeRules: Send + Sync + 'static {
+    fn checkpoint_filters(&self) -> Vec<LogFilter<super::CrossSpaceAddress>> {
+        Vec::new()
+    }
+
     fn derive_changes(
         &self,
-        execution: &CoreSpaceExecutedTransaction,
-        state: &CoreSpaceStateAccess,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError>;
+        view: CoreSpaceAnalysisView<'_>,
+    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError>;
 
     fn combine<R>(self, other: R) -> CombinedCoreSpaceChangeRules<Self, R>
     where
@@ -631,13 +638,22 @@ where
     A: CoreSpaceChangeRules,
     B: CoreSpaceChangeRules,
 {
+    fn checkpoint_filters(&self) -> Vec<LogFilter<super::CrossSpaceAddress>> {
+        let mut filters = self.first.checkpoint_filters();
+        for filter in self.second.checkpoint_filters() {
+            if !filters.contains(&filter) {
+                filters.push(filter);
+            }
+        }
+        filters
+    }
+
     fn derive_changes(
         &self,
-        execution: &CoreSpaceExecutedTransaction,
-        state: &CoreSpaceStateAccess,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
-        let first = self.first.derive_changes(execution, state)?;
-        let second = self.second.derive_changes(execution, state)?;
+        view: CoreSpaceAnalysisView<'_>,
+    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
+        let first = self.first.derive_changes(view)?;
+        let second = self.second.derive_changes(view)?;
         first.merge(second)
     }
 }
@@ -656,9 +672,10 @@ impl CoreSpaceNativeAndStakingChangeRules {
 impl CoreSpaceChangeRules for CoreSpaceNativeAndStakingChangeRules {
     fn derive_changes(
         &self,
-        execution: &CoreSpaceExecutedTransaction,
-        state: &CoreSpaceStateAccess,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
+        view: CoreSpaceAnalysisView<'_>,
+    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
+        let execution = view.execution();
+        let state = view.state();
         native_staking::derive_changes(execution, state, &self.currency).map_err(Into::into)
     }
 }
@@ -684,9 +701,10 @@ impl CoreSpaceGovernanceChangeRules {
 impl CoreSpaceChangeRules for CoreSpaceGovernanceChangeRules {
     fn derive_changes(
         &self,
-        execution: &CoreSpaceExecutedTransaction,
-        state: &CoreSpaceStateAccess,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
+        view: CoreSpaceAnalysisView<'_>,
+    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
+        let execution = view.execution();
+        let state = view.state();
         governance::derive_changes(execution, state).map_err(Into::into)
     }
 }
@@ -694,9 +712,10 @@ impl CoreSpaceChangeRules for CoreSpaceGovernanceChangeRules {
 impl CoreSpaceChangeRules for CoreSpacePoSChangeRules {
     fn derive_changes(
         &self,
-        execution: &CoreSpaceExecutedTransaction,
-        state: &CoreSpaceStateAccess,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
+        view: CoreSpaceAnalysisView<'_>,
+    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
+        let execution = view.execution();
+        let state = view.state();
         pos::derive_changes(execution, state).map_err(Into::into)
     }
 }
@@ -751,19 +770,20 @@ impl DefaultCoreSpaceChangeRules {
 impl CoreSpaceChangeRules for DefaultCoreSpaceChangeRules {
     fn derive_changes(
         &self,
-        execution: &CoreSpaceExecutedTransaction,
-        state: &CoreSpaceStateAccess,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
-        let native_and_staking = self.native_and_staking.derive_changes(execution, state)?;
-        let pos = self.pos.derive_changes(execution, state)?;
-        let governance = self.governance.derive_changes(execution, state)?;
-        let sponsorship = self.sponsorship.derive_changes(execution, state)?;
-        let admin = self.admin.derive_changes(execution, state)?;
-        let access = self.access.derive_changes(execution, state)?;
+        view: CoreSpaceAnalysisView<'_>,
+    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
+        let execution = view.execution();
+        let state = view.state();
+        let native_and_staking = self.native_and_staking.derive_changes(view)?;
+        let pos = self.pos.derive_changes(view)?;
+        let governance = self.governance.derive_changes(view)?;
+        let sponsorship = self.sponsorship.derive_changes(view)?;
+        let admin = self.admin.derive_changes(view)?;
+        let access = self.access.derive_changes(view)?;
         let nested_espace = if execution.nested_espace_scope_roots().is_empty() {
             CoreSpaceChangeSet::default()
         } else if !self.espace_change_rules_enabled {
-            return Err(CoreSpaceChangeDerivationError::Protocol(
+            return Err(CoreSpaceAnalysisError::Protocol(
                 CoreSpaceProtocolError::unsupported_operation(
                     "nested eSpace changes require eSpace chain configuration",
                 ),
@@ -798,9 +818,10 @@ impl CoreSpaceSponsorshipChangeRules {
 impl CoreSpaceChangeRules for CoreSpaceSponsorshipChangeRules {
     fn derive_changes(
         &self,
-        execution: &CoreSpaceExecutedTransaction,
-        state: &CoreSpaceStateAccess,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
+        view: CoreSpaceAnalysisView<'_>,
+    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
+        let execution = view.execution();
+        let state = view.state();
         sponsorship::derive_changes(execution, state).map_err(Into::into)
     }
 }
@@ -817,9 +838,10 @@ impl CoreSpaceContractChangeRules {
 impl CoreSpaceChangeRules for CoreSpaceContractChangeRules {
     fn derive_changes(
         &self,
-        execution: &CoreSpaceExecutedTransaction,
-        state: &CoreSpaceStateAccess,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
+        view: CoreSpaceAnalysisView<'_>,
+    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
+        let execution = view.execution();
+        let state = view.state();
         admin::derive_changes(execution, state).map_err(Into::into)
     }
 }
@@ -836,9 +858,10 @@ impl CoreSpaceAccessRuleChangeRules {
 impl CoreSpaceChangeRules for CoreSpaceAccessRuleChangeRules {
     fn derive_changes(
         &self,
-        execution: &CoreSpaceExecutedTransaction,
-        state: &CoreSpaceStateAccess,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceChangeDerivationError> {
+        view: CoreSpaceAnalysisView<'_>,
+    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
+        let execution = view.execution();
+        let state = view.state();
         access::derive_changes(execution, state).map_err(Into::into)
     }
 }
@@ -846,7 +869,7 @@ impl CoreSpaceChangeRules for CoreSpaceAccessRuleChangeRules {
 pub(crate) fn check_contract_support(
     execution: &CoreSpaceExecutedTransaction,
     state: &CoreSpaceStateAccess,
-) -> Result<(), CoreSpaceChangeDerivationError> {
+) -> Result<(), CoreSpaceAnalysisError> {
     use crate::execution::FrameAction;
     use cfx_parameters::internal_contract_addresses::*;
     use cfx_types::{AddressSpaceUtil, Space};

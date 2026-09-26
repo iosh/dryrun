@@ -2,7 +2,7 @@ use alloy::primitives::{Address, Bytes, U256};
 use contract_standards::getter_abi::{erc20, erc721, erc1155};
 
 use crate::{
-    EvmChangeDerivationError,
+    EvmAnalysisError,
     state::{EvmReadCallOutcome, EvmStateReader},
 };
 
@@ -12,7 +12,7 @@ pub(super) fn read_erc20_balance(
     view: &EvmStateReader,
     contract: Address,
     account: Address,
-) -> Result<U256, EvmChangeDerivationError> {
+) -> Result<U256, EvmAnalysisError> {
     let output = read_call_output(
         view,
         contract,
@@ -26,7 +26,7 @@ pub(super) fn read_erc20_balance(
 pub(super) fn read_erc20_total_supply(
     view: &EvmStateReader,
     contract: Address,
-) -> Result<U256, EvmChangeDerivationError> {
+) -> Result<U256, EvmAnalysisError> {
     let output = read_call_output(view, contract, erc20::total_supply_call(), "totalSupply()")?;
     erc20::decode_total_supply_output(&output)
         .map_err(|error| token_change_error(format!("invalid totalSupply return data: {error}")))
@@ -37,7 +37,7 @@ pub(super) fn read_erc1155_balance(
     contract: Address,
     account: Address,
     token_id: U256,
-) -> Result<U256, EvmChangeDerivationError> {
+) -> Result<U256, EvmAnalysisError> {
     let output = read_call_output(
         view,
         contract,
@@ -54,7 +54,7 @@ pub(super) fn read_allowance(
     contract: Address,
     owner: Address,
     spender: Address,
-) -> Result<U256, EvmChangeDerivationError> {
+) -> Result<U256, EvmAnalysisError> {
     let output = read_call_output(
         view,
         contract,
@@ -69,7 +69,7 @@ pub(super) fn read_erc721_owner(
     view: &EvmStateReader,
     contract: Address,
     token_id: U256,
-) -> Result<Option<Address>, EvmChangeDerivationError> {
+) -> Result<Option<Address>, EvmAnalysisError> {
     match view.read_call(contract, erc721::owner_of_call(token_id))? {
         EvmReadCallOutcome::Success(output) => erc721::decode_owner_of_output(&output)
             .map(Some)
@@ -85,7 +85,7 @@ pub(super) fn read_erc721_approval(
     view: &EvmStateReader,
     contract: Address,
     token_id: U256,
-) -> Result<Option<Address>, EvmChangeDerivationError> {
+) -> Result<Option<Address>, EvmAnalysisError> {
     let output = read_call_output(
         view,
         contract,
@@ -101,7 +101,7 @@ pub(super) fn read_erc721_approval_optional(
     view: &EvmStateReader,
     contract: Address,
     token_id: U256,
-) -> Result<Option<Address>, EvmChangeDerivationError> {
+) -> Result<Option<Address>, EvmAnalysisError> {
     match view.read_call(contract, erc721::get_approved_call(token_id))? {
         EvmReadCallOutcome::Success(output) => {
             let address = erc721::decode_get_approved_output(&output).map_err(|error| {
@@ -121,7 +121,7 @@ pub(super) fn read_operator_approval(
     contract: Address,
     owner: Address,
     operator: Address,
-) -> Result<bool, EvmChangeDerivationError> {
+) -> Result<bool, EvmAnalysisError> {
     let output = read_call_output(
         view,
         contract,
@@ -138,7 +138,7 @@ pub(super) fn read_call_output(
     target: Address,
     calldata: Bytes,
     operation: &'static str,
-) -> Result<Bytes, EvmChangeDerivationError> {
+) -> Result<Bytes, EvmAnalysisError> {
     match view.read_call(target, calldata)? {
         EvmReadCallOutcome::Success(output) => Ok(output),
         EvmReadCallOutcome::Reverted(_) => Err(token_change_error(format!("{operation} reverted"))),

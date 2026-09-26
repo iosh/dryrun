@@ -14,6 +14,7 @@ use super::{
 
 pub struct CoreSpaceTransactionSimulator<R = super::DefaultCoreSpaceChangeRules> {
     backend: ConfluxSimulationBackend,
+    limits: super::CoreSpaceSimulationLimits,
     change_rules: Arc<R>,
 }
 
@@ -21,6 +22,7 @@ impl<R> Clone for CoreSpaceTransactionSimulator<R> {
     fn clone(&self) -> Self {
         Self {
             backend: self.backend.clone(),
+            limits: self.limits,
             change_rules: Arc::clone(&self.change_rules),
         }
     }
@@ -28,6 +30,13 @@ impl<R> Clone for CoreSpaceTransactionSimulator<R> {
 
 impl CoreSpaceTransactionSimulator<super::DefaultCoreSpaceChangeRules> {
     pub fn new(backend: ConfluxSimulationBackend) -> Self {
+        Self::with_limits(backend, super::CoreSpaceSimulationLimits::default())
+    }
+
+    pub fn with_limits(
+        backend: ConfluxSimulationBackend,
+        limits: super::CoreSpaceSimulationLimits,
+    ) -> Self {
         let change_rules = super::DefaultCoreSpaceChangeRules::new_with_espace(
             backend.chain_spec().core_space_native_currency().clone(),
             backend.chain_spec().espace_native_currency().clone(),
@@ -35,6 +44,7 @@ impl CoreSpaceTransactionSimulator<super::DefaultCoreSpaceChangeRules> {
         );
         Self {
             backend,
+            limits,
             change_rules: Arc::new(change_rules),
         }
     }
@@ -47,6 +57,7 @@ impl<R> CoreSpaceTransactionSimulator<R> {
     {
         CoreSpaceTransactionSimulator {
             backend: self.backend,
+            limits: self.limits,
             change_rules: Arc::new(change_rules),
         }
     }
@@ -61,6 +72,7 @@ impl<R> CoreSpaceTransactionSimulator<R> {
     {
         CoreSpaceTransactionSimulator {
             backend: self.backend,
+            limits: self.limits,
             change_rules: Arc::new(super::CombinedCoreSpaceChangeRules::from_shared(
                 self.change_rules,
                 change_rules,
@@ -113,7 +125,7 @@ impl<R: super::CoreSpaceChangeRules> simulation_core::simulation::SimulationBack
     type Evidence = super::session::CoreSpaceExecutionEvidence;
     type Outcome = CoreSpaceExecutionOutcome;
     type ChangeSet = super::CoreSpaceChangeSet;
-    type AnalysisError = super::CoreSpaceChangeDerivationError;
+    type AnalysisError = super::CoreSpaceAnalysisError;
     type Error = CoreSpaceSimulationError;
 
     async fn prepare(
@@ -205,7 +217,13 @@ impl<R: super::CoreSpaceChangeRules> simulation_core::simulation::SimulationBack
     ) -> Result<simulation_core::simulation::Execution<Self::Evidence, Self::Rejection>, Self::Error>
     {
         let session = CoreSpaceExecutionSession::new(&self.0.backend, prepared.state, runtime)?;
-        session.execute(transaction, prepared.context, prepared.storage_sponsorship)
+        session.execute(
+            transaction,
+            prepared.context,
+            prepared.storage_sponsorship,
+            &self.0.change_rules.checkpoint_filters(),
+            self.0.limits,
+        )
     }
 
     fn is_success(&self, evidence: &Self::Evidence) -> bool {
@@ -222,10 +240,15 @@ impl<R: super::CoreSpaceChangeRules> simulation_core::simulation::SimulationBack
         >,
     ) -> Result<Self::ChangeSet, Self::AnalysisError> {
         let evidence = view.execution();
-        super::changes::check_contract_support(&evidence.record, &evidence.state)?;
-        self.0
-            .change_rules
-            .derive_changes(&evidence.record, &evidence.state)
+        evidence.record.check_observation_limit()?;
+        evidence.record.state().start_analysis();
+        let view = super::CoreSpaceAnalysisView {
+            context: view.context(),
+            transaction: view.transaction(),
+            execution: &evidence.record,
+        };
+        super::changes::check_contract_support(view.execution(), view.state())?;
+        self.0.change_rules.derive_changes(view)
     }
 
     fn into_outcome(&self, evidence: Self::Evidence) -> Self::Outcome {

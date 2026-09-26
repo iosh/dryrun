@@ -1,3 +1,4 @@
+mod analysis;
 use alloy::primitives::B256;
 
 mod chain_spec;
@@ -10,7 +11,6 @@ mod error;
 mod execution;
 mod execution_result;
 mod limits;
-mod observation;
 mod outcome;
 mod rejection;
 mod simulation;
@@ -22,10 +22,10 @@ mod transaction;
 pub(crate) use chain_spec::{EthereumChainSpec, EthereumExecutionSpec};
 pub use changeset::{
     CombinedEvmChangeRules, DefaultEvmChangeRules, EvmAccountDelegation,
-    EvmAccountDelegationChange, EvmAccountDelegationChangeRules, EvmChangeDerivationError,
-    EvmChangeRules, EvmChangeSet, EvmChangeSetBuilder, EvmChanges, EvmNativeAssetChangeRules,
-    EvmNativeCurrency, EvmNativeTransferChange, EvmSelfDestructBurnChange, EvmStandardChange,
-    EvmStateChange, EvmWrappedNativeDepositChange, EvmWrappedNativeWithdrawalChange,
+    EvmAccountDelegationChange, EvmAccountDelegationChangeRules, EvmAnalysisError, EvmChangeRules,
+    EvmChangeSet, EvmChangeSetBuilder, EvmChanges, EvmNativeAssetChangeRules, EvmNativeCurrency,
+    EvmNativeTransferChange, EvmSelfDestructBurnChange, EvmStandardChange, EvmStateChange,
+    EvmWrappedNativeDepositChange, EvmWrappedNativeWithdrawalChange,
 };
 pub(crate) use completion::complete_transaction;
 pub(crate) use context::resolve_block;
@@ -36,15 +36,14 @@ pub use error::{
 };
 pub use execution::{
     EvmCallKind, EvmCommittedFrame, EvmCommittedLog, EvmCommittedSelfdestruct,
-    EvmExecutionPosition, EvmFrameAction, EvmFrameId, EvmObservationError,
-    EvmSemanticLogOccurrence, EvmTransactionExecution,
+    EvmExecutionPosition, EvmFrameAction, EvmFrameId, EvmLogCheckpoint, EvmStorageWrite,
+    EvmTransactionExecution,
 };
 pub(crate) use execution::{
     EvmExecutionObserver, EvmTransactionExecutionResult, EvmTransactionExecutor,
 };
 pub use execution_result::{EvmBlobGasFee, EvmExecutionGasFee, EvmExecutionResult, EvmFee, EvmGas};
 pub use limits::EvmSimulationLimits;
-pub use observation::EvmObservationRequirements;
 pub use outcome::{
     EvmExecutionOutcome, EvmHaltReason, EvmOutOfGasReason, EvmRevertReason, EvmSuccessOutput,
     EvmSuccessReason,
@@ -53,8 +52,7 @@ pub use rejection::EvmTransactionRejection;
 pub use simulation::{EvmBlockContext, EvmSimulation};
 pub use simulator::EvmTransactionSimulator;
 pub use state::{
-    EvmAccountState, EvmOccurrenceHandle, EvmOccurrenceStateReaders, EvmReadCallOutcome,
-    EvmStateAccess, EvmStateReadError, EvmStateReader,
+    EvmAccountState, EvmReadCallOutcome, EvmStateAccess, EvmStateReadError, EvmStateReader,
 };
 pub(crate) use token_changes::EvmTokenChangeRules;
 pub use transaction::{
@@ -89,3 +87,6 @@ pub struct EvmSimulationRequest {
     pub block: EvmBlockSelector,
     pub transaction: TransactionInput,
 }
+
+pub use analysis::EvmAnalysisView;
+pub use simulation_core::observation::LogFilter;

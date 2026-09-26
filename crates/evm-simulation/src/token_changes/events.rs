@@ -4,20 +4,20 @@ use alloy::primitives::{Address, B256, Log, U256};
 use contract_standards::{DecodedStandardEvent, DecodedStandardLog, decode_standard_log};
 
 use crate::{
-    EvmChangeDerivationError,
-    execution::{EvmExecutionPosition, EvmSemanticLogOccurrence, EvmTransactionExecution},
+    EvmAnalysisError,
+    execution::{EvmExecutionPosition, EvmLogCheckpoint, EvmTransactionExecution},
 };
 
 use super::{DEPOSIT_TOPIC0, WITHDRAWAL_TOPIC0, error::token_change_error_at};
 
 #[derive(Debug)]
-pub(super) enum ObservedTokenEvent {
+pub(super) enum ObservedTokenEvent<'a> {
     Standard {
-        occurrence: EvmSemanticLogOccurrence,
+        checkpoint: EvmLogCheckpoint<'a>,
         decoded: DecodedStandardLog<Address>,
     },
     Wrapped {
-        occurrence: EvmSemanticLogOccurrence,
+        checkpoint: EvmLogCheckpoint<'a>,
         contract: Address,
         account: Address,
         amount: U256,
@@ -32,8 +32,8 @@ pub(super) enum WrappedOperation {
 }
 
 #[derive(Debug)]
-pub(super) struct TokenEventSequence {
-    pub(super) events: Vec<ObservedTokenEvent>,
+pub(super) struct TokenEventSequence<'a> {
+    pub(super) events: Vec<ObservedTokenEvent<'a>>,
     pub(super) pairs: Vec<WrappedEventPair>,
 }
 
@@ -75,15 +75,15 @@ impl WrappedPairProof {
     }
 }
 
-pub(super) fn collect_token_events(
-    execution: &EvmTransactionExecution,
+pub(super) fn collect_token_events<'a>(
+    execution: &'a EvmTransactionExecution,
     wrapped_native_token: Option<Address>,
-) -> Result<TokenEventSequence, EvmChangeDerivationError> {
-    let occurrences = execution.semantic_log_occurrences()?;
+) -> Result<TokenEventSequence<'a>, EvmAnalysisError> {
+    let checkpoints = execution.log_checkpoints();
     let mut events = Vec::new();
 
-    for occurrence in occurrences {
-        let log = occurrence.log();
+    for checkpoint in checkpoints {
+        let log = checkpoint.log();
         let Some(topic0) = log.data.topics().first() else {
             continue;
         };
@@ -92,9 +92,9 @@ pub(super) fn collect_token_events(
             && (*topic0 == *DEPOSIT_TOPIC0 || *topic0 == *WITHDRAWAL_TOPIC0)
         {
             let (account, amount, direction) = decode_wrapped_log(log)
-                .map_err(|error| token_change_error_at(occurrence.position(), error))?;
+                .map_err(|error| token_change_error_at(checkpoint.position(), error))?;
             events.push(ObservedTokenEvent::Wrapped {
-                occurrence: occurrence.clone(),
+                checkpoint,
                 contract: log.address,
                 account,
                 amount,
@@ -113,7 +113,7 @@ pub(super) fn collect_token_events(
             continue;
         };
         events.push(ObservedTokenEvent::Standard {
-            occurrence: occurrence.clone(),
+            checkpoint,
             decoded,
         });
     }
@@ -124,13 +124,13 @@ pub(super) fn collect_token_events(
     })
 }
 
-fn pair_wrapped_events(events: &[ObservedTokenEvent]) -> Vec<WrappedEventPair> {
+fn pair_wrapped_events(events: &[ObservedTokenEvent<'_>]) -> Vec<WrappedEventPair> {
     let mut used_wrapped = HashSet::new();
     let mut pairs = Vec::new();
 
     for (transfer_event_index, event) in events.iter().enumerate() {
         let ObservedTokenEvent::Standard {
-            occurrence,
+            checkpoint,
             decoded,
         } = event
         else {
@@ -160,7 +160,7 @@ fn pair_wrapped_events(events: &[ObservedTokenEvent]) -> Vec<WrappedEventPair> {
                     return false;
                 }
                 let ObservedTokenEvent::Wrapped {
-                    occurrence: wrapped_occurrence,
+                    checkpoint: wrapped_occurrence,
                     contract: wrapped_contract,
                     account: wrapped_account,
                     amount: wrapped_amount,
@@ -169,7 +169,7 @@ fn pair_wrapped_events(events: &[ObservedTokenEvent]) -> Vec<WrappedEventPair> {
                 else {
                     return false;
                 };
-                occurrence.frame_id() == wrapped_occurrence.frame_id()
+                checkpoint.frame_id() == wrapped_occurrence.frame_id()
                     && *wrapped_contract == *token
                     && *wrapped_account == account
                     && *wrapped_amount == *amount
@@ -180,13 +180,13 @@ fn pair_wrapped_events(events: &[ObservedTokenEvent]) -> Vec<WrappedEventPair> {
         };
 
         used_wrapped.insert(wrapped_event_index);
-        let ObservedTokenEvent::Wrapped { occurrence, .. } = wrapped else {
+        let ObservedTokenEvent::Wrapped { checkpoint, .. } = wrapped else {
             unreachable!("pair search only returns wrapped events");
         };
         pairs.push(WrappedEventPair {
             transfer_event_index,
             wrapped_event_index,
-            position: occurrence.position(),
+            position: checkpoint.position(),
             direction,
             amount: *amount,
         });
