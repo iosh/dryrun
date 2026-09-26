@@ -26,7 +26,7 @@ enum CrossSpaceOperation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CommittedCrossSpaceTransfer {
+pub(super) enum CommittedCrossSpaceTransfer {
     ToEspace {
         position: usize,
         parent_frame_id: FrameId,
@@ -46,15 +46,39 @@ pub(crate) enum CommittedCrossSpaceTransfer {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct CommittedCrossSpaceScopes {
-    pub(crate) roots: Vec<FrameId>,
-    pub(crate) transfers: Vec<CommittedCrossSpaceTransfer>,
+pub(super) struct CommittedCrossSpaceScopes {
+    pub(super) roots: Vec<FrameId>,
+    pub(super) transfers: Vec<CommittedCrossSpaceTransfer>,
 }
 
-/// Collect committed nested eSpace scopes and their canonical value movements.
-/// This runs while the finalized Core execution record is assembled, before
-/// change rules inspect logs or child frames.
-pub(crate) fn collect_committed_espace_scopes(
+impl CommittedCrossSpaceScopes {
+    pub(super) fn is_parent(&self, frame_id: FrameId) -> bool {
+        self.transfers.iter().any(|transfer| match transfer {
+            CommittedCrossSpaceTransfer::ToEspace {
+                parent_frame_id, ..
+            }
+            | CommittedCrossSpaceTransfer::ToCoreSpace {
+                parent_frame_id, ..
+            } => *parent_frame_id == frame_id,
+        })
+    }
+    pub(super) fn is_scope_parent(
+        &self,
+        trace: &CommittedExecutionTrace,
+        frame_id: FrameId,
+    ) -> bool {
+        self.roots
+            .iter()
+            .any(|root| trace.frame(*root).parent_id == Some(frame_id))
+    }
+    pub(super) fn owns_value_transfer(&self, frame_id: FrameId) -> bool {
+        self.transfers.iter().any(|transfer| matches!(transfer,
+            CommittedCrossSpaceTransfer::ToEspace { child_frame_id, .. } if *child_frame_id == frame_id))
+    }
+}
+
+/// Pair bridge calls, committed child frames and protocol movements.
+pub(super) fn collect_committed_espace_scopes(
     trace: &CommittedExecutionTrace,
 ) -> Result<CommittedCrossSpaceScopes, CoreSpaceProtocolError> {
     let contract = cfx_parameters::internal_contract_addresses::CROSS_SPACE_CONTRACT_ADDRESS;

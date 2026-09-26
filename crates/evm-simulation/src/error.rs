@@ -1,6 +1,8 @@
 use alloy::transports::TransportError;
 use revm::database::AlloyDBError;
 use simulation_core::error::{Diagnostic, ErrorCode as Code, ErrorInfo};
+use simulation_core::observation::AnalysisLimitExceeded;
+use std::error::Error as StdError;
 use thiserror::Error;
 
 use crate::{EvmBlockSelector, TransactionInputError, chain_spec::EthereumChainSpecError};
@@ -279,10 +281,10 @@ impl ErrorInfo for crate::EvmStateReadError {
 impl ErrorInfo for crate::EvmAnalysisError {
     fn diagnostic(&self) -> Diagnostic {
         match self {
+            Self::Coverage(error) => error.diagnostic(),
             Self::LimitExceeded(error) => error.diagnostic(),
             Self::StateRead(error) => error.diagnostic(),
             Self::Unsupported { .. } => Code::AnalysisUnsupported.diagnostic(),
-            Self::Conflict { .. } => Code::AnalysisValidationFailed.diagnostic(),
             Self::RuleFailure { source, .. } => source_diagnostic(source.as_ref()),
         }
     }
@@ -311,5 +313,38 @@ fn source_diagnostic(mut error: &(dyn std::error::Error + 'static)) -> Diagnosti
             return Code::AnalysisValidationFailed.diagnostic();
         };
         error = source;
+    }
+}
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum EvmAnalysisError {
+    #[error(transparent)]
+    Coverage(#[from] simulation_core::analysis::CoverageError),
+    #[error("unsupported contract behavior: {details}")]
+    Unsupported { details: String },
+    #[error(transparent)]
+    LimitExceeded(#[from] AnalysisLimitExceeded),
+
+    #[error(transparent)]
+    StateRead(#[from] crate::EvmStateReadError),
+
+    #[error("{rules} change rules could not derive complete changes: {source}")]
+    RuleFailure {
+        rules: &'static str,
+        #[source]
+        source: Box<dyn StdError + Send + Sync + 'static>,
+    },
+}
+
+impl EvmAnalysisError {
+    pub fn rule_failure(
+        rules: &'static str,
+        source: impl StdError + Send + Sync + 'static,
+    ) -> Self {
+        Self::RuleFailure {
+            rules,
+            source: Box::new(source),
+        }
     }
 }

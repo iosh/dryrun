@@ -23,7 +23,7 @@ const fn charset_index() -> [i8; 128] {
 
 const CHARSET_INDEX: [i8; 128] = charset_index();
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Network {
     Main,
     Test,
@@ -85,7 +85,7 @@ pub enum NetworkError {
     OutOfRange(u64),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CoreAddress {
     bytes: [u8; 20],
     network: Network,

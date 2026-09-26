@@ -1,6 +1,6 @@
-use simulation_core::simulation::Simulation;
 use std::sync::Arc;
 
+use simulation_core::simulation::Simulation;
 use tokio::runtime::Handle;
 
 use crate::{ConfluxSimulationBackend, state::ConfluxStateSource};
@@ -12,76 +12,52 @@ use super::{
     complete_transaction, prepare_core_space_context, session::CoreSpaceExecutionSession,
 };
 
-pub struct CoreSpaceTransactionSimulator<R = super::DefaultCoreSpaceChangeRules> {
+pub struct CoreSpaceTransactionSimulator {
     backend: ConfluxSimulationBackend,
     limits: super::CoreSpaceSimulationLimits,
-    change_rules: Arc<R>,
+    analyzers: Arc<super::CoreSpaceAnalyzerRegistry>,
 }
 
-impl<R> Clone for CoreSpaceTransactionSimulator<R> {
+impl Clone for CoreSpaceTransactionSimulator {
     fn clone(&self) -> Self {
         Self {
             backend: self.backend.clone(),
             limits: self.limits,
-            change_rules: Arc::clone(&self.change_rules),
+            analyzers: Arc::clone(&self.analyzers),
         }
     }
 }
 
-impl CoreSpaceTransactionSimulator<super::DefaultCoreSpaceChangeRules> {
-    pub fn new(backend: ConfluxSimulationBackend) -> Self {
-        Self::with_limits(backend, super::CoreSpaceSimulationLimits::default())
-    }
-
-    pub fn with_limits(
+impl CoreSpaceTransactionSimulator {
+    pub fn new(
         backend: ConfluxSimulationBackend,
         limits: super::CoreSpaceSimulationLimits,
     ) -> Self {
-        let change_rules = super::DefaultCoreSpaceChangeRules::new_with_espace(
+        let analyzers = super::analysis::default_registry(
             backend.chain_spec().core_space_native_currency().clone(),
             backend.chain_spec().espace_native_currency().clone(),
-            crate::espace::DefaultEspaceChangeRules::MAINNET_WCFX,
         );
         Self {
             backend,
             limits,
-            change_rules: Arc::new(change_rules),
+            analyzers: Arc::new(analyzers),
         }
     }
 }
 
-impl<R> CoreSpaceTransactionSimulator<R> {
-    pub fn with_change_rules<N>(self, change_rules: N) -> CoreSpaceTransactionSimulator<N>
-    where
-        N: super::CoreSpaceChangeRules,
-    {
-        CoreSpaceTransactionSimulator {
-            backend: self.backend,
-            limits: self.limits,
-            change_rules: Arc::new(change_rules),
-        }
+impl CoreSpaceTransactionSimulator {
+    pub fn with_analyzers(mut self, analyzers: super::CoreSpaceAnalyzerRegistry) -> Self {
+        self.analyzers = Arc::new(analyzers);
+        self
+    }
+    pub fn with_analyzer(
+        mut self,
+        analyzer: impl simulation_core::analysis::Analyzer<super::CoreSpaceAnalysisDomain>,
+    ) -> Result<Self, simulation_core::analysis::RegistryError> {
+        self.analyzers = Arc::new(self.analyzers.with_analyzer(analyzer)?);
+        Ok(self)
     }
 
-    pub fn with_additional_change_rules<N>(
-        self,
-        change_rules: N,
-    ) -> CoreSpaceTransactionSimulator<super::CombinedCoreSpaceChangeRules<R, N>>
-    where
-        R: super::CoreSpaceChangeRules,
-        N: super::CoreSpaceChangeRules,
-    {
-        CoreSpaceTransactionSimulator {
-            backend: self.backend,
-            limits: self.limits,
-            change_rules: Arc::new(super::CombinedCoreSpaceChangeRules::from_shared(
-                self.change_rules,
-                change_rules,
-            )),
-        }
-    }
-}
-
-impl<R: super::CoreSpaceChangeRules> CoreSpaceTransactionSimulator<R> {
     /// Simulates one Core Space transaction inside the caller's active Tokio runtime.
     /// Uses a fixed epoch and checks its pivot before execution and result delivery.
     /// Separate state RPCs do not provide an atomic snapshot during a reorganization.
@@ -106,16 +82,14 @@ impl<R: super::CoreSpaceChangeRules> CoreSpaceTransactionSimulator<R> {
     }
 }
 
-struct CoreSpaceBackend<R>(CoreSpaceTransactionSimulator<R>);
+struct CoreSpaceBackend(CoreSpaceTransactionSimulator);
 struct PreparedCoreSpaceExecution {
     context: crate::context::ExecutionBlockContext,
     storage_sponsorship: Option<super::StorageSponsorship>,
     state: ConfluxStateSource,
 }
 
-impl<R: super::CoreSpaceChangeRules> simulation_core::simulation::SimulationBackend
-    for CoreSpaceBackend<R>
-{
+impl simulation_core::simulation::SimulationBackend for CoreSpaceBackend {
     type Request = CoreSpaceSimulationRequest;
     type Context = super::CoreSpaceBlockContext;
     type Transaction = CoreSpaceTypedTransaction;
@@ -202,9 +176,9 @@ impl<R: super::CoreSpaceChangeRules> simulation_core::simulation::SimulationBack
             context: context.public_context,
             transaction,
             execution: PreparedCoreSpaceExecution {
+                state,
                 context: context.execution_block_context,
                 storage_sponsorship,
-                state,
             },
         })
     }
@@ -221,7 +195,7 @@ impl<R: super::CoreSpaceChangeRules> simulation_core::simulation::SimulationBack
             transaction,
             prepared.context,
             prepared.storage_sponsorship,
-            &self.0.change_rules.checkpoint_filters(),
+            self.0.analyzers.checkpoint_filters(),
             self.0.limits,
         )
     }
@@ -246,9 +220,11 @@ impl<R: super::CoreSpaceChangeRules> simulation_core::simulation::SimulationBack
             context: view.context(),
             transaction: view.transaction(),
             execution: &evidence.record,
+            espace_chain_id: self.0.backend.chain_spec().espace_chain_id(),
         };
-        super::changes::check_contract_support(view.execution(), view.state())?;
-        self.0.change_rules.derive_changes(view)
+        let mut changes = self.0.analyzers.analyze(view)?;
+        changes.load_metadata(evidence.record.state())?;
+        Ok(changes)
     }
 
     fn into_outcome(&self, evidence: Self::Evidence) -> Self::Outcome {

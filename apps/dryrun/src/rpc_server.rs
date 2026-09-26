@@ -109,17 +109,15 @@ async fn add_conflux_rpc_module(
         .map_err(|error| {
             startup_error(format!("failed to initialize Conflux simulation: {error}"))
         })?;
-    let core_space_address_network = backend.core_space_address_network();
     let espace_simulator = EspaceTransactionSimulator::new(backend.clone(), config.espace_limits);
     let core_space_simulator =
-        CoreSpaceTransactionSimulator::with_limits(backend, config.core_space_limits);
+        CoreSpaceTransactionSimulator::new(backend, config.core_space_limits);
 
     rpc_module
         .merge(build_conflux_rpc_module(
             espace_simulator,
             core_space_simulator,
             simulation_tasks,
-            core_space_address_network,
         ))
         .map_err(|error| startup_error(format!("failed to merge Conflux RPC module: {error}")))
 }

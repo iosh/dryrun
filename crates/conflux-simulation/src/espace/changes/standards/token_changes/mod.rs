@@ -12,11 +12,11 @@ use alloy::primitives::Address;
 
 use crate::espace::{EspaceAnalysisError, EspaceExecutedTransaction, EspaceStateAccess};
 
-use super::{super::EspaceStandardChange, load_metadata};
+use super::super::EspaceStandardChange;
 
 use self::{
     error::state_mismatch_at,
-    events::{ObservedTokenEvent, collect_token_events, required_metadata_calls},
+    events::{ObservedTokenEvent, collect_token_events},
     sequence_verification::{verify_event, verify_final_state},
     verified_changes::VerifiedTokenChange,
 };
@@ -34,7 +34,6 @@ pub(crate) enum VerifiedChange {
         account: Address,
         amount: alloy::primitives::U256,
         direction: WrappedOperation,
-        metadata: contract_standards::Erc20Metadata,
     },
 }
 
@@ -42,8 +41,9 @@ pub(crate) fn derive_verified_changes(
     execution: &EspaceExecutedTransaction,
     state: &EspaceStateAccess,
     wrapped_native_token: Address,
+    scope: &simulation_core::analysis::AnalysisScope<'_>,
 ) -> Result<Vec<VerifiedChange>, EspaceAnalysisError> {
-    let sequence = collect_token_events(execution, wrapped_native_token)?;
+    let sequence = collect_token_events(execution, wrapped_native_token, scope)?;
     let events = sequence.events;
     if events.is_empty() {
         return Ok(Vec::new());
@@ -75,17 +75,25 @@ pub(crate) fn derive_verified_changes(
     }
     verify_final_state(&final_state_expectations, state)?;
 
-    let metadata_values = load_metadata(state.finalized(), required_metadata_calls(&events))?;
     let mut changes = Vec::with_capacity(events.len());
-    for (event, verified) in events.into_iter().zip(verified_events) {
+    for (index, (event, verified)) in events.into_iter().zip(verified_events).enumerate() {
         match (event, verified) {
             (
                 ObservedTokenEvent::Standard { checkpoint, .. },
                 VerifiedTokenChange::Standard(verified),
-            ) => changes.push(VerifiedChange::Standard {
-                position: checkpoint.position().index(),
-                change: verified.into_change(&metadata_values),
-            }),
+            ) => {
+                if sequence
+                    .pairs
+                    .iter()
+                    .any(|pair| pair.transfer_event_index == index)
+                {
+                    continue;
+                }
+                changes.push(VerifiedChange::Standard {
+                    position: checkpoint.position().index(),
+                    change: verified.into_change(),
+                });
+            }
             (
                 ObservedTokenEvent::Wrapped {
                     checkpoint,
@@ -96,14 +104,12 @@ pub(crate) fn derive_verified_changes(
                 },
                 VerifiedTokenChange::Wrapped,
             ) => {
-                let token_metadata = metadata_values.erc20(&contract);
                 changes.push(VerifiedChange::Wrapped {
                     position: checkpoint.position().index(),
                     contract,
                     account,
                     amount,
                     direction,
-                    metadata: token_metadata,
                 });
             }
             _ => unreachable!("verification preserves the observed token event kind"),

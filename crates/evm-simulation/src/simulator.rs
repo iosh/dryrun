@@ -8,34 +8,33 @@ use alloy::{
 use tokio::runtime::Handle;
 
 use crate::{
-    EthereumChainSpec, EvmBlockContext, EvmExecutionObserver, EvmExecutionOutcome,
-    EvmInitializationError, EvmSimulation, EvmSimulationError, EvmSimulationLimits,
-    EvmSimulationRequest, EvmTransactionExecutionResult, EvmTransactionExecutor, TypedTransaction,
-    changeset::{CombinedEvmChangeRules, DefaultEvmChangeRules, EvmChangeRules, EvmChangeSet},
-    resolve_block,
+    EthereumChainSpec, EvmAnalysisDomain, EvmAnalysisView, EvmAnalyzerRegistry, EvmBlockContext,
+    EvmChangeSet, EvmExecutionObserver, EvmExecutionOutcome, EvmInitializationError, EvmSimulation,
+    EvmSimulationError, EvmSimulationLimits, EvmSimulationRequest, EvmTransactionExecutionResult,
+    EvmTransactionExecutor, TypedTransaction, analysis::default_registry, resolve_block,
     state::EvmStateSource,
 };
 
 #[derive(Debug)]
-pub struct EvmTransactionSimulator<R = DefaultEvmChangeRules> {
+pub struct EvmTransactionSimulator {
     provider: DynProvider<Ethereum>,
     chain_spec: Arc<EthereumChainSpec>,
-    change_rules: Arc<R>,
+    analyzers: Arc<EvmAnalyzerRegistry>,
     limits: EvmSimulationLimits,
 }
 
-impl<R> Clone for EvmTransactionSimulator<R> {
+impl Clone for EvmTransactionSimulator {
     fn clone(&self) -> Self {
         Self {
             provider: self.provider.clone(),
             chain_spec: Arc::clone(&self.chain_spec),
-            change_rules: Arc::clone(&self.change_rules),
-            limits: self.limits.clone(),
+            analyzers: Arc::clone(&self.analyzers),
+            limits: self.limits,
         }
     }
 }
 
-impl EvmTransactionSimulator<DefaultEvmChangeRules> {
+impl EvmTransactionSimulator {
     pub async fn ethereum_mainnet(
         provider: DynProvider<Ethereum>,
         limits: EvmSimulationLimits,
@@ -53,53 +52,33 @@ impl EvmTransactionSimulator<DefaultEvmChangeRules> {
             });
         }
 
-        let change_rules = DefaultEvmChangeRules::with_wrapped_native_token(
+        let analyzers = default_registry(
             chain_spec.native_currency().clone(),
             chain_spec.wrapped_native_token_address(),
         );
         Ok(Self {
             provider,
             chain_spec: Arc::new(chain_spec),
-            change_rules: Arc::new(change_rules),
+            analyzers: Arc::new(analyzers),
             limits,
         })
     }
 }
 
-impl<R> EvmTransactionSimulator<R> {
-    pub fn with_change_rules<N>(self, change_rules: N) -> EvmTransactionSimulator<N>
-    where
-        N: EvmChangeRules,
-    {
-        EvmTransactionSimulator {
-            provider: self.provider,
-            chain_spec: self.chain_spec,
-            change_rules: Arc::new(change_rules),
-            limits: self.limits,
-        }
+impl EvmTransactionSimulator {
+    pub fn with_analyzers(mut self, analyzers: EvmAnalyzerRegistry) -> Self {
+        self.analyzers = Arc::new(analyzers);
+        self
     }
 
-    pub fn with_additional_change_rules<N>(
-        self,
-        change_rules: N,
-    ) -> EvmTransactionSimulator<CombinedEvmChangeRules<R, N>>
-    where
-        R: EvmChangeRules,
-        N: EvmChangeRules,
-    {
-        EvmTransactionSimulator {
-            provider: self.provider,
-            chain_spec: self.chain_spec,
-            change_rules: Arc::new(CombinedEvmChangeRules::from_shared(
-                self.change_rules,
-                change_rules,
-            )),
-            limits: self.limits,
-        }
+    pub fn with_analyzer(
+        mut self,
+        analyzer: impl simulation_core::analysis::Analyzer<EvmAnalysisDomain>,
+    ) -> Result<Self, simulation_core::analysis::RegistryError> {
+        self.analyzers = Arc::new(self.analyzers.with_analyzer(analyzer)?);
+        Ok(self)
     }
-}
 
-impl<R: EvmChangeRules> EvmTransactionSimulator<R> {
     /// Simulates one transaction inside the caller's active Tokio runtime.
     pub async fn simulate(
         &self,
@@ -109,9 +88,9 @@ impl<R: EvmChangeRules> EvmTransactionSimulator<R> {
     }
 }
 
-struct EthereumBackend<R>(EvmTransactionSimulator<R>);
+struct EthereumBackend(EvmTransactionSimulator);
 
-impl<R: EvmChangeRules> simulation_core::simulation::SimulationBackend for EthereumBackend<R> {
+impl simulation_core::simulation::SimulationBackend for EthereumBackend {
     type Request = EvmSimulationRequest;
     type Context = EvmBlockContext;
     type Transaction = TypedTransaction;
@@ -170,7 +149,7 @@ impl<R: EvmChangeRules> simulation_core::simulation::SimulationBackend for Ether
     ) -> Result<simulation_core::simulation::Execution<Self::Evidence, Self::Rejection>, Self::Error>
     {
         use simulation_core::simulation::Execution;
-        let checkpoint_filters = self.0.change_rules.checkpoint_filters();
+        let checkpoint_filters = self.0.analyzers.checkpoint_filters().to_vec();
         let state_source =
             EvmStateSource::new(self.0.provider.clone(), runtime_handle, block.hash());
         let executor = EvmTransactionExecutor::new(
@@ -205,13 +184,14 @@ impl<R: EvmChangeRules> simulation_core::simulation::SimulationBackend for Ether
     ) -> Result<Self::ChangeSet, Self::AnalysisError> {
         let execution = view.execution();
         execution.check_observation_limit()?;
-        let view = crate::EvmAnalysisView {
+        let view = EvmAnalysisView {
             context: view.context(),
             transaction: view.transaction(),
             execution,
         };
-        crate::changeset::check_contract_support(execution, view.state())?;
-        self.0.change_rules.derive_changes(view)
+        let mut changes = self.0.analyzers.analyze(view)?;
+        changes.load_metadata(execution.state().finalized())?;
+        Ok(changes)
     }
 
     fn into_outcome(&self, evidence: Self::Evidence) -> Self::Outcome {

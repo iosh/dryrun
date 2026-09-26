@@ -3,8 +3,6 @@ use contract_standards::Erc1155TransferItem;
 
 use crate::EvmStandardChange;
 
-use super::metadata::TokenMetadataOutcomes;
-
 #[derive(Debug)]
 pub(super) enum VerifiedTokenEvent {
     Standard(VerifiedTokenChange),
@@ -64,7 +62,7 @@ pub(super) enum VerifiedTokenChange {
 }
 
 impl VerifiedTokenChange {
-    pub(super) fn into_change(self, metadata: &TokenMetadataOutcomes) -> EvmStandardChange {
+    pub(super) fn into_change(self) -> EvmStandardChange {
         match self {
             Self::Erc20Transfer {
                 contract,
@@ -72,20 +70,17 @@ impl VerifiedTokenChange {
                 to,
                 amount,
             } => {
-                let metadata = metadata.erc20(&contract);
                 if from == Address::ZERO {
                     EvmStandardChange::Erc20Mint {
                         contract_address: contract,
                         to,
                         raw_amount: amount,
-                        metadata,
                     }
                 } else if to == Address::ZERO {
                     EvmStandardChange::Erc20Burn {
                         contract_address: contract,
                         from,
                         raw_amount: amount,
-                        metadata,
                     }
                 } else {
                     EvmStandardChange::Erc20Transfer {
@@ -93,7 +88,6 @@ impl VerifiedTokenChange {
                         from,
                         to,
                         raw_amount: amount,
-                        metadata,
                     }
                 }
             }
@@ -109,7 +103,6 @@ impl VerifiedTokenChange {
                 spender,
                 before,
                 after,
-                metadata: metadata.erc20(&contract),
             },
             Self::Erc721Transfer {
                 contract,
@@ -117,20 +110,17 @@ impl VerifiedTokenChange {
                 to,
                 token_id,
             } => {
-                let metadata = metadata.erc721(&contract);
                 if from == Address::ZERO {
                     EvmStandardChange::Erc721Mint {
                         contract_address: contract,
                         to,
                         token_id,
-                        metadata,
                     }
                 } else if to == Address::ZERO {
                     EvmStandardChange::Erc721Burn {
                         contract_address: contract,
                         from,
                         token_id,
-                        metadata,
                     }
                 } else {
                     EvmStandardChange::Erc721Transfer {
@@ -138,7 +128,6 @@ impl VerifiedTokenChange {
                         from,
                         to,
                         token_id,
-                        metadata,
                     }
                 }
             }
@@ -154,7 +143,6 @@ impl VerifiedTokenChange {
                 before,
                 after,
                 token_id,
-                metadata: metadata.erc721(&contract),
             },
             Self::OperatorApproval {
                 contract,

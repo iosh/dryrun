@@ -1,1239 +1,108 @@
-use crate::espace::EspaceAnalysisView;
-use simulation_core::observation::LogFilter;
-mod native;
 mod standards;
 mod wrapped_native;
+use super::EspaceAnalysisError;
+use super::{EspaceAnalysisDomain, EspaceAnalysisView, EspaceFrameAction};
+use simulation_core::analysis::*;
+pub(crate) mod native;
+use super::{EspaceAccountState, EspaceExecutedTransaction, EspaceStateAccess};
+use alloy_primitives::Address;
+use simulation_core::changes::ChangePosition;
+use std::collections::BTreeMap;
 
-use std::{collections::BTreeMap, sync::Arc};
-
-use alloy_primitives::{Address, U256};
-use contract_standards::{
-    Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem, StandardChange,
-    decode_standard_log,
-};
-
-use crate::execution::{CommittedExecutionTrace, TraceEvent};
-
-use super::{
-    EspaceAccountState, EspaceAnalysisError, EspaceExecutedTransaction, EspaceExecutionPosition,
-    EspaceStateAccess,
-};
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EspaceNativeCurrency {
-    pub name: String,
-    pub symbol: String,
-    pub decimals: u8,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EspaceChange {
-    NativeTransfer {
-        from: Address,
-        to: Address,
-        raw_amount: U256,
-        currency: EspaceNativeCurrency,
-    },
-    SelfDestructBurn {
-        contract_address: Address,
-        raw_amount: U256,
-        currency: EspaceNativeCurrency,
-    },
-    WrappedNativeDeposit {
-        contract_address: Address,
-        account: Address,
-        raw_amount: U256,
-        metadata: Erc20Metadata,
-    },
-    WrappedNativeWithdrawal {
-        contract_address: Address,
-        account: Address,
-        raw_amount: U256,
-        metadata: Erc20Metadata,
-    },
-    Standard(StandardChange<Address>),
-}
-
-/// A verified standalone eSpace change.  `EspaceChange` below is retained for
-/// Core Space's legacy nested analysis and must not be used at the standalone
-/// RPC boundary.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EspaceStateChange {
-    NativeTransfer(EspaceNativeTransferChange),
-    SelfDestructBurn(EspaceSelfDestructBurnChange),
-    WrappedNativeDeposit(EspaceWrappedNativeDepositChange),
-    WrappedNativeWithdrawal(EspaceWrappedNativeWithdrawalChange),
-    Standard(EspaceStandardChange),
-    AccountDelegation(EspaceAccountDelegationChange),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EspaceNativeTransferChange {
-    pub from: Address,
-    pub to: Address,
-    pub raw_amount: U256,
-    pub currency: EspaceNativeCurrency,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EspaceSelfDestructBurnChange {
-    pub contract_address: Address,
-    pub raw_amount: U256,
-    pub currency: EspaceNativeCurrency,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EspaceWrappedNativeDepositChange {
-    pub contract_address: Address,
-    pub account: Address,
-    pub raw_amount: U256,
-    pub metadata: Erc20Metadata,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EspaceWrappedNativeWithdrawalChange {
-    pub contract_address: Address,
-    pub account: Address,
-    pub raw_amount: U256,
-    pub metadata: Erc20Metadata,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EspaceAccountDelegationChange {
-    pub account: Address,
-    pub before: EspaceAccountDelegation,
-    pub after: EspaceAccountDelegation,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EspaceAccountDelegation {
-    pub delegate: Option<Address>,
-    pub nonce: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EspaceStandardChange {
-    Erc20Transfer {
-        contract_address: Address,
-        from: Address,
-        to: Address,
-        raw_amount: U256,
-        metadata: Erc20Metadata,
-    },
-    Erc20Mint {
-        contract_address: Address,
-        to: Address,
-        raw_amount: U256,
-        metadata: Erc20Metadata,
-    },
-    Erc20Burn {
-        contract_address: Address,
-        from: Address,
-        raw_amount: U256,
-        metadata: Erc20Metadata,
-    },
-    Erc20Approval {
-        contract_address: Address,
-        owner: Address,
-        spender: Address,
-        before: U256,
-        after: U256,
-        metadata: Erc20Metadata,
-    },
-    Erc721Transfer {
-        contract_address: Address,
-        from: Address,
-        to: Address,
-        token_id: U256,
-        metadata: Erc721CollectionMetadata,
-    },
-    Erc721Mint {
-        contract_address: Address,
-        to: Address,
-        token_id: U256,
-        metadata: Erc721CollectionMetadata,
-    },
-    Erc721Burn {
-        contract_address: Address,
-        from: Address,
-        token_id: U256,
-        metadata: Erc721CollectionMetadata,
-    },
-    Erc721Approval {
-        contract_address: Address,
-        owner: Address,
-        before: Option<Address>,
-        after: Option<Address>,
-        token_id: U256,
-        metadata: Erc721CollectionMetadata,
-    },
-    OperatorApproval {
-        contract_address: Address,
-        owner: Address,
-        operator: Address,
-        before: bool,
-        after: bool,
-    },
-    Erc1155TransferSingle {
-        contract_address: Address,
-        operator: Address,
-        from: Address,
-        to: Address,
-        token_id: U256,
-        raw_amount: U256,
-    },
-    Erc1155MintSingle {
-        contract_address: Address,
-        operator: Address,
-        to: Address,
-        token_id: U256,
-        raw_amount: U256,
-    },
-    Erc1155BurnSingle {
-        contract_address: Address,
-        operator: Address,
-        from: Address,
-        token_id: U256,
-        raw_amount: U256,
-    },
-    Erc1155TransferBatch {
-        contract_address: Address,
-        operator: Address,
-        from: Address,
-        to: Address,
-        items: Vec<Erc1155TransferItem>,
-    },
-    Erc1155MintBatch {
-        contract_address: Address,
-        operator: Address,
-        to: Address,
-        items: Vec<Erc1155TransferItem>,
-    },
-    Erc1155BurnBatch {
-        contract_address: Address,
-        operator: Address,
-        from: Address,
-        items: Vec<Erc1155TransferItem>,
-    },
-}
-
-/// The verified changes produced by one finalized eSpace execution.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct EspaceChangeSet {
-    items: Vec<EspaceStateChange>,
-    entries: Vec<EspaceChangeEntry>,
-}
-
-impl EspaceChangeSet {
-    pub fn items(&self) -> &[EspaceStateChange] {
-        &self.items
-    }
-
-    pub fn into_items(self) -> Vec<EspaceStateChange> {
-        self.items
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
-    }
-
-    fn merge(self, other: Self) -> Result<Self, EspaceAnalysisError> {
-        let mut builder = EspaceChangeSetBuilder::new();
-        for entry in self.entries.into_iter().chain(other.entries) {
-            builder.insert_entry(entry)?;
-        }
-        Ok(builder.finish())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct EspaceChangeEntry {
-    position: EspaceChangePosition,
-    change: EspaceStateChange,
-    metadata_conflicts: EspaceMetadataConflicts,
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct EspaceMetadataConflicts {
-    name: bool,
-    symbol: bool,
-    decimals: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum EspaceChangePosition {
-    PreExecution,
-    Execution(EspaceExecutionPosition),
-}
-
-impl EspaceChangePosition {
-    fn index(self) -> usize {
-        match self {
-            Self::PreExecution => 0,
-            Self::Execution(position) => position.index().saturating_add(1),
-        }
-    }
-}
-
-/// A change result is either complete (including a verified empty set) or
-/// unavailable because the required evidence could not be established.
+pub type EspaceChange = simulation_core::changes::AssetChange;
+pub type EspaceStateChange = simulation_core::changes::AssetChange;
+pub type EspaceChangeSet = simulation_core::changes::AssetChangeSet;
+pub type EspaceNativeCurrency = simulation_core::changes::NativeCurrency;
+pub type EspaceNativeTransferChange = simulation_core::changes::NativeTransfer;
+pub type EspaceSelfDestructBurnChange = simulation_core::changes::NativeBurn;
+pub type EspaceAccountDelegationChange = simulation_core::changes::DelegationChange;
+pub type EspaceAccountDelegation = simulation_core::changes::AccountDelegation;
+pub type EspaceWrappedNativeDepositChange = simulation_core::changes::WrappedNativeChange;
+pub type EspaceWrappedNativeWithdrawalChange = simulation_core::changes::WrappedNativeChange;
+pub type EspaceStandardChange = contract_standards::StandardChange<Address>;
 pub type EspaceChanges = simulation_core::simulation::Changes<EspaceChangeSet, EspaceAnalysisError>;
 
-/// A replaceable, statically composable eSpace change-rule component.
-/// Rules run only after successful execution. The configured composition must
-/// account for every supported effect or return an error; partial sets are not published.
-pub trait EspaceChangeRules: Send + Sync + 'static {
-    fn checkpoint_filters(&self) -> Vec<LogFilter>;
-
-    fn derive_changes(
-        &self,
-        view: EspaceAnalysisView<'_>,
-    ) -> Result<EspaceChangeSet, EspaceAnalysisError>;
-
-    fn combine<R>(self, other: R) -> CombinedEspaceChangeRules<Self, R>
-    where
-        Self: Sized,
-        R: EspaceChangeRules,
-    {
-        CombinedEspaceChangeRules::new(self, other)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct CombinedEspaceChangeRules<A, B> {
-    first: Arc<A>,
-    second: Arc<B>,
-}
-
-impl<A, B> CombinedEspaceChangeRules<A, B> {
-    pub fn new(first: A, second: B) -> Self {
-        Self {
-            first: Arc::new(first),
-            second: Arc::new(second),
+pub(crate) fn derive_delegation(
+    execution: &EspaceExecutedTransaction,
+    state: &EspaceStateAccess,
+    scope: &AnalysisScope<'_>,
+) -> Result<EspaceChangeSet, EspaceAnalysisError> {
+    let accounts: std::collections::BTreeSet<_> = scope
+        .facts()
+        .filter(|fact| fact.kind == FactKind::Delegation)
+        .filter_map(|fact| fact.address)
+        .collect();
+    let mut authorizations = BTreeMap::<Address, Vec<_>>::new();
+    for authorization in execution.applied_authorizations() {
+        if !accounts.contains(&authorization.account()) {
+            continue;
         }
+        authorizations
+            .entry(authorization.account())
+            .or_default()
+            .push(authorization);
     }
 
-    pub(crate) fn from_shared(first: Arc<A>, second: B) -> Self {
-        Self {
-            first,
-            second: Arc::new(second),
-        }
-    }
-}
+    let mut changes = EspaceChangeSet::new();
+    for (account, authorizations) in authorizations {
+        let before_account = state.initial().read_account(account)?;
+        let after_account = state.finalized().read_account(account)?;
+        let before = delegation_state(account, &before_account)?;
+        let after = delegation_state(account, &after_account)?;
 
-impl<A, B> EspaceChangeRules for CombinedEspaceChangeRules<A, B>
-where
-    A: EspaceChangeRules,
-    B: EspaceChangeRules,
-{
-    fn checkpoint_filters(&self) -> Vec<LogFilter> {
-        let mut filters = self.first.checkpoint_filters();
-        for filter in self.second.checkpoint_filters() {
-            if !filters.contains(&filter) {
-                filters.push(filter);
-            }
-        }
-        filters
-    }
-
-    fn derive_changes(
-        &self,
-        view: EspaceAnalysisView<'_>,
-    ) -> Result<EspaceChangeSet, EspaceAnalysisError> {
-        let first = self.first.derive_changes(view)?;
-        let second = self.second.derive_changes(view)?;
-        first.merge(second)
-    }
-}
-
-/// Builder used by custom rules and by the built-in eSpace components.
-#[derive(Debug, Default)]
-pub struct EspaceChangeSetBuilder {
-    entries: BTreeMap<(EspaceChangePosition, EspaceChangeKey), EspaceChangeEntry>,
-}
-
-impl EspaceChangeSetBuilder {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    fn insert_entry(&mut self, entry: EspaceChangeEntry) -> Result<(), EspaceAnalysisError> {
-        let key = entry.change.key();
-        let position = entry.position;
-        let map_key = (position, key.clone());
-        if let Some(existing) = self.entries.get_mut(&map_key) {
-            if existing.merge_duplicate(entry) {
-                return Ok(());
-            }
-            return Err(EspaceAnalysisError::Validation {
-                details: format!(
-                    "different semantic values at execution position {}",
-                    position.index()
-                ),
-            });
-        }
-        if matches!(position, EspaceChangePosition::Execution(_))
-            && self
-                .entries
-                .keys()
-                .any(|(existing_position, _)| *existing_position == position)
-        {
-            return Err(EspaceAnalysisError::Validation {
-                details: format!(
-                    "multiple semantic changes at execution position {}",
-                    position.index()
-                ),
-            });
-        }
-        self.entries.insert(map_key, entry);
-        Ok(())
-    }
-
-    pub fn native_transfer(
-        &mut self,
-        position: EspaceExecutionPosition,
-        from: Address,
-        to: Address,
-        raw_amount: U256,
-        currency: EspaceNativeCurrency,
-    ) -> Result<(), EspaceAnalysisError> {
-        if raw_amount.is_zero() || from == to {
-            return Ok(());
-        }
-        self.insert_entry(EspaceChangeEntry {
-            position: EspaceChangePosition::Execution(position),
-            change: EspaceStateChange::NativeTransfer(EspaceNativeTransferChange {
-                from,
-                to,
-                raw_amount,
-                currency,
-            }),
-            metadata_conflicts: EspaceMetadataConflicts::default(),
-        })
-    }
-
-    pub fn selfdestruct_burn(
-        &mut self,
-        position: EspaceExecutionPosition,
-        contract_address: Address,
-        raw_amount: U256,
-        currency: EspaceNativeCurrency,
-    ) -> Result<(), EspaceAnalysisError> {
-        if raw_amount.is_zero() {
-            return Ok(());
-        }
-        self.insert_entry(EspaceChangeEntry {
-            position: EspaceChangePosition::Execution(position),
-            change: EspaceStateChange::SelfDestructBurn(EspaceSelfDestructBurnChange {
-                contract_address,
-                raw_amount,
-                currency,
-            }),
-            metadata_conflicts: EspaceMetadataConflicts::default(),
-        })
-    }
-
-    pub fn standard(
-        &mut self,
-        position: EspaceExecutionPosition,
-        change: EspaceStandardChange,
-    ) -> Result<(), EspaceAnalysisError> {
-        self.insert_entry(EspaceChangeEntry {
-            position: EspaceChangePosition::Execution(position),
-            change: EspaceStateChange::Standard(change),
-            metadata_conflicts: EspaceMetadataConflicts::default(),
-        })
-    }
-
-    pub fn wrapped_native_deposit(
-        &mut self,
-        position: EspaceExecutionPosition,
-        contract_address: Address,
-        account: Address,
-        raw_amount: U256,
-        metadata: Erc20Metadata,
-    ) -> Result<(), EspaceAnalysisError> {
-        self.insert_entry(EspaceChangeEntry {
-            position: EspaceChangePosition::Execution(position),
-            change: EspaceStateChange::WrappedNativeDeposit(EspaceWrappedNativeDepositChange {
-                contract_address,
-                account,
-                raw_amount,
-                metadata,
-            }),
-            metadata_conflicts: EspaceMetadataConflicts::default(),
-        })
-    }
-
-    pub fn wrapped_native_withdrawal(
-        &mut self,
-        position: EspaceExecutionPosition,
-        contract_address: Address,
-        account: Address,
-        raw_amount: U256,
-        metadata: Erc20Metadata,
-    ) -> Result<(), EspaceAnalysisError> {
-        self.insert_entry(EspaceChangeEntry {
-            position: EspaceChangePosition::Execution(position),
-            change: EspaceStateChange::WrappedNativeWithdrawal(
-                EspaceWrappedNativeWithdrawalChange {
-                    contract_address,
-                    account,
-                    raw_amount,
-                    metadata,
-                },
-            ),
-            metadata_conflicts: EspaceMetadataConflicts::default(),
-        })
-    }
-
-    pub fn account_delegation(
-        &mut self,
-        account: Address,
-        before: EspaceAccountDelegation,
-        after: EspaceAccountDelegation,
-    ) -> Result<(), EspaceAnalysisError> {
-        if before == after {
-            return Ok(());
-        }
-        self.insert_entry(EspaceChangeEntry {
-            position: EspaceChangePosition::PreExecution,
-            change: EspaceStateChange::AccountDelegation(EspaceAccountDelegationChange {
-                account,
-                before,
-                after,
-            }),
-            metadata_conflicts: EspaceMetadataConflicts::default(),
-        })
-    }
-
-    pub fn finish(self) -> EspaceChangeSet {
-        let entries = self.entries.into_values().collect::<Vec<_>>();
-        let items = entries.iter().map(|entry| entry.change.clone()).collect();
-        EspaceChangeSet { items, entries }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum EspaceChangeKey {
-    NativeTransfer {
-        from: Address,
-        to: Address,
-        amount: U256,
-    },
-    SelfDestructBurn {
-        contract: Address,
-        amount: U256,
-    },
-    WrappedNativeDeposit {
-        contract: Address,
-        account: Address,
-        amount: U256,
-    },
-    WrappedNativeWithdrawal {
-        contract: Address,
-        account: Address,
-        amount: U256,
-    },
-    AccountDelegation(Address),
-    Standard(EspaceStandardChangeKey),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-enum EspaceStandardChangeKey {
-    Erc20Transfer {
-        contract: Address,
-        from: Address,
-        to: Address,
-        amount: U256,
-    },
-    Erc20Mint {
-        contract: Address,
-        to: Address,
-        amount: U256,
-    },
-    Erc20Burn {
-        contract: Address,
-        from: Address,
-        amount: U256,
-    },
-    Erc20Approval {
-        contract: Address,
-        owner: Address,
-        spender: Address,
-        before: U256,
-        after: U256,
-    },
-    Erc721Transfer {
-        contract: Address,
-        from: Address,
-        to: Address,
-        token_id: U256,
-    },
-    Erc721Mint {
-        contract: Address,
-        to: Address,
-        token_id: U256,
-    },
-    Erc721Burn {
-        contract: Address,
-        from: Address,
-        token_id: U256,
-    },
-    Erc721Approval {
-        contract: Address,
-        owner: Address,
-        before: Option<Address>,
-        after: Option<Address>,
-        token_id: U256,
-    },
-    OperatorApproval {
-        contract: Address,
-        owner: Address,
-        operator: Address,
-        before: bool,
-        after: bool,
-    },
-    Erc1155TransferSingle {
-        contract: Address,
-        operator: Address,
-        from: Address,
-        to: Address,
-        token_id: U256,
-        amount: U256,
-    },
-    Erc1155MintSingle {
-        contract: Address,
-        operator: Address,
-        to: Address,
-        token_id: U256,
-        amount: U256,
-    },
-    Erc1155BurnSingle {
-        contract: Address,
-        operator: Address,
-        from: Address,
-        token_id: U256,
-        amount: U256,
-    },
-    Erc1155TransferBatch {
-        contract: Address,
-        operator: Address,
-        from: Address,
-        to: Address,
-        items: Vec<(U256, U256)>,
-    },
-    Erc1155MintBatch {
-        contract: Address,
-        operator: Address,
-        to: Address,
-        items: Vec<(U256, U256)>,
-    },
-    Erc1155BurnBatch {
-        contract: Address,
-        operator: Address,
-        from: Address,
-        items: Vec<(U256, U256)>,
-    },
-}
-
-impl EspaceStateChange {
-    fn key(&self) -> EspaceChangeKey {
-        match self {
-            Self::NativeTransfer(change) => EspaceChangeKey::NativeTransfer {
-                from: change.from,
-                to: change.to,
-                amount: change.raw_amount,
-            },
-            Self::SelfDestructBurn(change) => EspaceChangeKey::SelfDestructBurn {
-                contract: change.contract_address,
-                amount: change.raw_amount,
-            },
-            Self::WrappedNativeDeposit(change) => EspaceChangeKey::WrappedNativeDeposit {
-                contract: change.contract_address,
-                account: change.account,
-                amount: change.raw_amount,
-            },
-            Self::WrappedNativeWithdrawal(change) => EspaceChangeKey::WrappedNativeWithdrawal {
-                contract: change.contract_address,
-                account: change.account,
-                amount: change.raw_amount,
-            },
-            Self::AccountDelegation(change) => EspaceChangeKey::AccountDelegation(change.account),
-            Self::Standard(change) => EspaceChangeKey::Standard(change.key()),
-        }
-    }
-}
-
-impl EspaceStandardChange {
-    fn key(&self) -> EspaceStandardChangeKey {
-        match self {
-            Self::Erc20Transfer {
-                contract_address,
-                from,
-                to,
-                raw_amount,
-                ..
-            } => EspaceStandardChangeKey::Erc20Transfer {
-                contract: *contract_address,
-                from: *from,
-                to: *to,
-                amount: *raw_amount,
-            },
-            Self::Erc20Mint {
-                contract_address,
-                to,
-                raw_amount,
-                ..
-            } => EspaceStandardChangeKey::Erc20Mint {
-                contract: *contract_address,
-                to: *to,
-                amount: *raw_amount,
-            },
-            Self::Erc20Burn {
-                contract_address,
-                from,
-                raw_amount,
-                ..
-            } => EspaceStandardChangeKey::Erc20Burn {
-                contract: *contract_address,
-                from: *from,
-                amount: *raw_amount,
-            },
-            Self::Erc20Approval {
-                contract_address,
-                owner,
-                spender,
-                before,
-                after,
-                ..
-            } => EspaceStandardChangeKey::Erc20Approval {
-                contract: *contract_address,
-                owner: *owner,
-                spender: *spender,
-                before: *before,
-                after: *after,
-            },
-            Self::Erc721Transfer {
-                contract_address,
-                from,
-                to,
-                token_id,
-                ..
-            } => EspaceStandardChangeKey::Erc721Transfer {
-                contract: *contract_address,
-                from: *from,
-                to: *to,
-                token_id: *token_id,
-            },
-            Self::Erc721Mint {
-                contract_address,
-                to,
-                token_id,
-                ..
-            } => EspaceStandardChangeKey::Erc721Mint {
-                contract: *contract_address,
-                to: *to,
-                token_id: *token_id,
-            },
-            Self::Erc721Burn {
-                contract_address,
-                from,
-                token_id,
-                ..
-            } => EspaceStandardChangeKey::Erc721Burn {
-                contract: *contract_address,
-                from: *from,
-                token_id: *token_id,
-            },
-            Self::Erc721Approval {
-                contract_address,
-                owner,
-                before,
-                after,
-                token_id,
-                ..
-            } => EspaceStandardChangeKey::Erc721Approval {
-                contract: *contract_address,
-                owner: *owner,
-                before: *before,
-                after: *after,
-                token_id: *token_id,
-            },
-            Self::OperatorApproval {
-                contract_address,
-                owner,
-                operator,
-                before,
-                after,
-            } => EspaceStandardChangeKey::OperatorApproval {
-                contract: *contract_address,
-                owner: *owner,
-                operator: *operator,
-                before: *before,
-                after: *after,
-            },
-            Self::Erc1155TransferSingle {
-                contract_address,
-                operator,
-                from,
-                to,
-                token_id,
-                raw_amount,
-            } => EspaceStandardChangeKey::Erc1155TransferSingle {
-                contract: *contract_address,
-                operator: *operator,
-                from: *from,
-                to: *to,
-                token_id: *token_id,
-                amount: *raw_amount,
-            },
-            Self::Erc1155MintSingle {
-                contract_address,
-                operator,
-                to,
-                token_id,
-                raw_amount,
-            } => EspaceStandardChangeKey::Erc1155MintSingle {
-                contract: *contract_address,
-                operator: *operator,
-                to: *to,
-                token_id: *token_id,
-                amount: *raw_amount,
-            },
-            Self::Erc1155BurnSingle {
-                contract_address,
-                operator,
-                from,
-                token_id,
-                raw_amount,
-            } => EspaceStandardChangeKey::Erc1155BurnSingle {
-                contract: *contract_address,
-                operator: *operator,
-                from: *from,
-                token_id: *token_id,
-                amount: *raw_amount,
-            },
-            Self::Erc1155TransferBatch {
-                contract_address,
-                operator,
-                from,
-                to,
-                items,
-            } => EspaceStandardChangeKey::Erc1155TransferBatch {
-                contract: *contract_address,
-                operator: *operator,
-                from: *from,
-                to: *to,
-                items: items
-                    .iter()
-                    .map(|item| (item.token_id, item.raw_amount))
-                    .collect(),
-            },
-            Self::Erc1155MintBatch {
-                contract_address,
-                operator,
-                to,
-                items,
-            } => EspaceStandardChangeKey::Erc1155MintBatch {
-                contract: *contract_address,
-                operator: *operator,
-                to: *to,
-                items: items
-                    .iter()
-                    .map(|item| (item.token_id, item.raw_amount))
-                    .collect(),
-            },
-            Self::Erc1155BurnBatch {
-                contract_address,
-                operator,
-                from,
-                items,
-            } => EspaceStandardChangeKey::Erc1155BurnBatch {
-                contract: *contract_address,
-                operator: *operator,
-                from: *from,
-                items: items
-                    .iter()
-                    .map(|item| (item.token_id, item.raw_amount))
-                    .collect(),
-            },
-        }
-    }
-}
-
-impl EspaceChangeEntry {
-    fn merge_duplicate(&mut self, other: Self) -> bool {
-        // Metadata is optional presentation data.  A duplicate semantic fact
-        // is therefore idempotent even when one component learned more fields.
-        match (&mut self.change, other.change) {
-            (
-                EspaceStateChange::WrappedNativeDeposit(existing),
-                EspaceStateChange::WrappedNativeDeposit(incoming),
-            ) => {
-                merge_erc20_metadata(
-                    &mut existing.metadata,
-                    incoming.metadata,
-                    &mut self.metadata_conflicts,
-                    other.metadata_conflicts,
-                );
-                true
-            }
-            (
-                EspaceStateChange::WrappedNativeWithdrawal(existing),
-                EspaceStateChange::WrappedNativeWithdrawal(incoming),
-            ) => {
-                merge_erc20_metadata(
-                    &mut existing.metadata,
-                    incoming.metadata,
-                    &mut self.metadata_conflicts,
-                    other.metadata_conflicts,
-                );
-                true
-            }
-            (EspaceStateChange::Standard(existing), EspaceStateChange::Standard(incoming)) => {
-                merge_standard_metadata(
-                    existing,
-                    incoming,
-                    &mut self.metadata_conflicts,
-                    other.metadata_conflicts,
-                )
-            }
-            (existing, incoming) => *existing == incoming,
-        }
-    }
-}
-
-fn merge_metadata_field<T: Eq>(
-    existing: &mut Option<T>,
-    incoming: Option<T>,
-    conflict: &mut bool,
-    incoming_conflict: bool,
-) {
-    if *conflict || incoming_conflict {
-        *conflict = true;
-        *existing = None;
-        return;
-    }
-
-    match (existing.as_ref(), incoming) {
-        (None, Some(value)) => *existing = Some(value),
-        (Some(current), Some(value)) if current != &value => {
-            *conflict = true;
-            *existing = None;
-        }
-        _ => {}
-    }
-}
-
-fn merge_erc20_metadata(
-    existing: &mut Erc20Metadata,
-    incoming: Erc20Metadata,
-    conflicts: &mut EspaceMetadataConflicts,
-    incoming_conflicts: EspaceMetadataConflicts,
-) {
-    merge_metadata_field(
-        &mut existing.name,
-        incoming.name,
-        &mut conflicts.name,
-        incoming_conflicts.name,
-    );
-    merge_metadata_field(
-        &mut existing.symbol,
-        incoming.symbol,
-        &mut conflicts.symbol,
-        incoming_conflicts.symbol,
-    );
-    merge_metadata_field(
-        &mut existing.decimals,
-        incoming.decimals,
-        &mut conflicts.decimals,
-        incoming_conflicts.decimals,
-    );
-}
-
-fn merge_standard_metadata(
-    existing: &mut EspaceStandardChange,
-    incoming: EspaceStandardChange,
-    conflicts: &mut EspaceMetadataConflicts,
-    incoming_conflicts: EspaceMetadataConflicts,
-) -> bool {
-    match (existing, incoming) {
-        (
-            EspaceStandardChange::Erc20Transfer { metadata, .. }
-            | EspaceStandardChange::Erc20Mint { metadata, .. }
-            | EspaceStandardChange::Erc20Burn { metadata, .. },
-            EspaceStandardChange::Erc20Transfer {
-                metadata: incoming, ..
-            }
-            | EspaceStandardChange::Erc20Mint {
-                metadata: incoming, ..
-            }
-            | EspaceStandardChange::Erc20Burn {
-                metadata: incoming, ..
-            },
-        ) => {
-            merge_erc20_metadata(metadata, incoming, conflicts, incoming_conflicts);
-            true
-        }
-        (
-            EspaceStandardChange::Erc20Approval { metadata, .. },
-            EspaceStandardChange::Erc20Approval {
-                metadata: incoming, ..
-            },
-        ) => {
-            merge_erc20_metadata(metadata, incoming, conflicts, incoming_conflicts);
-            true
-        }
-        (
-            EspaceStandardChange::Erc721Transfer { metadata, .. }
-            | EspaceStandardChange::Erc721Mint { metadata, .. }
-            | EspaceStandardChange::Erc721Burn { metadata, .. },
-            EspaceStandardChange::Erc721Transfer {
-                metadata: incoming, ..
-            }
-            | EspaceStandardChange::Erc721Mint {
-                metadata: incoming, ..
-            }
-            | EspaceStandardChange::Erc721Burn {
-                metadata: incoming, ..
-            },
-        ) => {
-            merge_metadata_field(
-                &mut metadata.name,
-                incoming.name,
-                &mut conflicts.name,
-                incoming_conflicts.name,
-            );
-            merge_metadata_field(
-                &mut metadata.symbol,
-                incoming.symbol,
-                &mut conflicts.symbol,
-                incoming_conflicts.symbol,
-            );
-            true
-        }
-        (
-            EspaceStandardChange::Erc721Approval { metadata, .. },
-            EspaceStandardChange::Erc721Approval {
-                metadata: incoming, ..
-            },
-        ) => {
-            merge_metadata_field(
-                &mut metadata.name,
-                incoming.name,
-                &mut conflicts.name,
-                incoming_conflicts.name,
-            );
-            merge_metadata_field(
-                &mut metadata.symbol,
-                incoming.symbol,
-                &mut conflicts.symbol,
-                incoming_conflicts.symbol,
-            );
-            true
-        }
-        (existing, incoming) => *existing == incoming,
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct EspaceNativeAssetChangeRules {
-    currency: EspaceNativeCurrency,
-}
-
-impl EspaceNativeAssetChangeRules {
-    pub fn new(currency: EspaceNativeCurrency) -> Self {
-        Self { currency }
-    }
-}
-
-impl EspaceChangeRules for EspaceNativeAssetChangeRules {
-    fn checkpoint_filters(&self) -> Vec<LogFilter> {
-        Vec::new()
-    }
-
-    fn derive_changes(
-        &self,
-        view: EspaceAnalysisView<'_>,
-    ) -> Result<EspaceChangeSet, EspaceAnalysisError> {
-        let execution = view.execution();
-        let occurrences = native::derive_changes(execution, &self.currency)?;
-        let mut builder = EspaceChangeSetBuilder::new();
-        for occurrence in occurrences {
-            let (position, change) = occurrence.into_parts();
-            let position = EspaceExecutionPosition::from_index(position);
-            match change {
-                EspaceChange::NativeTransfer {
-                    from,
-                    to,
-                    raw_amount,
-                    currency,
-                } => builder.native_transfer(position, from, to, raw_amount, currency)?,
-                EspaceChange::SelfDestructBurn {
-                    contract_address,
-                    raw_amount,
-                    currency,
-                } => builder.selfdestruct_burn(position, contract_address, raw_amount, currency)?,
-                _ => {
-                    return Err(EspaceAnalysisError::Validation {
-                        details: "native rules produced a non-native change".to_owned(),
-                    });
-                }
-            }
-        }
-        Ok(builder.finish())
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct EspaceTokenChangeRules {
-    wrapped_native_token: Address,
-}
-
-impl EspaceTokenChangeRules {
-    pub const fn new(wrapped_native_token: Address) -> Self {
-        Self {
-            wrapped_native_token,
-        }
-    }
-}
-
-impl EspaceChangeRules for EspaceTokenChangeRules {
-    fn checkpoint_filters(&self) -> Vec<LogFilter> {
-        let mut filters = Vec::new();
-        for topic0 in contract_standards::supported_event_topics() {
-            filters.push(LogFilter {
-                address: None,
-                topic0: *topic0,
-            });
-        }
-        filters.extend(wrapped_native::checkpoint_filters(
-            self.wrapped_native_token,
-        ));
-        filters
-    }
-
-    fn derive_changes(
-        &self,
-        view: EspaceAnalysisView<'_>,
-    ) -> Result<EspaceChangeSet, EspaceAnalysisError> {
-        let execution = view.execution();
-        let state = view.state();
-        if !execution.is_success() {
-            return Ok(EspaceChangeSet::default());
-        }
-        let occurrences =
-            standards::derive_verified_changes(execution, state, self.wrapped_native_token)?;
-        let mut builder = EspaceChangeSetBuilder::new();
-        for occurrence in occurrences {
-            match occurrence {
-                standards::VerifiedChange::Standard { position, change } => {
-                    builder.standard(EspaceExecutionPosition::from_index(position), change)?
-                }
-                standards::VerifiedChange::Wrapped {
-                    position,
-                    contract,
-                    account,
-                    amount,
-                    direction,
-                    metadata,
-                } => match direction {
-                    standards::WrappedOperation::Deposit => builder.wrapped_native_deposit(
-                        EspaceExecutionPosition::from_index(position),
-                        contract,
-                        account,
-                        amount,
-                        metadata,
-                    )?,
-                    standards::WrappedOperation::Withdrawal => builder.wrapped_native_withdrawal(
-                        EspaceExecutionPosition::from_index(position),
-                        contract,
-                        account,
-                        amount,
-                        metadata,
-                    )?,
-                },
-            }
-        }
-        Ok(builder.finish())
-    }
-}
-
-#[derive(Debug, Default, Clone, Copy)]
-pub struct EspaceAccountDelegationChangeRules;
-
-impl EspaceChangeRules for EspaceAccountDelegationChangeRules {
-    fn checkpoint_filters(&self) -> Vec<LogFilter> {
-        Vec::new()
-    }
-
-    fn derive_changes(
-        &self,
-        view: EspaceAnalysisView<'_>,
-    ) -> Result<EspaceChangeSet, EspaceAnalysisError> {
-        let execution = view.execution();
-        let state = view.state();
-        let mut authorizations = BTreeMap::<Address, Vec<_>>::new();
-        for authorization in execution.applied_authorizations() {
-            authorizations
-                .entry(authorization.account())
-                .or_default()
-                .push(authorization);
-        }
-
-        let mut builder = EspaceChangeSetBuilder::new();
-        for (account, authorizations) in authorizations {
-            let before_account = state.initial().read_account(account)?;
-            let after_account = state.finalized().read_account(account)?;
-            let before = delegation_state(account, &before_account)?;
-            let after = delegation_state(account, &after_account)?;
-
-            // The executor increments the transaction sender nonce before it
-            // processes the EIP-7702 authorization list.  That increment is
-            // part of the authority's nonce when the sender authorizes itself.
-            let mut expected_nonce = before.nonce;
-            if account == execution.transaction_sender() {
-                expected_nonce = expected_nonce.checked_add(1).ok_or_else(|| {
-                    EspaceAnalysisError::Validation {
+        // The executor increments the transaction sender nonce before it
+        // processes the EIP-7702 authorization list.  That increment is
+        // part of the authority's nonce when the sender authorizes itself.
+        let mut expected_nonce = before.nonce;
+        if account == execution.transaction_sender() {
+            expected_nonce =
+                expected_nonce
+                    .checked_add(1)
+                    .ok_or_else(|| EspaceAnalysisError::Validation {
                         details: format!(
                             "transaction sender nonce overflow for delegation account {account}"
                         ),
-                    }
-                })?;
-            }
-            for authorization in &authorizations {
-                if authorization.nonce() != expected_nonce {
-                    return Err(EspaceAnalysisError::Validation {
-                        details: format!(
-                            "successful authorization for {account} used nonce {}, expected {expected_nonce}",
-                            authorization.nonce()
-                        ),
-                    });
-                }
-                expected_nonce = expected_nonce.checked_add(1).ok_or_else(|| {
-                    EspaceAnalysisError::Validation {
-                        details: format!(
-                            "successful authorization nonce overflow for account {account}"
-                        ),
-                    }
-                })?;
-            }
-
-            let expected_delegate = authorizations.last().and_then(|authorization| {
-                (authorization.delegate() != Address::ZERO).then_some(authorization.delegate())
-            });
-            if after.nonce != expected_nonce || after.delegate != expected_delegate {
+                    })?;
+        }
+        for authorization in &authorizations {
+            if authorization.nonce() != expected_nonce {
                 return Err(EspaceAnalysisError::Validation {
                     details: format!(
-                        "final delegation state for {account} does not match successful authorization results"
+                        "successful authorization for {account} used nonce {}, expected {expected_nonce}",
+                        authorization.nonce()
                     ),
                 });
             }
-            builder.account_delegation(account, before, after)?;
+            expected_nonce =
+                expected_nonce
+                    .checked_add(1)
+                    .ok_or_else(|| EspaceAnalysisError::Validation {
+                        details: format!(
+                            "successful authorization nonce overflow for account {account}"
+                        ),
+                    })?;
         }
-        Ok(builder.finish())
+
+        let expected_delegate = authorizations.last().and_then(|authorization| {
+            (authorization.delegate() != Address::ZERO).then_some(authorization.delegate())
+        });
+        if after.nonce != expected_nonce || after.delegate != expected_delegate {
+            return Err(EspaceAnalysisError::Validation {
+                details: format!(
+                    "final delegation state for {account} does not match successful authorization results"
+                ),
+            });
+        }
+        changes.insert(
+            ChangePosition::BeforeExecution,
+            EspaceStateChange::AccountDelegation(EspaceAccountDelegationChange {
+                account,
+                before,
+                after,
+            }),
+        );
     }
+    Ok(changes)
 }
 
 fn delegation_state(
@@ -1249,126 +118,131 @@ fn delegation_state(
     })
 }
 
-#[derive(Debug, Clone)]
-pub struct DefaultEspaceChangeRules {
-    components: CombinedEspaceChangeRules<
-        CombinedEspaceChangeRules<EspaceNativeAssetChangeRules, EspaceAccountDelegationChangeRules>,
-        EspaceTokenChangeRules,
-    >,
+pub(crate) struct TokenAnalyzer {
+    wrapped_native: Address,
 }
-
-impl DefaultEspaceChangeRules {
+impl TokenAnalyzer {
+    pub(crate) fn new(wrapped_native: Address) -> Self {
+        Self { wrapped_native }
+    }
     pub(crate) const MAINNET_WCFX: Address =
         alloy_primitives::address!("14b2d3bc65e74dae1030eafd8ac30c533c976a9b");
-
-    pub fn new(currency: EspaceNativeCurrency, wrapped_native_token: Address) -> Self {
-        Self {
-            components: CombinedEspaceChangeRules::new(
-                CombinedEspaceChangeRules::new(
-                    EspaceNativeAssetChangeRules::new(currency),
-                    EspaceAccountDelegationChangeRules,
-                ),
-                EspaceTokenChangeRules::new(wrapped_native_token),
-            ),
+}
+impl Analyzer<EspaceAnalysisDomain> for TokenAnalyzer {
+    fn descriptor(&self) -> AnalyzerDescriptor {
+        AnalyzerDescriptor {
+            id: "espace-contracts",
+            layer: AnalyzerLayer::General,
+            priority: 0,
+            deployments: Vec::new(),
         }
     }
-}
-
-impl EspaceChangeRules for DefaultEspaceChangeRules {
-    fn checkpoint_filters(&self) -> Vec<LogFilter> {
-        self.components.checkpoint_filters()
+    fn checkpoint_filters(&self) -> Vec<simulation_core::observation::LogFilter> {
+        let mut filters: Vec<_> = contract_standards::supported_event_topics()
+            .iter()
+            .map(|&topic0| simulation_core::observation::LogFilter {
+                address: None,
+                topic0,
+            })
+            .collect();
+        filters.extend(wrapped_native::checkpoint_filters(self.wrapped_native));
+        filters
     }
-
-    fn derive_changes(
+    fn select<'a>(
+        &self,
+        _: EspaceAnalysisView<'_>,
+        scope: &AnalysisScope<'a>,
+    ) -> Result<AnalysisScope<'a>, EspaceAnalysisError> {
+        Ok(scope.select(|fact| {
+            matches!(
+                fact.kind,
+                FactKind::Call
+                    | FactKind::Log
+                    | FactKind::StorageWrite
+                    | FactKind::Create
+                    | FactKind::Destroy
+            )
+        }))
+    }
+    fn analyze<'a>(
         &self,
         view: EspaceAnalysisView<'_>,
-    ) -> Result<EspaceChangeSet, EspaceAnalysisError> {
-        self.components.derive_changes(view)
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct ChangeOccurrence {
-    position: usize,
-    change: EspaceChange,
-}
-
-impl ChangeOccurrence {
-    pub(crate) const fn new(position: usize, change: EspaceChange) -> Self {
-        Self { position, change }
-    }
-
-    pub(crate) fn into_parts(self) -> (usize, EspaceChange) {
-        (self.position, self.change)
-    }
-}
-
-pub(crate) fn has_nested_token_logs(
-    trace: &CommittedExecutionTrace,
-    root_frame_ids: &[crate::execution::FrameId],
-    wrapped_native_token: Address,
-) -> Result<bool, EspaceAnalysisError> {
-    let mut has_token_logs = false;
-    for event in trace.events() {
-        let TraceEvent::Log {
-            frame_id,
-            address,
-            topics,
-            data,
-            ..
-        } = event
-        else {
-            continue;
-        };
-        if trace.frame(*frame_id).space != cfx_types::Space::Ethereum
-            || !root_frame_ids
-                .iter()
-                .any(|root_id| trace.frame_is_within(*frame_id, *root_id))
-        {
-            continue;
+        scope: &AnalysisScope<'a>,
+    ) -> Result<AnalysisReport<'a, EspaceChangeSet>, EspaceAnalysisError> {
+        check_contract_support(view, scope)?;
+        let mut changes = EspaceChangeSet::new();
+        for change in standards::derive_verified_changes(
+            view.execution(),
+            view.state(),
+            self.wrapped_native,
+            scope,
+        )? {
+            let (position, change) = match change {
+                standards::VerifiedChange::Standard { position, change } => {
+                    (position, EspaceChange::Standard(change))
+                }
+                standards::VerifiedChange::Wrapped {
+                    position,
+                    contract,
+                    account,
+                    amount,
+                    direction,
+                } => {
+                    let change = EspaceWrappedNativeDepositChange {
+                        contract_address: contract,
+                        account,
+                        raw_amount: amount,
+                    };
+                    (
+                        position,
+                        match direction {
+                            standards::WrappedOperation::Deposit => {
+                                EspaceChange::WrappedNativeDeposit(change)
+                            }
+                            standards::WrappedOperation::Withdrawal => {
+                                EspaceChange::WrappedNativeWithdrawal(change)
+                            }
+                        },
+                    )
+                }
+            };
+            changes.insert(ChangePosition::Execution(position), change);
         }
-        let address = crate::primitive::address_from_cfx(*address);
-        let topics = topics
-            .iter()
-            .copied()
-            .map(crate::primitive::b256_from_cfx)
-            .collect::<Vec<_>>();
-        let standard = decode_standard_log(address, &topics, data, |address| address)
-            .map_err(|error| EspaceAnalysisError::rule_failure("token", error))?;
-        has_token_logs |= standard.is_some();
-        if address == wrapped_native_token {
-            has_token_logs |= wrapped_native::decode_wrapped_native_log(&topics, data)
-                .ok()
-                .flatten()
-                .is_some();
-        }
+        Ok(AnalysisReport::new(changes).explain(scope.clone(), SupportEvidence::NoRelevantEffects))
     }
-    Ok(has_token_logs)
 }
-
-pub(crate) fn check_contract_support(
-    execution: &EspaceExecutedTransaction,
-    state: &EspaceStateAccess,
+fn check_contract_support(
+    view: EspaceAnalysisView<'_>,
+    scope: &AnalysisScope<'_>,
 ) -> Result<(), EspaceAnalysisError> {
-    for frame in execution.committed_frames() {
-        let super::EspaceFrameAction::Call { code_address, .. } = frame.action() else {
-            return Err(EspaceAnalysisError::Unsupported {
-                details: "contract creation requires an implementation-specific analyzer".into(),
-            });
-        };
-        if frame.space() != super::EspaceExecutionSpace::Espace {
-            return Err(EspaceAnalysisError::Unsupported {
-                details: "Core Space execution in an eSpace transaction".into(),
-            });
+    if let Some(fact) = scope
+        .facts()
+        .find(|fact| fact.kind != FactKind::Call || fact.chain.space != ExecutionSpace::Espace)
+    {
+        return Err(EspaceAnalysisError::Unsupported {
+            details: format!(
+                "no reviewed contract implementation for {:?} at {:?}",
+                fact.kind, fact.position
+            ),
+        });
+    }
+    let frames: std::collections::BTreeSet<_> =
+        scope.facts().filter_map(|fact| fact.frame_id).collect();
+    for frame in view.execution().committed_frames() {
+        if !frames.contains(&frame.id().index()) {
+            continue;
         }
-        for reader in [state.initial(), state.finalized()] {
+        let EspaceFrameAction::Call { code_address, .. } = frame.action() else {
+            continue;
+        };
+        for reader in [view.state().initial(), view.state().finalized()] {
             if reader
                 .read_account(*code_address)?
                 .code()
                 .is_some_and(|code| !code.is_empty())
             {
                 return Err(EspaceAnalysisError::Unsupported {
-                    details: format!("no verified implementation scope for code at {code_address}"),
+                    details: format!("no reviewed implementation for code at {code_address}"),
                 });
             }
         }

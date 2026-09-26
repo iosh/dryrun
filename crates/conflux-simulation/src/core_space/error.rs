@@ -4,6 +4,7 @@ use cfx_storage::Error as StorageError;
 use conflux_provider::{CoreAddress, Network};
 use simulation_core::error::{Diagnostic, DiagnosticData, ErrorCode as Code, ErrorInfo};
 use simulation_core::observation::AnalysisLimitExceeded;
+use std::error::Error as StdError;
 use thiserror::Error;
 
 use super::{CoreSpaceContextError, CoreSpaceTransactionInputError};
@@ -261,12 +262,41 @@ impl ErrorInfo for CoreSpaceSimulationError {
 impl ErrorInfo for super::CoreSpaceAnalysisError {
     fn diagnostic(&self) -> Diagnostic {
         match self {
+            Self::Coverage(error) => error.diagnostic(),
             Self::Protocol(error) => error.diagnostic(),
             Self::LimitExceeded(error) => error.diagnostic(),
-            Self::Conflict { .. } => Code::AnalysisValidationFailed.diagnostic(),
             Self::RuleFailure { source, .. } => {
                 source_diagnostic(source.as_ref(), Code::AnalysisValidationFailed)
             }
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum CoreSpaceAnalysisError {
+    #[error(transparent)]
+    Coverage(#[from] simulation_core::analysis::CoverageError),
+    #[error(transparent)]
+    LimitExceeded(#[from] AnalysisLimitExceeded),
+    #[error(transparent)]
+    Protocol(#[from] CoreSpaceProtocolError),
+    #[error("Core Space change rule `{rules}` failed: {source}")]
+    RuleFailure {
+        rules: &'static str,
+        #[source]
+        source: Box<dyn StdError + Send + Sync + 'static>,
+    },
+}
+
+impl CoreSpaceAnalysisError {
+    pub fn rule_failure(
+        rules: &'static str,
+        source: impl StdError + Send + Sync + 'static,
+    ) -> Self {
+        Self::RuleFailure {
+            rules,
+            source: Box::new(source),
         }
     }
 }

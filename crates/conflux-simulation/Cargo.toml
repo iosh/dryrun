@@ -4,14 +4,14 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [features]
-serde = ["dep:alloy-serde", "simulation-core/serde"]
+serde = ["dep:alloy-serde", "simulation-core/serde", "contract-standards/serde"]
 
 [dependencies]
-alloy-serde = { workspace = true, optional = true }
 simulation-core = { workspace = true, features = ["serde"] }
 alloy = { workspace = true }
 alloy-rpc-types = { workspace = true }
 alloy-primitives = { workspace = true }
+alloy-serde = { workspace = true, optional = true }
 alloy-sol-types = { workspace = true }
 conflux-provider = { workspace = true }
 contract-standards = { workspace = true }

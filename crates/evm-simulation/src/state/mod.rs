@@ -545,3 +545,13 @@ mod tests {
         RootProvider::new(RpcClient::mocked(Asserter::new())).erased()
     }
 }
+
+impl contract_standards::MetadataReader<Address> for EvmStateReader {
+    type Error = EvmStateReadError;
+    fn metadata_call(&self, address: &Address, input: Bytes) -> Result<Option<Bytes>, Self::Error> {
+        Ok(match self.read_call(*address, input)? {
+            EvmReadCallOutcome::Success(output) => Some(output),
+            EvmReadCallOutcome::Reverted(_) | EvmReadCallOutcome::Halted { .. } => None,
+        })
+    }
+}

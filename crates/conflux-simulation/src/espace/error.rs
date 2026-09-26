@@ -100,6 +100,8 @@ pub enum EspaceExecutionError {
 #[non_exhaustive]
 pub enum EspaceAnalysisError {
     #[error(transparent)]
+    Coverage(#[from] simulation_core::analysis::CoverageError),
+    #[error(transparent)]
     StateRead(#[from] super::EspaceStateReadError),
     #[error(transparent)]
     LimitExceeded(#[from] AnalysisLimitExceeded),
@@ -219,6 +221,7 @@ impl ErrorInfo for EspaceSimulationError {
 impl ErrorInfo for super::EspaceAnalysisError {
     fn diagnostic(&self) -> Diagnostic {
         match self {
+            Self::Coverage(error) => error.diagnostic(),
             Self::StateRead(error) => error.diagnostic(),
             Self::LimitExceeded(error) => error.diagnostic(),
             Self::Validation { .. } => Code::AnalysisValidationFailed.diagnostic(),

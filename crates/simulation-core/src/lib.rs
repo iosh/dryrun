@@ -1,3 +1,5 @@
+pub mod analysis;
+pub mod changes;
 #[cfg(feature = "serde")]
 pub mod codec;
 pub mod completion;

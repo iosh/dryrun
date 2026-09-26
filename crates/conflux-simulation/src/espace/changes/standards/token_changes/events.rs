@@ -1,9 +1,7 @@
 use std::collections::HashSet;
 
 use alloy::primitives::{Address, U256};
-use contract_standards::{
-    DecodedStandardEvent, DecodedStandardLog, MetadataCall, decode_standard_log, metadata_calls,
-};
+use contract_standards::{DecodedStandardEvent, DecodedStandardLog, decode_standard_log};
 
 use crate::espace::{
     EspaceAnalysisError, EspaceExecutedTransaction, EspaceExecutionPosition, EspaceExecutionSpace,
@@ -81,8 +79,18 @@ impl WrappedPairProof {
 pub(super) fn collect_token_events<'a>(
     execution: &'a EspaceExecutedTransaction,
     wrapped_native_token: Address,
+    scope: &simulation_core::analysis::AnalysisScope<'_>,
 ) -> Result<TokenEventSequence<'a>, EspaceAnalysisError> {
-    let checkpoints = execution.log_checkpoints();
+    let positions: std::collections::BTreeSet<_> = scope
+        .facts()
+        .filter(|fact| fact.kind == simulation_core::analysis::FactKind::Log)
+        .map(|fact| fact.position)
+        .collect();
+    let checkpoints = execution.log_checkpoints().filter(|checkpoint| {
+        positions.contains(&simulation_core::changes::ChangePosition::Execution(
+            checkpoint.position().index(),
+        ))
+    });
     let mut events = Vec::new();
 
     for checkpoint in checkpoints {
@@ -203,36 +211,4 @@ fn pair_wrapped_events(events: &[ObservedTokenEvent<'_>]) -> Vec<WrappedEventPai
     }
 
     pairs
-}
-
-pub(super) fn required_metadata_calls(
-    events: &[ObservedTokenEvent<'_>],
-) -> Vec<MetadataCall<Address>> {
-    let decoded = events.iter().filter_map(|event| match event {
-        ObservedTokenEvent::Standard { decoded, .. } => Some(decoded),
-        ObservedTokenEvent::Wrapped { .. } => None,
-    });
-    let mut calls = metadata_calls(decoded);
-    let mut seen = calls.iter().cloned().collect::<HashSet<_>>();
-    for event in events {
-        let ObservedTokenEvent::Wrapped { contract, .. } = event else {
-            continue;
-        };
-        for call in [
-            MetadataCall::Name {
-                contract_address: *contract,
-            },
-            MetadataCall::Symbol {
-                contract_address: *contract,
-            },
-            MetadataCall::Decimals {
-                contract_address: *contract,
-            },
-        ] {
-            if seen.insert(call.clone()) {
-                calls.push(call);
-            }
-        }
-    }
-    calls
 }

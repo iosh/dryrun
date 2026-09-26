@@ -7,6 +7,7 @@ import { toChangeItemViewModel } from '../../changeView.ts';
 import {
   getChangeAddresses,
   normalizeAddress,
+  spaceLabel,
   type ChangeAddressViewModel,
 } from '../../flowView.ts';
 import type {
@@ -106,8 +107,7 @@ function ChangeRow({
         normalizeAddress(item.address) === normalizeAddress(view.identifier!),
     );
   const rawChange = formatJson(change);
-  const spaceLabel =
-    'space' in change ? (change.space === 'ESPACE' ? 'eSpace' : 'Core') : null;
+  const space = spaceLabel(change.space);
 
   return (
     <article
@@ -121,7 +121,7 @@ function ChangeRow({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <ChangeBadge
-                label={spaceLabel ? `${spaceLabel} · ${view.label}` : view.label}
+                label={space ? `${space} · ${view.label}` : view.label}
                 tone={view.tone}
               />
               <h4 className="text-sm font-semibold text-ink-950">

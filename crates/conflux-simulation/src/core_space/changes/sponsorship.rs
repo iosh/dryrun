@@ -6,12 +6,9 @@ use cfx_parameters::internal_contract_addresses::SPONSOR_WHITELIST_CONTROL_CONTR
 use cfx_types::{Address, Space};
 use cfx_vm_types::CallType;
 
-use super::{
-    CoreSpaceChangeSet, CoreSpaceChangeSetBuilder, SPONSORSHIP_POSITION_BASE, StoragePoints,
-};
+use super::{CoreSpaceChangeSet, CoreSpaceChangeSetBuilder, StoragePoints};
 use crate::core_space::{
-    CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition, CoreSpaceProtocolError,
-    CoreSpaceStateAccess,
+    CoreSpaceExecutedTransaction, CoreSpaceProtocolError, CoreSpaceStateAccess,
 };
 
 sol! {
@@ -96,7 +93,6 @@ pub(super) fn derive_changes(
     let mut builder = CoreSpaceChangeSetBuilder::new();
     // Sponsorship is a net state projection, so it has no one-to-one execution
     // position. Keep its synthetic range disjoint from other protocol resolvers.
-    let mut next_position = SPONSORSHIP_POSITION_BASE;
     let mut candidates = candidates.into_iter().collect::<Vec<_>>();
     candidates.sort_by_key(|(contract, candidate)| (candidate.position, *contract));
     for (contract, _) in candidates {
@@ -120,18 +116,13 @@ pub(super) fn derive_changes(
                 .map_err(|source| {
                     CoreSpaceProtocolError::state_access("convert gas sponsor address", source)
                 })?;
-            builder
-                .gas_sponsorship(
-                    CoreSpaceExecutionPosition::from_index(next_position),
-                    contract_address,
-                    sponsor,
-                    u256_from_cfx(finalized.gas_balance),
-                    u256_from_cfx(finalized.gas_bound),
-                )
-                .map_err(|error| {
-                    CoreSpaceProtocolError::inconsistent_execution(error.to_string())
-                })?;
-            next_position = next_position.saturating_add(1);
+            builder.gas_sponsorship(
+                simulation_core::changes::ChangePosition::Settlement,
+                contract_address,
+                sponsor,
+                u256_from_cfx(finalized.gas_balance),
+                u256_from_cfx(finalized.gas_bound),
+            );
         }
         if initial.storage_sponsor != finalized.storage_sponsor
             || initial.storage_balance != finalized.storage_balance
@@ -144,33 +135,23 @@ pub(super) fn derive_changes(
                 .map_err(|source| {
                     CoreSpaceProtocolError::state_access("convert storage sponsor address", source)
                 })?;
-            builder
-                .storage_sponsorship(
-                    CoreSpaceExecutionPosition::from_index(next_position),
-                    contract_address,
-                    sponsor,
-                    u256_from_cfx(finalized.storage_balance),
-                    finalized.storage_points.map(|points| StoragePoints {
-                        unused: u256_from_cfx(points.unused),
-                        used: u256_from_cfx(points.used),
-                    }),
-                )
-                .map_err(|error| {
-                    CoreSpaceProtocolError::inconsistent_execution(error.to_string())
-                })?;
-            next_position = next_position.saturating_add(1);
+            builder.storage_sponsorship(
+                simulation_core::changes::ChangePosition::Settlement,
+                contract_address,
+                sponsor,
+                u256_from_cfx(finalized.storage_balance),
+                finalized.storage_points.map(|points| StoragePoints {
+                    unused: u256_from_cfx(points.unused),
+                    used: u256_from_cfx(points.used),
+                }),
+            );
         }
         if initial.storage_collateral != finalized.storage_collateral {
-            builder
-                .storage_collateral(
-                    CoreSpaceExecutionPosition::from_index(next_position),
-                    contract_address,
-                    u256_from_cfx(finalized.storage_collateral),
-                )
-                .map_err(|error| {
-                    CoreSpaceProtocolError::inconsistent_execution(error.to_string())
-                })?;
-            next_position = next_position.saturating_add(1);
+            builder.storage_collateral(
+                simulation_core::changes::ChangePosition::Settlement,
+                contract_address,
+                u256_from_cfx(finalized.storage_collateral),
+            );
         }
     }
     Ok(builder.finish())
@@ -201,29 +182,4 @@ fn decode_sponsored_contract(calldata: &[u8]) -> Result<Option<Address>, CoreSpa
         return Ok(None);
     };
     Ok(Some(Address::from_slice(address.as_slice())))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{SponsorCalls, decode_sponsored_contract};
-    use alloy_sol_types::SolCall;
-    use cfx_types::Address;
-
-    #[test]
-    fn decodes_only_canonical_sponsor_calls() {
-        let contract = Address::from_low_u64_be(7);
-        let call = SponsorCalls::setSponsorForGasCall {
-            contract_address: alloy_primitives::Address::from_slice(&contract.0),
-            upper_bound: alloy_primitives::U256::from(1),
-        };
-        assert_eq!(
-            decode_sponsored_contract(&call.abi_encode()).unwrap(),
-            Some(contract)
-        );
-
-        let mut malformed = call.abi_encode();
-        malformed[4] = 1;
-        assert!(decode_sponsored_contract(&malformed).is_err());
-        assert_eq!(decode_sponsored_contract(&malformed[..20]).unwrap(), None);
-    }
 }

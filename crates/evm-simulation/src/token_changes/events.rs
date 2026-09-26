@@ -78,8 +78,18 @@ impl WrappedPairProof {
 pub(super) fn collect_token_events<'a>(
     execution: &'a EvmTransactionExecution,
     wrapped_native_token: Option<Address>,
+    scope: &simulation_core::analysis::AnalysisScope<'_>,
 ) -> Result<TokenEventSequence<'a>, EvmAnalysisError> {
-    let checkpoints = execution.log_checkpoints();
+    let positions: std::collections::BTreeSet<_> = scope
+        .facts()
+        .filter(|fact| fact.kind == simulation_core::analysis::FactKind::Log)
+        .map(|fact| fact.position)
+        .collect();
+    let checkpoints = execution.log_checkpoints().filter(|checkpoint| {
+        positions.contains(&simulation_core::changes::ChangePosition::Execution(
+            checkpoint.position().index(),
+        ))
+    });
     let mut events = Vec::new();
 
     for checkpoint in checkpoints {

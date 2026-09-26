@@ -2,8 +2,6 @@ mod error;
 mod request;
 mod response;
 
-use cfx_addr::Network as RpcNetwork;
-use conflux_provider::Network;
 use conflux_simulation::{
     core_space::CoreSpaceTransactionSimulator, espace::EspaceTransactionSimulator,
 };
@@ -11,7 +9,7 @@ use jsonrpsee::{RpcModule, types::ErrorObjectOwned};
 use simulation_tasks::SimulationTaskSet;
 
 use self::{
-    error::{core_space_response_error, invalid_params, rpc_error},
+    error::{invalid_params, rpc_error},
     request::{SimulateCoreSpaceTransactionRequest, SimulateEspaceTransactionRequest},
     response::{SimulateCoreSpaceTransactionResponse, SimulateEspaceTransactionResponse},
 };
@@ -23,9 +21,7 @@ pub fn build_rpc_module(
     espace_simulator: EspaceTransactionSimulator,
     core_space_simulator: CoreSpaceTransactionSimulator,
     simulation_tasks: SimulationTaskSet,
-    core_space_address_network: Network,
 ) -> RpcModule<()> {
-    let rpc_network = to_rpc_network(core_space_address_network);
     let mut module = RpcModule::new(());
     let espace_simulation_tasks = simulation_tasks.clone();
 
@@ -69,20 +65,11 @@ pub fn build_rpc_module(
                         .map_err(rpc_error)?
                         .map_err(rpc_error)?;
 
-                    SimulateCoreSpaceTransactionResponse::try_from_simulation(output, rpc_network)
-                        .map_err(|error| core_space_response_error(error.to_string()))
+                    Ok::<_, ErrorObjectOwned>(SimulateCoreSpaceTransactionResponse::from(output))
                 }
             },
         )
         .expect("RPC method names must be unique");
 
     module
-}
-
-fn to_rpc_network(network: Network) -> RpcNetwork {
-    match network {
-        Network::Main => RpcNetwork::Main,
-        Network::Test => RpcNetwork::Test,
-        Network::Id(id) => RpcNetwork::Id(id),
-    }
 }

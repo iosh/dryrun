@@ -4,13 +4,13 @@ import type {
   SimulationResponse,
 } from './types.ts';
 
-const HISTORY_KEY = 'dryrun.simulation-history.v4';
+const HISTORY_KEY = 'dryrun.simulation-history.v5';
 export const HISTORY_LIMIT = 30;
 
 type StoredSimulationRecord = Omit<SimulationRecord, 'response'>;
 
 interface StoredHistoryPayload {
-  version: 4;
+  version: 5;
   records: StoredSimulationRecord[];
 }
 
@@ -20,7 +20,7 @@ export function loadSimulationHistory(): SimulationRecord[] {
     if (!raw) return [];
 
     const payload = JSON.parse(raw) as StoredHistoryPayload;
-    if (payload.version !== 4 || !Array.isArray(payload.records)) return [];
+    if (payload.version !== 5 || !Array.isArray(payload.records)) return [];
 
     return payload.records
       .map(restoreSimulationRecord)
@@ -62,7 +62,7 @@ function persistSimulationHistory(records: readonly SimulationRecord[]) {
   try {
     const payload: StoredHistoryPayload = {
       records: records.map(toStoredSimulationRecord),
-      version: 4,
+      version: 5,
     };
     localStorage.setItem(HISTORY_KEY, JSON.stringify(payload));
   } catch {

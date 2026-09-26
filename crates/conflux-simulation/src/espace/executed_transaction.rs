@@ -22,10 +22,6 @@ use super::{
 pub struct EspaceExecutionPosition(usize);
 
 impl EspaceExecutionPosition {
-    pub(crate) const fn from_index(index: usize) -> Self {
-        Self(index)
-    }
-
     pub const fn index(self) -> usize {
         self.0
     }

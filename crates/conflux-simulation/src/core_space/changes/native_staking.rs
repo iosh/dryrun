@@ -7,10 +7,10 @@ use cfx_vm_types::CallType;
 use conflux_provider::CoreAddress;
 use primitives::VoteStakeList;
 
+use super::cross_space::{CommittedCrossSpaceScopes, CommittedCrossSpaceTransfer};
 use super::{
     CoreSpaceChangeSet, CoreSpaceChangeSetBuilder, CoreSpaceNativeCurrency, CrossSpaceAddress,
 };
-use crate::core_space::cross_space_scope::CommittedCrossSpaceTransfer;
 use crate::{
     core_space::{
         CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition, CoreSpaceProtocolError,
@@ -28,9 +28,10 @@ pub(super) fn derive_changes(
     execution: &CoreSpaceExecutedTransaction,
     state: &CoreSpaceStateAccess,
     currency: &CoreSpaceNativeCurrency,
+    cross_space: &CommittedCrossSpaceScopes,
 ) -> Result<CoreSpaceChangeSet, CoreSpaceProtocolError> {
     let staking_calls = collect_staking_calls(execution)?;
-    let operations = collect_native_operations(execution, &staking_calls)?;
+    let operations = collect_native_operations(execution, &staking_calls, cross_space)?;
     let mut builder = CoreSpaceChangeSetBuilder::new();
     for operation in operations {
         match operation {
@@ -40,29 +41,25 @@ pub(super) fn derive_changes(
                 to,
                 amount,
             } => {
-                builder
-                    .native_transfer(
-                        position,
-                        core_address(from, execution),
-                        core_address(to, execution),
-                        amount,
-                        currency.clone(),
-                    )
-                    .expect("built-in Core Space changes use unique execution positions");
+                builder.native_transfer(
+                    position,
+                    core_address(from, execution),
+                    core_address(to, execution),
+                    amount,
+                    currency.clone(),
+                );
             }
             NativeOperation::Burn {
                 position,
                 account,
                 amount,
             } => {
-                builder
-                    .native_burn(
-                        position,
-                        core_address(account, execution),
-                        amount,
-                        currency.clone(),
-                    )
-                    .expect("built-in Core Space changes use unique execution positions");
+                builder.native_burn(
+                    position,
+                    core_address(account, execution),
+                    amount,
+                    currency.clone(),
+                );
             }
             NativeOperation::CrossSpaceToEspace {
                 position,
@@ -70,14 +67,12 @@ pub(super) fn derive_changes(
                 receiver,
                 amount,
             } => {
-                builder
-                    .cross_space_transfer(
-                        position,
-                        CrossSpaceAddress::CoreSpace(core_address(core_sender, execution)),
-                        CrossSpaceAddress::Espace(receiver),
-                        amount,
-                    )
-                    .expect("built-in Core Space changes use unique execution positions");
+                builder.cross_space_transfer(
+                    position,
+                    CrossSpaceAddress::CoreSpace(core_address(core_sender, execution)),
+                    CrossSpaceAddress::Espace(receiver),
+                    amount,
+                );
             }
             NativeOperation::CrossSpaceToCore {
                 position,
@@ -85,16 +80,12 @@ pub(super) fn derive_changes(
                 core_receiver,
                 amount,
             } => {
-                builder
-                    .cross_space_transfer(
-                        position,
-                        CrossSpaceAddress::Espace(crate::primitive::address_from_cfx(
-                            mapped_sender,
-                        )),
-                        CrossSpaceAddress::CoreSpace(core_address(core_receiver, execution)),
-                        amount,
-                    )
-                    .expect("built-in Core Space changes use unique execution positions");
+                builder.cross_space_transfer(
+                    position,
+                    CrossSpaceAddress::Espace(crate::primitive::address_from_cfx(mapped_sender)),
+                    CrossSpaceAddress::CoreSpace(core_address(core_receiver, execution)),
+                    amount,
+                );
             }
         }
     }
@@ -463,6 +454,7 @@ impl NativeOperation {
 fn collect_native_operations(
     execution: &CoreSpaceExecutedTransaction,
     staking_calls: &[StakingCall],
+    cross_space: &CommittedCrossSpaceScopes,
 ) -> Result<Vec<NativeOperation>, CoreSpaceProtocolError> {
     let trace = execution.trace();
     let claimed_positions: BTreeSet<_> = staking_calls
@@ -485,8 +477,8 @@ fn collect_native_operations(
                     continue;
                 }
                 let cross_space_transfer =
-                    execution
-                        .cross_space_transfers()
+                    cross_space
+                        .transfers
                         .iter()
                         .find(|transfer| match transfer {
                             CommittedCrossSpaceTransfer::ToEspace {
@@ -500,16 +492,10 @@ fn collect_native_operations(
                     operations.push(NativeOperation::from_cross_space(*transfer));
                     continue;
                 }
-                if execution.is_cross_space_scope_parent(*frame_id) {
+                if cross_space.is_scope_parent(trace, *frame_id) {
                     continue;
                 }
-                collect_frame_value_transfer(
-                    execution,
-                    trace,
-                    *position,
-                    *frame_id,
-                    &mut operations,
-                )?;
+                collect_frame_value_transfer(trace, *position, *frame_id, &mut operations)?;
             }
             TraceEvent::InternalTransfer {
                 position,
@@ -527,17 +513,17 @@ fn collect_native_operations(
                             if account.space == Space::Ethereum
                     )
                 {
-                    if execution.nested_espace_scope_roots().is_empty() {
+                    if cross_space.roots.is_empty() {
                         return Err(CoreSpaceProtocolError::inconsistent_execution(
                             "committed eSpace selfdestruct burn had no verified Core cross-space scope",
                         ));
                     }
                     continue;
                 }
-                if frame_id.is_some_and(|id| execution.is_cross_space_parent(id)) {
+                if frame_id.is_some_and(|id| cross_space.is_parent(id)) {
                     continue;
                 }
-                if frame_id.is_some_and(|id| execution.is_cross_space_scope_parent(id)) {
+                if frame_id.is_some_and(|id| cross_space.is_scope_parent(trace, id)) {
                     continue;
                 }
                 collect_internal_transfer(
@@ -558,7 +544,6 @@ fn collect_native_operations(
 }
 
 fn collect_frame_value_transfer(
-    execution: &CoreSpaceExecutedTransaction,
     trace: &CommittedExecutionTrace,
     position: usize,
     frame_id: FrameId,
@@ -573,7 +558,6 @@ fn collect_frame_value_transfer(
             call_type,
             caller,
             target,
-            code_address,
             transferred_value,
             ..
         } => {
@@ -584,11 +568,6 @@ fn collect_frame_value_transfer(
             if *call_type != CallType::Call {
                 return Err(CoreSpaceProtocolError::inconsistent_execution(format!(
                     "nonzero Core Space {call_type:?} value is not an ordinary CFX transfer"
-                )));
-            }
-            if execution.is_active_internal_contract(*code_address) {
-                return Err(CoreSpaceProtocolError::unsupported_operation(format!(
-                    "value movement through Core Space internal contract {code_address:?} is outside the current change rules"
                 )));
             }
             (*caller, *target, amount)
@@ -642,7 +621,7 @@ fn collect_internal_transfer(
                 amount,
             }
         }
-        (AddressPocket::GasPayment, _) | (_, AddressPocket::GasPayment) => return Ok(()),
+        (_, AddressPocket::GasPayment) | (AddressPocket::GasPayment, _) => return Ok(()),
         (AddressPocket::Balance(account), AddressPocket::MintBurn)
             if account.space == Space::Native =>
         {
@@ -663,6 +642,12 @@ fn collect_internal_transfer(
                 "Core Space issuance was not owned by a canonical staking withdrawal",
             ));
         }
+        (AddressPocket::SponsorBalanceForGas(_), _)
+        | (_, AddressPocket::SponsorBalanceForGas(_))
+        | (AddressPocket::SponsorBalanceForStorage(_), _)
+        | (_, AddressPocket::SponsorBalanceForStorage(_))
+        | (AddressPocket::StorageCollateral(_), _)
+        | (_, AddressPocket::StorageCollateral(_)) => return Ok(()),
         (from, to) => {
             return Err(CoreSpaceProtocolError::unsupported_operation(format!(
                 "Core Space native rules do not support {} ({}) -> {} ({}) pocket movement",
@@ -702,9 +687,7 @@ fn derive_staking_changes(
                 ..
             } => {
                 if !amount.is_zero() {
-                    builder
-                        .staking_deposit(position, core_address(account, execution), amount)
-                        .expect("built-in Core Space changes use unique execution positions");
+                    builder.staking_deposit(position, core_address(account, execution), amount);
                 }
             }
             StakingCall::Withdrawal {
@@ -715,14 +698,12 @@ fn derive_staking_changes(
                 ..
             } => {
                 if !principal_amount.is_zero() || !reward_amount.is_zero() {
-                    builder
-                        .staking_withdrawal(
-                            position,
-                            core_address(account, execution),
-                            principal_amount,
-                            reward_amount,
-                        )
-                        .expect("built-in Core Space changes use unique execution positions");
+                    builder.staking_withdrawal(
+                        position,
+                        core_address(account, execution),
+                        principal_amount,
+                        reward_amount,
+                    );
                 }
             }
             StakingCall::VoteLock {
@@ -746,14 +727,12 @@ fn derive_staking_changes(
                 let before = vote_list.clone();
                 vote_list.vote_lock(u256_to_cfx(required_locked_amount), unlock_block_number);
                 if *vote_list != before {
-                    builder
-                        .staking_vote_lock(
-                            position,
-                            core_address(account, execution),
-                            required_locked_amount,
-                            unlock_block_number,
-                        )
-                        .expect("built-in Core Space changes use unique execution positions");
+                    builder.staking_vote_lock(
+                        position,
+                        core_address(account, execution),
+                        required_locked_amount,
+                        unlock_block_number,
+                    );
                 }
             }
         }

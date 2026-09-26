@@ -1,10 +1,8 @@
 import type { EnvironmentId } from './environment.ts';
 import type {
+  AssetChange,
+  CoreProtocolChange,
   Diagnostic,
-  CoreChange,
-  CoreEspaceChange,
-  EspaceChange,
-  EvmChange,
   RpcSimulationResponse,
 } from './rpc.ts';
 
@@ -79,10 +77,8 @@ export type SimulationRequest = HexSimulationRequest | CoreSimulationRequest;
 export type SimulationResponse = RpcSimulationResponse;
 
 export type SimulationChange =
-  | EvmChange
-  | EspaceChange
-  | CoreEspaceChange
-  | CoreChange;
+  | AssetChange
+  | CoreProtocolChange;
 
 export interface SimulationChanges {
   status: RpcSimulationResponse['changes']['status'];

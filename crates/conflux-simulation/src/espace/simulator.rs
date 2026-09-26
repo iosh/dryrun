@@ -1,7 +1,7 @@
-use simulation_core::simulation::Simulation;
 use std::sync::Arc;
 
 use cfx_types::Space;
+use simulation_core::simulation::Simulation;
 use tokio::runtime::Handle;
 
 use super::{
@@ -19,68 +19,49 @@ use crate::{
     state::ConfluxStateSource,
 };
 
-pub struct EspaceTransactionSimulator<R = super::DefaultEspaceChangeRules> {
+pub struct EspaceTransactionSimulator {
     backend: ConfluxSimulationBackend,
     limits: EspaceSimulationLimits,
-    change_rules: Arc<R>,
+    analyzers: Arc<super::EspaceAnalyzerRegistry>,
 }
 
-impl<R> Clone for EspaceTransactionSimulator<R> {
+impl Clone for EspaceTransactionSimulator {
     fn clone(&self) -> Self {
         Self {
             backend: self.backend.clone(),
             limits: self.limits,
-            change_rules: Arc::clone(&self.change_rules),
+            analyzers: Arc::clone(&self.analyzers),
         }
     }
 }
 
-impl EspaceTransactionSimulator<super::DefaultEspaceChangeRules> {
+impl EspaceTransactionSimulator {
     pub fn new(backend: ConfluxSimulationBackend, limits: EspaceSimulationLimits) -> Self {
-        let change_rules = super::DefaultEspaceChangeRules::new(
+        let analyzers = super::analysis::default_registry(
             backend.chain_spec().espace_native_currency().clone(),
-            super::DefaultEspaceChangeRules::MAINNET_WCFX,
+            super::changes::TokenAnalyzer::MAINNET_WCFX,
         );
         Self {
             backend,
             limits,
-            change_rules: Arc::new(change_rules),
+            analyzers: Arc::new(analyzers),
         }
     }
 }
 
-impl<R> EspaceTransactionSimulator<R> {
-    pub fn with_change_rules<N>(self, change_rules: N) -> EspaceTransactionSimulator<N>
-    where
-        N: super::EspaceChangeRules,
-    {
-        EspaceTransactionSimulator {
-            backend: self.backend,
-            limits: self.limits,
-            change_rules: Arc::new(change_rules),
-        }
+impl EspaceTransactionSimulator {
+    pub fn with_analyzers(mut self, analyzers: super::EspaceAnalyzerRegistry) -> Self {
+        self.analyzers = Arc::new(analyzers);
+        self
+    }
+    pub fn with_analyzer(
+        mut self,
+        analyzer: impl simulation_core::analysis::Analyzer<super::EspaceAnalysisDomain>,
+    ) -> Result<Self, simulation_core::analysis::RegistryError> {
+        self.analyzers = Arc::new(self.analyzers.with_analyzer(analyzer)?);
+        Ok(self)
     }
 
-    pub fn with_additional_change_rules<N>(
-        self,
-        change_rules: N,
-    ) -> EspaceTransactionSimulator<super::CombinedEspaceChangeRules<R, N>>
-    where
-        R: super::EspaceChangeRules,
-        N: super::EspaceChangeRules,
-    {
-        EspaceTransactionSimulator {
-            backend: self.backend,
-            limits: self.limits,
-            change_rules: Arc::new(super::CombinedEspaceChangeRules::from_shared(
-                self.change_rules,
-                change_rules,
-            )),
-        }
-    }
-}
-
-impl<R: super::EspaceChangeRules> EspaceTransactionSimulator<R> {
     /// Simulates one eSpace transaction inside the caller's active Tokio runtime.
     /// Uses a fixed epoch and checks its pivot before execution and result delivery.
     /// Separate state RPCs do not provide an atomic snapshot during a reorganization.
@@ -105,7 +86,7 @@ impl<R: super::EspaceChangeRules> EspaceTransactionSimulator<R> {
     }
 }
 
-struct EspaceBackend<R>(EspaceTransactionSimulator<R>);
+struct EspaceBackend(EspaceTransactionSimulator);
 struct PreparedEspaceExecution {
     context: crate::context::ExecutionBlockContext,
     state: Arc<ConfluxStateSource>,
@@ -116,9 +97,7 @@ struct EspaceExecutionEvidence {
     record: EspaceExecutedTransaction,
 }
 
-impl<R: super::EspaceChangeRules> simulation_core::simulation::SimulationBackend
-    for EspaceBackend<R>
-{
+impl simulation_core::simulation::SimulationBackend for EspaceBackend {
     type Request = EspaceSimulationRequest;
     type Context = super::EspaceBlockContext;
     type Transaction = super::EspaceTypedTransaction;
@@ -206,7 +185,7 @@ impl<R: super::EspaceChangeRules> simulation_core::simulation::SimulationBackend
         };
         let observer = ExecutionTraceObserver::new(Space::Ethereum).with_checkpoint_filters(
             crate::execution::filters_for_space(
-                &self.0.change_rules.checkpoint_filters(),
+                self.0.analyzers.checkpoint_filters(),
                 Space::Ethereum,
             ),
             self.0.limits,
@@ -245,6 +224,7 @@ impl<R: super::EspaceChangeRules> simulation_core::simulation::SimulationBackend
             record.state().finalized(),
             backend.core_space_address_network(),
         )?;
+        record.state().start_analysis();
         Ok(Execution::Executed(EspaceExecutionEvidence {
             outcome,
             record,
@@ -266,14 +246,16 @@ impl<R: super::EspaceChangeRules> simulation_core::simulation::SimulationBackend
     ) -> Result<Self::ChangeSet, Self::AnalysisError> {
         let evidence = view.execution();
         evidence.record.check_observation_limit()?;
-        evidence.record.state().start_analysis();
         let view = super::EspaceAnalysisView {
             context: view.context(),
             transaction: view.transaction(),
             execution: &evidence.record,
+            core_chain_id: self.0.backend.chain_spec().core_space_chain_id(),
         };
-        super::changes::check_contract_support(view.execution(), view.state())?;
-        self.0.change_rules.derive_changes(view)
+        let mut changes = self.0.analyzers.analyze(view)?;
+        changes.load_metadata(evidence.record.state().finalized())?;
+        changes.set_space(simulation_core::analysis::ExecutionSpace::Espace);
+        Ok(changes)
     }
 
     fn into_outcome(&self, evidence: Self::Evidence) -> Self::Outcome {

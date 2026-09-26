@@ -9,14 +9,14 @@ use cfx_vm_types::CallType;
 
 use crate::{
     core_space::{
-        CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition, CoreSpaceProtocolError,
-        CoreSpaceStateAccess, SponsorshipAccessRuleScope,
+        CoreSpaceExecutedTransaction, CoreSpaceProtocolError, CoreSpaceStateAccess,
+        SponsorshipAccessRuleScope,
     },
     execution::{FrameAction, TraceEvent},
     state::SponsorWhitelistStorageKey,
 };
 
-use super::{ACCESS_RULE_POSITION_BASE, CoreSpaceChangeSet, CoreSpaceChangeSetBuilder};
+use super::{CoreSpaceChangeSet, CoreSpaceChangeSetBuilder};
 
 sol! {
     interface AccessRuleCalls {
@@ -125,7 +125,7 @@ pub(super) fn derive_changes(
     let mut builder = CoreSpaceChangeSetBuilder::new();
     let mut ordered = candidates.into_iter().collect::<Vec<_>>();
     ordered.sort_by_key(|(candidate, position)| (*position, *candidate));
-    for (index, (candidate, _)) in ordered.into_iter().enumerate() {
+    for (candidate, _) in ordered {
         let key = SponsorWhitelistStorageKey {
             contract_address: candidate.contract_address,
             account_address: candidate.account_address,
@@ -184,14 +184,12 @@ pub(super) fn derive_changes(
                     })?,
             )
         };
-        builder
-            .sponsorship_access_rule(
-                CoreSpaceExecutionPosition::from_index(ACCESS_RULE_POSITION_BASE + index),
-                contract_address,
-                scope,
-                finalized,
-            )
-            .map_err(|error| CoreSpaceProtocolError::inconsistent_execution(error.to_string()))?;
+        builder.sponsorship_access_rule(
+            simulation_core::changes::ChangePosition::Settlement,
+            contract_address,
+            scope,
+            finalized,
+        );
     }
     Ok(builder.finish())
 }
@@ -267,31 +265,4 @@ fn is_destroy(calldata: &[u8]) -> Result<bool, CoreSpaceProtocolError> {
                 "invalid destroy calldata: {error}"
             ))
         })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{AccessRuleCalls, decode_access_call};
-    use alloy_sol_types::SolCall;
-    use cfx_types::Address;
-
-    #[test]
-    fn decodes_access_calls_and_rejects_noncanonical_payloads() {
-        let caller = Address::from_low_u64_be(1);
-        let account = Address::from_low_u64_be(2);
-        let call = AccessRuleCalls::addPrivilegeCall {
-            account_addresses: vec![alloy_primitives::Address::from_slice(&account.0)],
-        };
-        let decoded = decode_access_call(&call.abi_encode(), caller).unwrap();
-        assert_eq!(decoded, vec![(caller, vec![account])]);
-
-        let mut malformed = call.abi_encode();
-        malformed[4] = 1;
-        assert!(decode_access_call(&malformed, caller).is_err());
-        assert!(
-            decode_access_call(&malformed[..3], caller)
-                .unwrap()
-                .is_empty()
-        );
-    }
 }

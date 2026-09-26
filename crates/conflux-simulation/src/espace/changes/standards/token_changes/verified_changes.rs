@@ -3,8 +3,6 @@ use contract_standards::Erc1155TransferItem;
 
 use crate::espace::changes::EspaceStandardChange;
 
-use super::super::metadata::TokenMetadataOutcomes;
-
 #[derive(Debug)]
 pub(super) enum VerifiedTokenChange {
     Standard(VerifiedStandardChange),
@@ -64,7 +62,7 @@ pub(super) enum VerifiedStandardChange {
 }
 
 impl VerifiedStandardChange {
-    pub(super) fn into_change(self, metadata: &TokenMetadataOutcomes) -> EspaceStandardChange {
+    pub(super) fn into_change(self) -> EspaceStandardChange {
         match self {
             Self::Erc20Transfer {
                 contract,
@@ -72,20 +70,17 @@ impl VerifiedStandardChange {
                 to,
                 amount,
             } => {
-                let metadata = metadata.erc20(&contract);
                 if from == Address::ZERO {
                     EspaceStandardChange::Erc20Mint {
                         contract_address: contract,
                         to,
                         raw_amount: amount,
-                        metadata,
                     }
                 } else if to == Address::ZERO {
                     EspaceStandardChange::Erc20Burn {
                         contract_address: contract,
                         from,
                         raw_amount: amount,
-                        metadata,
                     }
                 } else {
                     EspaceStandardChange::Erc20Transfer {
@@ -93,7 +88,6 @@ impl VerifiedStandardChange {
                         from,
                         to,
                         raw_amount: amount,
-                        metadata,
                     }
                 }
             }
@@ -109,7 +103,6 @@ impl VerifiedStandardChange {
                 spender,
                 before,
                 after,
-                metadata: metadata.erc20(&contract),
             },
             Self::Erc721Transfer {
                 contract,
@@ -117,20 +110,17 @@ impl VerifiedStandardChange {
                 to,
                 token_id,
             } => {
-                let metadata = metadata.erc721(&contract);
                 if from == Address::ZERO {
                     EspaceStandardChange::Erc721Mint {
                         contract_address: contract,
                         to,
                         token_id,
-                        metadata,
                     }
                 } else if to == Address::ZERO {
                     EspaceStandardChange::Erc721Burn {
                         contract_address: contract,
                         from,
                         token_id,
-                        metadata,
                     }
                 } else {
                     EspaceStandardChange::Erc721Transfer {
@@ -138,7 +128,6 @@ impl VerifiedStandardChange {
                         from,
                         to,
                         token_id,
-                        metadata,
                     }
                 }
             }
@@ -154,7 +143,6 @@ impl VerifiedStandardChange {
                 before,
                 after,
                 token_id,
-                metadata: metadata.erc721(&contract),
             },
             Self::OperatorApproval {
                 contract,

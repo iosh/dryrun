@@ -52,9 +52,14 @@ export function formatRawAmount(rawAmount: string | bigint, decimals = 0) {
 
 export function formatAmount(
   rawAmount: string | bigint,
-  decimals: number,
+  decimals: number | null | undefined,
   unit?: string,
 ) {
+  if (decimals === null || decimals === undefined) {
+    const value = formatRawAmount(rawAmount, 0);
+    return unit ? `${value} base units (${unit})` : `${value} base units`;
+  }
+
   const value = formatRawAmount(rawAmount, decimals);
   return unit ? `${value} ${unit}` : value;
 }

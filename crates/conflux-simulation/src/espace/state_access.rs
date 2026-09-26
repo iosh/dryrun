@@ -373,3 +373,13 @@ fn address_to_alloy(address: cfx_types::AddressWithSpace) -> Address {
 
 #[cfg(test)]
 mod tests;
+
+impl contract_standards::MetadataReader<Address> for EspaceStateReader {
+    type Error = EspaceStateReadError;
+    fn metadata_call(&self, address: &Address, input: Bytes) -> Result<Option<Bytes>, Self::Error> {
+        Ok(match self.read_call(*address, input)? {
+            EspaceReadCallOutcome::Success(output) => Some(output),
+            EspaceReadCallOutcome::Reverted(_) | EspaceReadCallOutcome::Failed => None,
+        })
+    }
+}

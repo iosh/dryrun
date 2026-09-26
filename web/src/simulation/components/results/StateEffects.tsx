@@ -37,7 +37,7 @@ export function StateEffects({
           <StateEffectSummary
             addressHighlight={addressHighlight}
             change={change}
-            key={`${'type' in change ? change.type : change.changeType}:${index}`}
+            key={`${change.type}:${index}`}
             participantMap={participantMap}
           />
         ))}

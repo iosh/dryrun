@@ -1,7 +1,8 @@
 mod backend;
-mod chain_spec;
 #[cfg(feature = "serde")]
 mod codec;
+
+mod chain_spec;
 mod context;
 pub mod core_space;
 mod error;
@@ -17,3 +18,10 @@ pub use error::{
     ConfluxStateAnchorError,
 };
 pub use state::ConfluxRpcError;
+
+pub use simulation_core::analysis::{
+    AnalysisReport, AnalysisScope, Analyzer, AnalyzerDescriptor, AnalyzerLayer, ChainScope,
+    Deployment, ExecutionSpace, FactKind, RegistryError, SupportEvidence,
+};
+
+pub use simulation_core::observation::LogFilter;

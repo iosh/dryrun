@@ -1,24 +1,36 @@
 use alloy_primitives::{Address, U256};
 
-use super::NativeOperation;
 use crate::espace::EspaceAnalysisError;
 use crate::espace::{
     EspaceCallKind, EspaceExecutedTransaction, EspaceExecutionSpace, EspaceFrameAction,
     EspaceTransferPocket,
 };
+use simulation_core::{
+    analysis::{AnalysisScope, FactKind},
+    changes::ChangePosition,
+};
+use std::collections::BTreeSet;
 
 #[derive(Debug, Default)]
 struct NativeOperationCollector {
     operations: Vec<NativeOperation>,
 }
 
-pub(super) fn collect_native_operations(
+pub(crate) fn collect_native_operations(
     execution: &EspaceExecutedTransaction,
+    scope: &AnalysisScope<'_>,
 ) -> Result<Vec<NativeOperation>, EspaceAnalysisError> {
+    let positions: BTreeSet<_> = scope
+        .facts()
+        .filter(|fact| fact.kind == FactKind::NativeMovement)
+        .map(|fact| fact.position)
+        .collect();
     let mut collector = NativeOperationCollector::default();
 
     for frame in execution.committed_frames() {
-        if frame.space() != EspaceExecutionSpace::Espace {
+        if frame.space() != EspaceExecutionSpace::Espace
+            || !positions.contains(&ChangePosition::Execution(frame.position().index()))
+        {
             continue;
         }
         match frame.action() {
@@ -46,6 +58,9 @@ pub(super) fn collect_native_operations(
         }
     }
     for transfer in execution.internal_transfers() {
+        if !positions.contains(&ChangePosition::Execution(transfer.position().index())) {
+            continue;
+        }
         collector.collect_internal_transfer(
             transfer.position().index(),
             transfer.from(),
@@ -97,7 +112,7 @@ impl NativeOperationCollector {
     }
 
     fn push_account_transfer(&mut self, position: usize, from: Address, to: Address, amount: U256) {
-        if !amount.is_zero() {
+        if !amount.is_zero() && from != to {
             self.operations.push(NativeOperation::AccountTransfer {
                 position,
                 from,
@@ -126,4 +141,28 @@ fn involves_non_espace_balance(from: EspaceTransferPocket, to: EspaceTransferPoc
                 | EspaceTransferPocket::SponsorBalanceForStorage(_)
         )
     })
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum NativeOperation {
+    AccountTransfer {
+        position: usize,
+        from: Address,
+        to: Address,
+        amount: U256,
+    },
+    SelfDestructBurn {
+        position: usize,
+        contract: Address,
+        amount: U256,
+    },
+}
+impl NativeOperation {
+    pub(crate) fn position(&self) -> usize {
+        match self {
+            Self::AccountTransfer { position, .. } | Self::SelfDestructBurn { position, .. } => {
+                *position
+            }
+        }
+    }
 }

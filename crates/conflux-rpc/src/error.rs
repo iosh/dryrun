@@ -40,10 +40,3 @@ pub(super) fn rpc_error(error: impl ErrorInfo + std::fmt::Debug) -> ErrorObjectO
 pub(super) fn invalid_params(message: impl Into<String>) -> ErrorObjectOwned {
     rpc_error(Diagnostic::new(ErrorCode::InvalidInput, message))
 }
-pub(super) fn core_space_response_error(details: impl Into<String>) -> ErrorObjectOwned {
-    tracing::error!(
-        details = details.into(),
-        "Conflux Core Space response mapping failed"
-    );
-    rpc_error(ErrorCode::Internal.diagnostic())
-}

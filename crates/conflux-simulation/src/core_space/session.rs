@@ -1,4 +1,3 @@
-use simulation_core::observation::LogFilter;
 use std::sync::Arc;
 
 use cfx_executor::{machine::Machine, state::State};
@@ -64,7 +63,7 @@ impl CoreSpaceExecutionSession {
         transaction: &CoreSpaceTypedTransaction,
         block_context: ExecutionBlockContext,
         storage_sponsorship: Option<StorageSponsorship>,
-        checkpoint_filters: &[LogFilter<super::CrossSpaceAddress>],
+        checkpoint_filters: &[simulation_core::observation::LogFilter],
         limits: super::CoreSpaceSimulationLimits,
     ) -> Result<
         simulation_core::simulation::Execution<
@@ -80,7 +79,10 @@ impl CoreSpaceExecutionSession {
                 self.chain_id,
             )),
         };
-        let filters = filters_for_network(checkpoint_filters, transaction.common().from.network());
+        let filters = [Space::Native, Space::Ethereum]
+            .into_iter()
+            .flat_map(|space| crate::execution::filters_for_space(checkpoint_filters, space))
+            .collect();
         let observer =
             ExecutionTraceObserver::new(Space::Native).with_checkpoint_filters(filters, limits);
         let execution = ConfluxTransactionExecutor::new(&mut self.state, &self.machine)
@@ -128,41 +130,6 @@ impl CoreSpaceExecutionSession {
             record,
         }))
     }
-}
-
-fn filters_for_network(
-    filters: &[LogFilter<super::CrossSpaceAddress>],
-    network: conflux_provider::Network,
-) -> Vec<(Space, LogFilter)> {
-    use super::CrossSpaceAddress;
-
-    filters
-        .iter()
-        .flat_map(|filter| {
-            let locations = match filter.address {
-                None => vec![(Space::Native, None), (Space::Ethereum, None)],
-                Some(CrossSpaceAddress::CoreSpace(address)) if address.network() == network => {
-                    vec![(
-                        Space::Native,
-                        Some(alloy_primitives::Address::from(address.bytes())),
-                    )]
-                }
-                Some(CrossSpaceAddress::CoreSpace(_)) => Vec::new(),
-                Some(CrossSpaceAddress::Espace(address)) => {
-                    vec![(Space::Ethereum, Some(address))]
-                }
-            };
-            locations.into_iter().map(|(space, address)| {
-                (
-                    space,
-                    LogFilter {
-                        address,
-                        topic0: filter.topic0,
-                    },
-                )
-            })
-        })
-        .collect()
 }
 
 fn map_execution_error(

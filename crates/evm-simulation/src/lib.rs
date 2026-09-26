@@ -1,10 +1,11 @@
-mod analysis;
 use alloy::primitives::B256;
 
-mod chain_spec;
-mod changeset;
 #[cfg(feature = "serde")]
 mod codec;
+
+mod analysis;
+mod chain_spec;
+mod changeset;
 mod completion;
 mod context;
 mod error;
@@ -19,25 +20,28 @@ mod state;
 mod token_changes;
 mod transaction;
 
+pub use analysis::{EvmAnalysisDomain, EvmAnalysisView, EvmAnalyzerRegistry};
 pub(crate) use chain_spec::{EthereumChainSpec, EthereumExecutionSpec};
 pub use changeset::{
-    CombinedEvmChangeRules, DefaultEvmChangeRules, EvmAccountDelegation,
-    EvmAccountDelegationChange, EvmAccountDelegationChangeRules, EvmAnalysisError, EvmChangeRules,
-    EvmChangeSet, EvmChangeSetBuilder, EvmChanges, EvmNativeAssetChangeRules, EvmNativeCurrency,
+    EvmAccountDelegation, EvmAccountDelegationChange, EvmChangeSet, EvmChanges, EvmNativeCurrency,
     EvmNativeTransferChange, EvmSelfDestructBurnChange, EvmStandardChange, EvmStateChange,
     EvmWrappedNativeDepositChange, EvmWrappedNativeWithdrawalChange,
 };
+pub use simulation_core::analysis::{
+    AnalysisReport, AnalysisScope, Analyzer, AnalyzerDescriptor, AnalyzerLayer, ChainScope,
+    Deployment, ExecutionSpace, FactKind, RegistryError, SupportEvidence,
+};
+
 pub(crate) use completion::complete_transaction;
 pub(crate) use context::resolve_block;
 pub use error::{
-    EvmBlockEnvironmentError, EvmBlockResolutionError, EvmExecutionError, EvmInitializationError,
-    EvmNotReadyError, EvmResultIntegrationError, EvmSimulationError, EvmStateAccessError,
-    EvmTransactionCompletionError,
+    EvmAnalysisError, EvmBlockEnvironmentError, EvmBlockResolutionError, EvmExecutionError,
+    EvmInitializationError, EvmNotReadyError, EvmResultIntegrationError, EvmSimulationError,
+    EvmStateAccessError, EvmTransactionCompletionError,
 };
 pub use execution::{
     EvmCallKind, EvmCommittedFrame, EvmCommittedLog, EvmCommittedSelfdestruct,
-    EvmExecutionPosition, EvmFrameAction, EvmFrameId, EvmLogCheckpoint, EvmStorageWrite,
-    EvmTransactionExecution,
+    EvmExecutionPosition, EvmFrameAction, EvmFrameId, EvmLogCheckpoint, EvmTransactionExecution,
 };
 pub(crate) use execution::{
     EvmExecutionObserver, EvmTransactionExecutionResult, EvmTransactionExecutor,
@@ -50,11 +54,11 @@ pub use outcome::{
 };
 pub use rejection::EvmTransactionRejection;
 pub use simulation::{EvmBlockContext, EvmSimulation};
+pub use simulation_core::observation::LogFilter;
 pub use simulator::EvmTransactionSimulator;
 pub use state::{
     EvmAccountState, EvmReadCallOutcome, EvmStateAccess, EvmStateReadError, EvmStateReader,
 };
-pub(crate) use token_changes::EvmTokenChangeRules;
 pub use transaction::{
     AccessListItem, Authorization, DynamicFees, FeeInput, PartialTransactionCommon,
     SignedAuthorization, TransactionCommon, TransactionInput, TransactionInputError,
@@ -87,6 +91,3 @@ pub struct EvmSimulationRequest {
     pub block: EvmBlockSelector,
     pub transaction: TransactionInput,
 }
-
-pub use analysis::EvmAnalysisView;
-pub use simulation_core::observation::LogFilter;

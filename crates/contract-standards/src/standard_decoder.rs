@@ -1,17 +1,11 @@
-use std::hash::Hash;
-
 use alloy_primitives::{Address, B256, U256};
 
 use crate::{
-    Erc1155TransferItem, StandardChange,
+    Erc1155TransferItem,
     event_codec::{DecodedEvent, StandardEventDecodeError, decode_log},
-    metadata::{MetadataValues, MissingMetadataOutcome},
 };
 
-/// A successfully decoded standard-log candidate that has not yet been enriched.
-///
-/// The decoded event is readable for chain-specific verification. Conversion
-/// into [`StandardChange`] still requires all metadata call outcomes.
+/// An unverified decoded candidate for state and execution analysis.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DecodedStandardLog<A> {
     pub(crate) event: DecodedStandardEvent<A>,
@@ -174,119 +168,5 @@ pub fn decode_standard_log<A>(
 impl<A> DecodedStandardLog<A> {
     pub const fn event(&self) -> &DecodedStandardEvent<A> {
         &self.event
-    }
-}
-
-impl<A> DecodedStandardLog<A>
-where
-    A: Eq + Hash,
-{
-    /// Converts this decoded log into a public change after every required
-    /// metadata call has a recorded outcome.
-    pub fn into_change(
-        self,
-        metadata: &MetadataValues<A>,
-    ) -> Result<StandardChange<A>, MissingMetadataOutcome> {
-        Ok(match self.event {
-            DecodedStandardEvent::Erc20Transfer {
-                token,
-                from,
-                to,
-                amount,
-            } => {
-                let change_metadata = metadata.erc20_metadata(&token)?;
-                StandardChange::Erc20Transfer {
-                    contract_address: token,
-                    from,
-                    to,
-                    raw_amount: amount,
-                    metadata: change_metadata,
-                }
-            }
-            DecodedStandardEvent::Erc20Approval {
-                token,
-                owner,
-                spender,
-                value,
-            } => {
-                let change_metadata = metadata.erc20_metadata(&token)?;
-                StandardChange::Erc20Approval {
-                    contract_address: token,
-                    owner,
-                    spender,
-                    approved_amount: value,
-                    metadata: change_metadata,
-                }
-            }
-            DecodedStandardEvent::Erc721Transfer {
-                collection,
-                from,
-                to,
-                token_id,
-            } => {
-                let change_metadata = metadata.erc721(&collection)?;
-                StandardChange::Erc721Transfer {
-                    contract_address: collection,
-                    from,
-                    to,
-                    token_id,
-                    metadata: change_metadata,
-                }
-            }
-            DecodedStandardEvent::Erc721Approval {
-                collection,
-                owner,
-                approved_address,
-                token_id,
-            } => {
-                let change_metadata = metadata.erc721(&collection)?;
-                StandardChange::Erc721Approval {
-                    contract_address: collection,
-                    owner,
-                    approved_address,
-                    token_id,
-                    metadata: change_metadata,
-                }
-            }
-            DecodedStandardEvent::OperatorApproval {
-                collection,
-                owner,
-                operator,
-                approved,
-            } => StandardChange::OperatorApproval {
-                contract_address: collection,
-                owner,
-                operator,
-                approved,
-            },
-            DecodedStandardEvent::Erc1155TransferSingle {
-                collection,
-                operator,
-                from,
-                to,
-                token_id,
-                amount,
-            } => StandardChange::Erc1155TransferSingle {
-                contract_address: collection,
-                operator,
-                from,
-                to,
-                token_id,
-                raw_amount: amount,
-            },
-            DecodedStandardEvent::Erc1155TransferBatch {
-                collection,
-                operator,
-                from,
-                to,
-                items,
-            } => StandardChange::Erc1155TransferBatch {
-                contract_address: collection,
-                operator,
-                from,
-                to,
-                items,
-            },
-        })
     }
 }

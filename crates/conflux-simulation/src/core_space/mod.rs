@@ -1,8 +1,9 @@
 mod analysis;
+#[cfg(feature = "serde")]
+mod change_codec;
 mod changes;
 mod completion;
 mod context;
-mod cross_space_scope;
 mod error;
 mod executed_transaction;
 mod execution;
@@ -21,16 +22,14 @@ mod transaction_codec;
 pub(crate) use completion::complete_transaction;
 pub(crate) use transaction::{StorageSponsorship, check_storage_sponsorship};
 
-pub use crate::execution::ReadCallOutcome as CoreSpaceReadCallOutcome;
+pub use analysis::{CoreSpaceAnalysisDomain, CoreSpaceAnalysisView, CoreSpaceAnalyzerRegistry};
 pub use changes::{
-    CombinedCoreSpaceChangeRules, ContractAdminState, CoreSpaceAccessRuleChangeRules,
-    CoreSpaceAnalysisError, CoreSpaceChange, CoreSpaceChangeRules, CoreSpaceChangeSet,
-    CoreSpaceChangeSetBuilder, CoreSpaceContractChangeRules, CoreSpaceGovernanceChangeRules,
-    CoreSpaceNativeAndStakingChangeRules, CoreSpaceNativeCurrency, CoreSpacePoSChangeRules,
-    CoreSpaceSponsorshipChangeRules, CrossSpaceAddress, DefaultCoreSpaceChangeRules,
-    GovernanceParameter, GovernanceVote, SponsoredResource, SponsorshipAccessRuleScope,
-    SponsorshipFundingTerms, SponsorshipReplacement, StoragePoints, VoteAllocation,
+    ContractAdminState, CoreSpaceChange, CoreSpaceChangeSet, CoreSpaceChangeSetBuilder,
+    CoreSpaceNativeCurrency, CrossSpaceAddress, GovernanceParameter, GovernanceVote,
+    SponsoredResource, SponsorshipAccessRuleScope, SponsorshipFundingTerms, SponsorshipReplacement,
+    StoragePoints, VoteAllocation,
 };
+
 pub use conflux_provider::CoreAddress;
 pub use context::{CoreSpaceBlockContext, CoreSpaceBlockSelector, CoreSpaceContextError};
 pub(crate) use context::{CoreSpaceContext, prepare_core_space_context};
@@ -38,8 +37,9 @@ pub use contract_standards::{
     Erc20Metadata, Erc721CollectionMetadata, Erc1155TransferItem, StandardChange,
 };
 pub use error::{
-    CoreSpaceExecutionError, CoreSpaceProtocolError, CoreSpaceResultIntegrationError,
-    CoreSpaceSimulationError, CoreSpaceStateAccessError, CoreSpaceTransactionCompletionError,
+    CoreSpaceAnalysisError, CoreSpaceExecutionError, CoreSpaceProtocolError,
+    CoreSpaceResultIntegrationError, CoreSpaceSimulationError, CoreSpaceStateAccessError,
+    CoreSpaceTransactionCompletionError,
 };
 pub use executed_transaction::{
     CoreSpaceCallKind, CoreSpaceCommittedFrame, CoreSpaceCommittedInternalTransfer,
@@ -63,8 +63,7 @@ pub use state_access::{
 pub use transaction::{
     CoreSpaceAccessListItem, CoreSpacePartialTransactionCommon, CoreSpaceTransactionCommon,
     CoreSpaceTransactionInput, CoreSpaceTransactionInputError, CoreSpaceTransactionRequest,
-    CoreSpaceTransactionType, CoreSpaceTypedTransaction, DynamicFees, FeeInput,
+    CoreSpaceTransactionType, CoreSpaceTypedTransaction,
 };
 
-pub use analysis::CoreSpaceAnalysisView;
-pub use simulation_core::observation::LogFilter;
+pub use crate::execution::ReadCallOutcome as CoreSpaceReadCallOutcome;

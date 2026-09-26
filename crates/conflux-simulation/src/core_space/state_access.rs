@@ -240,17 +240,6 @@ impl CoreSpaceStateReader {
         }
     }
 
-    pub(super) fn espace_balance(
-        &self,
-        address: Address,
-    ) -> Result<U256, CoreSpaceStateAccessError> {
-        self.with_state(|state| {
-            state
-                .balance(&address.with_evm_space())
-                .map_err(|source| operation("read eSpace account balance", source))
-        })
-    }
-
     pub fn native_balance(
         &self,
         address: CoreAddress,
@@ -826,4 +815,18 @@ fn governance_version_key(address: Address) -> [u8; 32] {
     let mut input = [0_u8; 64];
     input[12..32].copy_from_slice(address.as_bytes());
     alloy_primitives::keccak256(input).0
+}
+
+impl contract_standards::MetadataReader<super::CrossSpaceAddress> for CoreSpaceStateReader {
+    type Error = CoreSpaceStateAccessError;
+    fn metadata_call(
+        &self,
+        address: &super::CrossSpaceAddress,
+        input: Bytes,
+    ) -> Result<Option<Bytes>, Self::Error> {
+        Ok(match self.read_call(*address, input)? {
+            ReadCallOutcome::Success(output) => Some(output),
+            ReadCallOutcome::Reverted(_) | ReadCallOutcome::Failed => None,
+        })
+    }
 }

@@ -14,15 +14,14 @@ mod state_access;
 mod transaction;
 mod transaction_adapter;
 
-pub(crate) use changes::has_nested_token_logs;
+pub use analysis::{EspaceAnalysisDomain, EspaceAnalysisView, EspaceAnalyzerRegistry};
 pub use changes::{
-    CombinedEspaceChangeRules, DefaultEspaceChangeRules, EspaceAccountDelegation,
-    EspaceAccountDelegationChange, EspaceAccountDelegationChangeRules, EspaceChange,
-    EspaceChangeRules, EspaceChangeSet, EspaceChangeSetBuilder, EspaceChanges,
-    EspaceNativeAssetChangeRules, EspaceNativeCurrency, EspaceNativeTransferChange,
-    EspaceSelfDestructBurnChange, EspaceStandardChange, EspaceStateChange,
-    EspaceWrappedNativeDepositChange, EspaceWrappedNativeWithdrawalChange,
+    EspaceAccountDelegation, EspaceAccountDelegationChange, EspaceChange, EspaceChangeSet,
+    EspaceChanges, EspaceNativeCurrency, EspaceNativeTransferChange, EspaceSelfDestructBurnChange,
+    EspaceStandardChange, EspaceStateChange, EspaceWrappedNativeDepositChange,
+    EspaceWrappedNativeWithdrawalChange,
 };
+
 pub(crate) use completion::complete_transaction;
 pub use context::{EspaceBlockContext, EspaceBlockSelector, EspaceContextError};
 pub(crate) use context::{EspaceContext, prepare_espace_context};
@@ -65,6 +64,3 @@ pub struct EspaceSimulationRequest {
     pub block: EspaceBlockSelector,
     pub transaction: EspaceTransactionInput,
 }
-
-pub use analysis::EspaceAnalysisView;
-pub use simulation_core::observation::LogFilter;

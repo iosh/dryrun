@@ -1,96 +1,100 @@
-use crate::core_space::CoreSpaceAnalysisView;
-use simulation_core::observation::{AnalysisLimitExceeded, LogFilter};
+use super::CoreSpaceAnalysisError;
 mod access;
 mod admin;
+mod cross_space;
 mod governance;
 mod native_staking;
 mod nested_espace;
 mod pos;
 mod sponsorship;
 
-pub(super) const SPONSORSHIP_POSITION_BASE: usize = usize::MAX / 4;
-pub(super) const ADMIN_POSITION_BASE: usize = usize::MAX / 2;
-pub(super) const ACCESS_RULE_POSITION_BASE: usize = usize::MAX / 4 * 3;
-
-use std::{collections::BTreeMap, error::Error as StdError, sync::Arc};
+use contract_standards::MetadataStore;
+use simulation_core::analysis::MergeChanges;
+use simulation_core::changes::{AssetEffect, ChangePosition, OrderedChanges};
 
 use alloy_primitives::{Address, B256, Bytes, U256};
 use conflux_provider::CoreAddress;
 use contract_standards::StandardChange;
 
-use super::{
-    CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition, CoreSpaceProtocolError,
-    CoreSpaceStateAccess,
-};
+use super::{CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition, CoreSpaceStateAccess};
+
+pub type CoreSpaceNativeCurrency = simulation_core::changes::NativeCurrency;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CoreSpaceNativeCurrency {
-    pub name: String,
-    pub symbol: String,
-    pub decimals: u8,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(
+        tag = "type",
+        rename_all = "camelCase",
+        rename_all_fields = "camelCase"
+    )
+)]
 pub enum CoreSpaceChange {
-    NativeTransfer {
-        from: CoreAddress,
-        to: CoreAddress,
-        raw_amount: U256,
-        currency: CoreSpaceNativeCurrency,
-    },
-    NativeBurn {
-        from: CoreAddress,
-        raw_amount: U256,
-        currency: CoreSpaceNativeCurrency,
-    },
-    Standard(StandardChange<CoreAddress>),
     StakingDeposit {
         account: CoreAddress,
+        #[cfg_attr(feature = "serde", serde(rename = "rawAmount"))]
         amount: U256,
     },
     StakingWithdrawal {
         account: CoreAddress,
+        #[cfg_attr(feature = "serde", serde(rename = "principalRawAmount"))]
         principal_amount: U256,
+        #[cfg_attr(feature = "serde", serde(rename = "rewardRawAmount"))]
         reward_amount: U256,
     },
     StakingVoteLock {
         account: CoreAddress,
+        #[cfg_attr(feature = "serde", serde(rename = "requiredLockedRawAmount"))]
         required_locked_amount: U256,
+        #[cfg_attr(feature = "serde", serde(with = "alloy_serde::quantity"))]
         unlock_block_number: u64,
     },
+    #[cfg_attr(feature = "serde", serde(rename = "posRegistration"))]
     PoSRegistration {
         account: CoreAddress,
         identifier: B256,
         bls_public_key: Bytes,
         vrf_public_key: Bytes,
+        #[cfg_attr(feature = "serde", serde(with = "alloy_serde::quantity"))]
         initial_vote_count: u64,
+        #[cfg_attr(feature = "serde", serde(rename = "lockedRawAmount"))]
         locked_amount: U256,
     },
+    #[cfg_attr(feature = "serde", serde(rename = "posStakeIncrease"))]
     PoSStakeIncrease {
         account: CoreAddress,
         identifier: B256,
+        #[cfg_attr(feature = "serde", serde(with = "alloy_serde::quantity"))]
         added_vote_count: u64,
+        #[cfg_attr(feature = "serde", serde(rename = "addedLockedRawAmount"))]
         added_locked_amount: U256,
     },
+    #[cfg_attr(feature = "serde", serde(rename = "posRetirementRequest"))]
     PoSRetirementRequest {
         account: CoreAddress,
         identifier: B256,
+        #[cfg_attr(feature = "serde", serde(with = "alloy_serde::quantity"))]
         requested_vote_count: u64,
     },
     GovernanceVoteCast {
         voter: CoreAddress,
+        #[cfg_attr(feature = "serde", serde(with = "alloy_serde::quantity"))]
         round: u64,
         votes: Vec<GovernanceVote>,
     },
     GasSponsorship {
         contract_address: CoreAddress,
         sponsor: Option<CoreAddress>,
+        #[cfg_attr(feature = "serde", serde(rename = "balanceRawAmount"))]
         balance: U256,
+        #[cfg_attr(feature = "serde", serde(rename = "gasFeeUpperBoundRawAmount"))]
         gas_fee_upper_bound: U256,
     },
     StorageSponsorship {
         contract_address: CoreAddress,
         sponsor: Option<CoreAddress>,
+        #[cfg_attr(feature = "serde", serde(rename = "balanceRawAmount"))]
         balance: U256,
         storage_points: Option<StoragePoints>,
     },
@@ -108,11 +112,15 @@ pub enum CoreSpaceChange {
         enabled: bool,
     },
     SponsorshipFunding {
+        #[cfg_attr(feature = "serde", serde(skip))]
         resource: SponsoredResource,
         contract_address: CoreAddress,
         sponsor: CoreAddress,
+        #[cfg_attr(feature = "serde", serde(rename = "contributedRawAmount"))]
         contributed_amount: U256,
+        #[cfg_attr(feature = "serde", serde(rename = "poolCreditedRawAmount"))]
         pool_credited_amount: U256,
+        #[cfg_attr(feature = "serde", serde(flatten))]
         terms: SponsorshipFundingTerms,
         replacement: Option<SponsorshipReplacement>,
     },
@@ -127,7 +135,9 @@ pub enum CoreSpaceChange {
     },
     StoragePointConversion {
         contract_address: CoreAddress,
+        #[cfg_attr(feature = "serde", serde(rename = "fromSponsorPoolRawAmount"))]
         from_sponsor_pool_amount: U256,
+        #[cfg_attr(feature = "serde", serde(rename = "fromStorageCollateralRawAmount"))]
         from_storage_collateral_amount: U256,
     },
     CrossSpaceNativeTransfer {
@@ -135,10 +145,15 @@ pub enum CoreSpaceChange {
         to: CrossSpaceAddress,
         raw_amount: U256,
     },
+    #[cfg_attr(feature = "serde", serde(untagged))]
+    Asset(simulation_core::changes::AssetChange<CoreAddress>),
+    #[cfg_attr(feature = "serde", serde(untagged))]
     Espace(crate::espace::EspaceChange),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct VoteAllocation {
     pub unchanged: U256,
     pub increase: U256,
@@ -146,6 +161,8 @@ pub struct VoteAllocation {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct GovernanceVote {
     pub parameter: GovernanceParameter,
     pub allocation: VoteAllocation,
@@ -153,17 +170,21 @@ pub struct GovernanceVote {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct StoragePoints {
     pub unused: U256,
     pub used: U256,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ContractAdminState {
     pub admin: Option<CoreAddress>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum GovernanceParameter {
     PowBaseReward,
     PosRewardInterestRate,
@@ -171,99 +192,240 @@ pub enum GovernanceParameter {
     BaseFeeShareProportion,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(tag = "space", content = "address", rename_all = "camelCase")
+)]
 pub enum CrossSpaceAddress {
     CoreSpace(CoreAddress),
     Espace(Address),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub enum SponsoredResource {
     Gas,
     StorageCollateral,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(
+        tag = "resource",
+        rename_all = "camelCase",
+        rename_all_fields = "camelCase"
+    )
+)]
 pub enum SponsorshipFundingTerms {
     Gas { gas_fee_upper_bound: U256 },
     StorageCollateral,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(untagged, rename_all_fields = "camelCase"))]
 pub enum SponsorshipReplacement {
     Gas {
         previous_sponsor: CoreAddress,
+        #[cfg_attr(feature = "serde", serde(rename = "poolRefundedRawAmount"))]
         pool_refunded_amount: U256,
     },
     StorageCollateral {
         previous_sponsor: CoreAddress,
+        #[cfg_attr(feature = "serde", serde(rename = "poolRefundedRawAmount"))]
         pool_refunded_amount: U256,
+        #[cfg_attr(feature = "serde", serde(rename = "collateralCompensationRawAmount"))]
         collateral_compensation_amount: U256,
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(tag = "type", content = "address", rename_all = "camelCase")
+)]
 pub enum SponsorshipAccessRuleScope {
     Account(CoreAddress),
     AllAccounts,
 }
 
-/// A complete, position-ordered set of verified Core Space wallet semantics.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum ProtocolEffect {
+    StakingDeposit,
+    StakingWithdrawal,
+    StakingVoteLock,
+    PoSRegistration,
+    PoSStakeIncrease,
+    PoSRetirement,
+    Governance,
+    GasSponsorship,
+    StorageSponsorship,
+    StorageCollateral,
+    ContractAdmin,
+    ContractAdminSet,
+    StoragePointConversion,
+    SponsorshipFunding(SponsoredResource),
+    Access(SponsorshipAccessRuleScope),
+    AccessSet(SponsorshipAccessRuleScope),
+}
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum CoreEffect {
+    Asset(AssetEffect<CoreAddress>),
+    Protocol {
+        account: CoreAddress,
+        effect: ProtocolEffect,
+    },
+    CrossSpace {
+        from: CrossSpaceAddress,
+        to: CrossSpaceAddress,
+    },
+    Espace(AssetEffect),
+}
+impl CoreSpaceChange {
+    fn effect(&self) -> CoreEffect {
+        let (account, effect) = match self {
+            Self::Asset(change) => return CoreEffect::Asset(change.effect()),
+            Self::CrossSpaceNativeTransfer { from, to, .. } => {
+                return CoreEffect::CrossSpace {
+                    from: *from,
+                    to: *to,
+                };
+            }
+            Self::Espace(change) => return CoreEffect::Espace(change.effect()),
+            Self::StakingDeposit { account, .. } => (*account, ProtocolEffect::StakingDeposit),
+            Self::StakingWithdrawal { account, .. } => {
+                (*account, ProtocolEffect::StakingWithdrawal)
+            }
+            Self::StakingVoteLock { account, .. } => (*account, ProtocolEffect::StakingVoteLock),
+            Self::PoSRegistration { account, .. } => (*account, ProtocolEffect::PoSRegistration),
+            Self::PoSStakeIncrease { account, .. } => (*account, ProtocolEffect::PoSStakeIncrease),
+            Self::PoSRetirementRequest { account, .. } => (*account, ProtocolEffect::PoSRetirement),
+            Self::GovernanceVoteCast { voter, .. } => (*voter, ProtocolEffect::Governance),
+            Self::GasSponsorship {
+                contract_address, ..
+            } => (*contract_address, ProtocolEffect::GasSponsorship),
+            Self::StorageSponsorship {
+                contract_address, ..
+            } => (*contract_address, ProtocolEffect::StorageSponsorship),
+            Self::StorageCollateral {
+                contract_address, ..
+            } => (*contract_address, ProtocolEffect::StorageCollateral),
+            Self::ContractAdmin {
+                contract_address, ..
+            } => (*contract_address, ProtocolEffect::ContractAdmin),
+            Self::ContractAdminSet {
+                contract_address, ..
+            } => (*contract_address, ProtocolEffect::ContractAdminSet),
+            Self::StoragePointConversion {
+                contract_address, ..
+            } => (*contract_address, ProtocolEffect::StoragePointConversion),
+            Self::SponsorshipFunding {
+                contract_address,
+                resource,
+                ..
+            } => (
+                *contract_address,
+                ProtocolEffect::SponsorshipFunding(*resource),
+            ),
+            Self::SponsorshipAccessRule {
+                contract_address,
+                scope,
+                ..
+            } => (*contract_address, ProtocolEffect::Access(*scope)),
+            Self::SponsorshipAccessRuleSet {
+                contract_address,
+                scope,
+                ..
+            } => (*contract_address, ProtocolEffect::AccessSet(*scope)),
+        };
+        CoreEffect::Protocol { account, effect }
+    }
+}
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CoreSpaceChangeSet {
-    items: Vec<CoreSpaceChange>,
-    entries: Vec<(CoreSpaceExecutionPosition, CoreSpaceChange)>,
+    changes: OrderedChanges<CoreEffect, CoreSpaceChange>,
+    metadata: MetadataStore<CrossSpaceAddress>,
 }
-
 impl CoreSpaceChangeSet {
-    pub fn items(&self) -> &[CoreSpaceChange] {
-        &self.items
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn insert(&mut self, position: impl Into<ChangePosition>, change: CoreSpaceChange) {
+        self.changes
+            .insert(position.into(), change.effect(), change);
+    }
+    pub fn metadata(&self) -> &MetadataStore<CrossSpaceAddress> {
+        &self.metadata
     }
 
+    pub(crate) fn load_metadata(
+        &mut self,
+        state: &CoreSpaceStateAccess,
+    ) -> Result<(), CoreSpaceAnalysisError> {
+        let assets = self.items().filter_map(|change| match change {
+            CoreSpaceChange::Asset(change) => change
+                .metadata_request()
+                .map(|(address, kind)| (CrossSpaceAddress::CoreSpace(address), kind)),
+            CoreSpaceChange::Espace(change) => change
+                .metadata_request()
+                .map(|(address, kind)| (CrossSpaceAddress::Espace(address), kind)),
+            _ => None,
+        });
+        self.metadata =
+            contract_standards::load_metadata(state.finalized(), assets).map_err(|source| {
+                super::CoreSpaceProtocolError::state_access("read token metadata", source)
+            })?;
+        Ok(())
+    }
+    pub fn items(&self) -> impl ExactSizeIterator<Item = &CoreSpaceChange> {
+        self.changes.items()
+    }
     pub fn into_items(self) -> Vec<CoreSpaceChange> {
-        self.items
-    }
-
-    fn merge(self, other: Self) -> Result<Self, CoreSpaceAnalysisError> {
-        let mut builder = CoreSpaceChangeSetBuilder::new();
-        for (position, change) in self.entries.into_iter().chain(other.entries) {
-            builder.insert(position, change)?;
-        }
-        Ok(builder.finish())
+        self.changes.into_items()
     }
 }
-
-/// Builder shared by built-in and custom Core Space change rules.
+impl simulation_core::analysis::MergeChanges for CoreSpaceChangeSet {
+    fn merge(self, other: Self) -> Self {
+        Self {
+            changes: self.changes.merge(other.changes),
+            metadata: MetadataStore::default(),
+        }
+    }
+}
+impl From<CoreSpaceExecutionPosition> for ChangePosition {
+    fn from(position: CoreSpaceExecutionPosition) -> Self {
+        Self::Execution(position.index())
+    }
+}
 #[derive(Debug, Default)]
 pub struct CoreSpaceChangeSetBuilder {
-    entries: BTreeMap<CoreSpaceExecutionPosition, CoreSpaceChange>,
+    changes: CoreSpaceChangeSet,
 }
-
 impl CoreSpaceChangeSetBuilder {
     pub fn new() -> Self {
         Self::default()
     }
-
-    fn insert(
+    fn insert(&mut self, position: impl Into<ChangePosition>, change: CoreSpaceChange) {
+        self.changes
+            .changes
+            .insert(position.into(), change.effect(), change);
+    }
+    pub fn standard(
         &mut self,
         position: CoreSpaceExecutionPosition,
-        change: CoreSpaceChange,
-    ) -> Result<(), CoreSpaceAnalysisError> {
-        if let Some(existing) = self.entries.get(&position) {
-            if existing == &change {
-                return Ok(());
-            }
-            return Err(CoreSpaceAnalysisError::Conflict {
-                details: format!(
-                    "multiple semantic changes were produced at Core Space execution position {}",
-                    position.index()
-                ),
-            });
-        }
-        self.entries.insert(position, change);
-        Ok(())
+        change: StandardChange<CoreAddress>,
+    ) {
+        self.insert(
+            position,
+            CoreSpaceChange::Asset(simulation_core::changes::AssetChange::Standard(change)),
+        )
     }
-
     pub fn native_transfer(
         &mut self,
         position: CoreSpaceExecutionPosition,
@@ -271,18 +433,20 @@ impl CoreSpaceChangeSetBuilder {
         to: CoreAddress,
         raw_amount: U256,
         currency: CoreSpaceNativeCurrency,
-    ) -> Result<(), CoreSpaceAnalysisError> {
+    ) {
         if raw_amount.is_zero() || from == to {
-            return Ok(());
+            return;
         }
         self.insert(
             position,
-            CoreSpaceChange::NativeTransfer {
-                from,
-                to,
-                raw_amount,
-                currency,
-            },
+            CoreSpaceChange::Asset(simulation_core::changes::AssetChange::NativeTransfer(
+                simulation_core::changes::NativeTransfer {
+                    from,
+                    to,
+                    raw_amount,
+                    currency,
+                },
+            )),
         )
     }
 
@@ -292,17 +456,19 @@ impl CoreSpaceChangeSetBuilder {
         from: CoreAddress,
         raw_amount: U256,
         currency: CoreSpaceNativeCurrency,
-    ) -> Result<(), CoreSpaceAnalysisError> {
+    ) {
         if raw_amount.is_zero() {
-            return Ok(());
+            return;
         }
         self.insert(
             position,
-            CoreSpaceChange::NativeBurn {
-                from,
-                raw_amount,
-                currency,
-            },
+            CoreSpaceChange::Asset(simulation_core::changes::AssetChange::SelfDestructBurn(
+                simulation_core::changes::NativeBurn {
+                    contract_address: from,
+                    raw_amount,
+                    currency,
+                },
+            )),
         )
     }
 
@@ -311,9 +477,9 @@ impl CoreSpaceChangeSetBuilder {
         position: CoreSpaceExecutionPosition,
         account: CoreAddress,
         amount: U256,
-    ) -> Result<(), CoreSpaceAnalysisError> {
+    ) {
         if amount.is_zero() {
-            return Ok(());
+            return;
         }
         self.insert(
             position,
@@ -327,9 +493,9 @@ impl CoreSpaceChangeSetBuilder {
         account: CoreAddress,
         principal_amount: U256,
         reward_amount: U256,
-    ) -> Result<(), CoreSpaceAnalysisError> {
+    ) {
         if principal_amount.is_zero() && reward_amount.is_zero() {
-            return Ok(());
+            return;
         }
         self.insert(
             position,
@@ -347,7 +513,7 @@ impl CoreSpaceChangeSetBuilder {
         account: CoreAddress,
         required_locked_amount: U256,
         unlock_block_number: u64,
-    ) -> Result<(), CoreSpaceAnalysisError> {
+    ) {
         self.insert(
             position,
             CoreSpaceChange::StakingVoteLock {
@@ -371,7 +537,7 @@ impl CoreSpaceChangeSetBuilder {
         vrf_public_key: Bytes,
         initial_vote_count: u64,
         locked_amount: U256,
-    ) -> Result<(), CoreSpaceAnalysisError> {
+    ) {
         self.insert(
             position,
             CoreSpaceChange::PoSRegistration {
@@ -392,7 +558,7 @@ impl CoreSpaceChangeSetBuilder {
         identifier: B256,
         added_vote_count: u64,
         added_locked_amount: U256,
-    ) -> Result<(), CoreSpaceAnalysisError> {
+    ) {
         self.insert(
             position,
             CoreSpaceChange::PoSStakeIncrease {
@@ -410,7 +576,7 @@ impl CoreSpaceChangeSetBuilder {
         account: CoreAddress,
         identifier: B256,
         requested_vote_count: u64,
-    ) -> Result<(), CoreSpaceAnalysisError> {
+    ) {
         self.insert(
             position,
             CoreSpaceChange::PoSRetirementRequest {
@@ -427,9 +593,9 @@ impl CoreSpaceChangeSetBuilder {
         voter: CoreAddress,
         round: u64,
         votes: Vec<GovernanceVote>,
-    ) -> Result<(), CoreSpaceAnalysisError> {
+    ) {
         if votes.is_empty() {
-            return Ok(());
+            return;
         }
         self.insert(
             position,
@@ -443,12 +609,12 @@ impl CoreSpaceChangeSetBuilder {
 
     pub fn gas_sponsorship(
         &mut self,
-        position: CoreSpaceExecutionPosition,
+        position: impl Into<ChangePosition>,
         contract_address: CoreAddress,
         sponsor: Option<CoreAddress>,
         balance: U256,
         gas_fee_upper_bound: U256,
-    ) -> Result<(), CoreSpaceAnalysisError> {
+    ) {
         self.insert(
             position,
             CoreSpaceChange::GasSponsorship {
@@ -462,12 +628,12 @@ impl CoreSpaceChangeSetBuilder {
 
     pub fn storage_sponsorship(
         &mut self,
-        position: CoreSpaceExecutionPosition,
+        position: impl Into<ChangePosition>,
         contract_address: CoreAddress,
         sponsor: Option<CoreAddress>,
         balance: U256,
         storage_points: Option<StoragePoints>,
-    ) -> Result<(), CoreSpaceAnalysisError> {
+    ) {
         self.insert(
             position,
             CoreSpaceChange::StorageSponsorship {
@@ -481,10 +647,10 @@ impl CoreSpaceChangeSetBuilder {
 
     pub fn storage_collateral(
         &mut self,
-        position: CoreSpaceExecutionPosition,
+        position: impl Into<ChangePosition>,
         contract_address: CoreAddress,
         raw_amount: U256,
-    ) -> Result<(), CoreSpaceAnalysisError> {
+    ) {
         self.insert(
             position,
             CoreSpaceChange::StorageCollateral {
@@ -496,10 +662,10 @@ impl CoreSpaceChangeSetBuilder {
 
     pub fn contract_admin(
         &mut self,
-        position: CoreSpaceExecutionPosition,
+        position: impl Into<ChangePosition>,
         contract_address: CoreAddress,
         state: Option<ContractAdminState>,
-    ) -> Result<(), CoreSpaceAnalysisError> {
+    ) {
         self.insert(
             position,
             CoreSpaceChange::ContractAdmin {
@@ -511,11 +677,11 @@ impl CoreSpaceChangeSetBuilder {
 
     pub fn sponsorship_access_rule(
         &mut self,
-        position: CoreSpaceExecutionPosition,
+        position: impl Into<ChangePosition>,
         contract_address: CoreAddress,
         scope: SponsorshipAccessRuleScope,
         enabled: bool,
-    ) -> Result<(), CoreSpaceAnalysisError> {
+    ) {
         self.insert(
             position,
             CoreSpaceChange::SponsorshipAccessRule {
@@ -530,7 +696,7 @@ impl CoreSpaceChangeSetBuilder {
         &mut self,
         position: CoreSpaceExecutionPosition,
         change: crate::espace::EspaceChange,
-    ) -> Result<(), CoreSpaceAnalysisError> {
+    ) {
         self.insert(position, CoreSpaceChange::Espace(change))
     }
 
@@ -540,9 +706,9 @@ impl CoreSpaceChangeSetBuilder {
         from: CrossSpaceAddress,
         to: CrossSpaceAddress,
         raw_amount: U256,
-    ) -> Result<(), CoreSpaceAnalysisError> {
+    ) {
         if raw_amount.is_zero() {
-            return Ok(());
+            return;
         }
         self.insert(
             position,
@@ -555,377 +721,26 @@ impl CoreSpaceChangeSetBuilder {
     }
 
     pub fn finish(self) -> CoreSpaceChangeSet {
-        let entries = self.entries.into_iter().collect::<Vec<_>>();
-        let items = entries.iter().map(|(_, change)| change.clone()).collect();
-        CoreSpaceChangeSet { items, entries }
+        self.changes
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[non_exhaustive]
-pub enum CoreSpaceAnalysisError {
-    #[error(transparent)]
-    LimitExceeded(#[from] AnalysisLimitExceeded),
-    #[error(transparent)]
-    Protocol(#[from] CoreSpaceProtocolError),
-    #[error("Core Space change rules produced conflicting results: {details}")]
-    Conflict { details: String },
-    #[error("Core Space change rule `{rules}` failed: {source}")]
-    RuleFailure {
-        rules: &'static str,
-        #[source]
-        source: Box<dyn StdError + Send + Sync + 'static>,
-    },
-}
-
-impl CoreSpaceAnalysisError {
-    pub fn rule_failure(
-        rules: &'static str,
-        source: impl StdError + Send + Sync + 'static,
-    ) -> Self {
-        Self::RuleFailure {
-            rules,
-            source: Box::new(source),
-        }
-    }
-}
-
-/// Rules run only after successful execution. The configured composition must
-/// account for every supported effect or return an error; partial sets are not published.
-pub trait CoreSpaceChangeRules: Send + Sync + 'static {
-    fn checkpoint_filters(&self) -> Vec<LogFilter<super::CrossSpaceAddress>> {
-        Vec::new()
-    }
-
-    fn derive_changes(
-        &self,
-        view: CoreSpaceAnalysisView<'_>,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError>;
-
-    fn combine<R>(self, other: R) -> CombinedCoreSpaceChangeRules<Self, R>
-    where
-        Self: Sized,
-        R: CoreSpaceChangeRules,
-    {
-        CombinedCoreSpaceChangeRules::new(self, other)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct CombinedCoreSpaceChangeRules<A, B> {
-    first: Arc<A>,
-    second: Arc<B>,
-}
-
-impl<A, B> CombinedCoreSpaceChangeRules<A, B> {
-    pub fn new(first: A, second: B) -> Self {
-        Self {
-            first: Arc::new(first),
-            second: Arc::new(second),
-        }
-    }
-
-    pub(crate) fn from_shared(first: Arc<A>, second: B) -> Self {
-        Self {
-            first,
-            second: Arc::new(second),
-        }
-    }
-}
-
-impl<A, B> CoreSpaceChangeRules for CombinedCoreSpaceChangeRules<A, B>
-where
-    A: CoreSpaceChangeRules,
-    B: CoreSpaceChangeRules,
-{
-    fn checkpoint_filters(&self) -> Vec<LogFilter<super::CrossSpaceAddress>> {
-        let mut filters = self.first.checkpoint_filters();
-        for filter in self.second.checkpoint_filters() {
-            if !filters.contains(&filter) {
-                filters.push(filter);
-            }
-        }
-        filters
-    }
-
-    fn derive_changes(
-        &self,
-        view: CoreSpaceAnalysisView<'_>,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
-        let first = self.first.derive_changes(view)?;
-        let second = self.second.derive_changes(view)?;
-        first.merge(second)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct CoreSpaceNativeAndStakingChangeRules {
-    currency: CoreSpaceNativeCurrency,
-}
-
-impl CoreSpaceNativeAndStakingChangeRules {
-    pub fn new(currency: CoreSpaceNativeCurrency) -> Self {
-        Self { currency }
-    }
-}
-
-impl CoreSpaceChangeRules for CoreSpaceNativeAndStakingChangeRules {
-    fn derive_changes(
-        &self,
-        view: CoreSpaceAnalysisView<'_>,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
-        let execution = view.execution();
-        let state = view.state();
-        native_staking::derive_changes(execution, state, &self.currency).map_err(Into::into)
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CoreSpacePoSChangeRules;
-
-impl CoreSpacePoSChangeRules {
-    pub const fn new() -> Self {
-        Self
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CoreSpaceGovernanceChangeRules;
-
-impl CoreSpaceGovernanceChangeRules {
-    pub const fn new() -> Self {
-        Self
-    }
-}
-
-impl CoreSpaceChangeRules for CoreSpaceGovernanceChangeRules {
-    fn derive_changes(
-        &self,
-        view: CoreSpaceAnalysisView<'_>,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
-        let execution = view.execution();
-        let state = view.state();
-        governance::derive_changes(execution, state).map_err(Into::into)
-    }
-}
-
-impl CoreSpaceChangeRules for CoreSpacePoSChangeRules {
-    fn derive_changes(
-        &self,
-        view: CoreSpaceAnalysisView<'_>,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
-        let execution = view.execution();
-        let state = view.state();
-        pos::derive_changes(execution, state).map_err(Into::into)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct DefaultCoreSpaceChangeRules {
-    native_and_staking: CoreSpaceNativeAndStakingChangeRules,
-    pos: CoreSpacePoSChangeRules,
-    governance: CoreSpaceGovernanceChangeRules,
-    sponsorship: CoreSpaceSponsorshipChangeRules,
-    admin: CoreSpaceContractChangeRules,
-    access: CoreSpaceAccessRuleChangeRules,
-    espace_native_currency: crate::espace::EspaceNativeCurrency,
-    espace_wrapped_native_token: alloy_primitives::Address,
-    espace_change_rules_enabled: bool,
-}
-
-impl DefaultCoreSpaceChangeRules {
-    pub fn new(currency: CoreSpaceNativeCurrency) -> Self {
-        let mut rules = Self::new_with_espace(
-            currency,
-            crate::espace::EspaceNativeCurrency {
-                name: "eSpace native currency".to_owned(),
-                symbol: "CFX".to_owned(),
-                decimals: 18,
-            },
-            alloy_primitives::Address::ZERO,
-        );
-        rules.espace_change_rules_enabled = false;
-        rules
-    }
-
-    pub fn new_with_espace(
-        currency: CoreSpaceNativeCurrency,
-        espace_native_currency: crate::espace::EspaceNativeCurrency,
-        espace_wrapped_native_token: alloy_primitives::Address,
-    ) -> Self {
-        Self {
-            native_and_staking: CoreSpaceNativeAndStakingChangeRules::new(currency),
-            pos: CoreSpacePoSChangeRules,
-            governance: CoreSpaceGovernanceChangeRules,
-            sponsorship: CoreSpaceSponsorshipChangeRules,
-            admin: CoreSpaceContractChangeRules,
-            access: CoreSpaceAccessRuleChangeRules,
-            espace_native_currency,
-            espace_wrapped_native_token,
-            espace_change_rules_enabled: true,
-        }
-    }
-}
-
-impl CoreSpaceChangeRules for DefaultCoreSpaceChangeRules {
-    fn derive_changes(
-        &self,
-        view: CoreSpaceAnalysisView<'_>,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
-        let execution = view.execution();
-        let state = view.state();
-        let native_and_staking = self.native_and_staking.derive_changes(view)?;
-        let pos = self.pos.derive_changes(view)?;
-        let governance = self.governance.derive_changes(view)?;
-        let sponsorship = self.sponsorship.derive_changes(view)?;
-        let admin = self.admin.derive_changes(view)?;
-        let access = self.access.derive_changes(view)?;
-        let nested_espace = if execution.nested_espace_scope_roots().is_empty() {
-            CoreSpaceChangeSet::default()
-        } else if !self.espace_change_rules_enabled {
-            return Err(CoreSpaceAnalysisError::Protocol(
-                CoreSpaceProtocolError::unsupported_operation(
-                    "nested eSpace changes require eSpace chain configuration",
-                ),
-            ));
-        } else {
-            nested_espace::derive_native_changes(
-                execution,
-                state,
-                &self.espace_native_currency,
-                self.espace_wrapped_native_token,
-            )?
-        };
-        native_and_staking
-            .merge(pos)?
-            .merge(governance)?
-            .merge(sponsorship)?
-            .merge(admin)?
-            .merge(access)?
-            .merge(nested_espace)
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CoreSpaceSponsorshipChangeRules;
-
-impl CoreSpaceSponsorshipChangeRules {
-    pub const fn new() -> Self {
-        Self
-    }
-}
-
-impl CoreSpaceChangeRules for CoreSpaceSponsorshipChangeRules {
-    fn derive_changes(
-        &self,
-        view: CoreSpaceAnalysisView<'_>,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
-        let execution = view.execution();
-        let state = view.state();
-        sponsorship::derive_changes(execution, state).map_err(Into::into)
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CoreSpaceContractChangeRules;
-
-impl CoreSpaceContractChangeRules {
-    pub const fn new() -> Self {
-        Self
-    }
-}
-
-impl CoreSpaceChangeRules for CoreSpaceContractChangeRules {
-    fn derive_changes(
-        &self,
-        view: CoreSpaceAnalysisView<'_>,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
-        let execution = view.execution();
-        let state = view.state();
-        admin::derive_changes(execution, state).map_err(Into::into)
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CoreSpaceAccessRuleChangeRules;
-
-impl CoreSpaceAccessRuleChangeRules {
-    pub const fn new() -> Self {
-        Self
-    }
-}
-
-impl CoreSpaceChangeRules for CoreSpaceAccessRuleChangeRules {
-    fn derive_changes(
-        &self,
-        view: CoreSpaceAnalysisView<'_>,
-    ) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
-        let execution = view.execution();
-        let state = view.state();
-        access::derive_changes(execution, state).map_err(Into::into)
-    }
-}
-
-pub(crate) fn check_contract_support(
+pub(crate) fn derive_protocol_changes(
     execution: &CoreSpaceExecutedTransaction,
     state: &CoreSpaceStateAccess,
-) -> Result<(), CoreSpaceAnalysisError> {
-    use crate::execution::FrameAction;
-    use cfx_parameters::internal_contract_addresses::*;
-    use cfx_types::{AddressSpaceUtil, Space};
-
-    for (_, frame) in execution.committed_trace.frames() {
-        let FrameAction::Call {
-            code_address,
-            target,
-            call_type,
-            ..
-        } = frame.action
-        else {
-            return Err(CoreSpaceProtocolError::unsupported_operation(
-                "contract creation requires an implementation-specific analyzer",
-            )
-            .into());
-        };
-        if frame.space == Space::Native && execution.is_active_internal_contract(code_address) {
-            let supported = [
-                ADMIN_CONTROL_CONTRACT_ADDRESS,
-                SPONSOR_WHITELIST_CONTROL_CONTRACT_ADDRESS,
-                STORAGE_INTEREST_STAKING_CONTRACT_ADDRESS,
-                POS_REGISTER_CONTRACT_ADDRESS,
-                CROSS_SPACE_CONTRACT_ADDRESS,
-                PARAMS_CONTROL_CONTRACT_ADDRESS,
-                CONTEXT_CONTRACT_ADDRESS,
-            ]
-            .contains(&code_address);
-            if !supported
-                || target != code_address
-                || !matches!(
-                    call_type,
-                    cfx_vm_types::CallType::Call | cfx_vm_types::CallType::StaticCall
-                )
-            {
-                return Err(CoreSpaceProtocolError::unsupported_operation(format!(
-                    "unverified internal contract call at {code_address:?}"
-                ))
-                .into());
-            }
-            continue;
-        }
-        for reader in [state.initial(), state.finalized()] {
-            let code = reader
-                .code(code_address.with_space(frame.space))
-                .map_err(|source| {
-                    CoreSpaceProtocolError::state_access("check contract implementation", source)
-                })?;
-            if code.is_some_and(|code| !code.is_empty()) {
-                return Err(CoreSpaceProtocolError::unsupported_operation(format!(
-                    "no verified implementation scope for code at {code_address:?} in {:?}",
-                    frame.space
-                ))
-                .into());
-            }
-        }
-    }
-    Ok(())
+    currency: &CoreSpaceNativeCurrency,
+    espace_currency: &crate::espace::EspaceNativeCurrency,
+) -> Result<CoreSpaceChangeSet, CoreSpaceAnalysisError> {
+    let cross_space = cross_space::collect_committed_espace_scopes(execution.trace())?;
+    let changes = native_staking::derive_changes(execution, state, currency, &cross_space)?;
+    let changes = changes.merge(pos::derive_changes(execution, state)?);
+    let changes = changes.merge(governance::derive_changes(execution, state)?);
+    let changes = changes.merge(sponsorship::derive_changes(execution, state)?);
+    let changes = changes.merge(admin::derive_changes(execution, state)?);
+    let changes = changes.merge(access::derive_changes(execution, state)?);
+    Ok(changes.merge(nested_espace::derive_native_changes(
+        execution,
+        espace_currency,
+        &cross_space,
+    )?))
 }

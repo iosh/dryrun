@@ -215,3 +215,13 @@ impl ErrorInfo for crate::simulation::RuntimeError {
         .diagnostic()
     }
 }
+
+impl ErrorInfo for crate::analysis::CoverageError {
+    fn diagnostic(&self) -> Diagnostic {
+        match self {
+            Self::Unsupported { .. } => ErrorCode::AnalysisUnsupported,
+            Self::Incomplete { .. } => ErrorCode::IncompleteEvidence,
+        }
+        .diagnostic()
+    }
+}

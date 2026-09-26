@@ -123,14 +123,12 @@ pub(crate) fn derive_changes(
                 })
             })
             .collect::<Result<Vec<_>, CoreSpaceProtocolError>>()?;
-        builder
-            .governance_vote(
-                operation.position,
-                core_address(operation.voter, execution)?,
-                operation.round,
-                votes,
-            )
-            .map_err(|error| inconsistent(error.to_string()))?;
+        builder.governance_vote(
+            operation.position,
+            core_address(operation.voter, execution)?,
+            operation.round,
+            votes,
+        );
     }
 
     for (voter, state) in after {

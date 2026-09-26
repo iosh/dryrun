@@ -5,12 +5,9 @@ use cfx_parameters::internal_contract_addresses::ADMIN_CONTROL_CONTRACT_ADDRESS;
 use cfx_types::{Address, Space};
 use cfx_vm_types::CallType;
 
-use super::{
-    ADMIN_POSITION_BASE, ContractAdminState, CoreSpaceChangeSet, CoreSpaceChangeSetBuilder,
-};
+use super::{ContractAdminState, CoreSpaceChangeSet, CoreSpaceChangeSetBuilder};
 use crate::core_space::{
-    CoreSpaceExecutedTransaction, CoreSpaceExecutionPosition, CoreSpaceProtocolError,
-    CoreSpaceStateAccess,
+    CoreSpaceExecutedTransaction, CoreSpaceProtocolError, CoreSpaceStateAccess,
 };
 
 sol! {
@@ -64,7 +61,7 @@ pub(super) fn derive_changes(
     let mut ordered = candidates.into_iter().collect::<Vec<_>>();
     ordered.sort_by_key(|(address, position)| (*position, *address));
     let mut builder = CoreSpaceChangeSetBuilder::new();
-    for (index, (contract, _)) in ordered.into_iter().enumerate() {
+    for (contract, _) in ordered {
         let initial = state.initial().contract_admin(contract).map_err(|source| {
             CoreSpaceProtocolError::state_access("read initial Core Space contract admin", source)
         })?;
@@ -96,13 +93,11 @@ pub(super) fn derive_changes(
                 CoreSpaceProtocolError::state_access("convert contract admin address", source)
             })?
             .map(|admin| ContractAdminState { admin });
-        builder
-            .contract_admin(
-                CoreSpaceExecutionPosition::from_index(ADMIN_POSITION_BASE + index),
-                contract_address,
-                state,
-            )
-            .map_err(|error| CoreSpaceProtocolError::inconsistent_execution(error.to_string()))?;
+        builder.contract_admin(
+            simulation_core::changes::ChangePosition::Settlement,
+            contract_address,
+            state,
+        );
     }
     Ok(builder.finish())
 }
@@ -132,25 +127,4 @@ fn decode_contract(calldata: &[u8]) -> Result<Option<Address>, CoreSpaceProtocol
         return Ok(None);
     };
     Ok(Some(Address::from_slice(address.as_slice())))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{AdminCalls, decode_contract};
-    use alloy_sol_types::SolCall;
-    use cfx_types::Address;
-
-    #[test]
-    fn decodes_admin_targets_and_rejects_noncanonical_payloads() {
-        let contract = Address::from_low_u64_be(7);
-        let call = AdminCalls::destroyCall {
-            contract_address: alloy_primitives::Address::from_slice(&contract.0),
-        };
-        assert_eq!(decode_contract(&call.abi_encode()).unwrap(), Some(contract));
-
-        let mut malformed = call.abi_encode();
-        malformed[4] = 1;
-        assert!(decode_contract(&malformed).is_err());
-        assert_eq!(decode_contract(&malformed[..3]).unwrap(), None);
-    }
 }

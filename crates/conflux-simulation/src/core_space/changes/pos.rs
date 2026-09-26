@@ -78,17 +78,15 @@ pub(super) fn derive_changes(
                 replayed_state.apply_registration(account, identifier);
                 let locked_amount =
                     replayed_state.add_registered_votes(identifier, initial_vote_count)?;
-                changes
-                    .pos_registration(
-                        position,
-                        core_address(account, execution),
-                        identifier,
-                        bls_public_key,
-                        vrf_public_key,
-                        initial_vote_count,
-                        locked_amount,
-                    )
-                    .expect("built-in Core Space changes use unique execution positions");
+                changes.pos_registration(
+                    position,
+                    core_address(account, execution),
+                    identifier,
+                    bls_public_key,
+                    vrf_public_key,
+                    initial_vote_count,
+                    locked_amount,
+                );
             }
             CommittedPoSOperation::StakeIncrease {
                 position,
@@ -100,15 +98,13 @@ pub(super) fn derive_changes(
                 verify_event_identifier("increaseStake", event_identifier, registered_identifier)?;
                 let locked_amount =
                     replayed_state.add_registered_votes(registered_identifier, added_vote_count)?;
-                changes
-                    .pos_stake_increase(
-                        position,
-                        core_address(account, execution),
-                        registered_identifier,
-                        added_vote_count,
-                        locked_amount,
-                    )
-                    .expect("built-in Core Space changes use unique execution positions");
+                changes.pos_stake_increase(
+                    position,
+                    core_address(account, execution),
+                    registered_identifier,
+                    added_vote_count,
+                    locked_amount,
+                );
             }
             CommittedPoSOperation::RetirementRequest {
                 position,
@@ -118,14 +114,12 @@ pub(super) fn derive_changes(
             } => {
                 let registered_identifier = replayed_state.identifier_for_account(account)?;
                 verify_event_identifier("retire", event_identifier, registered_identifier)?;
-                changes
-                    .pos_retirement_request(
-                        position,
-                        core_address(account, execution),
-                        registered_identifier,
-                        requested_vote_count,
-                    )
-                    .expect("built-in Core Space changes use unique execution positions");
+                changes.pos_retirement_request(
+                    position,
+                    core_address(account, execution),
+                    registered_identifier,
+                    requested_vote_count,
+                );
             }
         }
     }
