@@ -172,6 +172,28 @@ impl ErrorInfo for contract_standards::SolidityRevertReason {
     }
 }
 
+/// The backend supplies state-error classification without changing contract semantics.
+pub fn contract_diagnostic(
+    error: &contract_standards::analysis::AnalysisError,
+    state_diagnostic: impl FnOnce(&(dyn std::error::Error + 'static)) -> Diagnostic,
+) -> Diagnostic {
+    use contract_standards::analysis::AnalysisError;
+    match error {
+        AnalysisError::State { source } => state_diagnostic(source.as_ref()),
+        AnalysisError::Unsupported { .. } => ErrorCode::AnalysisUnsupported.diagnostic(),
+        AnalysisError::IncompleteEvidence { .. } => ErrorCode::IncompleteEvidence.diagnostic(),
+        AnalysisError::Validation { position, .. } => {
+            let diagnostic = ErrorCode::AnalysisValidationFailed.diagnostic();
+            match position {
+                Some(position) => diagnostic.with_data(DiagnosticData::ExecutionPosition {
+                    position: *position,
+                }),
+                None => diagnostic,
+            }
+        }
+    }
+}
+
 impl ErrorCode {
     pub fn diagnostic(self) -> Diagnostic {
         Diagnostic::new(

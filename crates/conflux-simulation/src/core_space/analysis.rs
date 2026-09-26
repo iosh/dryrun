@@ -1,16 +1,21 @@
 use std::sync::Arc;
 
-use cfx_types::{AddressSpaceUtil, Space};
-use simulation_core::{analysis::*, changes::ChangePosition};
+use cfx_types::Space;
+use contract_standards::analysis::{AnalysisError, VerifiedChange, view::TokenView};
+use simulation_core::{
+    analysis::*,
+    changes::{AssetChange, ChangePosition},
+    contract_analysis::{ContractAnalysisDomain, default_contract_analyzers},
+};
 
 use super::{
-    CoreSpaceAnalysisError, CoreSpaceBlockContext, CoreSpaceChangeSet,
+    CoreSpaceAnalysisError, CoreSpaceBlockContext, CoreSpaceChange, CoreSpaceChangeSet,
     CoreSpaceExecutedTransaction, CoreSpaceNativeCurrency, CoreSpaceStateAccess,
-    CoreSpaceTypedTransaction, changes::derive_protocol_changes,
+    CoreSpaceTypedTransaction, changes::derive_protocol_changes, token_view::CoreTokenView,
 };
 use crate::{
     execution::{FrameAction, TraceEvent},
-    primitive::{address_from_cfx, address_to_cfx},
+    primitive::address_from_cfx,
 };
 
 #[derive(Clone, Copy)]
@@ -176,13 +181,67 @@ impl AnalysisDomain for CoreSpaceAnalysisDomain {
         view.facts()
     }
 }
+impl ContractAnalysisDomain for CoreSpaceAnalysisDomain {
+    fn token_view<'a>(
+        view: Self::View<'a>,
+        chain: ChainScope,
+    ) -> Result<Box<dyn TokenView + 'a>, Self::Error> {
+        let space = match chain.space {
+            ExecutionSpace::Core => Space::Native,
+            ExecutionSpace::Espace => Space::Ethereum,
+            ExecutionSpace::Evm => {
+                return Err(AnalysisError::unsupported(
+                    "Ethereum execution facts cannot occur in a Core Space simulation",
+                )
+                .into());
+            }
+        };
+        Ok(Box::new(CoreTokenView {
+            execution: view.execution,
+            space,
+        }))
+    }
+    fn insert_contract_change(
+        view: Self::View<'_>,
+        changes: &mut CoreSpaceChangeSet,
+        chain: ChainScope,
+        change: VerifiedChange,
+    ) -> Result<(), CoreSpaceAnalysisError> {
+        let (position, change) = AssetChange::from_verified(change);
+        let change = match chain.space {
+            ExecutionSpace::Core => CoreSpaceChange::Asset(
+                change
+                    .try_map_addresses(|address| {
+                        conflux_provider::CoreAddress::from_bytes(
+                            address.0.0,
+                            view.execution.address_network(),
+                        )
+                    })
+                    .map_err(|error| {
+                        CoreSpaceAnalysisError::rule_failure("Core Space contract address", error)
+                    })?,
+            ),
+            ExecutionSpace::Espace => CoreSpaceChange::Espace(change),
+            ExecutionSpace::Evm => {
+                return Err(AnalysisError::unsupported(
+                    "Ethereum changes cannot occur in a Core Space simulation",
+                )
+                .into());
+            }
+        };
+        changes.insert(position, change);
+        Ok(())
+    }
+    fn contract_error(error: AnalysisError) -> CoreSpaceAnalysisError {
+        error.into()
+    }
+}
 
 pub(crate) fn default_registry(
     currency: CoreSpaceNativeCurrency,
     espace_currency: crate::espace::EspaceNativeCurrency,
 ) -> CoreSpaceAnalyzerRegistry {
-    let mut rules: Vec<Arc<dyn Analyzer<CoreSpaceAnalysisDomain>>> =
-        vec![Arc::new(ContractAnalyzer)];
+    let mut rules = default_contract_analyzers::<CoreSpaceAnalysisDomain>();
     rules.push(Arc::new(ProtocolAnalyzer {
         currency,
         espace_currency,
@@ -209,6 +268,38 @@ impl Analyzer<CoreSpaceAnalysisDomain> for ProtocolAnalyzer {
         view: CoreSpaceAnalysisView<'_>,
         candidates: &AnalysisScope<'a>,
     ) -> Result<AnalysisScope<'a>, CoreSpaceAnalysisError> {
+        let internal_frames: std::collections::BTreeSet<_> = view
+            .execution
+            .trace()
+            .frames()
+            .filter_map(|(id, frame)| match frame.action {
+                FrameAction::Call { code_address, .. }
+                    if frame.space == Space::Native
+                        && view.execution.is_active_internal_contract(code_address) =>
+                {
+                    Some(id.index())
+                }
+                _ => None,
+            })
+            .collect();
+        Ok(candidates.select(|fact| {
+            matches!(fact.kind, FactKind::NativeMovement | FactKind::Protocol)
+                || (fact.chain.space == ExecutionSpace::Core && fact.kind == FactKind::Destroy)
+                || (fact.chain.space == ExecutionSpace::Core
+                    && matches!(
+                        fact.kind,
+                        FactKind::Call | FactKind::Log | FactKind::StorageWrite
+                    )
+                    && fact
+                        .frame_id
+                        .is_some_and(|frame| internal_frames.contains(&frame)))
+        }))
+    }
+    fn analyze<'a>(
+        &self,
+        view: CoreSpaceAnalysisView<'_>,
+        scope: &AnalysisScope<'a>,
+    ) -> Result<AnalysisReport<'a, CoreSpaceChangeSet>, CoreSpaceAnalysisError> {
         use cfx_parameters::internal_contract_addresses::*;
         let supported = [
             ADMIN_CONTROL_CONTRACT_ADDRESS,
@@ -219,26 +310,6 @@ impl Analyzer<CoreSpaceAnalysisDomain> for ProtocolAnalyzer {
             PARAMS_CONTROL_CONTRACT_ADDRESS,
             CONTEXT_CONTRACT_ADDRESS,
         ];
-        Ok(candidates.select(|fact| {
-            matches!(fact.kind, FactKind::NativeMovement | FactKind::Protocol)
-                || (fact.chain.space == ExecutionSpace::Core && fact.kind == FactKind::Destroy)
-                || (fact.chain.space == ExecutionSpace::Core
-                    && matches!(
-                        fact.kind,
-                        FactKind::Call | FactKind::Log | FactKind::StorageWrite
-                    )
-                    && fact.address.is_some_and(|address| {
-                        let address = address_to_cfx(address);
-                        supported.contains(&address)
-                            && view.execution.is_active_internal_contract(address)
-                    }))
-        }))
-    }
-    fn analyze<'a>(
-        &self,
-        view: CoreSpaceAnalysisView<'_>,
-        scope: &AnalysisScope<'a>,
-    ) -> Result<AnalysisReport<'a, CoreSpaceChangeSet>, CoreSpaceAnalysisError> {
         let frames: std::collections::BTreeSet<_> = scope
             .facts()
             .filter(|fact| fact.kind == FactKind::Call)
@@ -257,6 +328,14 @@ impl Analyzer<CoreSpaceAnalysisDomain> for ProtocolAnalyzer {
             else {
                 unreachable!()
             };
+            if !supported.contains(&code_address) {
+                return Err(
+                    super::CoreSpaceProtocolError::unsupported_operation(format!(
+                        "no protocol rule for internal contract {code_address:?}"
+                    ))
+                    .into(),
+                );
+            }
             if code_address != target
                 || !matches!(
                     call_type,
@@ -276,84 +355,5 @@ impl Analyzer<CoreSpaceAnalysisDomain> for ProtocolAnalyzer {
             &self.espace_currency,
         )?;
         Ok(AnalysisReport::new(changes).explain(scope.clone(), SupportEvidence::Protocol))
-    }
-}
-
-struct ContractAnalyzer;
-impl Analyzer<CoreSpaceAnalysisDomain> for ContractAnalyzer {
-    fn descriptor(&self) -> AnalyzerDescriptor {
-        AnalyzerDescriptor {
-            id: "conflux-contracts",
-            layer: AnalyzerLayer::General,
-            priority: 0,
-            deployments: Vec::new(),
-        }
-    }
-    fn select<'a>(
-        &self,
-        _: CoreSpaceAnalysisView<'_>,
-        scope: &AnalysisScope<'a>,
-    ) -> Result<AnalysisScope<'a>, CoreSpaceAnalysisError> {
-        Ok(scope.select(|fact| {
-            matches!(
-                fact.kind,
-                FactKind::Call
-                    | FactKind::Log
-                    | FactKind::StorageWrite
-                    | FactKind::Create
-                    | FactKind::Destroy
-            )
-        }))
-    }
-    fn analyze<'a>(
-        &self,
-        view: CoreSpaceAnalysisView<'_>,
-        scope: &AnalysisScope<'a>,
-    ) -> Result<AnalysisReport<'a, CoreSpaceChangeSet>, CoreSpaceAnalysisError> {
-        use super::CoreSpaceProtocolError;
-        if let Some(fact) = scope.facts().find(|fact| fact.kind != FactKind::Call) {
-            return Err(CoreSpaceProtocolError::unsupported_operation(format!(
-                "no reviewed contract implementation for {:?} at {:?}",
-                fact.kind, fact.position,
-            ))
-            .into());
-        }
-        let frames: std::collections::BTreeSet<_> =
-            scope.facts().filter_map(|fact| fact.frame_id).collect();
-        for (frame_id, frame) in view.execution.trace().frames() {
-            if !frames.contains(&frame_id.index()) {
-                continue;
-            }
-            let FrameAction::Call { code_address, .. } = frame.action else {
-                continue;
-            };
-            if frame.space == Space::Native
-                && view.execution.is_active_internal_contract(code_address)
-            {
-                return Err(CoreSpaceProtocolError::unsupported_operation(format!(
-                    "unverified internal contract call at {code_address:?}"
-                ))
-                .into());
-            }
-            for reader in [view.state().initial(), view.state().finalized()] {
-                let code = reader
-                    .code(code_address.with_space(frame.space))
-                    .map_err(|source| {
-                        CoreSpaceProtocolError::state_access(
-                            "check contract implementation",
-                            source,
-                        )
-                    })?;
-                if code.is_some_and(|code| !code.is_empty()) {
-                    return Err(CoreSpaceProtocolError::unsupported_operation(format!(
-                        "no reviewed implementation for code at {code_address:?} in {:?}",
-                        frame.space
-                    ))
-                    .into());
-                }
-            }
-        }
-        Ok(AnalysisReport::new(CoreSpaceChangeSet::new())
-            .explain(scope.clone(), SupportEvidence::NoRelevantEffects))
     }
 }

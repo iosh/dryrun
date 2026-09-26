@@ -52,10 +52,7 @@ impl EvmTransactionSimulator {
             });
         }
 
-        let analyzers = default_registry(
-            chain_spec.native_currency().clone(),
-            chain_spec.wrapped_native_token_address(),
-        );
+        let analyzers = default_registry(chain_spec.native_currency().clone());
         Ok(Self {
             provider,
             chain_spec: Arc::new(chain_spec),

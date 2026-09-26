@@ -17,7 +17,7 @@ mod rejection;
 mod simulation;
 mod simulator;
 mod state;
-mod token_changes;
+mod token_view;
 mod transaction;
 
 pub use analysis::{EvmAnalysisDomain, EvmAnalysisView, EvmAnalyzerRegistry};
@@ -29,7 +29,10 @@ pub use changeset::{
 };
 pub use simulation_core::analysis::{
     AnalysisReport, AnalysisScope, Analyzer, AnalyzerDescriptor, AnalyzerLayer, ChainScope,
-    Deployment, ExecutionSpace, FactKind, RegistryError, SupportEvidence,
+    Deployment, ExecutionFact, ExecutionSpace, FactKind, RegistryError, SupportEvidence,
+};
+pub use simulation_core::contract_analysis::{
+    ReviewedStandardImplementation, StandardAnalyzer, Weth9Analyzer,
 };
 
 pub(crate) use completion::complete_transaction;

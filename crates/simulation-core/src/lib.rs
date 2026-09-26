@@ -3,6 +3,7 @@ pub mod changes;
 #[cfg(feature = "serde")]
 pub mod codec;
 pub mod completion;
+pub mod contract_analysis;
 pub mod error;
 pub mod observation;
 pub mod simulation;

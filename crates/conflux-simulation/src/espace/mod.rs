@@ -11,6 +11,7 @@ mod rejection;
 mod result;
 mod simulator;
 mod state_access;
+mod token_view;
 mod transaction;
 mod transaction_adapter;
 

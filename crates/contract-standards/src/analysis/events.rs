@@ -1,24 +1,21 @@
+use super::{
+    AnalysisError,
+    view::{LogCheckpoint, TokenView},
+};
 use std::collections::HashSet;
 
-use alloy::primitives::{Address, U256};
-use contract_standards::{DecodedStandardEvent, DecodedStandardLog, decode_standard_log};
+use crate::{DecodedStandardEvent, DecodedStandardLog, decode_standard_log};
+use alloy_primitives::{Address, B256, U256};
 
-use crate::espace::{
-    EspaceAnalysisError, EspaceExecutedTransaction, EspaceExecutionPosition, EspaceExecutionSpace,
-    EspaceLogCheckpoint,
-    changes::wrapped_native::{WrappedNativeEvent, decode_wrapped_native_log},
-};
+use super::{DEPOSIT_TOPIC0, WITHDRAWAL_TOPIC0, error::validation_error_at};
 
-use super::error::token_change_error_at;
-
-#[derive(Debug)]
 pub(super) enum ObservedTokenEvent<'a> {
     Standard {
-        checkpoint: EspaceLogCheckpoint<'a>,
+        checkpoint: LogCheckpoint<'a>,
         decoded: DecodedStandardLog<Address>,
     },
     Wrapped {
-        checkpoint: EspaceLogCheckpoint<'a>,
+        checkpoint: LogCheckpoint<'a>,
         contract: Address,
         account: Address,
         amount: U256,
@@ -27,12 +24,11 @@ pub(super) enum ObservedTokenEvent<'a> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WrappedOperation {
+pub enum WrappedOperation {
     Deposit,
     Withdrawal,
 }
 
-#[derive(Debug)]
 pub(super) struct TokenEventSequence<'a> {
     pub(super) events: Vec<ObservedTokenEvent<'a>>,
     pub(super) pairs: Vec<WrappedEventPair>,
@@ -42,7 +38,7 @@ pub(super) struct TokenEventSequence<'a> {
 pub(super) struct WrappedEventPair {
     pub(super) transfer_event_index: usize,
     pub(super) wrapped_event_index: usize,
-    pub(super) position: EspaceExecutionPosition,
+    pub(super) position: usize,
     pub(super) direction: WrappedOperation,
     pub(super) amount: U256,
 }
@@ -77,61 +73,43 @@ impl WrappedPairProof {
 }
 
 pub(super) fn collect_token_events<'a>(
-    execution: &'a EspaceExecutedTransaction,
-    wrapped_native_token: Address,
-    scope: &simulation_core::analysis::AnalysisScope<'_>,
-) -> Result<TokenEventSequence<'a>, EspaceAnalysisError> {
-    let positions: std::collections::BTreeSet<_> = scope
-        .facts()
-        .filter(|fact| fact.kind == simulation_core::analysis::FactKind::Log)
-        .map(|fact| fact.position)
-        .collect();
-    let checkpoints = execution.log_checkpoints().filter(|checkpoint| {
-        positions.contains(&simulation_core::changes::ChangePosition::Execution(
-            checkpoint.position().index(),
-        ))
-    });
+    execution: &'a dyn TokenView,
+    wrapped_native_token: Option<Address>,
+) -> Result<TokenEventSequence<'a>, AnalysisError> {
+    let checkpoints = execution.log_checkpoints();
     let mut events = Vec::new();
 
     for checkpoint in checkpoints {
         let log = checkpoint.log();
-        if log.space() != EspaceExecutionSpace::Espace {
+        let Some(topic0) = log.topics.as_ref().first() else {
+            continue;
+        };
+
+        if wrapped_native_token.is_some_and(|address| address == log.address)
+            && (*topic0 == *DEPOSIT_TOPIC0 || *topic0 == *WITHDRAWAL_TOPIC0)
+        {
+            let (account, amount, direction) = decode_wrapped_log(log)
+                .map_err(|error| validation_error_at(checkpoint.position(), error))?;
+            events.push(ObservedTokenEvent::Wrapped {
+                checkpoint: checkpoint.clone(),
+                contract: log.address,
+                account,
+                amount,
+                direction,
+            });
             continue;
         }
 
-        if log.address() == wrapped_native_token {
-            let wrapped = decode_wrapped_native_log(log.topics(), log.data())
-                .map_err(|error| token_change_error_at(checkpoint.position(), error))?;
-            if let Some(event) = wrapped {
-                let (account, amount, direction) = match event {
-                    WrappedNativeEvent::Deposit {
-                        account,
-                        raw_amount,
-                    } => (account, raw_amount, WrappedOperation::Deposit),
-                    WrappedNativeEvent::Withdrawal {
-                        account,
-                        raw_amount,
-                    } => (account, raw_amount, WrappedOperation::Withdrawal),
-                };
-                events.push(ObservedTokenEvent::Wrapped {
-                    checkpoint,
-                    contract: wrapped_native_token,
-                    account,
-                    amount,
-                    direction,
-                });
-                continue;
-            }
-        }
-
         let Some(decoded) =
-            decode_standard_log(log.address(), log.topics(), log.data(), |address| address)
-                .map_err(|error| token_change_error_at(checkpoint.position(), error.to_string()))?
+            decode_standard_log(log.address, log.topics.as_ref(), log.data, |address| {
+                address
+            })
+            .map_err(|error| validation_error_at(checkpoint.position(), error.to_string()))?
         else {
             continue;
         };
         events.push(ObservedTokenEvent::Standard {
-            checkpoint,
+            checkpoint: checkpoint.clone(),
             decoded,
         });
     }
@@ -178,8 +156,8 @@ fn pair_wrapped_events(events: &[ObservedTokenEvent<'_>]) -> Vec<WrappedEventPai
                     return false;
                 }
                 let ObservedTokenEvent::Wrapped {
-                    checkpoint: wrapped_occurrence,
-                    contract,
+                    checkpoint: wrapped_checkpoint,
+                    contract: wrapped_contract,
                     account: wrapped_account,
                     amount: wrapped_amount,
                     direction: wrapped_direction,
@@ -187,8 +165,8 @@ fn pair_wrapped_events(events: &[ObservedTokenEvent<'_>]) -> Vec<WrappedEventPai
                 else {
                     return false;
                 };
-                checkpoint.frame_id() == wrapped_occurrence.frame_id()
-                    && *contract == *token
+                checkpoint.frame_id() == wrapped_checkpoint.frame_id()
+                    && *wrapped_contract == *token
                     && *wrapped_account == account
                     && *wrapped_amount == *amount
                     && *wrapped_direction == direction
@@ -211,4 +189,34 @@ fn pair_wrapped_events(events: &[ObservedTokenEvent<'_>]) -> Vec<WrappedEventPai
     }
 
     pairs
+}
+
+pub(super) fn decode_wrapped_log(
+    log: &super::view::LogRef<'_>,
+) -> Result<(Address, U256, WrappedOperation), &'static str> {
+    let topics = log.topics.as_ref();
+    if topics.len() != 2 || log.data.len() != 32 {
+        return Err("malformed wrapped-native event");
+    }
+    let account = indexed_address(&topics[1])?;
+    let amount = U256::from_be_slice(log.data);
+    let direction = if topics[0] == *DEPOSIT_TOPIC0 {
+        WrappedOperation::Deposit
+    } else if topics[0] == *WITHDRAWAL_TOPIC0 {
+        WrappedOperation::Withdrawal
+    } else {
+        return Err("unsupported wrapped-native event topic");
+    };
+    Ok((account, amount, direction))
+}
+
+fn indexed_address(topic: &B256) -> Result<Address, &'static str> {
+    if topic.as_slice()[..12].iter().any(|byte| *byte != 0) {
+        return Err("indexed address is not zero padded");
+    }
+    Ok(Address::from_word(*topic))
+}
+
+pub(super) fn nonzero_address(address: Address) -> Option<Address> {
+    (address != Address::ZERO).then_some(address)
 }

@@ -1,20 +1,18 @@
+use super::{
+    AnalysisError,
+    view::{ContractState, TokenView},
+};
 use std::collections::HashMap;
 
-use alloy::primitives::{Address, U256};
-use contract_standards::DecodedStandardEvent;
-
-use crate::{
-    EvmAnalysisError,
-    execution::{EvmExecutionPosition, EvmFrameId, EvmTransactionExecution},
-    state::EvmStateReader,
-};
+use crate::{DecodedStandardEvent, StandardChange};
+use alloy_primitives::{Address, U256};
 
 use super::{
     call_evidence::{
         verify_erc20_approval_call, verify_erc20_transfer_call, verify_erc721_approval_call,
         verify_erc721_transfer_call, verify_erc1155_transfer_call, verify_operator_approval_call,
     },
-    error::state_mismatch_at,
+    error::validation_error_at,
     events::{WrappedEventPair, WrappedOperation, WrappedPairProof, WrappedStateEffect},
     sequence_verification::{
         ExpectedFinalValue, FinalStateQuery, expect_decrease, expect_increase,
@@ -25,15 +23,15 @@ use super::{
         read_erc721_approval_optional, read_erc721_owner, read_erc1155_balance,
         read_operator_approval,
     },
-    verified_changes::VerifiedTokenChange,
 };
 
 pub(super) struct TokenEventVerification<'a> {
-    pub(super) position: EvmExecutionPosition,
-    pub(super) execution: &'a EvmTransactionExecution,
-    pub(super) frame_id: EvmFrameId,
-    pub(super) previous: &'a EvmStateReader,
-    pub(super) current: &'a EvmStateReader,
+    pub(super) implicit: &'a mut Vec<StandardChange<Address>>,
+    pub(super) position: usize,
+    pub(super) execution: &'a dyn TokenView,
+    pub(super) frame_id: usize,
+    pub(super) previous: &'a dyn ContractState,
+    pub(super) current: &'a dyn ContractState,
     pub(super) pair: Option<(usize, WrappedEventPair)>,
     pub(super) wrapped_pair_proofs: &'a mut HashMap<usize, WrappedPairProof>,
     pub(super) final_state_expectations: &'a mut HashMap<FinalStateQuery, ExpectedFinalValue>,
@@ -43,7 +41,7 @@ impl TokenEventVerification<'_> {
     pub(super) fn verify_standard_event(
         &mut self,
         event: &DecodedStandardEvent<Address>,
-    ) -> Result<VerifiedTokenChange, EvmAnalysisError> {
+    ) -> Result<StandardChange<Address>, AnalysisError> {
         let change = match event {
             DecodedStandardEvent::Erc20Transfer {
                 token,
@@ -52,11 +50,59 @@ impl TokenEventVerification<'_> {
                 amount,
             } => {
                 self.verify_erc20_transfer(*token, *from, *to, *amount)?;
-                VerifiedTokenChange::Erc20Transfer {
-                    contract: *token,
-                    from: *from,
-                    to: *to,
-                    amount: *amount,
+                if let Some(spender) = super::call_evidence::transfer_from_spender(
+                    self.execution,
+                    self.frame_id,
+                    *token,
+                    *from,
+                    *to,
+                    *amount,
+                ) {
+                    let before = read_allowance(self.previous, *token, *from, spender)?;
+                    let after = read_allowance(self.current, *token, *from, spender)?;
+                    if before != after {
+                        if before.checked_sub(*amount) != Some(after) {
+                            return Err(validation_error_at(
+                                self.position,
+                                "ERC-20 transferFrom has an unexplained allowance change",
+                            ));
+                        }
+                        self.implicit.push(StandardChange::Erc20Approval {
+                            contract_address: *token,
+                            owner: *from,
+                            spender,
+                            before,
+                            after,
+                        });
+                    }
+                    self.final_state_expectations.insert(
+                        FinalStateQuery::Allowance {
+                            contract: *token,
+                            owner: *from,
+                            spender,
+                        },
+                        ExpectedFinalValue::Amount(after),
+                    );
+                }
+                if from.is_zero() {
+                    StandardChange::Erc20Mint {
+                        contract_address: *token,
+                        to: *to,
+                        raw_amount: *amount,
+                    }
+                } else if to.is_zero() {
+                    StandardChange::Erc20Burn {
+                        contract_address: *token,
+                        from: *from,
+                        raw_amount: *amount,
+                    }
+                } else {
+                    StandardChange::Erc20Transfer {
+                        contract_address: *token,
+                        from: *from,
+                        to: *to,
+                        raw_amount: *amount,
+                    }
                 }
             }
             DecodedStandardEvent::Erc20Approval {
@@ -68,7 +114,7 @@ impl TokenEventVerification<'_> {
                 let before = read_allowance(self.previous, *token, *owner, *spender)?;
                 let after = read_allowance(self.current, *token, *owner, *spender)?;
                 if after != *value {
-                    return Err(state_mismatch_at(
+                    return Err(validation_error_at(
                         self.position,
                         "ERC-20 allowance does not match Approval",
                     ));
@@ -92,8 +138,8 @@ impl TokenEventVerification<'_> {
                     },
                     ExpectedFinalValue::Amount(after),
                 );
-                VerifiedTokenChange::Erc20Approval {
-                    contract: *token,
+                StandardChange::Erc20Approval {
+                    contract_address: *token,
                     owner: *owner,
                     spender: *spender,
                     before,
@@ -107,7 +153,7 @@ impl TokenEventVerification<'_> {
                 token_id,
             } => {
                 if *from == Address::ZERO && *to == Address::ZERO {
-                    return Err(state_mismatch_at(
+                    return Err(validation_error_at(
                         self.position,
                         "ERC-721 Transfer cannot mint to or burn from the zero address",
                     ));
@@ -116,20 +162,20 @@ impl TokenEventVerification<'_> {
                 let after = read_erc721_owner(self.current, *collection, *token_id)?;
                 if *from == Address::ZERO {
                     if before.is_some() || after != Some(*to) {
-                        return Err(state_mismatch_at(
+                        return Err(validation_error_at(
                             self.position,
                             "ERC-721 mint owner does not match Transfer",
                         ));
                     }
                 } else if *to == Address::ZERO {
                     if before != Some(*from) || after.is_some() {
-                        return Err(state_mismatch_at(
+                        return Err(validation_error_at(
                             self.position,
                             "ERC-721 burn owner does not match Transfer",
                         ));
                     }
                 } else if before != Some(*from) || after != Some(*to) {
-                    return Err(state_mismatch_at(
+                    return Err(validation_error_at(
                         self.position,
                         "ERC-721 owner does not match Transfer",
                     ));
@@ -151,7 +197,7 @@ impl TokenEventVerification<'_> {
                     read_erc721_approval_optional(self.previous, *collection, *token_id)?
                 };
                 if *from == Address::ZERO && approval_before.is_some() {
-                    return Err(state_mismatch_at(
+                    return Err(validation_error_at(
                         self.position,
                         "ERC-721 mint started with an unexpected token approval",
                     ));
@@ -162,10 +208,19 @@ impl TokenEventVerification<'_> {
                     read_erc721_approval_optional(self.current, *collection, *token_id)?
                 };
                 if approval_after.is_some() {
-                    return Err(state_mismatch_at(
+                    return Err(validation_error_at(
                         self.position,
                         "ERC-721 Transfer did not clear the token approval",
                     ));
+                }
+                if approval_before.is_some() {
+                    self.implicit.push(StandardChange::Erc721Approval {
+                        contract_address: *collection,
+                        owner: *from,
+                        before: approval_before,
+                        after: None,
+                        token_id: *token_id,
+                    });
                 }
                 self.final_state_expectations.insert(
                     FinalStateQuery::Owner {
@@ -181,11 +236,25 @@ impl TokenEventVerification<'_> {
                     },
                     ExpectedFinalValue::Owner(None),
                 );
-                VerifiedTokenChange::Erc721Transfer {
-                    contract: *collection,
-                    from: *from,
-                    to: *to,
-                    token_id: *token_id,
+                if from.is_zero() {
+                    StandardChange::Erc721Mint {
+                        contract_address: *collection,
+                        to: *to,
+                        token_id: *token_id,
+                    }
+                } else if to.is_zero() {
+                    StandardChange::Erc721Burn {
+                        contract_address: *collection,
+                        from: *from,
+                        token_id: *token_id,
+                    }
+                } else {
+                    StandardChange::Erc721Transfer {
+                        contract_address: *collection,
+                        from: *from,
+                        to: *to,
+                        token_id: *token_id,
+                    }
                 }
             }
             DecodedStandardEvent::Erc721Approval {
@@ -196,7 +265,7 @@ impl TokenEventVerification<'_> {
             } => {
                 let owner_state = read_erc721_owner(self.current, *collection, *token_id)?;
                 if owner_state != Some(*owner) {
-                    return Err(state_mismatch_at(
+                    return Err(validation_error_at(
                         self.position,
                         "ERC-721 Approval owner does not own the token",
                     ));
@@ -204,7 +273,7 @@ impl TokenEventVerification<'_> {
                 let before = read_erc721_approval(self.previous, *collection, *token_id)?;
                 let after = read_erc721_approval(self.current, *collection, *token_id)?;
                 if after != *approved_address {
-                    return Err(state_mismatch_at(
+                    return Err(validation_error_at(
                         self.position,
                         "ERC-721 approval does not match Approval",
                     ));
@@ -227,8 +296,8 @@ impl TokenEventVerification<'_> {
                     },
                     ExpectedFinalValue::Owner(after),
                 );
-                VerifiedTokenChange::Erc721Approval {
-                    contract: *collection,
+                StandardChange::Erc721Approval {
+                    contract_address: *collection,
                     owner: *owner,
                     before,
                     after,
@@ -244,7 +313,7 @@ impl TokenEventVerification<'_> {
                 let before = read_operator_approval(self.previous, *collection, *owner, *operator)?;
                 let after = read_operator_approval(self.current, *collection, *owner, *operator)?;
                 if after != *approved {
-                    return Err(state_mismatch_at(
+                    return Err(validation_error_at(
                         self.position,
                         "operator approval does not match event",
                     ));
@@ -268,8 +337,8 @@ impl TokenEventVerification<'_> {
                     },
                     ExpectedFinalValue::Bool(after),
                 );
-                VerifiedTokenChange::OperatorApproval {
-                    contract: *collection,
+                StandardChange::OperatorApproval {
+                    contract_address: *collection,
                     owner: *owner,
                     operator: *operator,
                     before,
@@ -291,13 +360,31 @@ impl TokenEventVerification<'_> {
                     &[(*token_id, *amount)],
                     false,
                 )?;
-                VerifiedTokenChange::Erc1155TransferSingle {
-                    contract: *collection,
-                    operator: *operator,
-                    from: *from,
-                    to: *to,
-                    token_id: *token_id,
-                    amount: *amount,
+                if from.is_zero() {
+                    StandardChange::Erc1155MintSingle {
+                        contract_address: *collection,
+                        operator: *operator,
+                        to: *to,
+                        token_id: *token_id,
+                        raw_amount: *amount,
+                    }
+                } else if to.is_zero() {
+                    StandardChange::Erc1155BurnSingle {
+                        contract_address: *collection,
+                        operator: *operator,
+                        from: *from,
+                        token_id: *token_id,
+                        raw_amount: *amount,
+                    }
+                } else {
+                    StandardChange::Erc1155TransferSingle {
+                        contract_address: *collection,
+                        operator: *operator,
+                        from: *from,
+                        to: *to,
+                        token_id: *token_id,
+                        raw_amount: *amount,
+                    }
                 }
             }
             DecodedStandardEvent::Erc1155TransferBatch {
@@ -307,17 +394,33 @@ impl TokenEventVerification<'_> {
                 to,
                 items,
             } => {
-                let items = items
+                let values = items
                     .iter()
                     .map(|item| (item.token_id, item.raw_amount))
                     .collect::<Vec<_>>();
-                self.verify_erc1155_transfer(*collection, *from, *to, &items, true)?;
-                VerifiedTokenChange::Erc1155TransferBatch {
-                    contract: *collection,
-                    operator: *operator,
-                    from: *from,
-                    to: *to,
-                    items,
+                self.verify_erc1155_transfer(*collection, *from, *to, &values, true)?;
+                if from.is_zero() {
+                    StandardChange::Erc1155MintBatch {
+                        contract_address: *collection,
+                        operator: *operator,
+                        to: *to,
+                        items: items.clone(),
+                    }
+                } else if to.is_zero() {
+                    StandardChange::Erc1155BurnBatch {
+                        contract_address: *collection,
+                        operator: *operator,
+                        from: *from,
+                        items: items.clone(),
+                    }
+                } else {
+                    StandardChange::Erc1155TransferBatch {
+                        contract_address: *collection,
+                        operator: *operator,
+                        from: *from,
+                        to: *to,
+                        items: items.clone(),
+                    }
                 }
             }
         };
@@ -330,9 +433,9 @@ impl TokenEventVerification<'_> {
         from: Address,
         to: Address,
         amount: U256,
-    ) -> Result<(), EvmAnalysisError> {
+    ) -> Result<(), AnalysisError> {
         if from == Address::ZERO && to == Address::ZERO {
-            return Err(state_mismatch_at(
+            return Err(validation_error_at(
                 self.position,
                 "ERC-20 Transfer cannot mint to or burn from the zero address",
             ));
@@ -392,7 +495,7 @@ impl TokenEventVerification<'_> {
 
         if from == to {
             if !source_unchanged {
-                return Err(state_mismatch_at(
+                return Err(validation_error_at(
                     self.position,
                     "self ERC-20 Transfer changed an unexpected balance",
                 ));
@@ -405,7 +508,7 @@ impl TokenEventVerification<'_> {
             self.record_wrapped_effect(WrappedStateEffect::Exact);
         } else if source_unchanged && target_unchanged && supply_unchanged {
             let Some((_, pair)) = self.pair else {
-                return Err(state_mismatch_at(
+                return Err(validation_error_at(
                     self.position,
                     "ERC-20 Transfer did not change the expected balances",
                 ));
@@ -425,7 +528,7 @@ impl TokenEventVerification<'_> {
             )?;
             self.record_wrapped_effect(WrappedStateEffect::Unchanged);
         } else {
-            return Err(state_mismatch_at(
+            return Err(validation_error_at(
                 self.position,
                 "ERC-20 Transfer did not change the expected balances",
             ));
@@ -464,7 +567,7 @@ impl TokenEventVerification<'_> {
         from: Address,
         to: Address,
         amount: U256,
-    ) -> Result<(), EvmAnalysisError> {
+    ) -> Result<(), AnalysisError> {
         if let Some((_, pair)) = self.pair {
             let account = match pair.direction {
                 WrappedOperation::Deposit => to,
@@ -503,9 +606,9 @@ impl TokenEventVerification<'_> {
         to: Address,
         items: &[(U256, U256)],
         batch: bool,
-    ) -> Result<(), EvmAnalysisError> {
+    ) -> Result<(), AnalysisError> {
         if from == Address::ZERO && to == Address::ZERO {
-            return Err(state_mismatch_at(
+            return Err(validation_error_at(
                 self.position,
                 "ERC-1155 transfer cannot mint to or burn from the zero address",
             ));
@@ -527,7 +630,7 @@ impl TokenEventVerification<'_> {
         for &(token_id, amount) in items {
             let entry = totals.entry(token_id).or_insert(U256::ZERO);
             *entry = entry.checked_add(amount).ok_or_else(|| {
-                state_mismatch_at(self.position, "ERC-1155 batch amount overflow")
+                validation_error_at(self.position, "ERC-1155 batch amount overflow")
             })?;
         }
 
@@ -547,7 +650,7 @@ impl TokenEventVerification<'_> {
 
             if from == to {
                 if from_before != from_after {
-                    return Err(state_mismatch_at(
+                    return Err(validation_error_at(
                         self.position,
                         "self ERC-1155 transfer changed an unexpected balance",
                     ));

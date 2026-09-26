@@ -378,8 +378,15 @@ impl CoreSpaceExecutedTransaction {
     }
 
     pub(crate) fn log_checkpoints(&self) -> impl Iterator<Item = CoreSpaceLogCheckpoint<'_>> {
+        self.log_checkpoints_in(Space::Native)
+    }
+
+    pub(crate) fn log_checkpoints_in(
+        &self,
+        space: Space,
+    ) -> impl Iterator<Item = CoreSpaceLogCheckpoint<'_>> {
         self.state
-            .log_checkpoints()
+            .log_checkpoints(space)
             .map(|(event_index, previous_state, state)| {
                 let TraceEvent::Log {
                     position,

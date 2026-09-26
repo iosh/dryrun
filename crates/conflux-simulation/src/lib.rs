@@ -21,7 +21,10 @@ pub use state::ConfluxRpcError;
 
 pub use simulation_core::analysis::{
     AnalysisReport, AnalysisScope, Analyzer, AnalyzerDescriptor, AnalyzerLayer, ChainScope,
-    Deployment, ExecutionSpace, FactKind, RegistryError, SupportEvidence,
+    Deployment, ExecutionFact, ExecutionSpace, FactKind, RegistryError, SupportEvidence,
+};
+pub use simulation_core::contract_analysis::{
+    ReviewedStandardImplementation, StandardAnalyzer, Weth9Analyzer,
 };
 
 pub use simulation_core::observation::LogFilter;

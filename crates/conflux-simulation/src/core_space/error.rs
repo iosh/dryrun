@@ -2,7 +2,9 @@ use alloy_primitives::U256;
 use cfx_statedb::Error as StateDbError;
 use cfx_storage::Error as StorageError;
 use conflux_provider::{CoreAddress, Network};
-use simulation_core::error::{Diagnostic, DiagnosticData, ErrorCode as Code, ErrorInfo};
+use simulation_core::error::{
+    Diagnostic, DiagnosticData, ErrorCode as Code, ErrorInfo, contract_diagnostic,
+};
 use simulation_core::observation::AnalysisLimitExceeded;
 use std::error::Error as StdError;
 use thiserror::Error;
@@ -262,12 +264,13 @@ impl ErrorInfo for CoreSpaceSimulationError {
 impl ErrorInfo for super::CoreSpaceAnalysisError {
     fn diagnostic(&self) -> Diagnostic {
         match self {
-            Self::Coverage(error) => error.diagnostic(),
             Self::Protocol(error) => error.diagnostic(),
+            Self::Contract(error) => contract_diagnostic(error, |source| {
+                source_diagnostic(source, Code::StateUnavailable)
+            }),
+            Self::Coverage(error) => error.diagnostic(),
             Self::LimitExceeded(error) => error.diagnostic(),
-            Self::RuleFailure { source, .. } => {
-                source_diagnostic(source.as_ref(), Code::AnalysisValidationFailed)
-            }
+            Self::RuleFailure { source, .. } => source_diagnostic(source.as_ref(), Code::Internal),
         }
     }
 }
@@ -276,11 +279,13 @@ impl ErrorInfo for super::CoreSpaceAnalysisError {
 #[non_exhaustive]
 pub enum CoreSpaceAnalysisError {
     #[error(transparent)]
+    Protocol(#[from] CoreSpaceProtocolError),
+    #[error(transparent)]
+    Contract(#[from] contract_standards::analysis::AnalysisError),
+    #[error(transparent)]
     Coverage(#[from] simulation_core::analysis::CoverageError),
     #[error(transparent)]
     LimitExceeded(#[from] AnalysisLimitExceeded),
-    #[error(transparent)]
-    Protocol(#[from] CoreSpaceProtocolError),
     #[error("Core Space change rule `{rules}` failed: {source}")]
     RuleFailure {
         rules: &'static str,

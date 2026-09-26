@@ -39,7 +39,6 @@ impl EspaceTransactionSimulator {
     pub fn new(backend: ConfluxSimulationBackend, limits: EspaceSimulationLimits) -> Self {
         let analyzers = super::analysis::default_registry(
             backend.chain_spec().espace_native_currency().clone(),
-            super::changes::TokenAnalyzer::MAINNET_WCFX,
         );
         Self {
             backend,

@@ -272,3 +272,46 @@ impl<A: Ord + Clone> AssetChangeSet<A> {
         Ok(())
     }
 }
+
+impl AssetChangeSet {
+    pub fn insert_verified(&mut self, change: contract_standards::analysis::VerifiedChange) {
+        let (position, change) = AssetChange::from_verified(change);
+        self.insert(position, change);
+    }
+}
+
+impl AssetChange {
+    pub fn from_verified(
+        change: contract_standards::analysis::VerifiedChange,
+    ) -> (ChangePosition, Self) {
+        use contract_standards::analysis::{VerifiedChange, WrappedOperation};
+        let (position, change) = match change {
+            VerifiedChange::Standard { position, change } => {
+                (position, AssetChange::Standard(change))
+            }
+            VerifiedChange::Wrapped {
+                position,
+                contract,
+                account,
+                amount,
+                direction,
+            } => {
+                let change = WrappedNativeChange {
+                    contract_address: contract,
+                    account,
+                    raw_amount: amount,
+                };
+                (
+                    position,
+                    match direction {
+                        WrappedOperation::Deposit => AssetChange::WrappedNativeDeposit(change),
+                        WrappedOperation::Withdrawal => {
+                            AssetChange::WrappedNativeWithdrawal(change)
+                        }
+                    },
+                )
+            }
+        };
+        (ChangePosition::Execution(position), change)
+    }
+}

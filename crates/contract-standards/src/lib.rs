@@ -15,3 +15,5 @@ pub use metadata::{
 };
 pub use revert::SolidityRevertReason;
 pub use standard_decoder::{DecodedStandardEvent, DecodedStandardLog, decode_standard_log};
+
+pub mod analysis;

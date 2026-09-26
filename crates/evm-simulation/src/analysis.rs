@@ -1,16 +1,19 @@
 use std::{collections::BTreeSet, sync::Arc};
 
+use contract_standards::analysis::{AnalysisError, VerifiedChange, view::TokenView};
 use simulation_core::{
     analysis::*,
     changes::{
         AccountDelegation, AssetChange, ChangePosition, DelegationChange, NativeBurn,
         NativeTransfer,
     },
+    contract_analysis::{ContractAnalysisDomain, default_contract_analyzers},
 };
 
 use crate::{
     EvmAnalysisError, EvmBlockContext, EvmChangeSet, EvmFrameAction, EvmNativeCurrency,
     EvmStateAccess, EvmTransactionExecution, TypedTransaction, execution::NativeMovement,
+    token_view::EvmTokenView,
 };
 
 #[derive(Clone, Copy)]
@@ -130,13 +133,31 @@ impl AnalysisDomain for EvmAnalysisDomain {
     }
 }
 
-pub(crate) fn default_registry(
-    currency: EvmNativeCurrency,
-    wrapped_native: Option<alloy_primitives::Address>,
-) -> EvmAnalyzerRegistry {
-    let mut rules: Vec<Arc<dyn Analyzer<EvmAnalysisDomain>>> = vec![Arc::new(
-        crate::token_changes::TokenAnalyzer::new(wrapped_native),
-    )];
+impl ContractAnalysisDomain for EvmAnalysisDomain {
+    fn token_view<'a>(
+        view: Self::View<'a>,
+        _: ChainScope,
+    ) -> Result<Box<dyn TokenView + 'a>, Self::Error> {
+        Ok(Box::new(EvmTokenView {
+            execution: view.execution,
+        }))
+    }
+    fn insert_contract_change(
+        _: Self::View<'_>,
+        changes: &mut EvmChangeSet,
+        _: ChainScope,
+        change: VerifiedChange,
+    ) -> Result<(), EvmAnalysisError> {
+        changes.insert_verified(change);
+        Ok(())
+    }
+    fn contract_error(error: AnalysisError) -> EvmAnalysisError {
+        error.into()
+    }
+}
+
+pub(crate) fn default_registry(currency: EvmNativeCurrency) -> EvmAnalyzerRegistry {
+    let mut rules = default_contract_analyzers::<EvmAnalysisDomain>();
     rules.push(Arc::new(NativeAnalyzer { currency }));
     rules.push(Arc::new(DelegationAnalyzer));
     EvmAnalyzerRegistry::new(rules)

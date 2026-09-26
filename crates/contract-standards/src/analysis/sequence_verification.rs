@@ -1,18 +1,15 @@
+use super::{
+    AnalysisError,
+    view::{ContractState, TokenView},
+};
 use std::collections::HashMap;
 
-use alloy::{
-    primitives::{Address, U256},
-    sol_types::SolValue,
-};
-
-use crate::espace::{
-    EspaceAnalysisError, EspaceCallKind, EspaceExecutedTransaction, EspaceExecutionPosition,
-    EspaceFrameId, EspaceStateAccess, EspaceStateReader,
-};
+use alloy_primitives::{Address, U256};
+use alloy_sol_types::SolValue;
 
 use super::{
     call_evidence::{encode_call, has_matching_committed_call, has_matching_value_call, selector},
-    error::{state_mismatch_at, token_change_error},
+    error::{validation_error, validation_error_at},
     event_verification::TokenEventVerification,
     events::{
         ObservedTokenEvent, WrappedEventPair, WrappedOperation, WrappedPairProof,
@@ -23,17 +20,25 @@ use super::{
         read_erc721_approval_optional, read_erc721_owner, read_erc1155_balance,
         read_operator_approval,
     },
-    verified_changes::VerifiedTokenChange,
 };
+
+#[derive(Debug)]
+pub(super) enum VerifiedTokenEvent {
+    Standard {
+        primary: crate::StandardChange<Address>,
+        implicit: Vec<crate::StandardChange<Address>>,
+    },
+    Wrapped,
+}
 
 pub(super) fn verify_event(
     event_index: usize,
     event: &ObservedTokenEvent<'_>,
-    execution: &EspaceExecutedTransaction,
+    execution: &dyn TokenView,
     pairs: &[WrappedEventPair],
     wrapped_pair_proofs: &mut HashMap<usize, WrappedPairProof>,
     final_state_expectations: &mut HashMap<FinalStateQuery, ExpectedFinalValue>,
-) -> Result<VerifiedTokenChange, EspaceAnalysisError> {
+) -> Result<VerifiedTokenEvent, AnalysisError> {
     let pair = pairs.iter().enumerate().find_map(|(index, pair)| {
         (pair.transfer_event_index == event_index || pair.wrapped_event_index == event_index)
             .then_some((index, *pair))
@@ -42,17 +47,23 @@ pub(super) fn verify_event(
         ObservedTokenEvent::Standard {
             checkpoint,
             decoded,
-        } => TokenEventVerification {
-            position: checkpoint.position(),
-            execution,
-            previous: checkpoint.previous_state(),
-            current: checkpoint.state(),
-            frame_id: checkpoint.frame_id(),
-            pair,
-            wrapped_pair_proofs,
-            final_state_expectations,
+        } => {
+            let around = checkpoint.states;
+            let mut implicit = Vec::new();
+            let mut verification = TokenEventVerification {
+                implicit: &mut implicit,
+                position: checkpoint.position(),
+                execution,
+                previous: around.previous(),
+                current: around.current(),
+                frame_id: checkpoint.frame_id(),
+                pair,
+                wrapped_pair_proofs,
+                final_state_expectations,
+            };
+            let primary = verification.verify_standard_event(decoded.event())?;
+            Ok(VerifiedTokenEvent::Standard { primary, implicit })
         }
-        .verify_standard_event(decoded.event()),
         ObservedTokenEvent::Wrapped {
             checkpoint,
             contract,
@@ -60,12 +71,13 @@ pub(super) fn verify_event(
             amount,
             direction,
         } => {
+            let around = checkpoint.states;
             let (after, total_supply_after) = verify_wrapped_event(
                 execution,
                 checkpoint.frame_id(),
                 checkpoint.position(),
-                checkpoint.previous_state(),
-                checkpoint.state(),
+                around.previous(),
+                around.current(),
                 *contract,
                 *account,
                 *amount,
@@ -86,25 +98,25 @@ pub(super) fn verify_event(
                 },
                 ExpectedFinalValue::Amount(total_supply_after),
             );
-            Ok(VerifiedTokenChange::Wrapped)
+            Ok(VerifiedTokenEvent::Wrapped)
         }
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn verify_wrapped_event(
-    execution: &EspaceExecutedTransaction,
-    frame_id: EspaceFrameId,
-    position: EspaceExecutionPosition,
-    previous: &EspaceStateReader,
-    current: &EspaceStateReader,
+    execution: &dyn TokenView,
+    frame_id: usize,
+    position: usize,
+    previous: &dyn ContractState,
+    current: &dyn ContractState,
     contract: Address,
     account: Address,
     amount: U256,
     direction: WrappedOperation,
     pair: Option<(usize, WrappedEventPair)>,
     wrapped_pair_proofs: &mut HashMap<usize, WrappedPairProof>,
-) -> Result<(U256, U256), EspaceAnalysisError> {
+) -> Result<(U256, U256), AnalysisError> {
     verify_wrapped_call_and_value(
         execution, frame_id, contract, account, amount, direction, position,
     )?;
@@ -127,14 +139,14 @@ pub(super) fn verify_wrapped_event(
     }
 
     if before != after || total_supply_before != total_supply_after {
-        return Err(state_mismatch_at(
+        return Err(validation_error_at(
             position,
             "wrapped-native balance or total supply does not match Deposit/Withdrawal",
         ));
     }
 
     let Some(pair) = pair else {
-        return Err(state_mismatch_at(
+        return Err(validation_error_at(
             position,
             "wrapped-native event did not change the expected balance",
         ));
@@ -148,23 +160,22 @@ pub(super) fn verify_wrapped_event(
 }
 
 pub(super) fn verify_wrapped_call_and_value(
-    execution: &EspaceExecutedTransaction,
-    frame_id: EspaceFrameId,
+    execution: &dyn TokenView,
+    frame_id: usize,
     contract: Address,
     account: Address,
     amount: U256,
     direction: WrappedOperation,
-    position: EspaceExecutionPosition,
-) -> Result<(), EspaceAnalysisError> {
+    position: usize,
+) -> Result<(), AnalysisError> {
     let has_evidence = match direction {
         WrappedOperation::Deposit => has_matching_committed_call(
             execution,
             frame_id,
             contract,
             position,
-            |kind, caller, value, input| {
-                kind == EspaceCallKind::Call
-                    && caller == account
+            |caller, value, input| {
+                caller == account
                     && value == amount
                     && (input.is_empty() || input == selector("deposit()").as_slice())
             },
@@ -176,12 +187,12 @@ pub(super) fn verify_wrapped_call_and_value(
                 frame_id,
                 contract,
                 position,
-                |_, caller, _, actual| caller == account && actual == input,
+                |caller, _, actual| caller == account && actual == input,
             ) && has_matching_value_call(execution, frame_id, contract, account, amount, position)
         }
     };
     has_evidence.then_some(()).ok_or_else(|| {
-        state_mismatch_at(position, "wrapped-native event has no matching value flow")
+        validation_error_at(position, "wrapped-native event has no matching value flow")
     })
 }
 
@@ -199,30 +210,30 @@ pub(super) fn expect_increase(
     before: U256,
     after: U256,
     amount: U256,
-    position: EspaceExecutionPosition,
+    position: usize,
     label: &'static str,
-) -> Result<(), EspaceAnalysisError> {
+) -> Result<(), AnalysisError> {
     let expected = before
         .checked_add(amount)
-        .ok_or_else(|| state_mismatch_at(position, "balance increase overflow"))?;
+        .ok_or_else(|| validation_error_at(position, "balance increase overflow"))?;
     (after == expected)
         .then_some(())
-        .ok_or_else(|| state_mismatch_at(position, label))
+        .ok_or_else(|| validation_error_at(position, label))
 }
 
 pub(super) fn expect_decrease(
     before: U256,
     after: U256,
     amount: U256,
-    position: EspaceExecutionPosition,
+    position: usize,
     label: &'static str,
-) -> Result<(), EspaceAnalysisError> {
+) -> Result<(), AnalysisError> {
     let expected = before
         .checked_sub(amount)
-        .ok_or_else(|| state_mismatch_at(position, "balance decrease underflow"))?;
+        .ok_or_else(|| validation_error_at(position, "balance decrease underflow"))?;
     (after == expected)
         .then_some(())
-        .ok_or_else(|| state_mismatch_at(position, label))
+        .ok_or_else(|| validation_error_at(position, label))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -268,8 +279,8 @@ pub(super) enum ExpectedFinalValue {
 
 pub(super) fn verify_final_state(
     expectations: &HashMap<FinalStateQuery, ExpectedFinalValue>,
-    state: &EspaceStateAccess,
-) -> Result<(), EspaceAnalysisError> {
+    state: &dyn TokenView,
+) -> Result<(), AnalysisError> {
     for (query, expected) in expectations {
         let actual = match query {
             FinalStateQuery::Erc20Balance { contract, account } => ExpectedFinalValue::Amount(
@@ -327,7 +338,7 @@ pub(super) fn verify_final_state(
             )?),
         };
         if &actual != expected {
-            return Err(token_change_error(
+            return Err(validation_error(
                 "finalized state differs from the last verified checkpoint",
             ));
         }

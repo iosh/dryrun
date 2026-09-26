@@ -134,7 +134,7 @@ pub enum ConfluxInitializationError {
     },
 }
 
-use simulation_core::error::{Diagnostic, ErrorCode as Code, ErrorInfo};
+use simulation_core::error::{Diagnostic, ErrorCode as Code, ErrorInfo, contract_diagnostic};
 
 impl ErrorInfo for crate::ConfluxRpcError {
     fn diagnostic(&self) -> Diagnostic {
@@ -214,6 +214,14 @@ pub(crate) fn source_diagnostic(
             error.downcast_ref::<simulation_core::observation::AnalysisLimitExceeded>()
         {
             return error.diagnostic();
+        }
+        if let Some(error) = error.downcast_ref::<simulation_core::analysis::CoverageError>() {
+            return error.diagnostic();
+        }
+        if let Some(error) = error.downcast_ref::<contract_standards::analysis::AnalysisError>() {
+            return contract_diagnostic(error, |source| {
+                source_diagnostic(source, Code::StateUnavailable)
+            });
         }
         if error.is::<TransportError>() || error.is::<ConfluxProviderError>() {
             return Code::ProviderRequestFailed.diagnostic();

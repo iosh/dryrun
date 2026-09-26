@@ -16,7 +16,7 @@ use cfx_executor::{
     machine::Machine,
     state::{SavedState, State},
 };
-use cfx_types::{Address, AddressSpaceUtil, AddressWithSpace, BigEndianHash, H256, U256};
+use cfx_types::{Address, AddressSpaceUtil, AddressWithSpace, BigEndianHash, H256, Space, U256};
 use conflux_provider::{CoreAddress, Network};
 use tokio::runtime::Handle;
 
@@ -45,8 +45,10 @@ sol! {
 pub struct CoreSpaceStateAccess {
     source: Arc<ConfluxStateSource>,
     runtime_handle: Handle,
-    checkpoints: Vec<(usize, CoreSpaceStateReader)>,
+    checkpoints: Vec<(usize, CoreSpaceStateReader, CoreSpaceStateReader)>,
     initial: CoreSpaceStateReader,
+    espace_initial: CoreSpaceStateReader,
+    espace_finalized: CoreSpaceStateReader,
     finalized: CoreSpaceStateReader,
 }
 
@@ -85,6 +87,8 @@ impl CoreSpaceStateAccess {
             source,
             runtime_handle,
             checkpoints: Vec::new(),
+            espace_initial: initial.for_space(Space::Ethereum),
+            espace_finalized: finalized.for_space(Space::Ethereum),
             initial,
             finalized,
         })
@@ -103,19 +107,39 @@ impl CoreSpaceStateAccess {
             .map_err(|source| CoreSpaceStateAccessError::Initialization { source })?;
         state.restore(snapshot);
         let reader = CoreSpaceStateReader::new(state, Rc::clone(&self.finalized.context));
-        self.checkpoints.push((event_index, reader));
+        let espace = reader.for_space(Space::Ethereum);
+        self.checkpoints.push((event_index, reader, espace));
         Ok(())
     }
 
+    pub(crate) fn initial_in(&self, space: Space) -> &CoreSpaceStateReader {
+        match space {
+            Space::Native => &self.initial,
+            Space::Ethereum => &self.espace_initial,
+        }
+    }
+    pub(crate) fn finalized_in(&self, space: Space) -> &CoreSpaceStateReader {
+        match space {
+            Space::Native => &self.finalized,
+            Space::Ethereum => &self.espace_finalized,
+        }
+    }
     pub(crate) fn log_checkpoints(
         &self,
+        space: Space,
     ) -> impl Iterator<Item = (usize, &CoreSpaceStateReader, &CoreSpaceStateReader)> {
-        let mut previous = self.initial();
-        self.checkpoints.iter().map(move |(event_index, current)| {
-            let checkpoint = (*event_index, previous, current);
-            previous = current;
-            checkpoint
-        })
+        let mut previous = self.initial_in(space);
+        self.checkpoints
+            .iter()
+            .map(move |(event_index, core, espace)| {
+                let current = match space {
+                    Space::Native => core,
+                    Space::Ethereum => espace,
+                };
+                let checkpoint = (*event_index, previous, current);
+                previous = current;
+                checkpoint
+            })
     }
 
     pub const fn initial(&self) -> &CoreSpaceStateReader {
@@ -226,18 +250,41 @@ impl CoreSpaceReadContext {
 }
 
 pub struct CoreSpaceStateReader {
-    state: RefCell<Option<State>>,
+    state: Rc<RefCell<Option<State>>>,
+    pub(super) space: Space,
     context: Rc<CoreSpaceReadContext>,
-    calls: RefCell<HashMap<(AddressWithSpace, Bytes), ReadCallOutcome>>,
+    calls: Rc<RefCell<HashMap<(AddressWithSpace, Bytes), ReadCallOutcome>>>,
 }
 
 impl CoreSpaceStateReader {
     fn new(state: State, context: Rc<CoreSpaceReadContext>) -> Self {
         Self {
-            state: RefCell::new(Some(state)),
+            state: Rc::new(RefCell::new(Some(state))),
+            space: Space::Native,
             context,
-            calls: RefCell::new(HashMap::new()),
+            calls: Rc::new(RefCell::new(HashMap::new())),
         }
+    }
+
+    fn for_space(&self, space: Space) -> Self {
+        Self {
+            state: Rc::clone(&self.state),
+            space,
+            context: Rc::clone(&self.context),
+            calls: Rc::clone(&self.calls),
+        }
+    }
+
+    pub(super) fn balance_in(
+        &self,
+        address: AddressWithSpace,
+    ) -> Result<AlloyU256, CoreSpaceStateAccessError> {
+        self.with_state(|state| {
+            state
+                .balance(&address)
+                .map(u256_from_cfx)
+                .map_err(|source| operation("read contract balance", source))
+        })
     }
 
     pub fn native_balance(
@@ -599,18 +646,25 @@ impl CoreSpaceStateReader {
         })
     }
 
+    pub(super) fn storage_word(
+        &self,
+        address: AddressWithSpace,
+        key: &[u8],
+    ) -> Result<U256, CoreSpaceStateAccessError> {
+        self.with_state(|state| {
+            state
+                .storage_at(&address, key)
+                .map_err(|source| operation("read Conflux storage", source))
+        })
+    }
+
     pub fn read_storage(
         &self,
         address: super::CrossSpaceAddress,
         slot: B256,
     ) -> Result<B256, CoreSpaceStateAccessError> {
-        let address = self.address_with_space(address)?;
-        self.with_state(|state| {
-            state
-                .storage_at(&address, slot.as_slice())
-                .map(|value| B256::from(u256_from_cfx(value)))
-                .map_err(|source| operation("read Conflux storage", source))
-        })
+        self.storage_word(self.address_with_space(address)?, slot.as_slice())
+            .map(|value| B256::from(u256_from_cfx(value)))
     }
 
     pub fn read_code(

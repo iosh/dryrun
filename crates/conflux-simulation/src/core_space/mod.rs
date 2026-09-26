@@ -15,6 +15,7 @@ mod result;
 mod session;
 mod simulator;
 mod state_access;
+mod token_view;
 mod transaction;
 #[cfg(feature = "serde")]
 mod transaction_codec;

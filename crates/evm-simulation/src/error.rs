@@ -1,6 +1,6 @@
 use alloy::transports::TransportError;
 use revm::database::AlloyDBError;
-use simulation_core::error::{Diagnostic, ErrorCode as Code, ErrorInfo};
+use simulation_core::error::{Diagnostic, ErrorCode as Code, ErrorInfo, contract_diagnostic};
 use simulation_core::observation::AnalysisLimitExceeded;
 use std::error::Error as StdError;
 use thiserror::Error;
@@ -278,19 +278,24 @@ impl ErrorInfo for crate::EvmStateReadError {
         }
     }
 }
+
 impl ErrorInfo for crate::EvmAnalysisError {
     fn diagnostic(&self) -> Diagnostic {
         match self {
-            Self::Coverage(error) => error.diagnostic(),
             Self::LimitExceeded(error) => error.diagnostic(),
             Self::StateRead(error) => error.diagnostic(),
-            Self::Unsupported { .. } => Code::AnalysisUnsupported.diagnostic(),
-            Self::RuleFailure { source, .. } => source_diagnostic(source.as_ref()),
+            Self::Contract(error) => contract_diagnostic(error, |source| {
+                source_diagnostic(source, Code::StateUnavailable)
+            }),
+            Self::Coverage(error) => error.diagnostic(),
+            Self::RuleFailure { source, .. } => source_diagnostic(source.as_ref(), Code::Internal),
         }
     }
 }
-// Extension errors are erased; known wrappers above are handled by their typed boundary.
-fn source_diagnostic(mut error: &(dyn std::error::Error + 'static)) -> Diagnostic {
+
+// Only erased extension/state errors need a source-chain search. Typed wrappers
+// above are matched directly because transparent errors can omit their inner type.
+fn source_diagnostic(mut error: &(dyn std::error::Error + 'static), fallback: Code) -> Diagnostic {
     loop {
         if let Some(error) = error.downcast_ref::<crate::EvmAnalysisError>() {
             return error.diagnostic();
@@ -306,11 +311,19 @@ fn source_diagnostic(mut error: &(dyn std::error::Error + 'static)) -> Diagnosti
         {
             return error.diagnostic();
         }
+        if let Some(error) = error.downcast_ref::<simulation_core::analysis::CoverageError>() {
+            return error.diagnostic();
+        }
+        if let Some(error) = error.downcast_ref::<contract_standards::analysis::AnalysisError>() {
+            return contract_diagnostic(error, |source| {
+                source_diagnostic(source, Code::StateUnavailable)
+            });
+        }
         if error.is::<TransportError>() {
             return Code::ProviderRequestFailed.diagnostic();
         }
         let Some(source) = error.source() else {
-            return Code::AnalysisValidationFailed.diagnostic();
+            return fallback.diagnostic();
         };
         error = source;
     }
@@ -320,23 +333,20 @@ fn source_diagnostic(mut error: &(dyn std::error::Error + 'static)) -> Diagnosti
 #[non_exhaustive]
 pub enum EvmAnalysisError {
     #[error(transparent)]
-    Coverage(#[from] simulation_core::analysis::CoverageError),
-    #[error("unsupported contract behavior: {details}")]
-    Unsupported { details: String },
-    #[error(transparent)]
     LimitExceeded(#[from] AnalysisLimitExceeded),
-
     #[error(transparent)]
     StateRead(#[from] crate::EvmStateReadError),
-
-    #[error("{rules} change rules could not derive complete changes: {source}")]
+    #[error(transparent)]
+    Contract(#[from] contract_standards::analysis::AnalysisError),
+    #[error(transparent)]
+    Coverage(#[from] simulation_core::analysis::CoverageError),
+    #[error("{rules} analysis failed: {source}")]
     RuleFailure {
         rules: &'static str,
         #[source]
-        source: Box<dyn StdError + Send + Sync + 'static>,
+        source: Box<dyn StdError + Send + Sync>,
     },
 }
-
 impl EvmAnalysisError {
     pub fn rule_failure(
         rules: &'static str,

@@ -1,8 +1,9 @@
 use alloy_primitives::U256;
 use cfx_statedb::Error as StateDbError;
 use cfx_storage::Error as StorageError;
-use simulation_core::error::{Diagnostic, ErrorCode as Code, ErrorInfo};
+use simulation_core::error::{Diagnostic, ErrorCode as Code, ErrorInfo, contract_diagnostic};
 use simulation_core::observation::AnalysisLimitExceeded;
+use std::error::Error as StdError;
 use thiserror::Error;
 
 use super::{EspaceContextError, EspaceTransactionInputError, TxType};
@@ -98,39 +99,6 @@ pub enum EspaceExecutionError {
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
-pub enum EspaceAnalysisError {
-    #[error(transparent)]
-    Coverage(#[from] simulation_core::analysis::CoverageError),
-    #[error(transparent)]
-    StateRead(#[from] super::EspaceStateReadError),
-    #[error(transparent)]
-    LimitExceeded(#[from] AnalysisLimitExceeded),
-    #[error("eSpace changes could not be verified: {details}")]
-    Validation { details: String },
-    #[error("unsupported eSpace contract behavior: {details}")]
-    Unsupported { details: String },
-    #[error("{rules} change rules could not derive complete changes: {source}")]
-    RuleFailure {
-        rules: &'static str,
-        #[source]
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
-}
-
-impl EspaceAnalysisError {
-    pub fn rule_failure(
-        rules: &'static str,
-        source: impl std::error::Error + Send + Sync + 'static,
-    ) -> Self {
-        Self::RuleFailure {
-            rules,
-            source: Box::new(source),
-        }
-    }
-}
-
-#[derive(Debug, Error)]
-#[non_exhaustive]
 pub enum EspaceSimulationError {
     #[error(transparent)]
     Input(#[from] EspaceTransactionInputError),
@@ -221,14 +189,49 @@ impl ErrorInfo for EspaceSimulationError {
 impl ErrorInfo for super::EspaceAnalysisError {
     fn diagnostic(&self) -> Diagnostic {
         match self {
-            Self::Coverage(error) => error.diagnostic(),
-            Self::StateRead(error) => error.diagnostic(),
-            Self::LimitExceeded(error) => error.diagnostic(),
             Self::Validation { .. } => Code::AnalysisValidationFailed.diagnostic(),
             Self::Unsupported { .. } => Code::AnalysisUnsupported.diagnostic(),
-            Self::RuleFailure { source, .. } => {
-                source_diagnostic(source.as_ref(), Code::AnalysisValidationFailed)
-            }
+            Self::StateRead(error) => error.diagnostic(),
+            Self::Contract(error) => contract_diagnostic(error, |source| {
+                source_diagnostic(source, Code::StateUnavailable)
+            }),
+            Self::Coverage(error) => error.diagnostic(),
+            Self::LimitExceeded(error) => error.diagnostic(),
+            Self::RuleFailure { source, .. } => source_diagnostic(source.as_ref(), Code::Internal),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum EspaceAnalysisError {
+    #[error("eSpace analysis validation failed: {details}")]
+    Validation { details: String },
+    #[error("unsupported eSpace behavior: {details}")]
+    Unsupported { details: String },
+    #[error(transparent)]
+    StateRead(#[from] super::EspaceStateReadError),
+    #[error(transparent)]
+    Contract(#[from] contract_standards::analysis::AnalysisError),
+    #[error(transparent)]
+    Coverage(#[from] simulation_core::analysis::CoverageError),
+    #[error(transparent)]
+    LimitExceeded(#[from] AnalysisLimitExceeded),
+    #[error("{rules} analysis failed: {source}")]
+    RuleFailure {
+        rules: &'static str,
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
+}
+impl EspaceAnalysisError {
+    pub fn rule_failure(
+        rules: &'static str,
+        source: impl StdError + Send + Sync + 'static,
+    ) -> Self {
+        Self::RuleFailure {
+            rules,
+            source: Box::new(source),
         }
     }
 }

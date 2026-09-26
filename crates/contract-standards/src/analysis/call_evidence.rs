@@ -1,100 +1,129 @@
-use alloy::{
-    primitives::{Address, Bytes, U256, keccak256},
-    sol_types::{SolType, SolValue, abi::TokenSeq},
+use super::{
+    AnalysisError,
+    view::{FrameAction, TokenView},
 };
+use alloy_primitives::{Address, Bytes, U256, keccak256};
+use alloy_sol_types::{SolType, SolValue, abi::TokenSeq};
 
-use crate::espace::{
-    EspaceAnalysisError, EspaceCallKind, EspaceCommittedFrame, EspaceExecutedTransaction,
-    EspaceExecutionPosition, EspaceExecutionSpace, EspaceFrameAction, EspaceFrameId,
-};
+use super::error::validation_error_at;
 
-use super::error::state_mismatch_at;
-
-pub(super) fn verify_erc20_transfer_call(
-    execution: &EspaceExecutedTransaction,
-    frame_id: EspaceFrameId,
+pub(super) fn transfer_from_spender(
+    execution: &dyn TokenView,
+    frame_id: usize,
     contract: Address,
     from: Address,
     to: Address,
     amount: U256,
-    position: EspaceExecutionPosition,
-) -> Result<(), EspaceAnalysisError> {
-    let transfer = encode_call(
-        "transfer(address,uint256)",
-        (to, amount).abi_encode_sequence(),
-    );
-    let transfer_from = encode_call(
-        "transferFrom(address,address,uint256)",
-        (from, to, amount).abi_encode_sequence(),
-    );
-    has_matching_committed_call(execution, frame_id, contract, position, |_, _, _, input| {
-        input == transfer || input == transfer_from
-    })
-    .then_some(())
-    .ok_or_else(|| state_mismatch_at(position, "ERC-20 no-op has no matching committed call"))
+) -> Option<Address> {
+    execution
+        .committed_frames()
+        .filter_map(|frame| {
+            let FrameAction::Call {
+                caller,
+                target,
+                input,
+                ..
+            } = frame.action
+            else {
+                return None;
+            };
+            if target != contract || !frames_are_nested(execution, frame.id, frame_id) {
+                return None;
+            }
+            let arguments = decode_call::<(Address, Address, U256)>(
+                input,
+                selector("transferFrom(address,address,uint256)"),
+            )?;
+            (arguments == (from, to, amount) && caller != from).then_some((frame.position, caller))
+        })
+        .max_by_key(|(position, _)| *position)
+        .map(|(_, caller)| caller)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn verify_erc20_approval_call(
-    execution: &EspaceExecutedTransaction,
-    frame_id: EspaceFrameId,
+pub(super) fn verify_erc20_transfer_call(
+    execution: &dyn TokenView,
+    frame_id: usize,
     contract: Address,
-    owner: Address,
-    spender: Address,
+    from: Address,
+    to: Address,
     amount: U256,
-    position: EspaceExecutionPosition,
-) -> Result<(), EspaceAnalysisError> {
-    let expected = encode_call(
-        "approve(address,uint256)",
-        (spender, amount).abi_encode_sequence(),
-    );
+    position: usize,
+) -> Result<(), AnalysisError> {
     has_matching_committed_call(
         execution,
         frame_id,
         contract,
         position,
-        |_, caller, _, input| caller == owner && input == expected,
+        |caller, _, input| {
+            (caller == from
+                && decode_call::<(Address, U256)>(input, selector("transfer(address,uint256)"))
+                    == Some((to, amount)))
+                || decode_call::<(Address, Address, U256)>(
+                    input,
+                    selector("transferFrom(address,address,uint256)"),
+                ) == Some((from, to, amount))
+        },
     )
     .then_some(())
-    .ok_or_else(|| state_mismatch_at(position, "ERC-20 Approval no-op has no matching call"))
+    .ok_or_else(|| validation_error_at(position, "ERC-20 no-op has no matching committed call"))
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(super) fn verify_erc20_approval_call(
+    execution: &dyn TokenView,
+    frame_id: usize,
+    contract: Address,
+    owner: Address,
+    spender: Address,
+    amount: U256,
+    position: usize,
+) -> Result<(), AnalysisError> {
+    has_matching_committed_call(
+        execution,
+        frame_id,
+        contract,
+        position,
+        |caller, _, input| {
+            caller == owner
+                && decode_call::<(Address, U256)>(input, selector("approve(address,uint256)"))
+                    == Some((spender, amount))
+        },
+    )
+    .then_some(())
+    .ok_or_else(|| validation_error_at(position, "ERC-20 Approval no-op has no matching call"))
+}
+
 pub(super) fn verify_erc721_transfer_call(
-    execution: &EspaceExecutedTransaction,
-    frame_id: EspaceFrameId,
+    execution: &dyn TokenView,
+    frame_id: usize,
     contract: Address,
     from: Address,
     to: Address,
     token_id: U256,
-    position: EspaceExecutionPosition,
-) -> Result<(), EspaceAnalysisError> {
-    has_matching_committed_call(execution, frame_id, contract, position, |_, _, _, input| {
+    position: usize,
+) -> Result<(), AnalysisError> {
+    has_matching_committed_call(execution, frame_id, contract, position, |_, _, input| {
         matches_erc721_transfer_call(input, from, Some(to), token_id)
     })
     .then_some(())
-    .ok_or_else(|| state_mismatch_at(position, "ERC-721 no-op has no matching committed call"))
+    .ok_or_else(|| validation_error_at(position, "ERC-721 no-op has no matching committed call"))
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn verify_erc721_approval_call(
-    execution: &EspaceExecutedTransaction,
-    frame_id: EspaceFrameId,
+    execution: &dyn TokenView,
+    frame_id: usize,
     contract: Address,
     owner: Address,
     approved: Option<Address>,
     token_id: U256,
-    position: EspaceExecutionPosition,
-) -> Result<(), EspaceAnalysisError> {
-    let expected = encode_call(
-        "approve(address,uint256)",
-        (approved.unwrap_or(Address::ZERO), token_id).abi_encode_sequence(),
-    );
-    has_matching_committed_call(execution, frame_id, contract, position, |_, _, _, input| {
-        input == expected || matches_erc721_transfer_call(input, owner, None, token_id)
+    position: usize,
+) -> Result<(), AnalysisError> {
+    has_matching_committed_call(execution, frame_id, contract, position, |_, _, input| {
+        decode_call::<(Address, U256)>(input, selector("approve(address,uint256)"))
+            == Some((approved.unwrap_or(Address::ZERO), token_id))
+            || matches_erc721_transfer_call(input, owner, None, token_id)
     })
     .then_some(())
-    .ok_or_else(|| state_mismatch_at(position, "ERC-721 Approval no-op has no matching call"))
+    .ok_or_else(|| validation_error_at(position, "ERC-721 Approval no-op has no matching call"))
 }
 
 pub(super) fn matches_erc721_transfer_call(
@@ -131,42 +160,44 @@ pub(super) fn matches_erc721_transfer_call(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn verify_operator_approval_call(
-    execution: &EspaceExecutedTransaction,
-    frame_id: EspaceFrameId,
+    execution: &dyn TokenView,
+    frame_id: usize,
     contract: Address,
     owner: Address,
     operator: Address,
     approved: bool,
-    position: EspaceExecutionPosition,
-) -> Result<(), EspaceAnalysisError> {
-    let expected = encode_call(
-        "setApprovalForAll(address,bool)",
-        (operator, approved).abi_encode_sequence(),
-    );
+    position: usize,
+) -> Result<(), AnalysisError> {
     has_matching_committed_call(
         execution,
         frame_id,
         contract,
         position,
-        |_, caller, _, input| caller == owner && input == expected,
+        |caller, _, input| {
+            caller == owner
+                && decode_call::<(Address, bool)>(
+                    input,
+                    selector("setApprovalForAll(address,bool)"),
+                ) == Some((operator, approved))
+        },
     )
     .then_some(())
-    .ok_or_else(|| state_mismatch_at(position, "operator Approval no-op has no matching call"))
+    .ok_or_else(|| validation_error_at(position, "operator Approval no-op has no matching call"))
 }
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn verify_erc1155_transfer_call(
-    execution: &EspaceExecutedTransaction,
-    frame_id: EspaceFrameId,
+    execution: &dyn TokenView,
+    frame_id: usize,
     contract: Address,
     from: Address,
     to: Address,
     items: &[(U256, U256)],
     batch: bool,
-    position: EspaceExecutionPosition,
-) -> Result<(), EspaceAnalysisError> {
+    position: usize,
+) -> Result<(), AnalysisError> {
     let matches =
-        has_matching_committed_call(execution, frame_id, contract, position, |_, _, _, input| {
+        has_matching_committed_call(execution, frame_id, contract, position, |_, _, input| {
             if batch {
                 let signature =
                     selector("safeBatchTransferFrom(address,address,uint256[],uint256[],bytes)");
@@ -174,6 +205,7 @@ pub(super) fn verify_erc1155_transfer_call(
                     .is_some_and(|(actual_from, actual_to, ids, amounts, _)| {
                         actual_from == from
                             && actual_to == to
+                            && ids.len() == amounts.len()
                             && ids.into_iter().zip(amounts).eq(items.iter().copied())
                     })
             } else {
@@ -185,49 +217,47 @@ pub(super) fn verify_erc1155_transfer_call(
                 )
             }
         });
-    matches
-        .then_some(())
-        .ok_or_else(|| state_mismatch_at(position, "ERC-1155 no-op has no matching committed call"))
+    matches.then_some(()).ok_or_else(|| {
+        validation_error_at(position, "ERC-1155 no-op has no matching committed call")
+    })
 }
 
 pub(super) fn has_matching_committed_call(
-    execution: &EspaceExecutedTransaction,
-    frame_id: EspaceFrameId,
+    execution: &dyn TokenView,
+    frame_id: usize,
     contract: Address,
-    position: EspaceExecutionPosition,
-    matches: impl Fn(EspaceCallKind, Address, U256, &[u8]) -> bool,
+    position: usize,
+    matches: impl Fn(Address, U256, &[u8]) -> bool,
 ) -> bool {
-    execution.committed_frames().iter().any(|frame| {
-        let EspaceFrameAction::Call {
-            kind,
+    execution.committed_frames().any(|frame| {
+        let FrameAction::Call {
             caller,
             target,
-            code_address,
+            bytecode_address,
             value,
-            calldata,
+            input,
+            ..
         } = frame.action()
         else {
             return false;
         };
-        frame.space() == EspaceExecutionSpace::Espace
-            && frames_are_nested(execution, frame.id(), frame_id)
-            && frame.position().index() <= position.index()
-            && (*target == contract || *code_address == contract)
-            && matches(*kind, *caller, *value, calldata)
+        frames_are_nested(execution, frame.id(), frame_id)
+            && frame.position() <= position
+            && (*target == contract || *bytecode_address == contract)
+            && matches(*caller, *value, input)
     })
 }
 
 pub(super) fn has_matching_value_call(
-    execution: &EspaceExecutedTransaction,
-    frame_id: EspaceFrameId,
+    execution: &dyn TokenView,
+    frame_id: usize,
     from: Address,
     to: Address,
     amount: U256,
-    position: EspaceExecutionPosition,
+    position: usize,
 ) -> bool {
-    execution.committed_frames().iter().any(|frame| {
-        let EspaceFrameAction::Call {
-            kind,
+    execution.committed_frames().any(|frame| {
+        let FrameAction::Call {
             caller,
             target,
             value,
@@ -236,28 +266,22 @@ pub(super) fn has_matching_value_call(
         else {
             return false;
         };
-        frame.space() == EspaceExecutionSpace::Espace
-            && *kind == EspaceCallKind::Call
-            && frames_are_nested(execution, frame.id(), frame_id)
-            && frame.position().index() <= position.index()
+        frames_are_nested(execution, frame.id(), frame_id)
+            && frame.position() <= position
             && *caller == from
             && *target == to
             && *value == amount
     })
 }
 
-pub(super) fn frames_are_nested(
-    execution: &EspaceExecutedTransaction,
-    first: EspaceFrameId,
-    second: EspaceFrameId,
-) -> bool {
+pub(super) fn frames_are_nested(execution: &dyn TokenView, first: usize, second: usize) -> bool {
     frame_is_ancestor(execution, first, second) || frame_is_ancestor(execution, second, first)
 }
 
 pub(super) fn frame_is_ancestor(
-    execution: &EspaceExecutedTransaction,
-    ancestor: EspaceFrameId,
-    descendant: EspaceFrameId,
+    execution: &dyn TokenView,
+    ancestor: usize,
+    descendant: usize,
 ) -> bool {
     let mut current = Some(descendant);
     while let Some(frame_id) = current {
@@ -266,9 +290,8 @@ pub(super) fn frame_is_ancestor(
         }
         current = execution
             .committed_frames()
-            .iter()
             .find(|frame| frame.id() == frame_id)
-            .and_then(EspaceCommittedFrame::parent);
+            .and_then(|frame| frame.parent());
     }
     false
 }

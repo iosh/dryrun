@@ -1,14 +1,16 @@
 use std::sync::Arc;
 
+use contract_standards::analysis::{AnalysisError, VerifiedChange, view::TokenView};
 use simulation_core::{
     analysis::*,
     changes::{AssetChange, AssetChangeSet, ChangePosition},
+    contract_analysis::{ContractAnalysisDomain, default_contract_analyzers},
 };
 
 use super::{
     EspaceAnalysisError, EspaceBlockContext, EspaceCallKind, EspaceChangeSet,
     EspaceExecutedTransaction, EspaceExecutionSpace, EspaceFrameAction, EspaceNativeCurrency,
-    EspaceStateAccess, EspaceTypedTransaction, changes,
+    EspaceStateAccess, EspaceTypedTransaction, changes, token_view::EspaceTokenView,
 };
 
 #[derive(Clone, Copy)]
@@ -165,13 +167,37 @@ impl AnalysisDomain for EspaceAnalysisDomain {
         view.facts()
     }
 }
+impl ContractAnalysisDomain for EspaceAnalysisDomain {
+    fn token_view<'a>(
+        view: Self::View<'a>,
+        chain: ChainScope,
+    ) -> Result<Box<dyn TokenView + 'a>, Self::Error> {
+        if chain.space != ExecutionSpace::Espace {
+            return Err(AnalysisError::unsupported(
+                "Core Space contract calls from an eSpace transaction are not supported",
+            )
+            .into());
+        }
+        Ok(Box::new(EspaceTokenView {
+            execution: view.execution,
+        }))
+    }
+    fn insert_contract_change(
+        _: Self::View<'_>,
+        changes: &mut EspaceChangeSet,
+        _: ChainScope,
+        change: VerifiedChange,
+    ) -> Result<(), EspaceAnalysisError> {
+        changes.insert_verified(change);
+        Ok(())
+    }
+    fn contract_error(error: AnalysisError) -> EspaceAnalysisError {
+        error.into()
+    }
+}
 
-pub(crate) fn default_registry(
-    currency: EspaceNativeCurrency,
-    wrapped_native: alloy_primitives::Address,
-) -> EspaceAnalyzerRegistry {
-    let mut rules: Vec<Arc<dyn Analyzer<EspaceAnalysisDomain>>> =
-        vec![Arc::new(changes::TokenAnalyzer::new(wrapped_native))];
+pub(crate) fn default_registry(currency: EspaceNativeCurrency) -> EspaceAnalyzerRegistry {
+    let mut rules = default_contract_analyzers::<EspaceAnalysisDomain>();
     rules.push(Arc::new(ProtocolAnalyzer { currency }));
     EspaceAnalyzerRegistry::new(rules)
         .expect("built-in eSpace analyzer IDs and deployments are valid")
