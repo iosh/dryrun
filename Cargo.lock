@@ -2300,28 +2300,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "conflux-rpc"
-version = "0.1.0"
-dependencies = [
- "alloy-primitives",
- "cfx-addr",
- "cfx-rpc-cfx-types",
- "cfx-rpc-eth-types",
- "cfx-rpc-primitives",
- "cfx-types",
- "conflux-provider",
- "conflux-simulation",
- "hex",
- "jsonrpsee",
- "serde",
- "serde_json",
- "simulation-core",
- "simulation-tasks",
- "thiserror 2.0.18",
- "tracing",
-]
-
-[[package]]
 name = "conflux-simulation"
 version = "0.1.0"
 dependencies = [
@@ -2965,16 +2943,16 @@ dependencies = [
  "axum",
  "config",
  "conflux-provider",
- "conflux-rpc",
  "conflux-simulation",
- "evm-rpc",
  "evm-simulation",
  "jsonrpsee",
  "metrics-exporter-prometheus",
  "serde",
+ "serde_json",
  "simulation-core",
- "simulation-tasks",
+ "thiserror 2.0.18",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber 0.3.23",
 ]
@@ -3155,23 +3133,6 @@ dependencies = [
  "impl-serde",
  "primitive-types 0.14.0",
  "uint 0.10.1",
-]
-
-[[package]]
-name = "evm-rpc"
-version = "0.1.0"
-dependencies = [
- "alloy-primitives",
- "alloy-serde 1.8.3",
- "contract-standards",
- "evm-simulation",
- "jsonrpsee",
- "serde",
- "serde_json",
- "simulation-core",
- "simulation-tasks",
- "thiserror 2.0.18",
- "tracing",
 ]
 
 [[package]]
@@ -4183,11 +4144,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f3f48dc3e6b8bd21e15436c1ddd0bc22a6a54e8ec46fedd6adf3425f396ec6a"
 dependencies = [
  "jsonrpsee-core",
- "jsonrpsee-proc-macros",
  "jsonrpsee-server",
  "jsonrpsee-types",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -4213,19 +4172,6 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
-]
-
-[[package]]
-name = "jsonrpsee-proc-macros"
-version = "0.26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2da3f8ab5ce1bb124b6d082e62dffe997578ceaf0aeb9f3174a214589dc00f07"
-dependencies = [
- "heck",
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "syn 2.0.118",
 ]
 
 [[package]]
@@ -7068,17 +7014,6 @@ dependencies = [
  "serde_with",
  "thiserror 2.0.18",
  "tokio",
-]
-
-[[package]]
-name = "simulation-tasks"
-version = "0.1.0"
-dependencies = [
- "simulation-core",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
 ]
 
 [[package]]

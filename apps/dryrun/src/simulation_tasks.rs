@@ -7,7 +7,7 @@ use tracing::error;
 
 /// A bounded set of owned simulation attempts.
 #[derive(Debug, Clone)]
-pub struct SimulationTaskSet {
+pub(crate) struct SimulationTaskSet {
     permits: Arc<Semaphore>,
     tasks: TaskTracker,
     response_timeout: Duration,
@@ -15,7 +15,7 @@ pub struct SimulationTaskSet {
 
 /// A failure produced by the task set rather than by a simulation attempt.
 #[derive(Debug, Error)]
-pub enum SimulationTaskError {
+pub(crate) enum SimulationTaskError {
     #[error("simulation task set is closed")]
     Closed,
 
@@ -82,6 +82,7 @@ impl SimulationTaskSet {
             let task = tokio::spawn(async move {
                 let _task_token = task_token;
                 let _permit = permit;
+                // Keep observing panics even after the response waiter is dropped.
                 match tokio::spawn(async move { start_attempt().await }).await {
                     Ok(output) => Ok(output),
                     Err(source) => Err(classify_join_error(source)),
@@ -102,18 +103,5 @@ fn classify_join_error(source: JoinError) -> SimulationTaskError {
     } else {
         error!(error = ?source, "admitted simulation task was cancelled");
         SimulationTaskError::TaskCancelled { source }
-    }
-}
-
-impl simulation_core::error::ErrorInfo for SimulationTaskError {
-    fn diagnostic(&self) -> simulation_core::error::Diagnostic {
-        use simulation_core::error::ErrorCode;
-        match self {
-            Self::Closed => ErrorCode::ServiceClosed,
-            Self::ResponseTimedOut => ErrorCode::ServiceTimeout,
-            Self::TaskCancelled { .. } => ErrorCode::ServiceCancelled,
-            Self::TaskPanicked { .. } => ErrorCode::Internal,
-        }
-        .diagnostic()
     }
 }

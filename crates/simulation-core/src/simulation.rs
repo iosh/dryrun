@@ -84,39 +84,6 @@ pub enum Simulation<C, T, P, O, R, S, E> {
     Executed(ExecutedSimulation<C, T, O, S, E>),
 }
 
-impl<C, T, P, O, R, S, E> Simulation<C, T, P, O, R, S, E> {
-    /// Transforms complete change items without changing execution or availability.
-    pub fn map_changes<U>(self, map: impl FnOnce(S) -> U) -> Simulation<C, T, P, O, R, U, E> {
-        match self.try_map_changes(|changes| Ok::<_, std::convert::Infallible>(map(changes))) {
-            Ok(result) => result,
-            Err(never) => match never {},
-        }
-    }
-
-    pub fn try_map_changes<U, F>(
-        self,
-        map: impl FnOnce(S) -> Result<U, F>,
-    ) -> Result<Simulation<C, T, P, O, R, U, E>, F> {
-        Ok(match self {
-            Self::Rejected(rejected) => Simulation::Rejected(rejected),
-            Self::Executed(executed) => {
-                let (context, transaction, outcome, changes) = executed.into_parts();
-                let changes = match changes {
-                    Changes::Complete(changes) => Changes::Complete(map(changes)?),
-                    Changes::NotAnalyzed => Changes::NotAnalyzed,
-                    Changes::Unavailable(error) => Changes::Unavailable(error),
-                };
-                Simulation::Executed(ExecutedSimulation {
-                    context,
-                    transaction,
-                    outcome,
-                    changes,
-                })
-            }
-        })
-    }
-}
-
 /// A backend's preparation exit, before any local user transaction is executed.
 pub enum Preparation<C, T, P, R, D> {
     Ready {

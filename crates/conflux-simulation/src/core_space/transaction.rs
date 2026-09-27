@@ -6,9 +6,8 @@ use primitives::transaction::{
 };
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-pub use simulation_core::transaction::{DynamicFees, FeeInput};
 use simulation_core::transaction::{
-    PartialTransactionCommon, TransactionCommon, TransactionInputError,
+    DynamicFees, FeeInput, PartialTransactionCommon, TransactionCommon, TransactionInputError,
 };
 use thiserror::Error;
 

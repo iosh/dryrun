@@ -6,22 +6,23 @@ use alloy::{
 };
 use alloy_rpc_client::RpcClient;
 use conflux_provider::ConfluxProvider;
-use conflux_rpc::build_rpc_module as build_conflux_rpc_module;
 use conflux_simulation::{
     ConfluxSimulationBackend, core_space::CoreSpaceTransactionSimulator,
     espace::EspaceTransactionSimulator,
 };
-use evm_rpc::{DryrunRpcServer, RpcHandler};
 use evm_simulation::EvmTransactionSimulator;
 use jsonrpsee::{
     RpcModule,
     server::{BatchRequestConfig, Server, ServerConfig as JsonRpcServerConfig, ServerHandle},
     types::ErrorObjectOwned,
 };
-use simulation_tasks::SimulationTaskSet;
 use tracing::info;
 
-use crate::app_config::{AppConfig, ConfluxConfig, EthereumConfig};
+use crate::{
+    app_config::{AppConfig, ConfluxConfig, EthereumConfig},
+    rpc,
+    simulation_tasks::SimulationTaskSet,
+};
 
 const MAX_RPC_CONNECTIONS: u32 = 100;
 const MAX_RPC_BODY_SIZE_BYTES: u32 = 10 * 1024 * 1024;
@@ -85,16 +86,14 @@ async fn add_evm_rpc_module(
     simulation_tasks: SimulationTaskSet,
 ) -> io::Result<()> {
     let ethereum_provider = create_ethereum_provider(config, http_client)?.erased();
-    let limits = config.limits;
-    let evm_simulator = EvmTransactionSimulator::ethereum_mainnet(ethereum_provider, limits)
+    let evm_simulator = EvmTransactionSimulator::ethereum_mainnet(ethereum_provider, config.limits)
         .await
         .map_err(|error| {
             startup_error(format!("failed to initialize Ethereum simulation: {error}"))
         })?;
 
-    rpc_module
-        .merge(RpcHandler::new(evm_simulator, simulation_tasks).into_rpc())
-        .map_err(|error| startup_error(format!("failed to merge EVM RPC module: {error}")))
+    rpc::register_evm(rpc_module, evm_simulator, simulation_tasks)
+        .map_err(|error| startup_error(format!("failed to register EVM RPC method: {error}")))
 }
 
 async fn add_conflux_rpc_module(
@@ -112,14 +111,13 @@ async fn add_conflux_rpc_module(
     let espace_simulator = EspaceTransactionSimulator::new(backend.clone(), config.espace_limits);
     let core_space_simulator =
         CoreSpaceTransactionSimulator::new(backend, config.core_space_limits);
-
-    rpc_module
-        .merge(build_conflux_rpc_module(
-            espace_simulator,
-            core_space_simulator,
-            simulation_tasks,
-        ))
-        .map_err(|error| startup_error(format!("failed to merge Conflux RPC module: {error}")))
+    rpc::register_conflux(
+        rpc_module,
+        espace_simulator,
+        core_space_simulator,
+        simulation_tasks,
+    )
+    .map_err(|error| startup_error(format!("failed to register Conflux RPC methods: {error}")))
 }
 
 fn create_provider_http_client() -> io::Result<HttpClient> {

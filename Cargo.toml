@@ -6,10 +6,7 @@ members = [
     "crates/contract-standards",
     "crates/conflux-provider",
     "crates/evm-simulation",
-    "crates/evm-rpc",
     "crates/conflux-simulation",
-    "crates/conflux-rpc",
-    "crates/simulation-tasks",
 ]
 
 [workspace.package]
@@ -21,10 +18,7 @@ simulation-core = { path = "crates/simulation-core" }
 contract-standards = { path = "crates/contract-standards" }
 conflux-provider = { path = "crates/conflux-provider" }
 evm-simulation = { path = "crates/evm-simulation" }
-evm-rpc = { path = "crates/evm-rpc" }
 conflux-simulation = { path = "crates/conflux-simulation" }
-conflux-rpc = { path = "crates/conflux-rpc" }
-simulation-tasks = { path = "crates/simulation-tasks" }
 
 jsonrpsee = "0.26"
 thiserror = "2"
@@ -47,10 +41,6 @@ alloy-sol-types = "1"
 revm = "36"
 
 cfx-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
-cfx-bytes = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
-cfx-addr = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
-cfx-rpc-cfx-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
-cfx-rpc-primitives = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-rpc-eth-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 primitives = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 
@@ -63,6 +53,5 @@ tracing-subscriber = "0.3"
 
 config = "0.15"
 
-metrics = "0.24"
 metrics-exporter-prometheus = "0.18"
 axum = "0.8"

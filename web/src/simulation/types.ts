@@ -59,7 +59,7 @@ export interface HexTransactionRequest {
 
 export interface HexSimulationRequest {
   transaction: HexTransactionRequest;
-  block: string;
+  block: string | { blockHash: string };
 }
 
 export interface CoreTransactionRequest extends HexTransactionRequest {

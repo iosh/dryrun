@@ -1,7 +1,7 @@
 use std::{future::pending, io, num::NonZeroUsize, time::Duration};
 
 use metrics_exporter_prometheus::PrometheusBuilder;
-use simulation_tasks::SimulationTaskSet;
+use tokio::sync::Semaphore;
 use tracing::{error, info};
 use tracing_subscriber::fmt::format::FmtSpan;
 
@@ -9,6 +9,7 @@ use crate::{
     app_config::{AppConfig, LogFormat, MetricsConfig, SimulationConfig, TracingConfig},
     metrics::{MetricsServer, start_metrics_server},
     rpc_server,
+    simulation_tasks::SimulationTaskSet,
 };
 
 pub async fn run(config: AppConfig) -> io::Result<()> {
@@ -115,9 +116,14 @@ fn init_tracing(config: &TracingConfig) -> io::Result<()> {
 }
 
 fn create_simulation_task_set(config: &SimulationConfig) -> io::Result<SimulationTaskSet> {
-    let max_concurrent = NonZeroUsize::new(config.max_concurrent).ok_or_else(|| {
-        configuration_error("simulation.max_concurrent must be greater than zero")
-    })?;
+    let max_concurrent = NonZeroUsize::new(config.max_concurrent)
+        .filter(|limit| limit.get() <= Semaphore::MAX_PERMITS)
+        .ok_or_else(|| {
+            configuration_error(format!(
+                "simulation.max_concurrent must be between 1 and {}",
+                Semaphore::MAX_PERMITS
+            ))
+        })?;
 
     Ok(SimulationTaskSet::new(
         max_concurrent,

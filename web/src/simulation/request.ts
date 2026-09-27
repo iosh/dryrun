@@ -250,9 +250,7 @@ export function countAdvancedValues(
     values.txType !== 'dynamic-fee' ? values.gasPrice : '',
     dynamicFeeEnabled ? values.maxFeePerGas : '',
     dynamicFeeEnabled ? values.maxPriorityFeePerGas : '',
-    accessListEnabled && values.accessListJson.trim() !== '[]'
-      ? values.accessListJson
-      : '',
+    accessListEnabled ? values.accessListJson : '',
     environmentId === 'conflux-core-mainnet' ? values.storageLimit : '',
     environmentId === 'conflux-core-mainnet' ? values.epochHeight : '',
   ].filter((value) => value.trim().length > 0).length;
@@ -272,7 +270,7 @@ function buildRequest(
     ...(parsed.gasLimit ? { gas: parsed.gasLimit } : {}),
     ...(parsed.value ? { value: parsed.value } : {}),
     ...(parsed.data ? { data: parsed.data } : {}),
-    ...(parsed.accessList && parsed.accessList.length > 0
+    ...(parsed.accessList !== undefined
       ? { accessList: parsed.accessList }
       : {}),
     ...(parsed.gasPrice ? { gasPrice: parsed.gasPrice } : {}),
@@ -303,9 +301,11 @@ function buildRequest(
 
   const request: HexSimulationRequest = {
     block:
-      values.contextMode === 'number' || values.contextMode === 'hash'
-        ? parsed.contextNumber!
-        : values.contextMode,
+      values.contextMode === 'hash'
+        ? { blockHash: parsed.contextNumber! }
+        : values.contextMode === 'number'
+          ? parsed.contextNumber!
+          : values.contextMode,
     transaction,
   };
   return request;
@@ -351,8 +351,7 @@ function validateRelationships(
 
   if (
     effectiveTxType === 'legacy' &&
-    parsed.accessList &&
-    parsed.accessList.length > 0
+    parsed.accessList !== undefined
   ) {
     issues.push('Legacy transactions cannot include an access list.');
   }
@@ -381,7 +380,7 @@ function resolveEffectiveTxType(
   if (parsed.maxFeePerGas || parsed.maxPriorityFeePerGas) {
     return 'dynamic-fee';
   }
-  if (parsed.accessList && parsed.accessList.length > 0) {
+  if (parsed.accessList !== undefined) {
     return 'access-list';
   }
   return 'legacy';
@@ -518,7 +517,7 @@ function parseAccessList(
   value: string,
 ): ParseResult<RpcAccessListItem[] | undefined> {
   const trimmed = value.trim();
-  if (!trimmed || trimmed === '[]') return success(undefined);
+  if (!trimmed) return success(undefined);
 
   try {
     const parsed = JSON.parse(trimmed) as unknown;

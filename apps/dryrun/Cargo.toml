@@ -5,18 +5,18 @@ edition = { workspace = true }
 
 [dependencies]
 simulation-core = { workspace = true, features = ["serde"] }
-conflux-simulation = { workspace = true }
-conflux-rpc = { workspace = true }
-evm-simulation = { workspace = true }
-evm-rpc = { workspace = true }
-simulation-tasks = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio-util = { workspace = true, features = ["rt"] }
+conflux-simulation = { workspace = true, features = ["serde"] }
+evm-simulation = { workspace = true, features = ["serde"] }
 jsonrpsee = { workspace = true, features = ["server"] }
 tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["json"] }
 metrics-exporter-prometheus = { workspace = true }
 axum = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features = ["rc"] }
 config = { workspace = true }
 alloy = { workspace = true }
 alloy-rpc-client = { workspace = true, features = ["reqwest"] }
