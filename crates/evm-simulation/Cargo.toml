@@ -3,24 +3,18 @@ name = "evm-simulation"
 version = { workspace = true }
 edition = { workspace = true }
 
-[features]
-serde = ["dep:serde", "simulation-core/serde", "contract-standards/serde"]
-
 [dependencies]
-serde = { workspace = true, optional = true }
-simulation-core = { workspace = true, features = ["serde"] }
-alloy = { workspace = true }
-alloy-chains = { workspace = true }
+simulation-core = { workspace = true }
+alloy = { workspace = true, features = ["consensus", "eips", "network", "providers", "rpc-types"] }
+alloy-evm = { workspace = true }
 alloy-hardforks = { workspace = true }
-alloy-primitives = { workspace = true }
-alloy-sol-types = { workspace = true }
-contract-standards = { workspace = true }
+alloy-serde = { workspace = true }
 revm = { workspace = true, features = [
-    "alloydb",
     "optional_balance_check",
     "optional_eip3607",
     "optional_fee_charge",
     "optional_no_base_fee",
 ] }
+serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }

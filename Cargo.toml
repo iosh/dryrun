@@ -1,13 +1,7 @@
 [workspace]
 resolver = "3"
-members = [
-    "apps/dryrun",
-    "crates/simulation-core",
-    "crates/contract-standards",
-    "crates/conflux-provider",
-    "crates/evm-simulation",
-    "crates/conflux-simulation",
-]
+members = ["apps/dryrun", "crates/simulation-core", "crates/evm-simulation"]
+exclude = ["crates/conflux-provider", "crates/conflux-simulation"]
 
 [workspace.package]
 version = "0.1.0"
@@ -15,10 +9,7 @@ edition = "2024"
 
 [workspace.dependencies]
 simulation-core = { path = "crates/simulation-core" }
-contract-standards = { path = "crates/contract-standards" }
-conflux-provider = { path = "crates/conflux-provider" }
 evm-simulation = { path = "crates/evm-simulation" }
-conflux-simulation = { path = "crates/conflux-simulation" }
 
 jsonrpsee = "0.26"
 thiserror = "2"
@@ -26,19 +17,13 @@ thiserror = "2"
 tokio = "1"
 tokio-util = "0.7"
 
-alloy = "1"
-alloy-consensus = "1"
-alloy-json-rpc = "1"
-alloy-rpc-types = "2"
-alloy-serde = "1"
-alloy-rpc-client = { version = "1", default-features = false }
-alloy-transport = { version = "1", default-features = false }
-alloy-chains = "0.2"
-alloy-eips = "1"
+alloy = "2"
+alloy-evm = "0.39"
 alloy-hardforks = "0.4"
 alloy-primitives = "1"
+alloy-serde = "2"
 alloy-sol-types = "1"
-revm = "36"
+revm = "43"
 
 cfx-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
 cfx-rpc-eth-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
@@ -46,7 +31,6 @@ primitives = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" 
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-serde_with = { version = "3", default-features = false, features = ["std"] }
 
 tracing = "0.1"
 tracing-subscriber = "0.3"

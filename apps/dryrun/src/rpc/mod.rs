@@ -1,25 +1,19 @@
 mod error;
 mod request;
 
-use std::{fmt::Debug, sync::Arc};
+use std::sync::Arc;
 
-use conflux_simulation::{
-    core_space::CoreSpaceTransactionSimulator, espace::EspaceTransactionSimulator,
-};
-use evm_simulation::EvmTransactionSimulator;
+use evm_simulation::{Outcome, Simulation, Simulator};
 use jsonrpsee::{RpcModule, core::RegisterMethodError};
-use simulation_core::{
-    error::ErrorInfo,
-    simulation::{Changes, Simulation},
-};
+use simulation_core::{CodedError, ExecutionStatus};
 
-use crate::simulation_tasks::SimulationTaskSet;
+use crate::tasks::SimulationTaskSet;
 use error::{invalid_params, rpc_error};
-use request::{BlockRequest, CoreRequest};
+use request::BlockRequest;
 
 pub(crate) fn register_evm(
     module: &mut RpcModule<()>,
-    simulator: EvmTransactionSimulator,
+    simulator: Simulator,
     tasks: SimulationTaskSet,
 ) -> Result<(), RegisterMethodError> {
     module.register_async_method("dryrun_evm_simulateTransaction", move |params, _, _| {
@@ -30,91 +24,26 @@ pub(crate) fn register_evm(
                 .parse::<BlockRequest>()
                 .map_err(invalid_params)?
                 .into_evm()
-                .map_err(rpc_error)?;
+                .map_err(|error| rpc_error(&error))?;
             tasks
-                .run(move || async move {
-                    simulator
-                        .simulate(request)
-                        .await
-                        .map(simulation_response)
-                        .map_err(rpc_error)
-                })
+                .run(move || async move { simulator.simulate(request).await })
                 .await
-                .map_err(rpc_error)?
+                .map_err(|error| rpc_error(&error))?
+                .map(response)
+                .map_err(|error| rpc_error(&error))
         }
     })?;
     Ok(())
 }
 
-pub(crate) fn register_conflux(
-    module: &mut RpcModule<()>,
-    espace: EspaceTransactionSimulator,
-    core: CoreSpaceTransactionSimulator,
-    tasks: SimulationTaskSet,
-) -> Result<(), RegisterMethodError> {
-    let espace_tasks = tasks.clone();
-    module.register_async_method(
-        "dryrun_conflux_espace_simulateTransaction",
-        move |params, _, _| {
-            let simulator = espace.clone();
-            let tasks = espace_tasks.clone();
-            async move {
-                let request = params
-                    .parse::<BlockRequest>()
-                    .map_err(invalid_params)?
-                    .into_espace()
-                    .map_err(rpc_error)?;
-                tasks
-                    .run(move || async move {
-                        simulator
-                            .simulate(request)
-                            .await
-                            .map(simulation_response)
-                            .map_err(rpc_error)
-                    })
-                    .await
-                    .map_err(rpc_error)?
-            }
-        },
-    )?;
-    module.register_async_method(
-        "dryrun_conflux_coreSpace_simulateTransaction",
-        move |params, _, _| {
-            let simulator = core.clone();
-            let tasks = tasks.clone();
-            async move {
-                let request = params
-                    .parse::<CoreRequest>()
-                    .map_err(invalid_params)?
-                    .into_simulation()
-                    .map_err(rpc_error)?;
-                tasks
-                    .run(move || async move {
-                        simulator
-                            .simulate(request)
-                            .await
-                            .map(simulation_response)
-                            .map_err(rpc_error)
-                    })
-                    .await
-                    .map_err(rpc_error)?
-            }
-        },
-    )?;
-    Ok(())
-}
-
-fn simulation_response<C, T, P, O, R, S, E: ErrorInfo + Debug>(
-    simulation: Simulation<C, T, P, O, R, S, E>,
-) -> Arc<Simulation<C, T, P, O, R, S, E>> {
-    if let Simulation::Executed(executed) = &simulation
-        && let Changes::Unavailable(error) = executed.changes()
+fn response(simulation: Simulation) -> Arc<Simulation> {
+    if let Outcome::Executed(execution) = &simulation.outcome
+        && let ExecutionStatus::Success {
+            changes: Err(error),
+            ..
+        } = &execution.status
     {
-        tracing::warn!(
-            error = ?error,
-            code = ?error.diagnostic().code,
-            "transaction changes unavailable"
-        );
+        tracing::warn!(?error, code = ?error.code(), "transaction changes unavailable");
     }
     Arc::new(simulation)
 }

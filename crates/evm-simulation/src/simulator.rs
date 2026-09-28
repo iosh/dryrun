@@ -1,257 +1,167 @@
 use std::sync::Arc;
 
 use alloy::{
-    consensus::{BlockHeader, Header, Sealed},
-    network::Ethereum,
+    eips::{BlockId, BlockNumHash},
+    primitives::{Address, U256},
     providers::{DynProvider, Provider},
+    rpc::types::TransactionRequest,
 };
+use revm::database_interface::DatabaseRef;
+use serde::{Serialize, Serializer};
+use simulation_core::{ExecutionStatus, Limits, ReadBudget, Rejection};
 use tokio::runtime::Handle;
 
-use crate::{
-    EthereumChainSpec, EvmAnalysisDomain, EvmAnalysisView, EvmAnalyzerRegistry, EvmBlockContext,
-    EvmChangeSet, EvmExecutionObserver, EvmExecutionOutcome, EvmInitializationError, EvmSimulation,
-    EvmSimulationError, EvmSimulationLimits, EvmSimulationRequest, EvmTransactionExecutionResult,
-    EvmTransactionExecutor, TypedTransaction, analysis::default_registry, resolve_block,
-    state::EvmStateSource,
-};
+use crate::{ChainSpec, Error, block, db::CachedAlloyDB, execution, transaction};
+
+#[derive(Debug, Clone)]
+pub struct Simulator {
+    provider: DynProvider,
+    chain: Arc<ChainSpec>,
+    limits: Limits,
+}
+
+#[derive(Debug, Clone)]
+pub struct SimulationRequest {
+    pub block: BlockId,
+    pub transaction: TransactionRequest,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Simulation {
+    #[serde(serialize_with = "serialize_block")]
+    pub block: BlockNumHash,
+    /// The transaction as executed, with omitted fields filled in.
+    pub transaction: TransactionRequest,
+    pub outcome: Outcome,
+}
 
 #[derive(Debug)]
-pub struct EvmTransactionSimulator {
-    provider: DynProvider<Ethereum>,
-    chain_spec: Arc<EthereumChainSpec>,
-    analyzers: Arc<EvmAnalyzerRegistry>,
-    limits: EvmSimulationLimits,
+pub enum Outcome {
+    Rejected(Rejection),
+    Executed(Box<Execution>),
 }
 
-impl Clone for EvmTransactionSimulator {
-    fn clone(&self) -> Self {
-        Self {
-            provider: self.provider.clone(),
-            chain_spec: Arc::clone(&self.chain_spec),
-            analyzers: Arc::clone(&self.analyzers),
-            limits: self.limits,
-        }
-    }
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Execution {
+    #[serde(with = "alloy_serde::quantity")]
+    pub gas_used: u64,
+    pub fee: Fee,
+    #[serde(flatten)]
+    pub status: ExecutionStatus<Address, Error>,
 }
 
-impl EvmTransactionSimulator {
-    pub async fn ethereum_mainnet(
-        provider: DynProvider<Ethereum>,
-        limits: EvmSimulationLimits,
-    ) -> Result<Self, EvmInitializationError> {
-        let chain_spec = EthereumChainSpec::mainnet();
-        let actual_chain_id = provider
+/// The transaction fee. Native balance changes exclude it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Fee {
+    /// Price paid per gas.
+    #[serde(with = "alloy_serde::quantity")]
+    pub gas_price: u128,
+    #[serde(with = "alloy_serde::quantity")]
+    pub base_fee: u64,
+    /// Price paid per blob gas, for blob transactions.
+    #[serde(
+        with = "alloy_serde::quantity::opt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub blob_gas_price: Option<u128>,
+    /// Total paid by the sender.
+    pub amount: U256,
+}
+
+impl Simulator {
+    /// Fails if the provider serves a different chain.
+    pub async fn new(
+        provider: DynProvider,
+        chain: ChainSpec,
+        limits: Limits,
+    ) -> Result<Self, Error> {
+        let actual = provider
             .get_chain_id()
             .await
-            .map_err(EvmInitializationError::chain_id_request)?;
-
-        if actual_chain_id != chain_spec.chain_id() {
-            return Err(EvmInitializationError::ChainIdMismatch {
-                expected: chain_spec.chain_id(),
-                actual: actual_chain_id,
+            .map_err(|source| Error::Provider {
+                operation: "eth_chainId",
+                source,
+            })?;
+        if actual != chain.chain_id {
+            return Err(Error::ChainMismatch {
+                expected: chain.chain_id,
+                actual,
             });
         }
-
-        let analyzers = default_registry(chain_spec.native_currency().clone());
         Ok(Self {
             provider,
-            chain_spec: Arc::new(chain_spec),
-            analyzers: Arc::new(analyzers),
+            chain: Arc::new(chain),
             limits,
         })
     }
-}
 
-impl EvmTransactionSimulator {
-    pub fn with_analyzers(mut self, analyzers: EvmAnalyzerRegistry) -> Self {
-        self.analyzers = Arc::new(analyzers);
-        self
-    }
-
-    pub fn with_analyzer(
-        mut self,
-        analyzer: impl simulation_core::analysis::Analyzer<EvmAnalysisDomain>,
-    ) -> Result<Self, simulation_core::analysis::RegistryError> {
-        self.analyzers = Arc::new(self.analyzers.with_analyzer(analyzer)?);
-        Ok(self)
-    }
-
-    /// Simulates one transaction inside the caller's active Tokio runtime.
-    pub async fn simulate(
-        &self,
-        request: EvmSimulationRequest,
-    ) -> Result<EvmSimulation, EvmSimulationError> {
-        simulation_core::simulation::simulate(EthereumBackend(self.clone()), request).await
-    }
-}
-
-struct EthereumBackend(EvmTransactionSimulator);
-
-impl simulation_core::simulation::SimulationBackend for EthereumBackend {
-    type Request = EvmSimulationRequest;
-    type Context = EvmBlockContext;
-    type Transaction = TypedTransaction;
-    type TransactionRequest = crate::TransactionRequest;
-    type Rejection = crate::EvmTransactionRejection;
-    type Prepared = Sealed<Header>;
-    type Evidence = crate::EvmTransactionExecution;
-    type Outcome = EvmExecutionOutcome;
-    type ChangeSet = EvmChangeSet;
-    type AnalysisError = crate::EvmAnalysisError;
-    type Error = EvmSimulationError;
-
-    async fn prepare(
-        &self,
-        request: Self::Request,
-    ) -> Result<simulation_core::simulation::PreparationFor<Self>, Self::Error> {
-        use simulation_core::{completion::Completion, simulation::Preparation};
-        let EvmSimulationRequest { block, transaction } = request;
-        let block = resolve_block(&self.0.provider, block).await?;
-        let context = EvmBlockContext {
-            number: block.number(),
-            hash: block.hash(),
-        };
-        let transaction = match crate::complete_transaction(
-            transaction,
-            &self.0.provider,
-            &block,
-            &self.0.chain_spec,
-        )
-        .await?
-        {
-            Completion::Ready(transaction) => transaction,
-            Completion::Rejected {
-                transaction,
-                rejection,
-            } => {
-                return Ok(Preparation::Rejected {
-                    context: Some(context),
-                    transaction,
-                    rejection,
-                });
-            }
-        };
-        Ok(Preparation::Ready {
-            context,
-            transaction,
-            execution: block,
-        })
-    }
-
-    fn execute(
-        &self,
-        transaction: &Self::Transaction,
-        block: Self::Prepared,
-        runtime_handle: Handle,
-    ) -> Result<simulation_core::simulation::Execution<Self::Evidence, Self::Rejection>, Self::Error>
-    {
-        use simulation_core::simulation::Execution;
-        let checkpoint_filters = self.0.analyzers.checkpoint_filters().to_vec();
-        let state_source =
-            EvmStateSource::new(self.0.provider.clone(), runtime_handle, block.hash());
-        let executor = EvmTransactionExecutor::new(
-            state_source,
+    pub async fn simulate(&self, request: SimulationRequest) -> Result<Simulation, Error> {
+        let SimulationRequest {
             block,
-            &self.0.chain_spec,
-            EvmExecutionObserver::new(checkpoint_filters, self.0.limits),
-            self.0.limits,
-        )?;
-        match executor.execute(transaction)? {
-            EvmTransactionExecutionResult::Executed(output) => {
-                Ok(Execution::Executed(output.commit(transaction)?))
+            mut transaction,
+        } = request;
+        let sender = transaction
+            .from
+            .ok_or_else(|| Error::InvalidInput("from is required".into()))?;
+        let header = block::fetch_header(&self.provider, block).await?;
+        let block = BlockNumHash::new(header.number, header.hash);
+        let env = self.chain.evm_env(&header.inner);
+        let provider = self.provider.clone();
+        let limits = self.limits;
+        let runtime = Handle::current();
+
+        tokio::task::spawn_blocking(move || {
+            let budget = ReadBudget::new(limits);
+            let db = CachedAlloyDB::new(provider, block.hash, runtime, &budget);
+            transaction::fill_defaults(&mut transaction, &env, || {
+                Ok(db.basic_ref(sender)?.unwrap_or_default().nonce)
+            })?;
+            let tx = transaction::tx_env(&transaction, sender)?;
+            let outcome = execution::execute(&db, &env, tx, &budget)?;
+            Ok(Simulation {
+                block,
+                transaction,
+                outcome,
+            })
+        })
+        .await
+        .map_err(Error::Runtime)?
+    }
+}
+
+impl Serialize for Outcome {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Rejected<'a> {
+            status: &'static str,
+            #[serde(flatten)]
+            rejection: &'a Rejection,
+        }
+
+        match self {
+            Self::Rejected(rejection) => Rejected {
+                status: "rejected",
+                rejection,
             }
-            EvmTransactionExecutionResult::NotExecuted(rejection) => {
-                Ok(Execution::Rejected(rejection))
-            }
+            .serialize(serializer),
+            Self::Executed(execution) => execution.serialize(serializer),
         }
     }
-
-    fn is_success(&self, evidence: &Self::Evidence) -> bool {
-        evidence.is_success()
-    }
-
-    fn analyze(
-        &self,
-        view: simulation_core::simulation::AnalysisView<
-            '_,
-            Self::Context,
-            Self::Transaction,
-            Self::Evidence,
-        >,
-    ) -> Result<Self::ChangeSet, Self::AnalysisError> {
-        let execution = view.execution();
-        execution.check_observation_limit()?;
-        let view = EvmAnalysisView {
-            context: view.context(),
-            transaction: view.transaction(),
-            execution,
-        };
-        let mut changes = self.0.analyzers.analyze(view)?;
-        changes.load_metadata(execution.state().finalized())?;
-        Ok(changes)
-    }
-
-    fn into_outcome(&self, evidence: Self::Evidence) -> Self::Outcome {
-        evidence.into_outcome()
-    }
 }
 
-#[cfg(test)]
-mod tests {
-    use std::future::Future;
-
-    use alloy::{
-        network::Ethereum,
-        providers::{DynProvider, Provider, RootProvider},
-        rpc::client::RpcClient,
-        transports::mock::Asserter,
-    };
-
-    use super::EvmTransactionSimulator;
-    use crate::{EvmInitializationError, EvmSimulationLimits};
-
-    #[test]
-    fn returns_typed_initialization_errors() {
-        let mismatch_asserter = Asserter::new();
-        mismatch_asserter.push_success(&"0x5");
-        let mismatch = block_on(EvmTransactionSimulator::ethereum_mainnet(
-            mock_provider(mismatch_asserter),
-            test_limits(),
-        ))
-        .expect_err("wrong chain id should reject initialization");
-        assert!(matches!(
-            mismatch,
-            EvmInitializationError::ChainIdMismatch {
-                expected: 1,
-                actual: 5,
-            }
-        ));
-
-        let failure_asserter = Asserter::new();
-        failure_asserter.push_failure_msg("provider unavailable");
-        let failure = block_on(EvmTransactionSimulator::ethereum_mainnet(
-            mock_provider(failure_asserter),
-            test_limits(),
-        ))
-        .expect_err("provider failure should reject initialization");
-        assert!(matches!(
-            failure,
-            EvmInitializationError::ChainIdRequest { .. }
-        ));
+fn serialize_block<S: Serializer>(block: &BlockNumHash, serializer: S) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct Block {
+        #[serde(with = "alloy_serde::quantity")]
+        number: u64,
+        hash: alloy::primitives::B256,
     }
 
-    fn mock_provider(asserter: Asserter) -> DynProvider<Ethereum> {
-        RootProvider::new(RpcClient::mocked(asserter)).erased()
+    Block {
+        number: block.number,
+        hash: block.hash,
     }
-
-    fn test_limits() -> EvmSimulationLimits {
-        EvmSimulationLimits::default()
-    }
-
-    fn block_on<T>(future: impl Future<Output = T>) -> T {
-        tokio::runtime::Builder::new_current_thread()
-            .build()
-            .expect("test runtime should build")
-            .block_on(future)
-    }
+    .serialize(serializer)
 }
