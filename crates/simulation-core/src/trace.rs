@@ -11,7 +11,8 @@ pub struct ExecutionTrace<A> {
     pub calls: Vec<CallFrame<A>>,
     /// Logs retained by the finished execution.
     pub logs: Vec<Log<A>>,
-    /// Accounts whose balance, nonce, code or storage changed.
+    /// Accounts touched by the execution, including unchanged ones: an
+    /// unchanged balance can still hide a transfer that cancels out the fee.
     pub accounts: BTreeMap<A, AccountDiff>,
 }
 

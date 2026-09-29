@@ -121,7 +121,7 @@ fn derive(
     )
 }
 
-/// Accounts changed by the execution. Values before it come from `db`, which
+/// Accounts touched by the execution. Values before it come from `db`, which
 /// already holds every account the execution loaded.
 fn account_diffs(
     db: &CachedAlloyDB<'_>,
@@ -176,13 +176,7 @@ fn account_diffs(
             },
             storage,
         };
-        if diff.balance.is_changed()
-            || diff.nonce.is_changed()
-            || diff.code_hash.is_changed()
-            || !diff.storage.is_empty()
-        {
-            accounts.insert(*address, diff);
-        }
+        accounts.insert(*address, diff);
     }
     Ok(accounts)
 }
