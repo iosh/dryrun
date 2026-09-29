@@ -6,7 +6,7 @@ use alloy::{
     providers::{DynProvider, Provider},
     rpc::types::TransactionRequest,
 };
-use revm::database_interface::DatabaseRef;
+use revm::{database_interface::DatabaseRef, primitives::hardfork::SpecId};
 use serde::{Serialize, Serializer};
 use simulation_core::{ExecutionStatus, Limits, ReadBudget, Rejection};
 use tokio::runtime::Handle;
@@ -108,6 +108,13 @@ impl Simulator {
         let header = block::fetch_header(&self.provider, block).await?;
         let block = BlockNumHash::new(header.number, header.hash);
         let env = self.chain.evm_env(&header.inner);
+        // Before EIP-161 the VM tells an existing empty account from a missing
+        // one, which the provider's account reads cannot.
+        if !env.cfg_env.spec.is_enabled_in(SpecId::SPURIOUS_DRAGON) {
+            return Err(Error::Unsupported(
+                "blocks before Spurious Dragon are not supported".into(),
+            ));
+        }
         let provider = self.provider.clone();
         let limits = self.limits;
         let runtime = Handle::current();

@@ -30,7 +30,7 @@ pub(crate) struct CachedAlloyDB<'a> {
 
 #[derive(Debug, Default)]
 struct Cache {
-    accounts: HashMap<Address, AccountInfo>,
+    accounts: HashMap<Address, Option<AccountInfo>>,
     storage: HashMap<(Address, U256), U256>,
     block_hashes: HashMap<u64, B256>,
     code: HashMap<B256, Bytecode>,
@@ -98,7 +98,7 @@ impl DatabaseRef for CachedAlloyDB<'_> {
 
     fn basic_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
         if let Some(account) = self.cache.borrow().accounts.get(&address) {
-            return Ok(Some(account.clone()));
+            return Ok(account.clone());
         }
         let provider = &self.provider;
         let (balance, nonce, code) = self.fetch(
@@ -121,11 +121,16 @@ impl DatabaseRef for CachedAlloyDB<'_> {
             },
         )?;
         let code = Bytecode::new_raw(code);
-        let account = AccountInfo::new(balance, nonce, code.hash_slow(), code.clone());
+        let code_hash = code.hash_slow();
+        let account = AccountInfo::new(balance, nonce, code_hash, code.clone());
+        // Since EIP-161 the VM treats an empty account as a missing one, except
+        // for the EIP-7702 refund, which came after empty accounts were
+        // cleared from the state. Earlier blocks are not simulated.
+        let account = (!account.is_empty()).then_some(account);
         let mut cache = self.cache.borrow_mut();
-        cache.code.insert(account.code_hash, code);
+        cache.code.insert(code_hash, code);
         cache.accounts.insert(address, account.clone());
-        Ok(Some(account))
+        Ok(account)
     }
 
     fn code_by_hash_ref(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
