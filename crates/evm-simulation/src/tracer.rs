@@ -1,11 +1,12 @@
 use alloy::primitives::Address;
 use revm::{
     Inspector,
-    context_interface::ContextTr,
+    context_interface::{ContextTr, JournalTr},
     interpreter::{
         CallInputs, CallOutcome, CallScheme as RevmCallScheme, CreateInputs, CreateOutcome,
         CreateScheme,
     },
+    state::EvmState,
 };
 use simulation_core::{CallFrame, CallScheme};
 
@@ -29,7 +30,7 @@ impl CallTracer {
     }
 }
 
-impl<CTX: ContextTr> Inspector<CTX> for CallTracer {
+impl<CTX: ContextTr<Journal: JournalTr<State = EvmState>>> Inspector<CTX> for CallTracer {
     fn call(&mut self, context: &mut CTX, inputs: &mut CallInputs) -> Option<CallOutcome> {
         // Accounts without code and precompiles run no code.
         if inputs.known_bytecode.1.is_empty() {
@@ -46,7 +47,7 @@ impl<CTX: ContextTr> Inspector<CTX> for CallTracer {
             },
             from: inputs.caller,
             to: inputs.target_address,
-            code_address: inputs.bytecode_address,
+            code_address: code_address(context, inputs.bytecode_address),
             value: inputs.transfer_value().unwrap_or_default(),
             input: inputs.input.bytes(context),
             success: false,
@@ -96,4 +97,20 @@ impl<CTX: ContextTr> Inspector<CTX> for CallTracer {
             }
         }
     }
+}
+
+/// The account whose code a call to `address` runs. A call to an EIP-7702
+/// delegated account runs its delegate's code, while revm keeps the delegated
+/// account as the call's bytecode address.
+fn code_address<CTX: ContextTr<Journal: JournalTr<State = EvmState>>>(
+    context: &CTX,
+    address: Address,
+) -> Address {
+    // The call has already loaded the account with its code.
+    context
+        .journal()
+        .evm_state()
+        .get(&address)
+        .and_then(|account| account.info.code.as_ref()?.eip7702_address())
+        .unwrap_or(address)
 }
