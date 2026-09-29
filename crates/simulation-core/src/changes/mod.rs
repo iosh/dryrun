@@ -25,9 +25,17 @@ use crate::{ChainAddress, Diff, ExecutionTrace};
 pub trait StateView<A> {
     type Error;
 
-    /// Runs a read-only call and discards its writes. Returns `None` when the
-    /// call reverts or halts.
-    fn call(&self, contract: A, input: Bytes) -> Result<Option<Bytes>, Self::Error>;
+    /// Runs a read-only call and discards its writes.
+    fn call(&self, contract: A, input: Bytes) -> Result<CallResult, Self::Error>;
+}
+
+/// How a read-only call ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallResult {
+    Success(Bytes),
+    Revert,
+    /// The call failed without reverting, e.g. it ran out of gas.
+    Halt,
 }
 
 /// The transaction fee as settled by the VM. It is reported separately and
@@ -135,7 +143,7 @@ pub struct InvolvedContract<A> {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct TokenReadFailure<A> {
     pub token: A,
-    /// The standard function that reverted or returned malformed data.
+    /// The standard function that failed or returned malformed data.
     pub function: &'static str,
 }
 
@@ -189,6 +197,7 @@ enum Read<T> {
     /// The contract has no code on this side, so the call was not made.
     NoCode,
     Reverted,
+    Halted,
     Malformed,
     Returned(T),
 }
@@ -252,20 +261,21 @@ fn read<A: Copy, V: StateView<A>, C: SolCall>(
         return Ok(Read::NoCode);
     }
     Ok(match view.call(contract, call.abi_encode().into())? {
-        None => Read::Reverted,
-        Some(output) => {
+        CallResult::Success(output) => {
             C::abi_decode_returns_validate(&output).map_or(Read::Malformed, Read::Returned)
         }
+        CallResult::Revert => Read::Reverted,
+        CallResult::Halt => Read::Halted,
     })
 }
 
 /// Values read on both sides, where a side without code holds `empty`.
-/// `None` if a call reverted or returned malformed data.
+/// `None` if a call failed or returned malformed data.
 fn values<T: Clone>(read: Diff<Read<T>>, empty: T) -> Option<Diff<T>> {
     let value = |read| match read {
         Read::NoCode => Some(empty.clone()),
         Read::Returned(value) => Some(value),
-        Read::Reverted | Read::Malformed => None,
+        Read::Reverted | Read::Halted | Read::Malformed => None,
     };
     Some(Diff {
         before: value(read.before)?,

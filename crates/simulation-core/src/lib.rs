@@ -10,7 +10,7 @@ mod trace;
 
 pub use address::ChainAddress;
 pub use changes::{
-    ApprovalChange, Asset, BalanceChange, ChangeSet, DelegationChange, FeePayment,
+    ApprovalChange, Asset, BalanceChange, CallResult, ChangeSet, DelegationChange, FeePayment,
     InvolvedContract, StateView, TokenMetadata, TokenReadFailure, derive_changes,
 };
 pub use error::{CodedError, ErrorCode, ErrorObject};

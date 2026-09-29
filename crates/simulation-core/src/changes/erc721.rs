@@ -1,6 +1,6 @@
 //! ERC-721 ownership and single-token approvals.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use alloy_primitives::{Address, U256};
 use alloy_sol_types::{SolEvent, sol};
@@ -20,19 +20,29 @@ pub(super) fn track<A: ChainAddress, V: StateView<A>>(
     derivation: &mut Derivation<'_, A, V>,
 ) -> Result<(), V::Error> {
     // A transfer also clears the token's approval, so every token id that
-    // appears in either event is read for both owner and approval.
-    let mut ids = BTreeSet::new();
+    // appears in either event is read for both owner and approval. Each id
+    // records whether the token may be missing before the execution (it was
+    // minted) and after it (it was burned).
+    let mut ids = BTreeMap::new();
     for log in &derivation.trace.logs {
         if let Ok(event) = Transfer::decode_log_data(&log.data) {
-            ids.insert((log.address, event.tokenId));
+            let missing = ids.entry((log.address, event.tokenId)).or_insert(Diff {
+                before: false,
+                after: false,
+            });
+            missing.before |= event.from.is_zero();
+            missing.after |= event.to.is_zero();
         } else if let Ok(event) = Approval::decode_log_data(&log.data) {
-            ids.insert((log.address, event.tokenId));
+            ids.entry((log.address, event.tokenId)).or_insert(Diff {
+                before: false,
+                after: false,
+            });
         }
     }
 
-    for (token, id) in ids {
+    for ((token, id), missing) in ids {
         let owner = derivation.read(token, &ownerOfCall { tokenId: id })?;
-        match addresses(owner) {
+        match addresses(owner, missing) {
             Some(owner) if owner.is_changed() => {
                 let asset = Asset::Erc721 { token, id };
                 if let Some(previous) = owner.before {
@@ -47,7 +57,7 @@ pub(super) fn track<A: ChainAddress, V: StateView<A>>(
         }
 
         let approved = derivation.read(token, &getApprovedCall { tokenId: id })?;
-        match addresses(approved) {
+        match addresses(approved, missing) {
             Some(approved) if approved.is_changed() => {
                 derivation.changes.approvals.push(ApprovalChange::Erc721 {
                     token,
@@ -63,17 +73,20 @@ pub(super) fn track<A: ChainAddress, V: StateView<A>>(
     Ok(())
 }
 
-/// ERC-721 reverts for tokens that do not exist, so a revert, missing code or
-/// the zero address all mean no account.
-fn addresses(value: Diff<Read<Address>>) -> Option<Diff<Option<Address>>> {
-    let account = |read: Read<Address>| match read {
-        Read::NoCode | Read::Reverted => Some(None),
+/// The accounts read on both sides, where missing code or the zero address
+/// means no account. ERC-721 getters revert for tokens that do not exist, so
+/// a revert also means no account on a side where the token may be missing.
+/// `None` if a call failed otherwise or returned malformed data.
+fn addresses(value: Diff<Read<Address>>, missing: Diff<bool>) -> Option<Diff<Option<Address>>> {
+    let account = |read: Read<Address>, missing: bool| match read {
+        Read::NoCode => Some(None),
+        Read::Reverted if missing => Some(None),
         Read::Returned(address) => Some((!address.is_zero()).then_some(address)),
-        Read::Malformed => None,
+        Read::Reverted | Read::Halted | Read::Malformed => None,
     };
     Some(Diff {
-        before: account(value.before)?,
-        after: account(value.after)?,
+        before: account(value.before, missing.before)?,
+        after: account(value.after, missing.after)?,
     })
 }
 

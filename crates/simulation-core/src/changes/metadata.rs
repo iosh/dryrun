@@ -56,6 +56,6 @@ pub(super) fn load<A: ChainAddress, V: StateView<A>>(
 fn returned<T>(read: Read<T>) -> Option<T> {
     match read {
         Read::Returned(value) => Some(value),
-        Read::NoCode | Read::Reverted | Read::Malformed => None,
+        Read::NoCode | Read::Reverted | Read::Halted | Read::Malformed => None,
     }
 }

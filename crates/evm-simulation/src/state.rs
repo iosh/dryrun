@@ -6,7 +6,7 @@ use revm::{
     context_interface::result::{EVMError, ExecutionResult},
     database_interface::{DatabaseRef, WrapDatabaseRef},
 };
-use simulation_core::{ReadBudget, StateView};
+use simulation_core::{CallResult, ReadBudget, StateView};
 
 use crate::{Error, StateError};
 
@@ -38,7 +38,7 @@ impl<'a, DB: DatabaseRef<Error = StateError>> StateReader<'a, DB> {
 impl<DB: DatabaseRef<Error = StateError>> StateView<Address> for StateReader<'_, DB> {
     type Error = Error;
 
-    fn call(&self, contract: Address, input: Bytes) -> Result<Option<Bytes>, Error> {
+    fn call(&self, contract: Address, input: Bytes) -> Result<CallResult, Error> {
         self.budget.record_read_call()?;
         let gas_limit = self
             .budget
@@ -57,17 +57,18 @@ impl<DB: DatabaseRef<Error = StateError>> StateView<Address> for StateReader<'_,
             .with_cfg(self.env.cfg_env.clone())
             .with_block(self.env.block_env.clone())
             .build_mainnet();
-        let output = match evm.transact(tx) {
+        let result = match evm.transact(tx) {
             Ok(result) => match result.result {
-                ExecutionResult::Success { output, .. } => Some(output.into_data()),
-                ExecutionResult::Revert { .. } | ExecutionResult::Halt { .. } => None,
+                ExecutionResult::Success { output, .. } => CallResult::Success(output.into_data()),
+                ExecutionResult::Revert { .. } => CallResult::Revert,
+                ExecutionResult::Halt { .. } => CallResult::Halt,
             },
             Err(EVMError::Database(error)) => return Err(error.into()),
             Err(error) => return Err(Error::Execution(format!("read call: {error}"))),
         };
-        if let Some(output) = &output {
+        if let CallResult::Success(output) = &result {
             self.budget.check_read_call_output(output.len())?;
         }
-        Ok(output)
+        Ok(result)
     }
 }
