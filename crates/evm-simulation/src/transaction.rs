@@ -14,16 +14,21 @@ use crate::Error;
 /// Fills omitted fields with the defaults of `eth_call`, so that the request
 /// echoed in the result is the transaction that ran.
 ///
+/// - `type`: inferred from supplied fields; conflicts are checked by [`tx_env`].
 /// - `gas`: the block gas limit, capped by the per-transaction limit.
 /// - `nonce`: the sender's nonce in the state.
 /// - `chainId`: the chain's id.
 /// - fees: zero; see [`skips_fee_checks`].
+/// - blob hashes: those of the sidecar's blobs.
 /// - blob fee: the block's blob gas price.
 pub(crate) fn fill_defaults(
     request: &mut TransactionRequest,
     env: &EvmEnv,
     state_nonce: impl FnOnce() -> Result<u64, Error>,
 ) -> Result<(), Error> {
+    if request.transaction_type.is_none() {
+        request.transaction_type = Some(request.minimal_tx_type() as u8);
+    }
     if request.gas.is_none() {
         let cap = env.cfg_env.tx_gas_limit_cap();
         request.gas = Some(env.block_env.gas_limit.min(cap));
@@ -34,6 +39,9 @@ pub(crate) fn fill_defaults(
     if request.chain_id.is_none() {
         request.chain_id = Some(env.cfg_env.chain_id);
     }
+    if request.blob_versioned_hashes.is_none() {
+        request.populate_blob_hashes();
+    }
     if request.has_eip4844_blob_data() && request.max_fee_per_blob_gas.is_none() {
         request.max_fee_per_blob_gas = env.block_env.blob_gasprice();
     }
@@ -41,29 +49,23 @@ pub(crate) fn fill_defaults(
 }
 
 /// Converts a request with filled defaults into the VM's transaction.
-/// Validity rules are left to the VM.
+///
+/// Rejects fields incompatible with the transaction type. The VM checks
+/// values such as the nonce and fees.
 pub(crate) fn tx_env(request: &TransactionRequest, caller: Address) -> Result<TxEnv, Error> {
+    let tx_type = request.transaction_type.unwrap_or_default();
+    let tx_type = TxType::try_from(tx_type)
+        .map_err(|_| Error::InvalidInput(format!("unsupported transaction type {tx_type:#x}")))?;
+    check_tx_fields(request, tx_type)?;
     let input = request
         .input
         .clone()
         .try_into_unique_input()
         .map_err(|error| Error::InvalidInput(error.to_string()))?
         .unwrap_or_default();
-    if request.gas_price.is_some()
-        && (request.max_fee_per_gas.is_some() || request.max_priority_fee_per_gas.is_some())
-    {
-        return Err(Error::InvalidInput(
-            "gasPrice cannot be combined with maxFeePerGas or maxPriorityFeePerGas".into(),
-        ));
-    }
-
-    let tx_type = match request.transaction_type {
-        Some(tx_type) => tx_type,
-        None => request.minimal_tx_type() as u8,
-    };
-    let is_dynamic_fee = tx_type >= TxType::Eip1559 as u8;
+    let is_dynamic_fee = !matches!(tx_type, TxType::Legacy | TxType::Eip2930);
     Ok(TxEnv {
-        tx_type,
+        tx_type: tx_type as u8,
         caller,
         gas_limit: request.gas.unwrap_or_default(),
         gas_price: request
@@ -88,6 +90,60 @@ pub(crate) fn tx_env(request: &TransactionRequest, caller: Address) -> Result<Tx
             .map(Either::Left)
             .collect(),
     })
+}
+
+/// Checks field compatibility and whether the type permits contract creation.
+fn check_tx_fields(request: &TransactionRequest, tx_type: TxType) -> Result<(), Error> {
+    let has_legacy_fee = matches!(tx_type, TxType::Legacy | TxType::Eip2930);
+    let is_blob = tx_type == TxType::Eip4844;
+    let fields = [
+        ("gasPrice", request.gas_price.is_some(), has_legacy_fee),
+        (
+            "maxFeePerGas",
+            request.max_fee_per_gas.is_some(),
+            !has_legacy_fee,
+        ),
+        (
+            "maxPriorityFeePerGas",
+            request.max_priority_fee_per_gas.is_some(),
+            !has_legacy_fee,
+        ),
+        (
+            "accessList",
+            request.access_list.is_some(),
+            tx_type != TxType::Legacy,
+        ),
+        (
+            "blobVersionedHashes",
+            request.blob_versioned_hashes.is_some(),
+            is_blob,
+        ),
+        ("sidecar", request.sidecar.is_some(), is_blob),
+        (
+            "maxFeePerBlobGas",
+            request.max_fee_per_blob_gas.is_some(),
+            is_blob,
+        ),
+        (
+            "authorizationList",
+            request.authorization_list.is_some(),
+            tx_type == TxType::Eip7702,
+        ),
+    ];
+    if let Some((field, ..)) = fields.iter().find(|(_, set, allowed)| *set && !allowed) {
+        return Err(Error::InvalidInput(format!(
+            "{field} is not a field of transaction type {:#x}",
+            tx_type as u8
+        )));
+    }
+    let creates = !matches!(request.to, Some(TxKind::Call(_)));
+    if creates && matches!(tx_type, TxType::Eip4844 | TxType::Eip7702) {
+        return Err(Error::InvalidInput(format!(
+            "transaction type {:#x} cannot create a contract",
+            tx_type as u8
+        )));
+    }
+    Ok(())
 }
 
 /// Like geth's `eth_call`, a transaction that offers no fee is not held to
