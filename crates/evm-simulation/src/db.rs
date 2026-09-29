@@ -1,7 +1,10 @@
 use std::{cell::RefCell, collections::HashMap, future::IntoFuture};
 
 use alloy::{
-    eips::BlockId,
+    eips::{
+        BlockId, BlockNumHash,
+        eip2935::{HISTORY_SERVE_WINDOW, HISTORY_STORAGE_ADDRESS},
+    },
     primitives::{Address, B256, U256},
     providers::{DynProvider, Provider},
     transports::TransportError,
@@ -66,18 +69,24 @@ impl CodedError for StateError {
 }
 
 impl<'a> CachedAlloyDB<'a> {
+    /// State after `block`, whose parent is `parent`.
     pub(crate) fn new(
         provider: DynProvider,
-        block_hash: B256,
+        block: B256,
+        parent: Option<BlockNumHash>,
         runtime: Handle,
         budget: &'a ReadBudget,
     ) -> Self {
+        let mut cache = Cache::default();
+        if let Some(parent) = parent {
+            cache.block_hashes.insert(parent.number, parent.hash);
+        }
         Self {
             provider,
-            block: BlockId::hash_canonical(block_hash),
+            block: BlockId::hash_canonical(block),
             runtime,
             budget,
-            cache: RefCell::default(),
+            cache: RefCell::new(cache),
         }
     }
 
@@ -90,6 +99,28 @@ impl<'a> CachedAlloyDB<'a> {
         self.runtime
             .block_on(request.into_future())
             .map_err(|source| StateError::Provider { operation, source })
+    }
+
+    /// The hash of an ancestor, found by following parent hashes back from
+    /// the closest known descendant. The parent is always known, and the VM
+    /// only asks for the last 256 blocks.
+    fn ancestor_hash(&self, number: u64) -> Result<B256, StateError> {
+        let known = {
+            let cache = self.cache.borrow();
+            (number + 1..=number + 256)
+                .find_map(|child| Some((child, *cache.block_hashes.get(&child)?)))
+        };
+        let (mut child, mut hash) = known.ok_or(StateError::BlockUnavailable(number))?;
+        while child > number {
+            hash = self
+                .fetch("eth_getBlockByHash", self.provider.get_block_by_hash(hash))?
+                .ok_or(StateError::BlockUnavailable(child))?
+                .header
+                .parent_hash;
+            child -= 1;
+            self.cache.borrow_mut().block_hashes.insert(child, hash);
+        }
+        Ok(hash)
     }
 }
 
@@ -164,14 +195,14 @@ impl DatabaseRef for CachedAlloyDB<'_> {
         if let Some(hash) = self.cache.borrow().block_hashes.get(&number) {
             return Ok(*hash);
         }
-        let hash = self
-            .fetch(
-                "eth_getBlockByNumber",
-                self.provider.get_block_by_number(number.into()),
-            )?
-            .ok_or(StateError::BlockUnavailable(number))?
-            .header
-            .hash;
+        // Both sources follow the chain of this block even if a reorg replaces
+        // it: the state keeps the hashes of recent blocks since EIP-2935, and
+        // earlier ones come from the parent hashes.
+        let slot = U256::from(number % HISTORY_SERVE_WINDOW as u64);
+        let mut hash = B256::from(self.storage_ref(HISTORY_STORAGE_ADDRESS, slot)?);
+        if hash.is_zero() {
+            hash = self.ancestor_hash(number)?;
+        }
         self.cache.borrow_mut().block_hashes.insert(number, hash);
         Ok(hash)
     }

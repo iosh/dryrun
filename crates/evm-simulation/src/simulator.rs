@@ -107,6 +107,10 @@ impl Simulator {
             .ok_or_else(|| Error::InvalidInput("from is required".into()))?;
         let header = block::fetch_header(&self.provider, block).await?;
         let block = BlockNumHash::new(header.number, header.hash);
+        let parent = header
+            .number
+            .checked_sub(1)
+            .map(|number| BlockNumHash::new(number, header.parent_hash));
         let env = self.chain.evm_env(&header.inner);
         // Before EIP-161 the VM tells an existing empty account from a missing
         // one, which the provider's account reads cannot.
@@ -121,7 +125,7 @@ impl Simulator {
 
         tokio::task::spawn_blocking(move || {
             let budget = ReadBudget::new(limits);
-            let db = CachedAlloyDB::new(provider, block.hash, runtime, &budget);
+            let db = CachedAlloyDB::new(provider, block.hash, parent, runtime, &budget);
             transaction::fill_defaults(&mut transaction, &env, || {
                 Ok(db.basic_ref(sender)?.unwrap_or_default().nonce)
             })?;
