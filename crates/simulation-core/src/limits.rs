@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -52,19 +52,20 @@ impl CodedError for LimitExceeded {
 }
 
 /// Counts resource use of one request against its [`Limits`].
+/// Shared by the database and analysis, including across the execution thread.
 #[derive(Debug)]
 pub struct ReadBudget {
     limits: Limits,
-    state_reads: Cell<usize>,
-    read_calls: Cell<usize>,
+    state_reads: AtomicUsize,
+    read_calls: AtomicUsize,
 }
 
 impl ReadBudget {
     pub fn new(limits: Limits) -> Self {
         Self {
             limits,
-            state_reads: Cell::new(0),
-            read_calls: Cell::new(0),
+            state_reads: AtomicUsize::new(0),
+            read_calls: AtomicUsize::new(0),
         }
     }
 
@@ -100,10 +101,10 @@ impl ReadBudget {
     }
 }
 
-fn consume(used: &Cell<usize>, limit: usize, resource: Resource) -> Result<(), LimitExceeded> {
-    if used.get() >= limit {
-        return Err(LimitExceeded { resource, limit });
-    }
-    used.set(used.get() + 1);
-    Ok(())
+fn consume(used: &AtomicUsize, limit: usize, resource: Resource) -> Result<(), LimitExceeded> {
+    used.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        (value < limit).then(|| value + 1)
+    })
+    .map(|_| ())
+    .map_err(|_| LimitExceeded { resource, limit })
 }

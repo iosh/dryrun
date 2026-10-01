@@ -1,42 +1,41 @@
-use std::{cell::RefCell, collections::HashMap, future::IntoFuture};
+use std::{cell::RefCell, collections::HashMap, future::IntoFuture, sync::Arc};
 
 use alloy::{
     eips::{
-        BlockId, BlockNumHash,
+        BlockId,
         eip2935::{HISTORY_SERVE_WINDOW, HISTORY_STORAGE_ADDRESS},
     },
     primitives::{Address, B256, U256},
     providers::{DynProvider, Provider},
+    rpc::types::Header,
     transports::TransportError,
 };
 use revm::{
     database_interface::{DBErrorMarker, DatabaseRef},
     state::{AccountInfo, Bytecode},
 };
-use simulation_core::{CodedError, ErrorCode, LimitExceeded, ReadBudget};
+use simulation_core::{CodedError, ErrorCode, LimitExceeded, Limits, ReadBudget};
 use thiserror::Error;
 use tokio::runtime::Handle;
 
-/// State of one block, fetched from the provider on first access and cached
-/// for the rest of the request.
-///
-/// revm reads state synchronously; reads block on the runtime, so this must
-/// be used from a blocking thread.
+/// Request-local database backed by one fixed block. All reads, caching and
+/// state-read accounting live here; the VM adapter only bridges async access.
 #[derive(Debug)]
-pub(crate) struct CachedAlloyDB<'a> {
+pub(crate) struct ForkDatabase {
     provider: DynProvider,
     block: BlockId,
-    runtime: Handle,
-    budget: &'a ReadBudget,
-    cache: RefCell<Cache>,
-}
-
-#[derive(Debug, Default)]
-struct Cache {
+    budget: Arc<ReadBudget>,
     accounts: HashMap<Address, Option<AccountInfo>>,
     storage: HashMap<(Address, U256), U256>,
     block_hashes: HashMap<u64, B256>,
     code: HashMap<B256, Bytecode>,
+}
+
+/// Exposes the same database through revm's synchronous shared-reference API.
+#[derive(Debug)]
+pub(crate) struct VmDatabase {
+    db: RefCell<ForkDatabase>,
+    runtime: Handle,
 }
 
 #[derive(Debug, Error)]
@@ -68,142 +67,163 @@ impl CodedError for StateError {
     }
 }
 
-impl<'a> CachedAlloyDB<'a> {
-    /// State after `block`, whose parent is `parent`.
-    pub(crate) fn new(
-        provider: DynProvider,
-        block: B256,
-        parent: Option<BlockNumHash>,
-        runtime: Handle,
-        budget: &'a ReadBudget,
-    ) -> Self {
-        let mut cache = Cache::default();
-        if let Some(parent) = parent {
-            cache.block_hashes.insert(parent.number, parent.hash);
+impl ForkDatabase {
+    pub(crate) fn new(provider: DynProvider, header: &Header, limits: Limits) -> Self {
+        let mut block_hashes = HashMap::new();
+        if let Some(number) = header.number.checked_sub(1) {
+            block_hashes.insert(number, header.parent_hash);
         }
         Self {
             provider,
-            block: BlockId::hash_canonical(block),
-            runtime,
-            budget,
-            cache: RefCell::new(cache),
+            block: BlockId::hash_canonical(header.hash),
+            budget: Arc::new(ReadBudget::new(limits)),
+            accounts: HashMap::new(),
+            storage: HashMap::new(),
+            block_hashes,
+            code: HashMap::new(),
         }
     }
 
-    fn fetch<T>(
-        &self,
-        operation: &'static str,
-        request: impl IntoFuture<Output = Result<T, TransportError>>,
-    ) -> Result<T, StateError> {
-        self.budget.record_state_read()?;
-        self.runtime
-            .block_on(request.into_future())
-            .map_err(|source| StateError::Provider { operation, source })
+    pub(crate) fn provider(&self) -> &DynProvider {
+        &self.provider
     }
 
-    /// The hash of an ancestor, found by following parent hashes back from
-    /// the closest known descendant. The parent is always known, and the VM
-    /// only asks for the last 256 blocks.
-    fn ancestor_hash(&self, number: u64) -> Result<B256, StateError> {
-        let known = {
-            let cache = self.cache.borrow();
-            (number + 1..=number + 256)
-                .find_map(|child| Some((child, *cache.block_hashes.get(&child)?)))
-        };
-        let (mut child, mut hash) = known.ok_or(StateError::BlockUnavailable(number))?;
-        while child > number {
-            hash = self
-                .fetch("eth_getBlockByHash", self.provider.get_block_by_hash(hash))?
-                .ok_or(StateError::BlockUnavailable(child))?
-                .header
-                .parent_hash;
-            child -= 1;
-            self.cache.borrow_mut().block_hashes.insert(child, hash);
-        }
-        Ok(hash)
+    pub(crate) fn block(&self) -> BlockId {
+        self.block
     }
-}
 
-impl DatabaseRef for CachedAlloyDB<'_> {
-    type Error = StateError;
+    pub(crate) fn budget(&self) -> &Arc<ReadBudget> {
+        &self.budget
+    }
 
-    fn basic_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
-        if let Some(account) = self.cache.borrow().accounts.get(&address) {
+    pub(crate) async fn account(
+        &mut self,
+        address: Address,
+    ) -> Result<Option<AccountInfo>, StateError> {
+        if let Some(account) = self.accounts.get(&address) {
             return Ok(account.clone());
         }
-        let provider = &self.provider;
-        let (balance, nonce, code) = self.fetch(
-            "eth_getBalance/eth_getTransactionCount/eth_getCode",
-            async {
-                tokio::try_join!(
-                    provider
-                        .get_balance(address)
-                        .block_id(self.block)
-                        .into_future(),
-                    provider
-                        .get_transaction_count(address)
-                        .block_id(self.block)
-                        .into_future(),
-                    provider
-                        .get_code_at(address)
-                        .block_id(self.block)
-                        .into_future(),
-                )
-            },
+        self.budget.record_state_read()?;
+        let (balance, nonce, code) = tokio::try_join!(
+            rpc_request(
+                "eth_getBalance",
+                self.provider.get_balance(address).block_id(self.block),
+            ),
+            rpc_request(
+                "eth_getTransactionCount",
+                self.provider
+                    .get_transaction_count(address)
+                    .block_id(self.block),
+            ),
+            rpc_request(
+                "eth_getCode",
+                self.provider.get_code_at(address).block_id(self.block),
+            ),
         )?;
         let code = Bytecode::new_raw(code);
         let code_hash = code.hash_slow();
         let account = AccountInfo::new(balance, nonce, code_hash, code.clone());
-        // Since EIP-161 the VM treats an empty account as a missing one, except
-        // for the EIP-7702 refund, which came after empty accounts were
-        // cleared from the state. Earlier blocks are not simulated.
+        // Since EIP-161 the VM treats an empty account as missing. Earlier
+        // blocks are rejected when selecting the execution context.
         let account = (!account.is_empty()).then_some(account);
-        let mut cache = self.cache.borrow_mut();
-        cache.code.insert(code_hash, code);
-        cache.accounts.insert(address, account.clone());
+        self.code.insert(code_hash, code);
+        self.accounts.insert(address, account.clone());
         Ok(account)
     }
 
-    fn code_by_hash_ref(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
-        // Code is loaded together with its account.
-        self.cache
-            .borrow()
-            .code
+    fn code_by_hash(&self, code_hash: B256) -> Result<Bytecode, StateError> {
+        self.code
             .get(&code_hash)
             .cloned()
             .ok_or(StateError::CodeNotLoaded(code_hash))
     }
 
-    fn storage_ref(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
-        if let Some(value) = self.cache.borrow().storage.get(&(address, index)) {
+    async fn storage(&mut self, address: Address, index: U256) -> Result<U256, StateError> {
+        if let Some(value) = self.storage.get(&(address, index)) {
             return Ok(*value);
         }
-        let value = self.fetch(
+        self.budget.record_state_read()?;
+        let value = rpc_request(
             "eth_getStorageAt",
             self.provider
                 .get_storage_at(address, index)
                 .block_id(self.block),
-        )?;
-        self.cache
-            .borrow_mut()
-            .storage
-            .insert((address, index), value);
+        )
+        .await?;
+        self.storage.insert((address, index), value);
         Ok(value)
     }
 
-    fn block_hash_ref(&self, number: u64) -> Result<B256, Self::Error> {
-        if let Some(hash) = self.cache.borrow().block_hashes.get(&number) {
+    async fn block_hash(&mut self, number: u64) -> Result<B256, StateError> {
+        if let Some(hash) = self.block_hashes.get(&number) {
             return Ok(*hash);
         }
-        // Both sources follow the chain of this block even if a reorg replaces
-        // it: the state keeps the hashes of recent blocks since EIP-2935, and
-        // earlier ones come from the parent hashes.
+        // Query history at the fixed block; if unavailable, follow parent
+        // hashes. A lookup by block number could silently cross a reorg.
         let slot = U256::from(number % HISTORY_SERVE_WINDOW as u64);
-        let mut hash = B256::from(self.storage_ref(HISTORY_STORAGE_ADDRESS, slot)?);
+        let mut hash = B256::from(self.storage(HISTORY_STORAGE_ADDRESS, slot).await?);
         if hash.is_zero() {
-            hash = self.ancestor_hash(number)?;
+            hash = self.ancestor_hash(number).await?;
         }
-        self.cache.borrow_mut().block_hashes.insert(number, hash);
+        self.block_hashes.insert(number, hash);
         Ok(hash)
+    }
+
+    async fn ancestor_hash(&mut self, number: u64) -> Result<B256, StateError> {
+        let (mut child, mut hash) = (number + 1..=number + 256)
+            .find_map(|child| Some((child, *self.block_hashes.get(&child)?)))
+            .ok_or(StateError::BlockUnavailable(number))?;
+        while child > number {
+            self.budget.record_state_read()?;
+            hash = rpc_request("eth_getBlockByHash", self.provider.get_block_by_hash(hash))
+                .await?
+                .ok_or(StateError::BlockUnavailable(child))?
+                .header
+                .parent_hash;
+            child -= 1;
+            self.block_hashes.insert(child, hash);
+        }
+        Ok(hash)
+    }
+}
+
+async fn rpc_request<T>(
+    operation: &'static str,
+    request: impl IntoFuture<Output = Result<T, TransportError>>,
+) -> Result<T, StateError> {
+    request
+        .into_future()
+        .await
+        .map_err(|source| StateError::Provider { operation, source })
+}
+
+impl VmDatabase {
+    pub(crate) fn new(db: ForkDatabase, runtime: Handle) -> Self {
+        Self {
+            db: RefCell::new(db),
+            runtime,
+        }
+    }
+}
+
+impl DatabaseRef for VmDatabase {
+    type Error = StateError;
+
+    fn basic_ref(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+        self.runtime.block_on(self.db.borrow_mut().account(address))
+    }
+
+    fn code_by_hash_ref(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
+        self.db.borrow().code_by_hash(code_hash)
+    }
+
+    fn storage_ref(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
+        self.runtime
+            .block_on(self.db.borrow_mut().storage(address, index))
+    }
+
+    fn block_hash_ref(&self, number: u64) -> Result<B256, Self::Error> {
+        self.runtime
+            .block_on(self.db.borrow_mut().block_hash(number))
     }
 }

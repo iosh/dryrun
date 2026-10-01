@@ -6,12 +6,16 @@ use alloy::{
     providers::{DynProvider, Provider},
     rpc::types::TransactionRequest,
 };
-use revm::{database_interface::DatabaseRef, primitives::hardfork::SpecId};
+use revm::primitives::hardfork::SpecId;
 use serde::{Serialize, Serializer};
-use simulation_core::{ExecutionStatus, Limits, ReadBudget, Rejection};
+use simulation_core::{ExecutionStatus, Limits, Rejection};
 use tokio::runtime::Handle;
 
-use crate::{ChainSpec, Error, block, db::CachedAlloyDB, execution, transaction};
+use crate::{
+    ChainSpec, Error, block,
+    db::{ForkDatabase, VmDatabase},
+    execution, transaction,
+};
 
 #[derive(Debug, Clone)]
 pub struct Simulator {
@@ -58,6 +62,7 @@ pub struct Fee {
     /// Price paid per gas.
     #[serde(with = "alloy_serde::quantity")]
     pub gas_price: u128,
+    /// Base fee of the simulated block.
     #[serde(with = "alloy_serde::quantity")]
     pub base_fee: u64,
     /// Price paid per blob gas, for blob transactions.
@@ -98,19 +103,10 @@ impl Simulator {
     }
 
     pub async fn simulate(&self, request: SimulationRequest) -> Result<Simulation, Error> {
-        let SimulationRequest {
-            block,
-            mut transaction,
-        } = request;
-        let sender = transaction
-            .from
-            .ok_or_else(|| Error::InvalidInput("from is required".into()))?;
+        let SimulationRequest { block, transaction } = request;
+        let preparation = transaction::Preparation::new(transaction)?;
         let header = block::fetch_header(&self.provider, block).await?;
         let block = BlockNumHash::new(header.number, header.hash);
-        let parent = header
-            .number
-            .checked_sub(1)
-            .map(|number| BlockNumHash::new(number, header.parent_hash));
         let env = self.chain.evm_env(&header.inner);
         // Before EIP-161 the VM tells an existing empty account from a missing
         // one, which the provider's account reads cannot.
@@ -119,17 +115,13 @@ impl Simulator {
                 "blocks before Spurious Dragon are not supported".into(),
             ));
         }
-        let provider = self.provider.clone();
-        let limits = self.limits;
+        let mut db = ForkDatabase::new(self.provider.clone(), &header, self.limits);
+        let (transaction, tx) = preparation.complete(&env, &mut db).await?;
+        let budget = Arc::clone(db.budget());
         let runtime = Handle::current();
 
         tokio::task::spawn_blocking(move || {
-            let budget = ReadBudget::new(limits);
-            let db = CachedAlloyDB::new(provider, block.hash, parent, runtime, &budget);
-            transaction::fill_defaults(&mut transaction, &env, || {
-                Ok(db.basic_ref(sender)?.unwrap_or_default().nonce)
-            })?;
-            let tx = transaction::tx_env(&transaction, sender)?;
+            let db = VmDatabase::new(db, runtime);
             let outcome = execution::execute(&db, &env, tx, &budget)?;
             Ok(Simulation {
                 block,

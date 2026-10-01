@@ -21,6 +21,8 @@ pub enum Error {
         #[source]
         source: TransportError,
     },
+    #[error("{0}")]
+    Internal(&'static str),
     #[error(transparent)]
     State(StateError),
     #[error(transparent)]
@@ -56,7 +58,9 @@ impl CodedError for Error {
             Self::State(error) => error.code(),
             Self::LimitExceeded(_) => ErrorCode::LimitExceeded,
             Self::Execution(_) => ErrorCode::ExecutionFailed,
-            Self::ChainMismatch { .. } | Self::Runtime(_) => ErrorCode::Internal,
+            Self::Internal(_) | Self::ChainMismatch { .. } | Self::Runtime(_) => {
+                ErrorCode::Internal
+            }
         }
     }
 }

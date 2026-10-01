@@ -17,19 +17,16 @@ use simulation_core::{
 };
 
 use crate::{
-    Error, Execution, Fee, Outcome, db::CachedAlloyDB, state::StateReader, tracer::CallTracer,
-    transaction::skips_fee_checks,
+    Error, Execution, Fee, Outcome, db::VmDatabase, state::StateReader, tracer::CallTracer,
 };
 
 /// Executes the transaction once and, if it succeeds, derives its changes.
 pub(crate) fn execute(
-    db: &CachedAlloyDB<'_>,
+    db: &VmDatabase,
     env: &EvmEnv,
     tx: TxEnv,
     budget: &ReadBudget,
 ) -> Result<Outcome, Error> {
-    let mut cfg = env.cfg_env.clone();
-    cfg.disable_base_fee = skips_fee_checks(&tx);
     let block = &env.block_env;
     let caller = tx.caller;
     let gas_price = tx.effective_gas_price(u128::from(block.basefee));
@@ -40,7 +37,7 @@ pub(crate) fn execute(
 
     let mut evm = Context::mainnet()
         .with_db(WrapDatabaseRef(db))
-        .with_cfg(cfg)
+        .with_cfg(env.cfg_env.clone())
         .with_block(block.clone())
         .build_mainnet_with_inspector(CallTracer::default());
     let ResultAndState { result, state } = match evm.inspect_tx(tx) {
@@ -89,7 +86,7 @@ pub(crate) fn execute(
 }
 
 fn derive(
-    db: &CachedAlloyDB<'_>,
+    db: &VmDatabase,
     env: &EvmEnv,
     budget: &ReadBudget,
     calls: Vec<simulation_core::CallFrame<Address>>,
@@ -124,7 +121,7 @@ fn derive(
 /// Accounts touched by the execution. Values before it come from `db`, which
 /// already holds every account the execution loaded.
 fn account_diffs(
-    db: &CachedAlloyDB<'_>,
+    db: &VmDatabase,
     state: &EvmState,
 ) -> Result<BTreeMap<Address, AccountDiff>, Error> {
     let mut accounts = BTreeMap::new();
