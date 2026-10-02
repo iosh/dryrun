@@ -1,288 +1,205 @@
-use std::sync::Arc;
-
+use super::{execution, transaction};
+use crate::{ChainSpec, Error, anchor::Anchor, env::BlockContext, state::StateSource};
+use alloy::{
+    eips::{BlockId, BlockNumHash},
+    primitives::{Address, U256},
+    providers::{DynProvider, Provider},
+    rpc::types::TransactionRequest,
+};
+use cfx_executor::machine::Machine;
 use cfx_types::Space;
-use simulation_core::simulation::Simulation;
+use conflux_provider::ConfluxProvider;
+use serde::{Serialize, Serializer};
+use simulation_core::{ExecutionStatus, Limits, Rejection};
+use std::sync::Arc;
 use tokio::runtime::Handle;
 
-use super::{
-    EspaceExecutedTransaction, EspaceExecutionError, EspaceExecutionOutcome,
-    EspaceResultIntegrationError, EspaceSimulation, EspaceSimulationError, EspaceSimulationLimits,
-    EspaceSimulationRequest, EspaceStateAccess, EspaceStateAccessError, build_executor_transaction,
-    complete_transaction, map_executor_outcome, prepare_espace_context,
-};
-use crate::{
-    ConfluxSimulationBackend,
-    execution::{
-        ConfluxExecutionOutcome, ConfluxTransactionExecutor, DryRunTransactionInput,
-        ExecutionTraceObserver, TransactionExecutionInput, build_conflux_state,
-    },
-    state::ConfluxStateSource,
-};
-
-pub struct EspaceTransactionSimulator {
-    backend: ConfluxSimulationBackend,
-    limits: EspaceSimulationLimits,
-    analyzers: Arc<super::EspaceAnalyzerRegistry>,
+pub struct Simulator {
+    core: ConfluxProvider,
+    espace: DynProvider,
+    chain: ChainSpec,
+    machine: Arc<Machine>,
+    limits: Limits,
 }
 
-impl Clone for EspaceTransactionSimulator {
-    fn clone(&self) -> Self {
-        Self {
-            backend: self.backend.clone(),
-            limits: self.limits,
-            analyzers: Arc::clone(&self.analyzers),
-        }
-    }
+#[derive(Debug, Clone)]
+pub struct SimulationRequest {
+    pub block: BlockId,
+    pub transaction: TransactionRequest,
 }
 
-impl EspaceTransactionSimulator {
-    pub fn new(backend: ConfluxSimulationBackend, limits: EspaceSimulationLimits) -> Self {
-        let analyzers = super::analysis::default_registry(
-            backend.chain_spec().espace_native_currency().clone(),
-        );
-        Self {
-            backend,
-            limits,
-            analyzers: Arc::new(analyzers),
-        }
-    }
+#[derive(Debug, Serialize)]
+pub struct Simulation {
+    #[serde(serialize_with = "serialize_block")]
+    pub block: BlockNumHash,
+    /// The transaction as executed, with omitted fields filled in.
+    pub transaction: TransactionRequest,
+    pub outcome: Outcome,
 }
 
-impl EspaceTransactionSimulator {
-    pub fn with_analyzers(mut self, analyzers: super::EspaceAnalyzerRegistry) -> Self {
-        self.analyzers = Arc::new(analyzers);
-        self
-    }
-    pub fn with_analyzer(
-        mut self,
-        analyzer: impl simulation_core::analysis::Analyzer<super::EspaceAnalysisDomain>,
-    ) -> Result<Self, simulation_core::analysis::RegistryError> {
-        self.analyzers = Arc::new(self.analyzers.with_analyzer(analyzer)?);
-        Ok(self)
-    }
-
-    /// Simulates one eSpace transaction inside the caller's active Tokio runtime.
-    /// Uses a fixed epoch and checks its pivot before execution and result delivery.
-    /// Separate state RPCs do not provide an atomic snapshot during a reorganization.
-    pub async fn simulate(
-        &self,
-        request: EspaceSimulationRequest,
-    ) -> Result<EspaceSimulation, EspaceSimulationError> {
-        let simulation =
-            simulation_core::simulation::simulate(EspaceBackend(self.clone()), request).await?;
-        let context = match &simulation {
-            Simulation::Rejected(result) => result.context(),
-            Simulation::Executed(result) => Some(result.context()),
-        };
-        if let Some(context) = context {
-            self.backend
-                .provider()
-                .validate_state_anchor(context.state_anchor())
-                .await
-                .map_err(super::EspaceContextError::from)?;
-        }
-        Ok(simulation)
-    }
+#[derive(Debug)]
+pub enum Outcome {
+    Rejected(Rejection),
+    Executed(Box<Execution>),
 }
 
-struct EspaceBackend(EspaceTransactionSimulator);
-struct PreparedEspaceExecution {
-    context: crate::context::ExecutionBlockContext,
-    state: Arc<ConfluxStateSource>,
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Execution {
+    #[serde(with = "alloy_serde::quantity")]
+    pub gas_used: u64,
+    #[serde(with = "alloy_serde::quantity")]
+    pub gas_charged: u64,
+    pub fee: Fee,
+    #[serde(flatten)]
+    pub status: ExecutionStatus<Address, Error>,
 }
 
-struct EspaceExecutionEvidence {
-    outcome: EspaceExecutionOutcome,
-    record: EspaceExecutedTransaction,
+/// The transaction fee. Native balance changes exclude it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Fee {
+    /// Price paid per gas.
+    #[serde(with = "alloy_serde::quantity")]
+    pub gas_price: u128,
+    /// Base fee of the simulated block.
+    #[serde(with = "alloy_serde::quantity")]
+    pub base_fee: u128,
+    /// Total paid by the sender.
+    pub amount: U256,
 }
 
-impl simulation_core::simulation::SimulationBackend for EspaceBackend {
-    type Request = EspaceSimulationRequest;
-    type Context = super::EspaceBlockContext;
-    type Transaction = super::EspaceTypedTransaction;
-    type TransactionRequest = super::EspaceTransactionRequest;
-    type Rejection = super::EspaceTransactionRejection;
-    type Prepared = PreparedEspaceExecution;
-    type Evidence = EspaceExecutionEvidence;
-    type Outcome = EspaceExecutionOutcome;
-    type ChangeSet = super::EspaceChangeSet;
-    type AnalysisError = super::EspaceAnalysisError;
-    type Error = EspaceSimulationError;
-
-    async fn prepare(
-        &self,
-        request: Self::Request,
-    ) -> Result<simulation_core::simulation::PreparationFor<Self>, Self::Error> {
-        use simulation_core::{completion::Completion, simulation::Preparation};
-        let EspaceSimulationRequest { block, transaction } = request;
-        let backend = &self.0.backend;
-        let context = prepare_espace_context(
-            backend.provider(),
-            block,
-            backend.chain_spec().common_params(),
-        )
-        .await?;
-        let execution_block_number = context.execution_block_context.number;
-        let execution_epoch_height = context.execution_block_context.epoch_height;
-        let chain_id = u64::from(backend.chain_spec().espace_chain_id());
-        let rules = backend
-            .chain_spec()
-            .espace_transaction_validation_rules(execution_block_number, execution_epoch_height);
-        let transaction =
-            match complete_transaction(transaction, backend.provider(), &context, chain_id, rules)
-                .await?
-            {
-                Completion::Ready(transaction) => transaction,
-                Completion::Rejected {
-                    transaction,
-                    rejection,
-                } => {
-                    return Ok(Preparation::Rejected {
-                        context: Some(context.public_context),
-                        transaction,
-                        rejection,
-                    });
-                }
-            };
-        let state = ConfluxStateSource::prepare(context.state_anchor, backend.provider().clone())
+impl Simulator {
+    pub async fn new(
+        core: ConfluxProvider,
+        espace: DynProvider,
+        chain: ChainSpec,
+        limits: Limits,
+    ) -> Result<Self, Error> {
+        let actual = espace
+            .get_chain_id()
             .await
-            .map_err(|source| {
-                EspaceExecutionError::StateAccess(EspaceStateAccessError::Preparation { source })
+            .map_err(|source| Error::EspaceProvider {
+                operation: "eth_chainId",
+                source,
             })?;
-        backend
-            .provider()
-            .validate_state_anchor(context.state_anchor)
-            .await
-            .map_err(super::EspaceContextError::from)?;
-        Ok(Preparation::Ready {
-            context: context.public_context,
-            transaction,
-            execution: PreparedEspaceExecution {
-                context: context.execution_block_context,
-                state: Arc::new(state),
-            },
+        let expected = u64::from(chain.params.chain_id(0, Space::Ethereum));
+        if actual != expected {
+            return Err(Error::ChainMismatch {
+                endpoint: "eSpace",
+                field: "chainId",
+                expected,
+                actual: U256::from(actual),
+            });
+        }
+        let status = core.cfx_get_status().await?;
+        for (field, actual, expected) in [
+            (
+                "chainId",
+                status.chain_id,
+                u64::from(chain.params.chain_id(0, Space::Native)),
+            ),
+            (
+                "ethereumSpaceChainId",
+                status.ethereum_space_chain_id,
+                expected,
+            ),
+            ("networkId", status.network_id, chain.params.network_id),
+        ] {
+            if actual != U256::from(expected) {
+                return Err(Error::ChainMismatch {
+                    endpoint: "Core Space",
+                    field,
+                    expected,
+                    actual,
+                });
+            }
+        }
+        let machine = Arc::new(chain.machine());
+        Ok(Self {
+            core,
+            espace,
+            chain,
+            machine,
+            limits,
         })
     }
 
-    fn execute(
-        &self,
-        transaction: &Self::Transaction,
-        prepared: Self::Prepared,
-        runtime: Handle,
-    ) -> Result<simulation_core::simulation::Execution<Self::Evidence, Self::Rejection>, Self::Error>
-    {
-        use simulation_core::simulation::Execution;
-        let backend = &self.0.backend;
-        let mut execution_state = build_conflux_state(Arc::clone(&prepared.state), runtime.clone())
-            .map_err(|source| {
-                EspaceExecutionError::StateAccess(EspaceStateAccessError::Initialization { source })
-            })?;
-        let machine = Arc::new(backend.chain_spec().build_machine());
-        let input = TransactionExecutionInput {
-            block_context: prepared.context,
-            transaction: DryRunTransactionInput::Espace(build_executor_transaction(transaction)?),
-        };
-        let observer = ExecutionTraceObserver::new(Space::Ethereum).with_checkpoint_filters(
-            crate::execution::filters_for_space(
-                self.0.analyzers.checkpoint_filters(),
-                Space::Ethereum,
-            ),
-            self.0.limits,
+    pub async fn simulate(&self, request: SimulationRequest) -> Result<Simulation, Error> {
+        let preparation = transaction::Preparation::new(request.transaction)?;
+        let (anchor, pivot, header) =
+            Anchor::fetch(&self.core, &self.espace, request.block).await?;
+        let context = BlockContext::new(&pivot, &header, &self.chain.params)?;
+        let source = Arc::new(
+            StateSource::new(
+                anchor,
+                self.core.clone(),
+                self.espace.clone(),
+                self.chain.network,
+                self.limits,
+            )
+            .await?,
         );
-        let mut execution = ConfluxTransactionExecutor::new(&mut execution_state, &machine)
-            .execute(input, observer)
-            .map_err(map_execution_error)?;
-        match execution.outcome {
-            ConfluxExecutionOutcome::NotExecutedDrop(error) => {
-                return Ok(Execution::Rejected(super::outcome_mapping::map_drop_error(
-                    error,
-                )?));
-            }
-            ConfluxExecutionOutcome::NotExecutedToReconsiderPacking(error) => {
-                return Ok(Execution::Rejected(
-                    super::outcome_mapping::map_reconsider_packing_error(error)?,
-                ));
-            }
-            _ => {}
-        }
-        let state = EspaceStateAccess::new(
-            prepared.state,
-            runtime,
-            execution_state,
-            machine,
-            &execution.prepared,
-            transaction.common().from,
-            self.0.limits,
-        )
-        .map_err(EspaceExecutionError::from)?;
-        let record = EspaceExecutedTransaction::from_outcome(&mut execution.outcome, state)?;
-        let outcome = map_executor_outcome(
-            execution.outcome,
-            &record,
+        let (transaction, tx) = preparation
+            .complete(
+                &context,
+                &source,
+                self.chain
+                    .params
+                    .chain_id(context.epoch_height, Space::Ethereum),
+                context.epoch_height >= self.chain.params.transition_heights.cip1559,
+            )
+            .await?;
+        anchor.check(&self.core).await?;
+        let runtime = Handle::current();
+        let machine = Arc::clone(&self.machine);
+        let result = tokio::task::spawn_blocking(move || {
+            execution::execute(source, runtime, &machine, context, tx)
+        })
+        .await;
+        // Every formal execution outcome passes the same final pivot check,
+        // including rejection, VM failure and unavailable changes.
+        anchor.check(&self.core).await?;
+        let outcome = result.map_err(Error::Runtime)??;
+        Ok(Simulation {
+            block: BlockNumHash::new(anchor.epoch, anchor.pivot_hash),
             transaction,
-            record.state().finalized(),
-            backend.core_space_address_network(),
-        )?;
-        record.state().start_analysis();
-        Ok(Execution::Executed(EspaceExecutionEvidence {
             outcome,
-            record,
-        }))
-    }
-
-    fn is_success(&self, evidence: &Self::Evidence) -> bool {
-        evidence.record.is_success()
-    }
-
-    fn analyze(
-        &self,
-        view: simulation_core::simulation::AnalysisView<
-            '_,
-            Self::Context,
-            Self::Transaction,
-            Self::Evidence,
-        >,
-    ) -> Result<Self::ChangeSet, Self::AnalysisError> {
-        let evidence = view.execution();
-        evidence.record.check_observation_limit()?;
-        let view = super::EspaceAnalysisView {
-            context: view.context(),
-            transaction: view.transaction(),
-            execution: &evidence.record,
-            core_chain_id: self.0.backend.chain_spec().core_space_chain_id(),
-        };
-        let mut changes = self.0.analyzers.analyze(view)?;
-        changes.load_metadata(evidence.record.state().finalized())?;
-        changes.set_space(simulation_core::analysis::ExecutionSpace::Espace);
-        Ok(changes)
-    }
-
-    fn into_outcome(&self, evidence: Self::Evidence) -> Self::Outcome {
-        evidence.outcome
+        })
     }
 }
 
-fn map_execution_error(
-    error: crate::execution::TransactionExecutionError,
-) -> super::EspaceExecutionError {
-    use crate::execution::TransactionExecutionError;
-
-    match error {
-        TransactionExecutionError::StateAccess(source) => EspaceStateAccessError::Operation {
-            operation: "execute eSpace transaction",
-            source,
+impl Serialize for Outcome {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Rejected<'a> {
+            status: &'static str,
+            #[serde(flatten)]
+            rejection: &'a Rejection,
         }
-        .into(),
-        TransactionExecutionError::MissingExecutionTrace => EspaceResultIntegrationError::new(
-            "executed transaction did not produce a committed execution trace",
-        )
-        .into(),
-        TransactionExecutionError::GasValueOutOfRange { field, value } => {
-            EspaceResultIntegrationError::new(format!(
-                "executor returned {field} value {}, exceeding u64",
-                crate::primitive::u256_from_cfx(value)
-            ))
-            .into()
+
+        match self {
+            Self::Rejected(rejection) => Rejected {
+                status: "rejected",
+                rejection,
+            }
+            .serialize(serializer),
+            Self::Executed(execution) => execution.serialize(serializer),
         }
     }
+}
+
+fn serialize_block<S: Serializer>(block: &BlockNumHash, serializer: S) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct Block {
+        #[serde(with = "alloy_serde::quantity")]
+        number: u64,
+        hash: alloy::primitives::B256,
+    }
+
+    Block {
+        number: block.number,
+        hash: block.hash,
+    }
+    .serialize(serializer)
 }

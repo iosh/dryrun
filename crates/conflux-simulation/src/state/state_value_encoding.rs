@@ -12,7 +12,8 @@ use primitives::{
     storage::StorageValue,
 };
 
-use crate::state::rpc_types::{CoreSpaceRpcAccount, CoreSpaceSponsorInfo};
+use crate::primitive::{b256_to_cfx, u256_to_cfx};
+use conflux_provider::{CoreAccount, CoreSponsorInfo};
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub(crate) enum StateValueEncodingError {
@@ -21,9 +22,6 @@ pub(crate) enum StateValueEncodingError {
 
     #[error("Core Space account collateral total {total} is less than token collateral {token}")]
     StorageCollateralUnderflow { total: U256, token: U256 },
-
-    #[error("basic Core Space account has storage-point collateral {value}")]
-    BasicAccountStoragePointCollateral { value: U256 },
 
     #[error("available storage-point units {units} overflow when converted to collateral in drips")]
     AvailableStoragePointCollateralOverflow { units: U256 },
@@ -75,21 +73,21 @@ pub(crate) fn encode_core_space_basic_account(
 }
 
 pub(crate) fn encode_core_space_contract_account(
-    account: &CoreSpaceRpcAccount,
+    account: &CoreAccount,
     token_collateral_for_storage: U256,
     used_storage_point_collateral: U256,
-    sponsor_info: CoreSpaceSponsorInfo,
+    sponsor_info: CoreSponsorInfo,
 ) -> Result<Option<Box<[u8]>>, StateValueEncodingError> {
     let sponsor_info =
         core_space_sponsor_info_from_rpc(sponsor_info, used_storage_point_collateral)?;
 
     if account.balance.is_zero()
         && account.nonce.is_zero()
-        && account.code_hash == KECCAK_EMPTY
+        && b256_to_cfx(account.code_hash) == KECCAK_EMPTY
         && account.staking_balance.is_zero()
         && token_collateral_for_storage.is_zero()
         && account.accumulated_interest_return.is_zero()
-        && account.admin.is_zero()
+        && account.admin.bytes() == [0; 20]
         && sponsor_info == SponsorInfo::default()
     {
         return Ok(None);
@@ -97,13 +95,13 @@ pub(crate) fn encode_core_space_contract_account(
 
     Ok(Some(
         rlp::encode(&ContractAccount {
-            balance: account.balance,
-            nonce: account.nonce,
-            code_hash: account.code_hash,
-            staking_balance: account.staking_balance,
+            balance: u256_to_cfx(account.balance),
+            nonce: u256_to_cfx(account.nonce),
+            code_hash: b256_to_cfx(account.code_hash),
+            staking_balance: u256_to_cfx(account.staking_balance),
             collateral_for_storage: token_collateral_for_storage,
-            accumulated_interest_return: account.accumulated_interest_return,
-            admin: account.admin,
+            accumulated_interest_return: u256_to_cfx(account.accumulated_interest_return),
+            admin: Address::from(account.admin.bytes()),
             sponsor_info,
         })
         .to_vec()
@@ -167,24 +165,23 @@ pub(crate) fn encode_storage_slot(value: U256) -> Box<[u8]> {
 }
 
 fn core_space_sponsor_info_from_rpc(
-    info: CoreSpaceSponsorInfo,
+    info: CoreSponsorInfo,
     used_storage_point_collateral: U256,
 ) -> Result<SponsorInfo, StateValueEncodingError> {
-    let unused_storage_point_collateral = info
-        .available_storage_point_units
+    let unused_storage_point_collateral = u256_to_cfx(info.available_storage_points)
         .checked_mul(*DRIPS_PER_STORAGE_COLLATERAL_UNIT)
         .ok_or(
             StateValueEncodingError::AvailableStoragePointCollateralOverflow {
-                units: info.available_storage_point_units,
+                units: u256_to_cfx(info.available_storage_points),
             },
         )?;
 
     Ok(SponsorInfo {
-        sponsor_for_gas: info.sponsor_for_gas,
-        sponsor_for_collateral: info.sponsor_for_collateral,
-        sponsor_gas_bound: info.sponsor_gas_bound,
-        sponsor_balance_for_gas: info.sponsor_balance_for_gas,
-        sponsor_balance_for_collateral: info.sponsor_balance_for_collateral,
+        sponsor_for_gas: Address::from(info.sponsor_for_gas.bytes()),
+        sponsor_for_collateral: Address::from(info.sponsor_for_collateral.bytes()),
+        sponsor_gas_bound: u256_to_cfx(info.sponsor_gas_bound),
+        sponsor_balance_for_gas: u256_to_cfx(info.sponsor_balance_for_gas),
+        sponsor_balance_for_collateral: u256_to_cfx(info.sponsor_balance_for_collateral),
         storage_points: Some(StoragePoints {
             unused: unused_storage_point_collateral,
             used: used_storage_point_collateral,

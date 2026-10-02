@@ -1,234 +1,105 @@
-use std::fmt;
-
-use alloy::{
-    primitives::{B256, U256},
-    transports::TransportError,
-};
-use conflux_provider::ConfluxProviderError;
+use alloy::{eips::BlockId, transports::TransportError};
+use simulation_core::{CodedError, ErrorCode, LimitExceeded};
 use thiserror::Error;
 
-/// Chain identity values expected from or observed at the paired Conflux endpoints.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub struct ConfluxEndpointIdentity {
-    /// Core Space chain id.
-    pub core_space_chain_id: u64,
-    /// eSpace chain id represented by the Core Space endpoint.
-    pub core_reported_espace_chain_id: u64,
-    /// Core Space network id.
-    pub network_id: u64,
-    /// Chain id represented by the eSpace endpoint.
-    pub espace_endpoint_chain_id: u64,
-}
-
-impl ConfluxEndpointIdentity {
-    pub(crate) const fn new(
-        core_space_chain_id: u64,
-        core_reported_espace_chain_id: u64,
-        network_id: u64,
-        espace_endpoint_chain_id: u64,
-    ) -> Self {
-        Self {
-            core_space_chain_id,
-            core_reported_espace_chain_id,
-            network_id,
-            espace_endpoint_chain_id,
-        }
-    }
-}
-
-impl fmt::Display for ConfluxEndpointIdentity {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "Core Space chain id {}, Core-reported eSpace chain id {}, network id {}, eSpace endpoint chain id {}",
-            self.core_space_chain_id,
-            self.core_reported_espace_chain_id,
-            self.network_id,
-            self.espace_endpoint_chain_id,
-        )
-    }
-}
-
-/// An identity field returned by the Core Space `cfx_getStatus` method.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum ConfluxCoreStatusIdentityField {
-    /// Core Space chain id.
-    ChainId,
-    /// eSpace chain id reported by the Core Space endpoint.
-    EthereumSpaceChainId,
-    /// Core Space network id.
-    NetworkId,
-}
-
-impl fmt::Display for ConfluxCoreStatusIdentityField {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = match self {
-            Self::ChainId => "chainId",
-            Self::EthereumSpaceChainId => "ethereumSpaceChainId",
-            Self::NetworkId => "networkId",
-        };
-        formatter.write_str(name)
-    }
-}
-
-/// A failure to verify the pivot selected for a simulation against its endpoints.
 #[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum ConfluxStateAnchorError {
-    /// A block lookup failed; the underlying provider error is preserved.
-    #[error(transparent)]
-    Rpc(#[from] crate::ConfluxRpcError),
-
-    /// An endpoint no longer reports the selected pivot at the fixed epoch.
-    #[error("Conflux pivot at selected epoch {epoch_number} changed or is no longer available")]
-    Mismatch {
-        /// The epoch fixed during preparation.
-        epoch_number: u64,
-        /// The pivot fixed during preparation.
-        expected_pivot_hash: B256,
-        /// The current Core Space pivot, or None if the block is unavailable.
-        core_space_pivot_hash: Option<B256>,
-        /// The current eSpace block, or None if the block is unavailable.
-        espace_block_hash: Option<B256>,
+pub enum Error {
+    #[error("{0}")]
+    InvalidInput(String),
+    #[error("block {0} was not found")]
+    BlockNotFound(BlockId),
+    #[error("the selected epoch pivot changed during simulation")]
+    ContextInconsistent,
+    #[error("{0}")]
+    Unsupported(String),
+    #[error("{endpoint} serves {field} {actual}, expected {expected}")]
+    ChainMismatch {
+        endpoint: &'static str,
+        field: &'static str,
+        expected: u64,
+        actual: alloy::primitives::U256,
     },
-}
-
-/// An error that prevents construction of a verified Conflux simulation backend.
-#[derive(Debug, Error)]
-#[non_exhaustive]
-pub enum ConfluxInitializationError {
-    /// The Core Space endpoint did not return its status.
-    #[error("failed to fetch the Core Space status: {source}")]
-    CoreStatusRequest {
-        /// The underlying Core Space RPC failure.
-        #[source]
-        source: ConfluxProviderError,
-    },
-
-    /// The eSpace endpoint did not return its chain id.
-    #[error("failed to fetch the eSpace chain id: {source}")]
-    EspaceChainIdRequest {
-        /// The underlying eSpace transport failure.
+    #[error("Core Space provider request failed")]
+    CoreProvider(#[from] conflux_provider::Error),
+    #[error("provider request {operation} failed")]
+    EspaceProvider {
+        operation: &'static str,
         #[source]
         source: TransportError,
     },
+    #[error(transparent)]
+    State(#[from] StateError),
+    #[error(transparent)]
+    LimitExceeded(#[from] LimitExceeded),
+    #[error("execution failed: {0}")]
+    Execution(String),
+    #[error("{0}")]
+    Internal(&'static str),
+    #[error("simulation task failed")]
+    Runtime(#[source] tokio::task::JoinError),
+}
 
-    /// A Core Space identity value cannot be represented by the backend.
-    #[error("Core Space status identity field {field} exceeds u64: {actual}")]
-    CoreStatusIdentityValueOutOfRange {
-        /// The field containing the invalid value.
-        field: ConfluxCoreStatusIdentityField,
-        /// The value returned by the endpoint.
-        actual: U256,
+/// State access failures retain their source through the node executor.
+#[derive(Debug, Error)]
+pub enum StateError {
+    #[error("Core Space state request failed")]
+    CoreProvider(#[from] conflux_provider::Error),
+    #[error("eSpace state request {operation} failed")]
+    EspaceProvider {
+        operation: &'static str,
+        #[source]
+        source: TransportError,
     },
-
-    /// The paired endpoints do not both identify as Conflux mainnet.
-    #[error("Conflux endpoint identity mismatch: expected [{expected}], got [{actual}]")]
-    EndpointIdentityMismatch {
-        /// The identity required by this named constructor.
-        expected: ConfluxEndpointIdentity,
-        /// The identity assembled from both endpoints.
-        actual: ConfluxEndpointIdentity,
-    },
+    #[error(transparent)]
+    LimitExceeded(#[from] LimitExceeded),
+    #[error("state is unavailable: {0}")]
+    Unavailable(String),
 }
 
-use simulation_core::error::{Diagnostic, ErrorCode as Code, ErrorInfo, contract_diagnostic};
-
-impl ErrorInfo for crate::ConfluxRpcError {
-    fn diagnostic(&self) -> Diagnostic {
-        let message = match self {
-            Self::AddressEncoding { .. } => return Code::Internal.diagnostic(),
-            Self::Core { .. } => "Simulation service could not query the upstream Core Space node",
-            Self::Espace { .. } => "Simulation service could not query the upstream eSpace node",
-            Self::InvalidResponse { .. } => "Upstream chain node returned invalid response data",
-        };
-        Diagnostic::new(Code::ProviderRequestFailed, message)
-    }
-}
-
-impl ErrorInfo for crate::ConfluxBlockContextError {
-    fn diagnostic(&self) -> Diagnostic {
-        Diagnostic::new(Code::ContextUnavailable, self.to_string())
-    }
-}
-
-impl ErrorInfo for ConfluxStateAnchorError {
-    fn diagnostic(&self) -> Diagnostic {
+impl CodedError for StateError {
+    fn code(&self) -> ErrorCode {
         match self {
-            Self::Rpc(error) => error.diagnostic(),
-            Self::Mismatch { .. } => Diagnostic::new(Code::InconsistentContext, self.to_string()),
+            Self::CoreProvider(_) | Self::EspaceProvider { .. } => ErrorCode::ProviderRequestFailed,
+            Self::LimitExceeded(_) => ErrorCode::LimitExceeded,
+            Self::Unavailable(_) => ErrorCode::StateUnavailable,
         }
     }
 }
 
-pub(crate) fn estimation_diagnostic(error: &crate::ConfluxRpcError) -> Diagnostic {
-    let execution_failed = match error {
-        crate::ConfluxRpcError::Core {
-            source: ConfluxProviderError::JsonRpc { code, .. },
-            ..
-        } => *code == -32015,
-        crate::ConfluxRpcError::Espace {
-            source: TransportError::ErrorResp(error),
-            ..
-        } => error.code == 3,
-        _ => false,
-    };
-    if execution_failed {
-        Code::CompletionFailed.diagnostic()
-    } else {
-        error.diagnostic()
+impl CodedError for Error {
+    fn code(&self) -> ErrorCode {
+        match self {
+            Self::InvalidInput(_) => ErrorCode::InvalidInput,
+            Self::BlockNotFound(_) => ErrorCode::ContextNotFound,
+            Self::ContextInconsistent => ErrorCode::ContextInconsistent,
+            Self::Unsupported(_) => ErrorCode::Unsupported,
+            Self::CoreProvider(_) | Self::EspaceProvider { .. } => ErrorCode::ProviderRequestFailed,
+            Self::State(error) => error.code(),
+            Self::LimitExceeded(_) => ErrorCode::LimitExceeded,
+            Self::Execution(_) => ErrorCode::ExecutionFailed,
+            Self::Internal(_) | Self::ChainMismatch { .. } | Self::Runtime(_) => {
+                ErrorCode::Internal
+            }
+        }
     }
 }
 
-// Source traversal is limited to erased backend and extension errors. Known
-// transparent wrappers are handled by their typed ErrorInfo implementations.
-pub(crate) fn source_diagnostic(
-    mut error: &(dyn std::error::Error + 'static),
-    fallback: Code,
-) -> Diagnostic {
-    loop {
-        if let Some(error) = error.downcast_ref::<crate::ConfluxRpcError>() {
-            return error.diagnostic();
+impl From<cfx_statedb::Error> for Error {
+    fn from(error: cfx_statedb::Error) -> Self {
+        match error {
+            cfx_statedb::Error::Storage(cfx_storage::Error::External(source)) => {
+                match source.downcast::<StateError>() {
+                    Ok(error) => Self::State(*error),
+                    Err(error) => Self::Execution(error.to_string()),
+                }
+            }
+            error => Self::Execution(error.to_string()),
         }
-        if let Some(error) = error.downcast_ref::<crate::core_space::CoreSpaceStateAccessError>() {
-            return error.diagnostic();
-        }
-        if let Some(error) = error.downcast_ref::<crate::espace::EspaceStateAccessError>() {
-            return error.diagnostic();
-        }
-        if let Some(error) = error.downcast_ref::<crate::espace::EspaceStateReadError>() {
-            return error.diagnostic();
-        }
-        if let Some(error) = error.downcast_ref::<crate::core_space::CoreSpaceProtocolError>() {
-            return error.diagnostic();
-        }
-        if let Some(error) = error.downcast_ref::<crate::core_space::CoreSpaceAnalysisError>() {
-            return error.diagnostic();
-        }
-        if let Some(error) = error.downcast_ref::<crate::espace::EspaceAnalysisError>() {
-            return error.diagnostic();
-        }
-        if let Some(error) =
-            error.downcast_ref::<simulation_core::observation::AnalysisLimitExceeded>()
-        {
-            return error.diagnostic();
-        }
-        if let Some(error) = error.downcast_ref::<simulation_core::analysis::CoverageError>() {
-            return error.diagnostic();
-        }
-        if let Some(error) = error.downcast_ref::<contract_standards::analysis::AnalysisError>() {
-            return contract_diagnostic(error, |source| {
-                source_diagnostic(source, Code::StateUnavailable)
-            });
-        }
-        if error.is::<TransportError>() || error.is::<ConfluxProviderError>() {
-            return Code::ProviderRequestFailed.diagnostic();
-        }
-        let Some(source) = error.source() else {
-            return fallback.diagnostic();
-        };
-        error = source;
+    }
+}
+
+impl From<StateError> for cfx_storage::Error {
+    fn from(error: StateError) -> Self {
+        Self::External(Box::new(error))
     }
 }

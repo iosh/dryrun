@@ -7,6 +7,7 @@ mod error;
 mod limits;
 mod status;
 mod trace;
+pub mod transaction;
 
 pub use address::ChainAddress;
 pub use changes::{

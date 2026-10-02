@@ -1,495 +1,341 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::{Arc, Mutex as SyncMutex},
+use super::{
+    state_item::{CoreSpaceStateItem as Core, EspaceStateItem as Eth, StateItem},
+    state_value_encoding::*,
 };
-
-use alloy::eips::BlockId as EspaceBlockId;
+use crate::{StateError, anchor::Anchor, primitive::*};
+use alloy::{
+    primitives::{Address as AlloyAddress, U256 as AlloyU256},
+    providers::{DynProvider, Provider},
+};
 use cfx_parameters::staking::DRIPS_PER_STORAGE_COLLATERAL_UNIT;
-use cfx_storage::{Error as StorageError, Result as StorageResult};
-use conflux_provider::BlockHashOrEpochNumber;
-use tokio::sync::Mutex as AsyncMutex;
+use cfx_types::{Address, U256};
+use conflux_provider::{BlockHashOrEpochNumber, ConfluxProvider, CoreAddress, Network};
+use simulation_core::{Limits, ReadBudget};
+use std::{collections::HashMap, sync::Arc};
+use tokio::sync::Mutex;
 
-use crate::state::{
-    ConfluxSimulationProvider, ConfluxStateAnchor,
-    core_space_internal::{
-        CoreSpaceInternalStateItem, SponsorWhitelistStorageKey, decode_abi_bool,
-    },
-    rpc_types::{CoreSpaceAccountState, CoreSpaceGlobals, EspaceAccountData},
-    state_item::{CoreSpaceStateItem, EspaceStateItem, StateItem},
-    state_value_encoding::{
-        StateValueEncodingError, encode_code, encode_core_space_basic_account,
-        encode_core_space_contract_account, encode_core_space_deposit_list, encode_core_space_u256,
-        encode_core_space_vote_list, encode_espace_account, encode_storage_slot,
-        should_encode_core_space_contract_account, used_storage_point_collateral,
-    },
-};
-use cfx_types::{Address, H256, U256};
-use primitives::{DepositInfo, VoteStakeInfo};
+type Cache = HashMap<StateItem, Option<Box<[u8]>>>;
 
-type RawStateValue = Box<[u8]>;
-type StateRead = Option<RawStateValue>;
-
-#[derive(Clone, Default)]
-pub(crate) struct RecordedDepositLists {
-    deposit_lists_by_account: Arc<SyncMutex<HashMap<Address, Vec<DepositInfo>>>>,
+/// One remote cache and budget for preparation, execution and both views.
+pub(crate) struct StateSource {
+    pub anchor: Anchor,
+    pub core: ConfluxProvider,
+    pub espace: DynProvider,
+    pub budget: ReadBudget,
+    network: Network,
+    cache: Mutex<Cache>,
 }
 
-impl RecordedDepositLists {
-    fn record(&self, address: Address, deposit_list: Vec<DepositInfo>) -> StorageResult<()> {
-        let mut deposit_lists_by_account = self
-            .deposit_lists_by_account
-            .lock()
-            .map_err(|_| Self::lock_error())?;
-        if let Some(recorded) = deposit_lists_by_account.get(&address) {
-            if recorded != &deposit_list {
-                return Err(StorageError::Msg(format!(
-                    "the anchored Core Space deposit list changed across reads for {address:?}"
-                )));
-            }
-        } else {
-            deposit_lists_by_account.insert(address, deposit_list);
+impl StateSource {
+    pub async fn new(
+        anchor: Anchor,
+        core: ConfluxProvider,
+        espace: DynProvider,
+        network: Network,
+        limits: Limits,
+    ) -> Result<Self, StateError> {
+        let source = Self {
+            anchor,
+            core,
+            espace,
+            network,
+            budget: ReadBudget::new(limits),
+            cache: Mutex::new(HashMap::new()),
+        };
+        source.load_globals().await?;
+        Ok(source)
+    }
+
+    async fn load_globals(&self) -> Result<(), StateError> {
+        let epoch = self.anchor.epoch();
+        let mut batch = self.core.batch();
+        let interest = batch.cfx_get_interest_rate(epoch)?;
+        let accumulated = batch.cfx_get_accumulate_interest_rate(epoch)?;
+        let supply = batch.cfx_get_supply_info(epoch)?;
+        let collateral = batch.cfx_get_collateral_info(epoch)?;
+        let pos = batch.cfx_get_pos_economics(epoch)?;
+        let vote = batch.cfx_get_params_from_vote(epoch)?;
+        let burnt = batch.cfx_get_fee_burnt(epoch)?;
+        // Each decoded global is a separate state item even when its RPC is batched.
+        for _ in 0..14 {
+            self.budget.record_state_read()?;
         }
-        Ok(())
-    }
-
-    pub(crate) fn for_account(&self, address: Address) -> StorageResult<Vec<DepositInfo>> {
-        self.deposit_lists_by_account
-            .lock()
-            .map_err(|_| Self::lock_error())?
-            .get(&address)
-            .cloned()
-            .ok_or_else(|| {
-                StorageError::Msg(format!(
-                    "no Core Space deposit list was captured during execution for {address:?}"
-                ))
-            })
-    }
-
-    fn lock_error() -> StorageError {
-        StorageError::Msg("failed to access request-local Core Space deposit-list state".to_owned())
-    }
-}
-
-#[derive(Clone, Default)]
-pub(crate) struct MaskedWhitelistKeys {
-    entries: Arc<SyncMutex<HashSet<SponsorWhitelistStorageKey>>>,
-}
-
-impl MaskedWhitelistKeys {
-    fn record(&self, key: SponsorWhitelistStorageKey) -> StorageResult<()> {
-        self.entries
-            .lock()
-            .map_err(|_| Self::lock_error())?
-            .insert(key);
-        Ok(())
-    }
-
-    pub(crate) fn snapshot(&self) -> StorageResult<HashSet<SponsorWhitelistStorageKey>> {
-        self.entries
-            .lock()
-            .map_err(|_| Self::lock_error())
-            .map(|entries| entries.clone())
-    }
-
-    fn lock_error() -> StorageError {
-        StorageError::Msg(
-            "failed to access request-local Core Space sponsor whitelist state".to_owned(),
-        )
-    }
-}
-
-/// Vote lists fetched by this request's anchored StateDB reads.
-#[derive(Clone, Default)]
-pub(crate) struct RecordedVoteLists {
-    vote_lists_by_account: Arc<SyncMutex<HashMap<Address, Vec<VoteStakeInfo>>>>,
-}
-
-impl RecordedVoteLists {
-    fn record(&self, address: Address, vote_list: Vec<VoteStakeInfo>) -> StorageResult<()> {
-        let mut vote_lists_by_account = self
-            .vote_lists_by_account
-            .lock()
-            .map_err(|_| Self::lock_error())?;
-        if let Some(recorded) = vote_lists_by_account.get(&address) {
-            if recorded != &vote_list {
-                return Err(StorageError::Msg(format!(
-                    "the anchored Core Space vote list changed across reads for {address:?}"
-                )));
-            }
-        } else {
-            vote_lists_by_account.insert(address, vote_list);
-        }
-        Ok(())
-    }
-
-    pub(crate) fn for_account(&self, address: Address) -> StorageResult<Vec<VoteStakeInfo>> {
-        self.vote_lists_by_account
-            .lock()
-            .map_err(|_| Self::lock_error())?
-            .get(&address)
-            .cloned()
-            .ok_or_else(|| {
-                StorageError::Msg(format!(
-                    "no Core Space vote list was captured during execution for {address:?}"
-                ))
-            })
-    }
-
-    fn lock_error() -> StorageError {
-        StorageError::Msg("failed to access request-local Core Space vote-list state".to_owned())
-    }
-}
-
-pub(crate) struct ConfluxStateSource {
-    state_anchor: ConfluxStateAnchor,
-    provider: ConfluxSimulationProvider,
-    core_space_globals: CoreSpaceGlobals,
-    espace_account_cache: AsyncMutex<HashMap<Address, Arc<EspaceAccountData>>>,
-    masked_whitelist_keys: MaskedWhitelistKeys,
-    deposit_lists: RecordedDepositLists,
-    vote_lists: RecordedVoteLists,
-}
-
-impl ConfluxStateSource {
-    pub(crate) async fn prepare(
-        state_anchor: ConfluxStateAnchor,
-        provider: ConfluxSimulationProvider,
-    ) -> StorageResult<Self> {
-        let core_space_globals = provider
-            .load_core_space_globals(state_anchor.core_space_epoch())
-            .await
-            .map_err(storage_error)?;
-
-        Ok(Self {
-            state_anchor,
-            provider,
-            core_space_globals,
-            espace_account_cache: AsyncMutex::new(HashMap::new()),
-            masked_whitelist_keys: MaskedWhitelistKeys::default(),
-            deposit_lists: RecordedDepositLists::default(),
-            vote_lists: RecordedVoteLists::default(),
-        })
-    }
-
-    pub(crate) fn state_anchor(&self) -> ConfluxStateAnchor {
-        self.state_anchor
-    }
-
-    pub(crate) fn vote_lists(&self) -> RecordedVoteLists {
-        self.vote_lists.clone()
-    }
-
-    pub(crate) fn deposit_lists(&self) -> RecordedDepositLists {
-        self.deposit_lists.clone()
-    }
-
-    pub(crate) fn accumulated_interest_rate(&self) -> U256 {
-        self.core_space_globals.accumulate_interest_rate
-    }
-
-    pub(crate) fn masked_whitelist_keys(&self) -> MaskedWhitelistKeys {
-        self.masked_whitelist_keys.clone()
-    }
-
-    pub(crate) async fn read(&self, item: &StateItem) -> StorageResult<StateRead> {
-        match item {
-            StateItem::CoreSpace(item) => self.read_core_space(*item).await,
-            StateItem::Espace(item) => self.read_espace(*item).await,
-        }
-    }
-
-    async fn read_core_space(&self, item: CoreSpaceStateItem) -> StorageResult<StateRead> {
-        match item {
-            CoreSpaceStateItem::Account { address } => self.fetch_core_space_account(address).await,
-            CoreSpaceStateItem::DepositList { address } => {
-                let deposit_list = self
-                    .provider
-                    .cfx_get_deposit_list(address, self.state_anchor.core_space_epoch())
-                    .await
-                    .map_err(storage_error)?;
-                self.deposit_lists.record(address, deposit_list.clone())?;
-                Ok(encode_core_space_deposit_list(deposit_list))
-            }
-            CoreSpaceStateItem::VoteList { address } => {
-                let vote_list = self
-                    .provider
-                    .cfx_get_vote_list(address, self.state_anchor.core_space_epoch())
-                    .await
-                    .map_err(storage_error)?;
-                self.vote_lists.record(address, vote_list.clone())?;
-                Ok(encode_core_space_vote_list(vote_list))
-            }
-            CoreSpaceStateItem::InterestRate => Ok(Some(encode_core_space_u256(
-                self.core_space_globals.interest_rate,
-            ))),
-            CoreSpaceStateItem::AccumulateInterestRate => Ok(Some(encode_core_space_u256(
-                self.core_space_globals.accumulate_interest_rate,
-            ))),
-            CoreSpaceStateItem::TotalIssued => Ok(Some(encode_core_space_u256(
-                self.core_space_globals.supply.total_issued,
-            ))),
-            CoreSpaceStateItem::TotalStaking => Ok(Some(encode_core_space_u256(
-                self.core_space_globals.supply.total_staking,
-            ))),
-            CoreSpaceStateItem::TotalEvmToken => Ok(Some(encode_core_space_u256(
-                self.core_space_globals.supply.total_espace_tokens,
-            ))),
-            CoreSpaceStateItem::TotalStorage => Ok(Some(encode_core_space_u256(
-                self.core_space_globals.supply.total_collateral,
-            ))),
-            CoreSpaceStateItem::UsedStoragePoints => Ok(Some(encode_core_space_u256(
-                self.core_space_globals.collateral.used_storage_points
-                    * *DRIPS_PER_STORAGE_COLLATERAL_UNIT,
-            ))),
-            CoreSpaceStateItem::ConvertedStoragePoints => Ok(Some(encode_core_space_u256(
-                self.core_space_globals.collateral.converted_storage_points
-                    * *DRIPS_PER_STORAGE_COLLATERAL_UNIT,
-            ))),
-            CoreSpaceStateItem::TotalPosStaking => Ok(Some(encode_core_space_u256(
-                self.core_space_globals
-                    .pos_economics
-                    .total_pos_staking_tokens,
-            ))),
-            CoreSpaceStateItem::DistributablePosInterest => Ok(Some(encode_core_space_u256(
-                self.core_space_globals
-                    .pos_economics
-                    .distributable_pos_interest,
-            ))),
-            CoreSpaceStateItem::LastDistributeBlock => {
-                Ok(Some(encode_core_space_u256(U256::from(
-                    self.core_space_globals
-                        .pos_economics
-                        .last_distribute_block
-                        .as_u64(),
-                ))))
-            }
-            CoreSpaceStateItem::PowBaseReward => Ok(Some(encode_core_space_u256(
-                self.core_space_globals.vote_params.pow_base_reward,
-            ))),
-            CoreSpaceStateItem::TotalBurnt1559 => Ok(Some(encode_core_space_u256(
-                self.core_space_globals.fee_burnt,
-            ))),
-            CoreSpaceStateItem::BaseFeeProp => Ok(Some(encode_core_space_u256(
-                self.core_space_globals.vote_params.base_fee_share_prop,
-            ))),
-            CoreSpaceStateItem::InternalContractStorage(item) => {
-                self.fetch_core_space_internal_storage(item).await
-            }
-            CoreSpaceStateItem::StorageSlot { address, slot } => {
-                // Public Core Space RPC returns the value without its storage owner.
-                self.provider
-                    .cfx_get_storage_at(address, slot, self.core_space_pivot())
-                    .await
-                    .map_err(storage_error)
-                    .map(|value| value.map(encode_storage_slot))
-            }
-            CoreSpaceStateItem::Code { address, code_hash } => {
-                self.fetch_core_space_code(address, code_hash).await
-            }
-        }
-    }
-
-    async fn read_espace(&self, item: EspaceStateItem) -> StorageResult<StateRead> {
-        match item {
-            EspaceStateItem::Account { address } => self.fetch_espace_account(address).await,
-            EspaceStateItem::StorageSlot { address, slot } => self
-                .provider
-                .eth_get_storage_at(address, slot, self.espace_block())
-                .await
-                .map_err(storage_error)
-                .map(|value| value.map(encode_storage_slot)),
-            EspaceStateItem::Code { address, code_hash } => {
-                self.fetch_espace_code(address, code_hash).await
-            }
-        }
-    }
-
-    fn espace_block(&self) -> EspaceBlockId {
-        self.state_anchor.espace_block()
-    }
-
-    fn core_space_pivot(&self) -> BlockHashOrEpochNumber {
-        self.state_anchor.core_space_pivot()
-    }
-
-    async fn espace_account_data(&self, address: Address) -> StorageResult<Arc<EspaceAccountData>> {
-        if let Some(account) = self
-            .espace_account_cache
+        batch.send().await?;
+        let (interest, accumulated, supply, collateral, pos, vote, burnt) =
+            tokio::try_join!(interest, accumulated, supply, collateral, pos, vote, burnt)?;
+        let units = |v| {
+            u256_to_cfx(v)
+                .checked_mul(*DRIPS_PER_STORAGE_COLLATERAL_UNIT)
+                .ok_or_else(|| {
+                    StateError::Unavailable("global storage collateral overflows U256".into())
+                })
+        };
+        let globals = [
+            (Core::InterestRate, u256_to_cfx(interest)),
+            (Core::AccumulateInterestRate, u256_to_cfx(accumulated)),
+            (Core::TotalIssued, u256_to_cfx(supply.total_issued)),
+            (Core::TotalStaking, u256_to_cfx(supply.total_staking)),
+            (Core::TotalEvmToken, u256_to_cfx(supply.total_espace_tokens)),
+            (Core::TotalStorage, u256_to_cfx(supply.total_collateral)),
+            (
+                Core::UsedStoragePoints,
+                units(collateral.used_storage_points)?,
+            ),
+            (
+                Core::ConvertedStoragePoints,
+                units(collateral.converted_storage_points)?,
+            ),
+            (
+                Core::TotalPosStaking,
+                u256_to_cfx(pos.total_pos_staking_tokens),
+            ),
+            (
+                Core::DistributablePosInterest,
+                u256_to_cfx(pos.distributable_pos_interest),
+            ),
+            (
+                Core::LastDistributeBlock,
+                u256_to_cfx(pos.last_distribute_block),
+            ),
+            (Core::PowBaseReward, u256_to_cfx(vote.pow_base_reward)),
+            (Core::TotalBurnt1559, u256_to_cfx(burnt)),
+            (Core::BaseFeeProp, u256_to_cfx(vote.base_fee_share_prop)),
+        ];
+        self.cache
             .lock()
             .await
-            .get(&address)
-            .cloned()
-        {
-            return Ok(account);
-        }
+            .extend(globals.into_iter().map(|(key, value)| {
+                (
+                    StateItem::CoreSpace(key),
+                    Some(encode_core_space_u256(value)),
+                )
+            }));
+        Ok(())
+    }
 
-        let account = Arc::new(
-            self.provider
-                .load_espace_account(address, self.espace_block())
-                .await
-                .map_err(storage_error)?,
+    pub async fn read(&self, item: StateItem) -> Result<Option<Box<[u8]>>, StateError> {
+        // Hold the async lock through a miss so concurrent views cannot refetch.
+        let mut cache = self.cache.lock().await;
+        if let Some(value) = cache.get(&item) {
+            return Ok(value.clone());
+        }
+        self.budget.record_state_read()?;
+        let value = match item {
+            StateItem::Espace(Eth::Account { address }) => {
+                self.load_espace_account(address, &mut cache).await?
+            }
+            StateItem::Espace(Eth::StorageSlot { address, slot }) => {
+                let value = self
+                    .espace
+                    .get_storage_at(
+                        address_from_cfx(address),
+                        AlloyU256::from_be_slice(slot.as_bytes()),
+                    )
+                    .block_id(self.anchor.block())
+                    .await
+                    .map_err(|source| StateError::EspaceProvider {
+                        operation: "eth_getStorageAt",
+                        source,
+                    })?;
+                (!value.is_zero()).then(|| encode_storage_slot(u256_to_cfx(value)))
+            }
+            StateItem::Espace(Eth::Code { .. }) => {
+                return Err(StateError::Unavailable(
+                    "code was not loaded with its eSpace account".into(),
+                ));
+            }
+            StateItem::CoreSpace(item) => self.load_core(item).await?,
+        };
+        cache.insert(item, value.clone());
+        Ok(value)
+    }
+
+    pub async fn nonce(&self, address: AlloyAddress) -> Result<u64, StateError> {
+        let value = self
+            .read(StateItem::Espace(Eth::Account {
+                address: address_to_cfx(address),
+            }))
+            .await?;
+        let Some(value) = value else {
+            return Ok(0);
+        };
+        let account: primitives::account::EthereumAccount = rlp::decode(&value).map_err(invalid)?;
+        account
+            .nonce
+            .try_into()
+            .map_err(|_| StateError::Unavailable("account nonce exceeds u64".into()))
+    }
+
+    async fn load_espace_account(
+        &self,
+        address: Address,
+        cache: &mut Cache,
+    ) -> Result<Option<Box<[u8]>>, StateError> {
+        let rpc_address = address_from_cfx(address);
+        let block = self.anchor.block();
+        let (balance, nonce, code) = tokio::try_join!(
+            async {
+                self.espace
+                    .get_balance(rpc_address)
+                    .block_id(block)
+                    .await
+                    .map_err(|source| StateError::EspaceProvider {
+                        operation: "eth_getBalance",
+                        source,
+                    })
+            },
+            async {
+                self.espace
+                    .get_transaction_count(rpc_address)
+                    .block_id(block)
+                    .await
+                    .map_err(|source| StateError::EspaceProvider {
+                        operation: "eth_getTransactionCount",
+                        source,
+                    })
+            },
+            async {
+                self.espace
+                    .get_code_at(rpc_address)
+                    .block_id(block)
+                    .await
+                    .map_err(|source| StateError::EspaceProvider {
+                        operation: "eth_getCode",
+                        source,
+                    })
+            },
+        )?;
+        let hash = keccak_hash::keccak(&code);
+        let code_value = if code.is_empty() {
+            None
+        } else {
+            Some(encode_code(hash, Address::zero(), Arc::new(code.to_vec())).map_err(invalid)?)
+        };
+        cache.insert(
+            StateItem::Espace(Eth::Code {
+                address,
+                code_hash: hash,
+            }),
+            code_value,
         );
-        let mut cache = self.espace_account_cache.lock().await;
-
-        Ok(Arc::clone(cache.entry(address).or_insert_with(|| account)))
-    }
-
-    async fn fetch_core_space_account(&self, address: Address) -> StorageResult<StateRead> {
-        let CoreSpaceAccountState {
-            account,
-            token_collateral_for_storage,
-        } = self
-            .provider
-            .load_core_space_account_state(address, self.state_anchor.core_space_epoch())
-            .await
-            .map_err(storage_error)?;
-        let used_storage_point_collateral = used_storage_point_collateral(
-            account.total_collateral_for_storage,
-            token_collateral_for_storage,
-        )
-        .map_err(storage_error)?;
-
-        if should_encode_core_space_contract_account(address, account.code_hash) {
-            let sponsor_info = self
-                .provider
-                .cfx_get_sponsor_info(address, self.state_anchor.core_space_epoch())
-                .await
-                .map_err(storage_error)?;
-
-            return encode_core_space_contract_account(
-                &account,
-                token_collateral_for_storage,
-                used_storage_point_collateral,
-                sponsor_info,
-            )
-            .map_err(storage_error);
-        }
-
-        if !used_storage_point_collateral.is_zero() {
-            return Err(storage_error(
-                StateValueEncodingError::BasicAccountStoragePointCollateral {
-                    value: used_storage_point_collateral,
-                },
-            ));
-        }
-
-        Ok(encode_core_space_basic_account(
-            account.balance,
-            account.nonce,
-            account.staking_balance,
-            token_collateral_for_storage,
-            account.accumulated_interest_return,
-        ))
-    }
-
-    async fn fetch_core_space_code(
-        &self,
-        address: Address,
-        expected_code_hash: H256,
-    ) -> StorageResult<StateRead> {
-        let code = self
-            .provider
-            .cfx_get_code(address, self.core_space_pivot())
-            .await
-            .map_err(storage_error)?;
-
-        if code.is_empty() {
-            return Ok(None);
-        }
-
-        // Core Space code keeps the state address as the upstream CodeInfo owner.
-        encode_code(expected_code_hash, address, Arc::new(code))
-            .map(Some)
-            .map_err(storage_error)
-    }
-
-    async fn fetch_core_space_internal_storage(
-        &self,
-        item: CoreSpaceInternalStateItem,
-    ) -> StorageResult<StateRead> {
-        match item {
-            CoreSpaceInternalStateItem::SponsorWhitelist(key) => {
-                self.fetch_core_space_sponsor_whitelist_storage(key).await
-            }
-        }
-    }
-
-    async fn fetch_core_space_sponsor_whitelist_storage(
-        &self,
-        key: SponsorWhitelistStorageKey,
-    ) -> StorageResult<StateRead> {
-        let is_all_whitelisted = self
-            .provider
-            .cfx_call(
-                key.control_contract_address(),
-                key.is_all_whitelisted_call_data(),
-                self.core_space_pivot(),
-            )
-            .await
-            .and_then(|value| decode_abi_bool(value, "cfx_call"))
-            .map_err(storage_error)?;
-
-        if key.is_all_whitelist_key() {
-            return Ok(is_all_whitelisted.then_some(encode_storage_slot(U256::one())));
-        }
-
-        // The raw user key is only read after the all-whitelist key is zero.
-        if is_all_whitelisted {
-            self.masked_whitelist_keys.record(key)?;
-            tracing::warn!(
-                contract_address = ?key.contract_address,
-                account_address = ?key.account_address,
-                "sponsor whitelist user key is masked because all-whitelist is enabled"
-            );
-            return Ok(None);
-        }
-
-        let is_user_whitelisted = self
-            .provider
-            .cfx_call(
-                key.control_contract_address(),
-                key.is_user_whitelisted_call_data(),
-                self.core_space_pivot(),
-            )
-            .await
-            .and_then(|value| decode_abi_bool(value, "cfx_call"))
-            .map_err(storage_error)?;
-
-        Ok(is_user_whitelisted.then_some(encode_storage_slot(U256::one())))
-    }
-
-    async fn fetch_espace_account(&self, address: Address) -> StorageResult<StateRead> {
-        let account = self.espace_account_data(address).await?;
-
         Ok(encode_espace_account(
-            account.balance,
-            account.nonce,
-            account.code.as_ref(),
+            u256_to_cfx(balance),
+            nonce.into(),
+            &code,
         ))
     }
 
-    async fn fetch_espace_code(
-        &self,
-        address: Address,
-        expected_code_hash: H256,
-    ) -> StorageResult<StateRead> {
-        let account = self.espace_account_data(address).await?;
+    fn core_address(&self, address: Address) -> Result<CoreAddress, StateError> {
+        CoreAddress::from_bytes(address.0, self.network).map_err(invalid)
+    }
 
-        if account.code.is_empty() {
-            return Ok(None);
+    fn pivot(&self) -> BlockHashOrEpochNumber {
+        BlockHashOrEpochNumber::BlockHash {
+            hash: self.anchor.pivot_hash,
+            require_pivot: Some(true),
         }
+    }
 
-        // Upstream eSpace code values use the zero address as their owner.
-        encode_code(
-            expected_code_hash,
-            Address::zero(),
-            Arc::clone(&account.code),
-        )
-        .map(Some)
-        .map_err(storage_error)
+    async fn load_core(&self, item: Core) -> Result<Option<Box<[u8]>>, StateError> {
+        let epoch = self.anchor.epoch();
+        match item {
+            Core::Account { address } => {
+                let rpc_address = self.core_address(address)?;
+                let mut batch = self.core.batch();
+                let account = batch.cfx_get_account(rpc_address, epoch)?;
+                let collateral = batch.cfx_get_collateral_for_storage(rpc_address, epoch)?;
+                batch.send().await?;
+                let (account, collateral) = tokio::try_join!(account, collateral)?;
+                let collateral = u256_to_cfx(collateral);
+                let points = used_storage_point_collateral(
+                    u256_to_cfx(account.collateral_for_storage),
+                    collateral,
+                )
+                .map_err(invalid)?;
+                if should_encode_core_space_contract_account(
+                    address,
+                    b256_to_cfx(account.code_hash),
+                ) {
+                    let sponsor = self.core.cfx_get_sponsor_info(rpc_address, epoch).await?;
+                    encode_core_space_contract_account(&account, collateral, points, sponsor)
+                        .map_err(invalid)
+                } else {
+                    if !points.is_zero() {
+                        return Err(StateError::Unavailable(
+                            "basic account has storage-point collateral".into(),
+                        ));
+                    }
+                    Ok(encode_core_space_basic_account(
+                        u256_to_cfx(account.balance),
+                        u256_to_cfx(account.nonce),
+                        u256_to_cfx(account.staking_balance),
+                        collateral,
+                        u256_to_cfx(account.accumulated_interest_return),
+                    ))
+                }
+            }
+            Core::Code { address, code_hash } => {
+                let code = self
+                    .core
+                    .cfx_get_code(self.core_address(address)?, self.pivot())
+                    .await?;
+                if code.is_empty() && code_hash == keccak_hash::KECCAK_EMPTY {
+                    return Ok(None);
+                }
+                encode_code(code_hash, address, Arc::new(code.to_vec()))
+                    .map(Some)
+                    .map_err(invalid)
+            }
+            Core::StorageSlot { address, slot } => {
+                let value = self
+                    .core
+                    .cfx_get_storage_at(
+                        self.core_address(address)?,
+                        AlloyU256::from_be_slice(slot.as_bytes()),
+                        Some(self.pivot()),
+                    )
+                    .await?;
+                Ok(value.map(|v| encode_storage_slot(U256::from_big_endian(v.as_slice()))))
+            }
+            Core::DepositList { address } => {
+                let values = self
+                    .core
+                    .cfx_get_deposit_list(self.core_address(address)?, epoch)
+                    .await?;
+                let values = values
+                    .into_iter()
+                    .map(|v| primitives::DepositInfo {
+                        amount: u256_to_cfx(v.amount),
+                        deposit_time: u256_to_cfx(v.deposit_time),
+                        accumulated_interest_rate: u256_to_cfx(v.accumulated_interest_rate),
+                    })
+                    .collect();
+                Ok(encode_core_space_deposit_list(values))
+            }
+            Core::VoteList { address } => {
+                let values = self
+                    .core
+                    .cfx_get_vote_list(self.core_address(address)?, epoch)
+                    .await?;
+                let values = values
+                    .into_iter()
+                    .map(|v| primitives::VoteStakeInfo {
+                        amount: u256_to_cfx(v.amount),
+                        unlock_block_number: u256_to_cfx(v.unlock_block_number),
+                    })
+                    .collect();
+                Ok(encode_core_space_vote_list(values))
+            }
+            Core::InternalContractStorage(_) => Err(StateError::Unavailable(
+                "raw sponsor whitelist state is not available through Core RPC".into(),
+            )),
+            _ => Err(StateError::Unavailable(
+                "global state was not loaded".into(),
+            )),
+        }
     }
 }
 
-fn storage_error(error: impl std::error::Error + Send + Sync + 'static) -> StorageError {
-    StorageError::External(Box::new(error))
+fn invalid(error: impl std::fmt::Display) -> StateError {
+    StateError::Unavailable(error.to_string())
 }

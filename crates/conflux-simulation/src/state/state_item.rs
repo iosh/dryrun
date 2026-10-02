@@ -13,7 +13,7 @@ use thiserror::Error;
 const ADDRESS_BYTES: usize = StorageKeyWithSpace::ACCOUNT_BYTES;
 const HASH_BYTES: usize = 32;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum StateItem {
     CoreSpace(CoreSpaceStateItem),
     Espace(EspaceStateItem),
@@ -30,7 +30,7 @@ impl StateItem {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum CoreSpaceStateItem {
     TotalIssued,
     TotalStaking,
@@ -54,7 +54,7 @@ pub(crate) enum CoreSpaceStateItem {
     Code { address: Address, code_hash: H256 },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum EspaceStateItem {
     Account { address: Address },
     StorageSlot { address: Address, slot: H256 },

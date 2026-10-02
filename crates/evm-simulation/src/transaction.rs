@@ -23,23 +23,9 @@ pub(crate) struct Preparation {
 impl Preparation {
     /// Checks the request's representation before any RPC is issued.
     pub(crate) fn new(request: TransactionRequest) -> Result<Self, Error> {
-        let sender = request
-            .from
-            .ok_or_else(|| Error::InvalidInput("from is required".into()))?;
-        let explicit_type = request
-            .transaction_type
-            .map(|value| {
-                TxType::try_from(value).map_err(|_| {
-                    Error::InvalidInput(format!("unsupported transaction type {value:#x}"))
-                })
-            })
-            .transpose()?;
-        let tx_type = explicit_type.unwrap_or_else(|| request.minimal_tx_type());
-        check_type_compatibility(&request, tx_type)?;
-        request
-            .input
-            .unique_input()
-            .map_err(|error| Error::InvalidInput(error.to_string()))?;
+        let (sender, explicit_type) =
+            simulation_core::transaction::parse_transaction_input(&request)
+                .map_err(Error::InvalidInput)?;
         Ok(Self {
             request,
             sender,
@@ -137,13 +123,16 @@ async fn fill_fees(
         }
     };
     if request.max_fee_per_gas.is_none() {
-        let cap = (u128::from(env.block_env.basefee) * EIP1559_BASE_FEE_MULTIPLIER)
-            .checked_add(priority_fee)
-            .ok_or_else(|| {
-                Error::Unsupported(
-                    "automatic fee cap exceeds the supported range; specify maxFeePerGas".into(),
-                )
-            })?;
+        let cap = simulation_core::transaction::fee_cap(
+            u128::from(env.block_env.basefee),
+            priority_fee,
+            EIP1559_BASE_FEE_MULTIPLIER,
+        )
+        .ok_or_else(|| {
+            Error::Unsupported(
+                "automatic fee cap exceeds the supported range; specify maxFeePerGas".into(),
+            )
+        })?;
         request.max_fee_per_gas = Some(cap);
     }
     if tx_type == TxType::Eip4844 && request.max_fee_per_blob_gas.is_none() {
@@ -216,45 +205,4 @@ fn to_tx_env(
             .map(Either::Left)
             .collect(),
     })
-}
-
-/// Rejects fields that cannot be represented by the chosen transaction type.
-fn check_type_compatibility(request: &TransactionRequest, tx_type: TxType) -> Result<(), Error> {
-    if matches!(tx_type, TxType::Legacy | TxType::Eip2930) {
-        if request.max_fee_per_gas.is_some() || request.max_priority_fee_per_gas.is_some() {
-            return Err(Error::InvalidInput(
-                "dynamic fee fields require a dynamic fee transaction type".into(),
-            ));
-        }
-    } else if request.gas_price.is_some() {
-        return Err(Error::InvalidInput(
-            "gasPrice requires a legacy or EIP-2930 transaction".into(),
-        ));
-    }
-    if tx_type == TxType::Legacy && request.access_list.is_some() {
-        return Err(Error::InvalidInput(
-            "accessList is not a field of a legacy transaction".into(),
-        ));
-    }
-    if tx_type != TxType::Eip4844
-        && (request.has_eip4844_blob_data() || request.max_fee_per_blob_gas.is_some())
-    {
-        return Err(Error::InvalidInput(
-            "blob fields require an EIP-4844 transaction".into(),
-        ));
-    }
-    if tx_type != TxType::Eip7702 && request.authorization_list.is_some() {
-        return Err(Error::InvalidInput(
-            "authorizationList requires an EIP-7702 transaction".into(),
-        ));
-    }
-    if matches!(tx_type, TxType::Eip4844 | TxType::Eip7702)
-        && !matches!(request.to, Some(TxKind::Call(_)))
-    {
-        return Err(Error::InvalidInput(format!(
-            "transaction type {:#x} cannot create a contract",
-            tx_type as u8
-        )));
-    }
-    Ok(())
 }

@@ -1,4 +1,5 @@
 use ::config::{Config, ConfigError, Environment, File};
+use alloy::transports::http::reqwest::Url;
 use serde::Deserialize;
 use simulation_core::Limits;
 
@@ -6,6 +7,7 @@ use simulation_core::Limits;
 pub struct AppConfig {
     pub server: ServerConfig,
     pub ethereum: EthereumConfig,
+    pub conflux: Option<ConfluxConfig>,
     pub simulation: SimulationConfig,
     pub tracing: TracingConfig,
     pub metrics: MetricsConfig,
@@ -13,7 +15,15 @@ pub struct AppConfig {
 
 #[derive(Debug, Deserialize)]
 pub struct EthereumConfig {
-    pub rpc_url: String,
+    pub rpc_url: Url,
+    #[serde(default)]
+    pub limits: Limits,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ConfluxConfig {
+    pub core_rpc_url: Url,
+    pub espace_rpc_url: Url,
     #[serde(default)]
     pub limits: Limits,
 }

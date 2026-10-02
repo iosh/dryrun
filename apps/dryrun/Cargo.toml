@@ -6,6 +6,8 @@ edition = { workspace = true }
 [dependencies]
 simulation-core = { workspace = true }
 evm-simulation = { workspace = true }
+conflux-simulation = { workspace = true }
+conflux-provider = { workspace = true }
 alloy = { workspace = true, features = ["provider-http"] }
 axum = { workspace = true }
 config = { workspace = true }

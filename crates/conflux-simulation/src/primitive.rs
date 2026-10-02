@@ -1,7 +1,7 @@
-use alloy::primitives::{Address, B256, U256, U512};
-use cfx_types::{Address as CfxAddress, H256 as CfxH256, U256 as CfxU256, U512 as CfxU512};
+use alloy::primitives::{Address, B256, U256};
+use alloy::rpc::types::AccessListItem;
+use cfx_types::{Address as CfxAddress, H256 as CfxH256, U256 as CfxU256};
 use primitives::AccessListItem as CfxAccessListItem;
-use simulation_core::transaction::AccessListItem;
 
 pub(crate) fn address_to_cfx(address: Address) -> CfxAddress {
     CfxAddress::from_slice(address.as_slice())
@@ -26,15 +26,6 @@ pub(crate) fn b256_from_cfx(value: CfxH256) -> B256 {
 pub(crate) fn u256_from_cfx(value: CfxU256) -> U256 {
     let bytes = value.to_big_endian();
     U256::from_be_bytes(bytes)
-}
-
-pub(crate) fn u512_from_cfx(value: CfxU512) -> U512 {
-    let bytes = value.to_big_endian();
-    U512::from_be_bytes(bytes)
-}
-
-pub(crate) fn alloy_u256_from_u64(value: u64) -> U256 {
-    U256::from_limbs([value, 0, 0, 0])
 }
 
 pub(crate) fn access_list_to_cfx(items: &[AccessListItem]) -> Vec<CfxAccessListItem> {

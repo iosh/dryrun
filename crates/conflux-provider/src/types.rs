@@ -1,9 +1,5 @@
 mod common;
 mod core;
-mod filter;
-mod pos;
 
-pub use common::*;
+pub use common::{BlockHashOrEpochNumber, EpochNumber, SelectorError};
 pub use core::*;
-pub use filter::*;
-pub use pos::*;

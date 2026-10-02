@@ -1,7 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["apps/dryrun", "crates/simulation-core", "crates/evm-simulation"]
-exclude = ["crates/conflux-provider", "crates/conflux-simulation"]
+members = ["apps/dryrun", "crates/simulation-core", "crates/evm-simulation", "crates/conflux-provider", "crates/conflux-simulation"]
 
 [workspace.package]
 version = "0.1.0"
@@ -10,6 +9,8 @@ edition = "2024"
 [workspace.dependencies]
 simulation-core = { path = "crates/simulation-core" }
 evm-simulation = { path = "crates/evm-simulation" }
+conflux-provider = { path = "crates/conflux-provider" }
+conflux-simulation = { path = "crates/conflux-simulation" }
 
 jsonrpsee = "0.26"
 thiserror = "2"
@@ -18,6 +19,11 @@ tokio = "1"
 tokio-util = "0.7"
 
 alloy = "2"
+alloy-json-rpc = "2"
+alloy-rpc-client = "2"
+alloy-transport = "2"
+alloy-rpc-types-eth = "2"
+alloy-consensus = "2"
 alloy-evm = "0.39"
 alloy-hardforks = "0.4"
 alloy-primitives = "1"
@@ -39,3 +45,15 @@ config = "0.15"
 
 metrics-exporter-prometheus = "0.18"
 axum = "0.8"
+
+cfx-executor = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+
+cfx-vm-types = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+
+cfx-storage = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+
+cfx-statedb = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+
+cfx-internal-common = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }
+
+cfx-parameters = { git = "https://github.com/iosh/conflux-rust.git", branch = "dry" }

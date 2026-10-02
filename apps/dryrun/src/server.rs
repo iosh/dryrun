@@ -5,7 +5,6 @@ use alloy::{
     rpc::client::RpcClient,
     transports::http::reqwest::Client as HttpClient,
 };
-use evm_simulation::{ChainSpec, Simulator};
 use jsonrpsee::{
     RpcModule,
     server::{BatchRequestConfig, Server, ServerConfig as JsonRpcServerConfig, ServerHandle},
@@ -13,7 +12,11 @@ use jsonrpsee::{
 };
 use tracing::info;
 
-use crate::{config::AppConfig, rpc, tasks::SimulationTaskSet};
+use crate::{
+    config::{AppConfig, ConfluxConfig, EthereumConfig},
+    rpc,
+    tasks::SimulationTaskSet,
+};
 
 const MAX_RPC_CONNECTIONS: u32 = 100;
 const MAX_RPC_BODY_SIZE_BYTES: u32 = 10 * 1024 * 1024;
@@ -46,32 +49,57 @@ async fn build_rpc_module(
     let http_client = HttpClient::builder()
         .timeout(PROVIDER_REQUEST_TIMEOUT)
         .build()
-        .map_err(|error| {
-            startup_error(format!("failed to configure provider HTTP client: {error}"))
-        })?;
-    let rpc_url = config.ethereum.rpc_url.parse().map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("invalid Ethereum RPC URL: {error}"),
-        )
-    })?;
-    let provider =
-        RootProvider::new(RpcClient::new_http_with_client(http_client, rpc_url)).erased();
-    let simulator = Simulator::new(provider, ChainSpec::mainnet(), config.ethereum.limits)
-        .await
-        .map_err(|error| {
-            startup_error(format!("failed to initialize Ethereum simulation: {error}"))
-        })?;
-
+        .map_err(io::Error::other)?;
     let mut module = RpcModule::new(());
-    rpc::register_evm(&mut module, simulator, tasks)
-        .map_err(|error| startup_error(format!("failed to register EVM RPC method: {error}")))?;
+
+    let ethereum = build_ethereum_simulator(&config.ethereum, &http_client).await?;
+    rpc::register_evm(&mut module, ethereum, tasks.clone()).map_err(io::Error::other)?;
+
+    if let Some(conflux) = &config.conflux {
+        let espace = build_espace_simulator(conflux, &http_client).await?;
+        rpc::register_espace(&mut module, espace, tasks).map_err(io::Error::other)?;
+    }
+
     module
         .register_method("dryrun_health", |_, _, _| Ok::<_, ErrorObjectOwned>("ok"))
-        .map_err(|error| startup_error(format!("failed to register health RPC method: {error}")))?;
+        .map_err(io::Error::other)?;
     Ok(module)
 }
 
-fn startup_error(message: impl Into<String>) -> io::Error {
-    io::Error::other(message.into())
+async fn build_ethereum_simulator(
+    config: &EthereumConfig,
+    http_client: &HttpClient,
+) -> io::Result<evm_simulation::Simulator> {
+    let client = RpcClient::new_http_with_client(http_client.clone(), config.rpc_url.clone());
+    let provider = RootProvider::new(client).erased();
+    evm_simulation::Simulator::new(
+        provider,
+        evm_simulation::ChainSpec::mainnet(),
+        config.limits,
+    )
+    .await
+    .map_err(io::Error::other)
+}
+
+async fn build_espace_simulator(
+    config: &ConfluxConfig,
+    http_client: &HttpClient,
+) -> io::Result<conflux_simulation::espace::Simulator> {
+    let core = conflux_provider::ConfluxProvider::new(RpcClient::new_http_with_client(
+        http_client.clone(),
+        config.core_rpc_url.clone(),
+    ));
+    let espace = RootProvider::new(RpcClient::new_http_with_client(
+        http_client.clone(),
+        config.espace_rpc_url.clone(),
+    ))
+    .erased();
+    conflux_simulation::espace::Simulator::new(
+        core,
+        espace,
+        conflux_simulation::ChainSpec::mainnet(),
+        config.limits,
+    )
+    .await
+    .map_err(io::Error::other)
 }

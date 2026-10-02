@@ -9,3 +9,5 @@ alloy-serde = { workspace = true }
 alloy-sol-types = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+alloy-rpc-types-eth = { workspace = true }
+alloy-consensus = { workspace = true }

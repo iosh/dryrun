@@ -7,6 +7,8 @@ pub enum ErrorCode {
     InvalidInput,
     #[serde(rename = "context.not_found")]
     ContextNotFound,
+    #[serde(rename = "context.inconsistent")]
+    ContextInconsistent,
     #[serde(rename = "simulation.unsupported")]
     Unsupported,
     #[serde(rename = "provider.request_failed")]

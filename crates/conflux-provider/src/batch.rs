@@ -8,19 +8,18 @@ use alloy_json_rpc::{RpcRecv, RpcSend};
 use alloy_rpc_client::{BatchRequest, Waiter};
 
 use crate::{
-    ConfluxProvider, ConfluxProviderError, CoreAccount, CoreAddress, CoreCollateralInfo,
-    CorePoSEconomics, CoreSupplyInfo, CoreVoteParams, EpochNumber,
-    error::{classify_alloy_rpc_error, classify_batch_error},
+    ConfluxProvider, CoreAccount, CoreAddress, CoreCollateralInfo, CorePoSEconomics,
+    CoreSupplyInfo, CoreVoteParams, EpochNumber, Error,
 };
 use alloy_primitives::U256;
 
 #[must_use = "a batch call must be awaited after the batch is sent"]
 pub struct BatchCall<T> {
-    inner: Pin<Box<dyn Future<Output = Result<T, ConfluxProviderError>> + Send>>,
+    inner: Pin<Box<dyn Future<Output = Result<T, Error>> + Send>>,
 }
 
 impl<T> Future for BatchCall<T> {
-    type Output = Result<T, ConfluxProviderError>;
+    type Output = Result<T, Error>;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         self.get_mut().inner.as_mut().poll(context)
@@ -28,64 +27,56 @@ impl<T> Future for BatchCall<T> {
 }
 
 pub struct CoreBatch<'a> {
-    provider: &'a ConfluxProvider,
     inner: BatchRequest<'a>,
 }
 
 impl<'a> CoreBatch<'a> {
     pub(crate) fn new(provider: &'a ConfluxProvider) -> Self {
         Self {
-            provider,
             inner: provider.client().new_batch(),
         }
     }
 
-    pub fn cfx_get_interest_rate(
-        &mut self,
-        epoch: EpochNumber,
-    ) -> Result<BatchCall<U256>, ConfluxProviderError> {
+    pub fn cfx_get_interest_rate(&mut self, epoch: EpochNumber) -> Result<BatchCall<U256>, Error> {
         self.add("cfx_getInterestRate", (epoch,))
     }
 
     pub fn cfx_get_accumulate_interest_rate(
         &mut self,
         epoch: EpochNumber,
-    ) -> Result<BatchCall<U256>, ConfluxProviderError> {
+    ) -> Result<BatchCall<U256>, Error> {
         self.add("cfx_getAccumulateInterestRate", (epoch,))
     }
 
     pub fn cfx_get_supply_info(
         &mut self,
         epoch: EpochNumber,
-    ) -> Result<BatchCall<CoreSupplyInfo>, ConfluxProviderError> {
+    ) -> Result<BatchCall<CoreSupplyInfo>, Error> {
         self.add("cfx_getSupplyInfo", (epoch,))
     }
 
     pub fn cfx_get_collateral_info(
         &mut self,
         epoch: EpochNumber,
-    ) -> Result<BatchCall<CoreCollateralInfo>, ConfluxProviderError> {
+    ) -> Result<BatchCall<CoreCollateralInfo>, Error> {
         self.add("cfx_getCollateralInfo", (epoch,))
     }
 
     pub fn cfx_get_pos_economics(
         &mut self,
         epoch: EpochNumber,
-    ) -> Result<BatchCall<CorePoSEconomics>, ConfluxProviderError> {
+    ) -> Result<BatchCall<CorePoSEconomics>, Error> {
         self.add("cfx_getPoSEconomics", (epoch,))
     }
 
     pub fn cfx_get_params_from_vote(
         &mut self,
         epoch: EpochNumber,
-    ) -> Result<BatchCall<CoreVoteParams>, ConfluxProviderError> {
+    ) -> Result<BatchCall<CoreVoteParams>, Error> {
         self.add("cfx_getParamsFromVote", (epoch,))
     }
 
-    pub fn cfx_get_fee_burnt(
-        &mut self,
-        epoch: EpochNumber,
-    ) -> Result<BatchCall<U256>, ConfluxProviderError> {
+    pub fn cfx_get_fee_burnt(&mut self, epoch: EpochNumber) -> Result<BatchCall<U256>, Error> {
         self.add("cfx_getFeeBurnt", (epoch,))
     }
 
@@ -93,34 +84,30 @@ impl<'a> CoreBatch<'a> {
         &mut self,
         address: CoreAddress,
         epoch: EpochNumber,
-    ) -> Result<BatchCall<CoreAccount>, ConfluxProviderError> {
-        let waiter = self.add_waiter("cfx_getAccount", (address, epoch))?;
-        let provider = self.provider.clone();
-        Ok(self.decode(waiter, "cfx_getAccount", move |wire| {
-            provider.decode_account("cfx_getAccount", wire)
-        }))
+    ) -> Result<BatchCall<CoreAccount>, Error> {
+        self.add("cfx_getAccount", (address, epoch))
     }
 
     pub fn cfx_get_collateral_for_storage(
         &mut self,
         address: CoreAddress,
         epoch: EpochNumber,
-    ) -> Result<BatchCall<U256>, ConfluxProviderError> {
+    ) -> Result<BatchCall<U256>, Error> {
         self.add("cfx_getCollateralForStorage", (address, epoch))
     }
 
-    pub async fn send(self) -> Result<(), ConfluxProviderError> {
-        self.inner
-            .send()
-            .await
-            .map_err(|error| classify_alloy_rpc_error("Core Space typed batch", error))
+    pub async fn send(self) -> Result<(), Error> {
+        self.inner.send().await.map_err(|error| Error::Rpc {
+            method: "Core Space batch",
+            source: error,
+        })
     }
 
     fn add<Params, Response>(
         &mut self,
         method: &'static str,
         params: Params,
-    ) -> Result<BatchCall<Response>, ConfluxProviderError>
+    ) -> Result<BatchCall<Response>, Error>
     where
         Params: RpcSend,
         Response: RpcRecv,
@@ -133,14 +120,17 @@ impl<'a> CoreBatch<'a> {
         &mut self,
         method: &'static str,
         params: Params,
-    ) -> Result<Waiter<Response>, ConfluxProviderError>
+    ) -> Result<Waiter<Response>, Error>
     where
         Params: RpcSend,
         Response: RpcRecv,
     {
         self.inner
             .add_call(method, &params)
-            .map_err(|error| classify_alloy_rpc_error(method, error))
+            .map_err(|error| Error::Rpc {
+                method,
+                source: error,
+            })
     }
 
     fn decode<Response, Output, Decode>(
@@ -152,13 +142,14 @@ impl<'a> CoreBatch<'a> {
     where
         Response: RpcRecv,
         Output: Send + 'static,
-        Decode: FnOnce(Response) -> Result<Output, ConfluxProviderError> + Send + 'static,
+        Decode: FnOnce(Response) -> Result<Output, Error> + Send + 'static,
     {
         BatchCall {
             inner: Box::pin(async move {
-                let response = waiter
-                    .await
-                    .map_err(|error| classify_batch_error(crate::CORE_BATCH_NAME, method, error))?;
+                let response = waiter.await.map_err(|error| Error::Rpc {
+                    method,
+                    source: error,
+                })?;
                 decode(response)
             }),
         }

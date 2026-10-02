@@ -1,7 +1,8 @@
 use alloy::{eips::BlockId, rpc::types::TransactionRequest};
-use evm_simulation::{Error, SimulationRequest};
+use jsonrpsee::types::ErrorObjectOwned;
 use serde::Deserialize;
 use serde_json::Value;
+use simulation_core::ErrorCode;
 
 /// Parameters of the block-based simulation methods.
 #[derive(Deserialize)]
@@ -16,13 +17,13 @@ pub(super) struct BlockRequest {
 }
 
 impl BlockRequest {
-    pub(super) fn into_evm(self) -> Result<SimulationRequest, Error> {
+    pub(super) fn into_parts(self) -> Result<(BlockId, TransactionRequest), ErrorObjectOwned> {
         if self.options.is_some() {
-            return Err(Error::Unsupported("options are not supported".into()));
+            return Err(super::error::rpc_error_object(
+                ErrorCode::Unsupported,
+                "options are not supported".into(),
+            ));
         }
-        Ok(SimulationRequest {
-            block: self.block.unwrap_or_default(),
-            transaction: self.transaction,
-        })
+        Ok((self.block.unwrap_or_default(), self.transaction))
     }
 }
