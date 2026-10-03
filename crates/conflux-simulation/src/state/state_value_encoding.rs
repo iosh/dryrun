@@ -49,27 +49,16 @@ pub(crate) fn encode_core_space_basic_account(
     staking_balance: U256,
     token_collateral_for_storage: U256,
     accumulated_interest_return: U256,
-) -> Option<Box<[u8]>> {
-    if balance.is_zero()
-        && nonce.is_zero()
-        && staking_balance.is_zero()
-        && token_collateral_for_storage.is_zero()
-        && accumulated_interest_return.is_zero()
-    {
-        return None;
-    }
-
-    Some(
-        rlp::encode(&BasicAccount {
-            balance,
-            nonce,
-            staking_balance,
-            collateral_for_storage: token_collateral_for_storage,
-            accumulated_interest_return,
-        })
-        .to_vec()
-        .into_boxed_slice(),
-    )
+) -> Box<[u8]> {
+    rlp::encode(&BasicAccount {
+        balance,
+        nonce,
+        staking_balance,
+        collateral_for_storage: token_collateral_for_storage,
+        accumulated_interest_return,
+    })
+    .to_vec()
+    .into_boxed_slice()
 }
 
 pub(crate) fn encode_core_space_contract_account(
@@ -77,39 +66,25 @@ pub(crate) fn encode_core_space_contract_account(
     token_collateral_for_storage: U256,
     used_storage_point_collateral: U256,
     sponsor_info: CoreSponsorInfo,
-) -> Result<Option<Box<[u8]>>, StateValueEncodingError> {
+) -> Result<Box<[u8]>, StateValueEncodingError> {
     let sponsor_info =
         core_space_sponsor_info_from_rpc(sponsor_info, used_storage_point_collateral)?;
 
-    if account.balance.is_zero()
-        && account.nonce.is_zero()
-        && b256_to_cfx(account.code_hash) == KECCAK_EMPTY
-        && account.staking_balance.is_zero()
-        && token_collateral_for_storage.is_zero()
-        && account.accumulated_interest_return.is_zero()
-        && account.admin.bytes() == [0; 20]
-        && sponsor_info == SponsorInfo::default()
-    {
-        return Ok(None);
-    }
-
-    Ok(Some(
-        rlp::encode(&ContractAccount {
-            balance: u256_to_cfx(account.balance),
-            nonce: u256_to_cfx(account.nonce),
-            code_hash: b256_to_cfx(account.code_hash),
-            staking_balance: u256_to_cfx(account.staking_balance),
-            collateral_for_storage: token_collateral_for_storage,
-            accumulated_interest_return: u256_to_cfx(account.accumulated_interest_return),
-            admin: Address::from(account.admin.bytes()),
-            sponsor_info,
-        })
-        .to_vec()
-        .into_boxed_slice(),
-    ))
+    Ok(rlp::encode(&ContractAccount {
+        balance: u256_to_cfx(account.balance),
+        nonce: u256_to_cfx(account.nonce),
+        code_hash: b256_to_cfx(account.code_hash),
+        staking_balance: u256_to_cfx(account.staking_balance),
+        collateral_for_storage: token_collateral_for_storage,
+        accumulated_interest_return: u256_to_cfx(account.accumulated_interest_return),
+        admin: Address::from(account.admin.bytes()),
+        sponsor_info,
+    })
+    .to_vec()
+    .into_boxed_slice())
 }
 
-pub(crate) fn should_encode_core_space_contract_account(address: Address, code_hash: H256) -> bool {
+pub(crate) fn uses_core_contract_encoding(address: Address, code_hash: H256) -> bool {
     (code_hash != KECCAK_EMPTY && !code_hash.is_zero()) || address.is_contract_address()
 }
 
@@ -157,7 +132,9 @@ pub(crate) fn encode_core_space_vote_list(votes: Vec<VoteStakeInfo>) -> Option<B
     )
 }
 
-// Upstream StorageValue encodes an ownerless slot as the bare U256 value.
+// Upstream interprets None as the storage account's address. Core RPC does not
+// expose the historical owner, so this is a simulation placeholder consumed
+// only with collateral settlement skipped. eSpace does not use this metadata.
 pub(crate) fn encode_storage_slot(value: U256) -> Box<[u8]> {
     rlp::encode(&StorageValue { value, owner: None })
         .to_vec()
@@ -182,6 +159,9 @@ fn core_space_sponsor_info_from_rpc(
         sponsor_gas_bound: u256_to_cfx(info.sponsor_gas_bound),
         sponsor_balance_for_gas: u256_to_cfx(info.sponsor_balance_for_gas),
         sponsor_balance_for_collateral: u256_to_cfx(info.sponsor_balance_for_collateral),
+        // RPC rounds unused points down to whole storage bytes and omits the
+        // initialization bit. Assume initialized, including the ambiguous zero
+        // case. Sponsor deposits can consequently differ from chain execution.
         storage_points: Some(StoragePoints {
             unused: unused_storage_point_collateral,
             used: used_storage_point_collateral,

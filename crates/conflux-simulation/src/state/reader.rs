@@ -1,22 +1,36 @@
 use super::{
+    core_space_internal::{CoreSpaceInternalStateItem, SponsorWhitelistStorageKey},
     state_item::{CoreSpaceStateItem as Core, EspaceStateItem as Eth, StateItem},
     state_value_encoding::*,
 };
 use crate::{StateError, anchor::Anchor, primitive::*};
 use alloy::{
-    primitives::{Address as AlloyAddress, U256 as AlloyU256},
+    primitives::{Address as AlloyAddress, Bytes, U256 as AlloyU256},
     providers::{DynProvider, Provider},
 };
+use alloy_sol_types::{SolCall, sol};
+use cfx_parameters::internal_contract_addresses::SPONSOR_WHITELIST_CONTROL_CONTRACT_ADDRESS;
 use cfx_parameters::staking::DRIPS_PER_STORAGE_COLLATERAL_UNIT;
 use cfx_types::{Address, U256};
-use conflux_provider::{BlockHashOrEpochNumber, ConfluxProvider, CoreAddress, Network};
+use conflux_provider::{
+    BlockHashOrEpochNumber, ConfluxProvider, CoreAddress, CoreTransactionRequest, Network,
+};
 use simulation_core::{Limits, ReadBudget};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
 
 type Cache = HashMap<StateItem, Option<Box<[u8]>>>;
 
+sol! {
+    function isAllWhitelisted(address contractAddress) external view returns (bool);
+    function isWhitelisted(address contractAddress, address user) external view returns (bool);
+}
+
 /// One remote cache and budget for preparation, execution and both views.
+///
+/// Core records approximate collateral owners, storage points and hidden
+/// whitelist entries. Use them only with `ChargeCollateral::Skip`, never for
+/// consensus execution or persistence. RPC failures are still propagated.
 pub(crate) struct StateSource {
     pub anchor: Anchor,
     pub core: ConfluxProvider,
@@ -144,7 +158,7 @@ impl StateSource {
                     "code was not loaded with its eSpace account".into(),
                 ));
             }
-            StateItem::CoreSpace(item) => self.load_core(item).await?,
+            StateItem::CoreSpace(item) => self.load_core(item, &mut cache).await?,
         };
         cache.insert(item, value.clone());
         Ok(value)
@@ -159,7 +173,8 @@ impl StateSource {
         let Some(value) = value else {
             return Ok(0);
         };
-        let account: primitives::account::EthereumAccount = rlp::decode(&value).map_err(invalid)?;
+        let account: primitives::account::EthereumAccount =
+            rlp::decode(&value).map_err(state_unavailable)?;
         account
             .nonce
             .try_into()
@@ -209,7 +224,10 @@ impl StateSource {
         let code_value = if code.is_empty() {
             None
         } else {
-            Some(encode_code(hash, Address::zero(), Arc::new(code.to_vec())).map_err(invalid)?)
+            Some(
+                encode_code(hash, Address::zero(), Arc::new(code.to_vec()))
+                    .map_err(state_unavailable)?,
+            )
         };
         cache.insert(
             StateItem::Espace(Eth::Code {
@@ -226,7 +244,7 @@ impl StateSource {
     }
 
     fn core_address(&self, address: Address) -> Result<CoreAddress, StateError> {
-        CoreAddress::from_bytes(address.0, self.network).map_err(invalid)
+        CoreAddress::from_bytes(address.0, self.network).map_err(state_unavailable)
     }
 
     fn pivot(&self) -> BlockHashOrEpochNumber {
@@ -236,42 +254,50 @@ impl StateSource {
         }
     }
 
-    async fn load_core(&self, item: Core) -> Result<Option<Box<[u8]>>, StateError> {
+    async fn load_core(
+        &self,
+        item: Core,
+        cache: &mut Cache,
+    ) -> Result<Option<Box<[u8]>>, StateError> {
         let epoch = self.anchor.epoch();
         match item {
             Core::Account { address } => {
                 let rpc_address = self.core_address(address)?;
                 let mut batch = self.core.batch();
                 let account = batch.cfx_get_account(rpc_address, epoch)?;
+                let admin = batch.cfx_get_admin(rpc_address, epoch)?;
                 let collateral = batch.cfx_get_collateral_for_storage(rpc_address, epoch)?;
                 batch.send().await?;
-                let (account, collateral) = tokio::try_join!(account, collateral)?;
+                let (account, admin, collateral) = tokio::try_join!(account, admin, collateral)?;
+                // getAccount also returns an empty record for an absent account.
+                // getAdmin distinguishes absence from an existing zero account.
+                if admin.is_none() {
+                    return Ok(None);
+                }
                 let collateral = u256_to_cfx(collateral);
                 let points = used_storage_point_collateral(
                     u256_to_cfx(account.collateral_for_storage),
                     collateral,
                 )
-                .map_err(invalid)?;
-                if should_encode_core_space_contract_account(
-                    address,
-                    b256_to_cfx(account.code_hash),
-                ) {
+                .map_err(state_unavailable)?;
+                if uses_core_contract_encoding(address, b256_to_cfx(account.code_hash)) {
                     let sponsor = self.core.cfx_get_sponsor_info(rpc_address, epoch).await?;
                     encode_core_space_contract_account(&account, collateral, points, sponsor)
-                        .map_err(invalid)
+                        .map(Some)
+                        .map_err(state_unavailable)
                 } else {
                     if !points.is_zero() {
                         return Err(StateError::Unavailable(
                             "basic account has storage-point collateral".into(),
                         ));
                     }
-                    Ok(encode_core_space_basic_account(
+                    Ok(Some(encode_core_space_basic_account(
                         u256_to_cfx(account.balance),
                         u256_to_cfx(account.nonce),
                         u256_to_cfx(account.staking_balance),
                         collateral,
                         u256_to_cfx(account.accumulated_interest_return),
-                    ))
+                    )))
                 }
             }
             Core::Code { address, code_hash } => {
@@ -282,9 +308,11 @@ impl StateSource {
                 if code.is_empty() && code_hash == keccak_hash::KECCAK_EMPTY {
                     return Ok(None);
                 }
+                // RPC does not expose the historical collateral owner. The
+                // account address is a placeholder; Skip never refunds it.
                 encode_code(code_hash, address, Arc::new(code.to_vec()))
                     .map(Some)
-                    .map_err(invalid)
+                    .map_err(state_unavailable)
             }
             Core::StorageSlot { address, slot } => {
                 let value = self
@@ -326,16 +354,97 @@ impl StateSource {
                     .collect();
                 Ok(encode_core_space_vote_list(values))
             }
-            Core::InternalContractStorage(_) => Err(StateError::Unavailable(
-                "raw sponsor whitelist state is not available through Core RPC".into(),
-            )),
+            Core::InternalContractStorage(CoreSpaceInternalStateItem::SponsorWhitelist(key)) => {
+                self.load_whitelist_entry(key, cache).await
+            }
             _ => Err(StateError::Unavailable(
                 "global state was not loaded".into(),
             )),
         }
     }
+
+    async fn load_whitelist_entry(
+        &self,
+        key: SponsorWhitelistStorageKey,
+        cache: &mut Cache,
+    ) -> Result<Option<Box<[u8]>>, StateError> {
+        let all_whitelisted_key = StateItem::CoreSpace(Core::InternalContractStorage(
+            CoreSpaceInternalStateItem::SponsorWhitelist(SponsorWhitelistStorageKey {
+                contract_address: key.contract_address,
+                account_address: Address::zero(),
+            }),
+        ));
+        let all_whitelisted = if let Some(value) = cache.get(&all_whitelisted_key) {
+            value.is_some()
+        } else {
+            // read() has already charged for the requested item.
+            if !key.account_address.is_zero() {
+                self.budget.record_state_read()?;
+            }
+            let output = self
+                .call_sponsor_whitelist(
+                    isAllWhitelistedCall {
+                        contractAddress: address_from_cfx(key.contract_address),
+                    }
+                    .abi_encode(),
+                )
+                .await?;
+            let all_whitelisted = isAllWhitelistedCall::abi_decode_returns_validate(&output)
+                .map_err(state_unavailable)?;
+            cache.insert(
+                all_whitelisted_key,
+                all_whitelisted.then(|| encode_storage_slot(U256::one())),
+            );
+            all_whitelisted
+        };
+        let has_entry = if key.account_address.is_zero() {
+            all_whitelisted
+        } else if all_whitelisted {
+            // The public permission hides the individual entry. Assume it is
+            // absent. A local removal of public permission may therefore make
+            // a later isWhitelisted query differ from the chain.
+            false
+        } else {
+            let output = self
+                .call_sponsor_whitelist(
+                    isWhitelistedCall {
+                        contractAddress: address_from_cfx(key.contract_address),
+                        user: address_from_cfx(key.account_address),
+                    }
+                    .abi_encode(),
+                )
+                .await?;
+            isWhitelistedCall::abi_decode_returns_validate(&output).map_err(state_unavailable)?
+        };
+        Ok(has_entry.then(|| encode_storage_slot(U256::one())))
+    }
+
+    async fn call_sponsor_whitelist(&self, data: Vec<u8>) -> Result<Bytes, StateError> {
+        Ok(self
+            .core
+            .cfx_call(
+                CoreTransactionRequest {
+                    to: Some(self.core_address(SPONSOR_WHITELIST_CONTROL_CONTRACT_ADDRESS)?),
+                    data: Some(data.into()),
+                    from: None,
+                    gas: None,
+                    gas_price: None,
+                    value: None,
+                    nonce: None,
+                    storage_limit: None,
+                    access_list: None,
+                    max_fee_per_gas: None,
+                    max_priority_fee_per_gas: None,
+                    transaction_type: None,
+                    chain_id: None,
+                    epoch_height: None,
+                },
+                Some(self.pivot()),
+            )
+            .await?)
+    }
 }
 
-fn invalid(error: impl std::fmt::Display) -> StateError {
+fn state_unavailable(error: impl std::fmt::Display) -> StateError {
     StateError::Unavailable(error.to_string())
 }

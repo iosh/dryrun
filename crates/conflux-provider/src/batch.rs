@@ -88,6 +88,14 @@ impl<'a> CoreBatch<'a> {
         self.add("cfx_getAccount", (address, epoch))
     }
 
+    pub fn cfx_get_admin(
+        &mut self,
+        address: CoreAddress,
+        epoch: EpochNumber,
+    ) -> Result<BatchCall<Option<CoreAddress>>, Error> {
+        self.add("cfx_getAdmin", (address, epoch))
+    }
+
     pub fn cfx_get_collateral_for_storage(
         &mut self,
         address: CoreAddress,
