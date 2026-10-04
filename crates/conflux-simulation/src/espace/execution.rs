@@ -5,27 +5,20 @@ use crate::{
     execution,
     primitive::*,
     state::{StateSource, new_state},
-    tracer::Calls,
+    tracer::Tracer,
     view::View,
 };
-use alloy::primitives::{Address, B256, LogData, U256};
+use alloy::primitives::{Address, U256};
 use cfx_executor::{
-    executive::{ExecutionError, ExecutionOutcome, ToRepackError, TxDropError},
+    executive::{ExecutionError, ExecutionOutcome},
     machine::Machine,
     state::State,
-    verification::{TransactionVerifier, VerifyTxLocalMode, VerifyTxMode},
-};
-use cfx_parameters::{
-    consensus::TRANSACTION_DEFAULT_EPOCH_BOUND, tx_pool::TXPOOL_DEFAULT_NONCE_BITS,
 };
 use cfx_types::Space;
 use cfx_vm_types::{Env, Spec};
-use primitives::{SignedTransaction, transaction::TransactionError};
-use simulation_core::{
-    AccountDiff, CallFrame, ChangeSet, Diff, ExecutionStatus, ExecutionTrace, FeePayment, Log,
-    Rejection, RejectionReason, derive_changes,
-};
-use std::{collections::BTreeMap, sync::Arc};
+use primitives::SignedTransaction;
+use simulation_core::{ChangeSet, ExecutionStatus, FeePayment, derive_changes};
+use std::sync::Arc;
 use tokio::runtime::Handle;
 
 pub(crate) fn execute(
@@ -34,36 +27,23 @@ pub(crate) fn execute(
     machine: &Machine,
     context: BlockContext,
     tx: SignedTransaction,
-) -> Result<Outcome, Error> {
+) -> Result<Outcome<Execution>, Error> {
     let spec = machine.spec(context.number, context.epoch_height);
-    let verifier =
-        TransactionVerifier::new(TRANSACTION_DEFAULT_EPOCH_BOUND, TXPOOL_DEFAULT_NONCE_BITS);
-    if let Err(error) = verifier.verify_transaction_common(
-        &tx,
-        cfx_types::AllChainID::new(
-            machine
-                .params()
-                .chain_id(context.epoch_height, Space::Native),
-            machine
-                .params()
-                .chain_id(context.epoch_height, Space::Ethereum),
-        ),
-        context.epoch_height,
-        &machine.params().transition_heights,
-        VerifyTxMode::Local(VerifyTxLocalMode::Full, &spec),
-    ) {
-        return Ok(Outcome::Rejected(static_rejection(error)));
+    if let Err(rejection) =
+        execution::verify_transaction_static(&tx, machine, &spec, context.epoch_height)
+    {
+        return Ok(Outcome::Rejected(rejection));
     }
     let mut state = new_state(Arc::clone(&source), runtime.clone())?;
     let env = context.env(machine, &state, &tx);
-    let mut calls = Calls::new(machine, context.number, context.epoch_height);
-    let outcome = execution::transact(&mut state, machine, &env, &spec, &tx, &mut calls)?;
+    let mut tracer = Tracer::new(machine, &env, &spec, source.network);
+    let outcome = execution::transact(&mut state, machine, &env, &spec, &tx, &mut tracer)?;
     let (failure, executed) = match outcome {
         ExecutionOutcome::NotExecutedDrop(error) => {
-            return Ok(Outcome::Rejected(drop_rejection(error)));
+            return Ok(Outcome::Rejected(execution::drop_rejection(error)));
         }
         ExecutionOutcome::NotExecutedToReconsiderPacking(error) => {
-            return Ok(Outcome::Rejected(repack_rejection(error)));
+            return Ok(Outcome::Rejected(execution::repack_rejection(error)));
         }
         ExecutionOutcome::ExecutionErrorBumpNonce(error, executed) => (Some(error), executed),
         ExecutionOutcome::Finished(executed) => (None, executed),
@@ -84,7 +64,7 @@ pub(crate) fn execute(
         amount: u256_from_cfx(executed.fee),
     };
     let payment = FeePayment {
-        payer: address_from_cfx(tx.sender().address),
+        payer: Some(address_from_cfx(tx.sender().address)),
         amount: fee.amount,
         beneficiary: address_from_cfx(context.author),
         reward: U256::ZERO,
@@ -105,7 +85,7 @@ pub(crate) fn execute(
                 &env,
                 &spec,
                 state,
-                calls.frames,
+                tracer,
                 executed.logs,
                 &payment,
             ),
@@ -133,143 +113,16 @@ fn derive(
     env: &Env,
     spec: &Spec,
     after: State,
-    calls: Vec<CallFrame<Address>>,
+    tracer: Tracer<'_, Address>,
     logs: Vec<primitives::LogEntry>,
     payment: &FeePayment<Address>,
 ) -> Result<ChangeSet<Address>, Error> {
     let before = new_state(Arc::clone(&source), runtime)?;
-    let accounts = account_diffs(&before, &after)?;
-    let logs = logs
-        .into_iter()
-        .filter(|log| log.space == Space::Ethereum)
-        .map(|log| Log {
-            address: address_from_cfx(log.address),
-            data: LogData::new_unchecked(
-                log.topics.into_iter().map(b256_from_cfx).collect(),
-                log.data.into(),
-            ),
-        })
-        .collect();
-    let trace = ExecutionTrace {
-        calls,
-        logs,
-        accounts,
-    };
+    let trace = tracer.into_trace(&before, &after, logs)?;
     derive_changes(
         &trace,
         payment,
         &View::new(before, machine, env, spec, &source.budget),
         &View::new(after, machine, env, spec, &source.budget),
     )
-}
-
-fn account_diffs(before: &State, after: &State) -> Result<BTreeMap<Address, AccountDiff>, Error> {
-    let mut accounts = BTreeMap::new();
-    for (address, entry) in &after.committed_cache {
-        if address.space != Space::Ethereum || !entry.is_dirty() {
-            continue;
-        }
-        let Some(account) = entry.account() else {
-            continue;
-        };
-        let mut storage = BTreeMap::new();
-        for key in account.modified_storage_keys() {
-            if key.len() != 32 {
-                return Err(Error::Execution(
-                    "eSpace storage key is not 32 bytes".into(),
-                ));
-            }
-            let old = B256::from(u256_from_cfx(before.storage_at(address, &key)?));
-            let new = B256::from(u256_from_cfx(after.storage_at(address, &key)?));
-            if old != new {
-                storage.insert(
-                    B256::from_slice(&key),
-                    Diff {
-                        before: old,
-                        after: new,
-                    },
-                );
-            }
-        }
-        let nonce = |state: &State| -> Result<u64, Error> {
-            state
-                .nonce(address)?
-                .try_into()
-                .map_err(|_| Error::Execution("account nonce exceeds u64".into()))
-        };
-        let delegation = |state: &State| -> Result<Option<Address>, Error> {
-            Ok(state
-                .code(address)?
-                .and_then(|code| primitives::transaction::extract_7702_payload(&code))
-                .map(address_from_cfx))
-        };
-        accounts.insert(
-            address_from_cfx(address.address),
-            AccountDiff {
-                balance: Diff {
-                    before: u256_from_cfx(before.balance(address)?),
-                    after: u256_from_cfx(after.balance(address)?),
-                },
-                nonce: Diff {
-                    before: nonce(before)?,
-                    after: nonce(after)?,
-                },
-                code_hash: Diff {
-                    before: b256_from_cfx(before.code_hash(address)?),
-                    after: b256_from_cfx(after.code_hash(address)?),
-                },
-                delegation: Diff {
-                    before: delegation(before)?,
-                    after: delegation(after)?,
-                },
-                storage,
-            },
-        );
-    }
-    Ok(accounts)
-}
-
-fn static_rejection(error: TransactionError) -> Rejection {
-    use RejectionReason as R;
-    let reason = match error {
-        TransactionError::ChainIdMismatch { .. } => R::InvalidChainId,
-        TransactionError::NotEnoughBaseGas { .. } => R::IntrinsicGasTooLow,
-        TransactionError::PriortyGreaterThanMaxFee => R::TipAboveFeeCap,
-        TransactionError::CreateInitCodeSizeLimit => R::InitCodeTooLarge,
-        _ => R::InvalidTransaction,
-    };
-    Rejection {
-        reason,
-        message: error.to_string(),
-    }
-}
-
-fn drop_rejection(error: TxDropError) -> Rejection {
-    use RejectionReason as R;
-    let reason = match error {
-        TxDropError::OldNonce(..) => R::NonceTooLow,
-        TxDropError::NotEnoughGasLimit { .. } => R::IntrinsicGasTooLow,
-        TxDropError::SenderWithCode(_) => R::SenderNotEoa,
-        TxDropError::InvalidRecipientAddress(_) => R::InvalidTransaction,
-    };
-    Rejection {
-        reason,
-        message: format!("{error:?}"),
-    }
-}
-
-fn repack_rejection(error: ToRepackError) -> Rejection {
-    use RejectionReason as R;
-    let reason = match error {
-        ToRepackError::InvalidNonce { .. } => R::NonceTooHigh,
-        ToRepackError::SenderDoesNotExist | ToRepackError::NotEnoughBalance { .. } => {
-            R::InsufficientFunds
-        }
-        ToRepackError::NotEnoughBaseFee { .. } => R::FeeCapTooLow,
-        _ => R::InvalidTransaction,
-    };
-    Rejection {
-        reason,
-        message: format!("{error:?}"),
-    }
 }

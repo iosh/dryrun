@@ -1,7 +1,7 @@
 use alloy_primitives::Bytes;
 use serde::{Serialize, Serializer};
 
-use crate::{ChainAddress, ChangeSet, CodedError, ErrorObject};
+use crate::{CodedError, ErrorObject};
 
 /// How an executed transaction ended. Only a successful execution has
 /// changes; deriving them may fail independently of the execution.
@@ -9,13 +9,13 @@ use crate::{ChainAddress, ChangeSet, CodedError, ErrorObject};
 #[serde(
     tag = "status",
     rename_all = "camelCase",
-    bound(serialize = "A: ChainAddress, E: CodedError")
+    bound(serialize = "C: Serialize, E: CodedError")
 )]
-pub enum ExecutionStatus<A, E> {
+pub enum ExecutionStatus<C, E> {
     Success {
         output: Bytes,
         #[serde(serialize_with = "serialize_changes")]
-        changes: Result<ChangeSet<A>, E>,
+        changes: Result<C, E>,
     },
     Reverted {
         output: Bytes,
@@ -28,7 +28,7 @@ pub enum ExecutionStatus<A, E> {
     },
 }
 
-impl<A, E> ExecutionStatus<A, E> {
+impl<C, E> ExecutionStatus<C, E> {
     pub fn reverted(output: Bytes) -> Self {
         let reason =
             alloy_sol_types::decode_revert_reason(&output).filter(|reason| !reason.is_empty());
@@ -36,12 +36,9 @@ impl<A, E> ExecutionStatus<A, E> {
     }
 }
 
-fn serialize_changes<A, E, S>(
-    changes: &Result<ChangeSet<A>, E>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
+fn serialize_changes<C, E, S>(changes: &Result<C, E>, serializer: S) -> Result<S::Ok, S::Error>
 where
-    A: ChainAddress,
+    C: Serialize,
     E: CodedError,
     S: Serializer,
 {
@@ -83,4 +80,30 @@ pub enum RejectionReason {
     InitCodeTooLarge,
     /// Any other violation of the transaction validity rules; see the message.
     InvalidTransaction,
+}
+
+#[derive(Debug)]
+pub enum Outcome<T> {
+    Rejected(Rejection),
+    Executed(Box<T>),
+}
+
+impl<T: Serialize> Serialize for Outcome<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Rejected<'a> {
+            status: &'static str,
+            #[serde(flatten)]
+            rejection: &'a Rejection,
+        }
+
+        match self {
+            Self::Rejected(rejection) => Rejected {
+                status: "rejected",
+                rejection,
+            }
+            .serialize(serializer),
+            Self::Executed(execution) => execution.serialize(serializer),
+        }
+    }
 }

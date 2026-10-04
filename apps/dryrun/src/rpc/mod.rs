@@ -92,9 +92,7 @@ where
     Ok(())
 }
 
-fn log_changes_error<E: CodedError + Debug>(
-    status: &ExecutionStatus<alloy::primitives::Address, E>,
-) {
+fn log_changes_error<C, E: CodedError + Debug>(status: &ExecutionStatus<C, E>) {
     if let ExecutionStatus::Success {
         changes: Err(error),
         ..

@@ -3,14 +3,15 @@ use crate::{ChainSpec, Error, anchor::Anchor, env::BlockContext, state::StateSou
 use alloy::{
     eips::{BlockId, BlockNumHash},
     primitives::{Address, U256},
-    providers::{DynProvider, Provider},
+    providers::DynProvider,
     rpc::types::TransactionRequest,
 };
 use cfx_executor::machine::Machine;
 use cfx_types::Space;
 use conflux_provider::ConfluxProvider;
 use serde::{Serialize, Serializer};
-use simulation_core::{ExecutionStatus, Limits, Rejection};
+use simulation_core::Outcome;
+use simulation_core::{ExecutionStatus, Limits};
 use std::sync::Arc;
 use tokio::runtime::Handle;
 
@@ -34,13 +35,7 @@ pub struct Simulation {
     pub block: BlockNumHash,
     /// The transaction as executed, with omitted fields filled in.
     pub transaction: TransactionRequest,
-    pub outcome: Outcome,
-}
-
-#[derive(Debug)]
-pub enum Outcome {
-    Rejected(Rejection),
-    Executed(Box<Execution>),
+    pub outcome: Outcome<Execution>,
 }
 
 #[derive(Debug, Serialize)]
@@ -52,7 +47,7 @@ pub struct Execution {
     pub gas_charged: u64,
     pub fee: Fee,
     #[serde(flatten)]
-    pub status: ExecutionStatus<Address, Error>,
+    pub status: ExecutionStatus<simulation_core::ChangeSet<Address>, Error>,
 }
 
 /// The transaction fee. Native balance changes exclude it.
@@ -76,45 +71,7 @@ impl Simulator {
         chain: ChainSpec,
         limits: Limits,
     ) -> Result<Self, Error> {
-        let actual = espace
-            .get_chain_id()
-            .await
-            .map_err(|source| Error::EspaceProvider {
-                operation: "eth_chainId",
-                source,
-            })?;
-        let expected = u64::from(chain.params.chain_id(0, Space::Ethereum));
-        if actual != expected {
-            return Err(Error::ChainMismatch {
-                endpoint: "eSpace",
-                field: "chainId",
-                expected,
-                actual: U256::from(actual),
-            });
-        }
-        let status = core.cfx_get_status().await?;
-        for (field, actual, expected) in [
-            (
-                "chainId",
-                status.chain_id,
-                u64::from(chain.params.chain_id(0, Space::Native)),
-            ),
-            (
-                "ethereumSpaceChainId",
-                status.ethereum_space_chain_id,
-                expected,
-            ),
-            ("networkId", status.network_id, chain.params.network_id),
-        ] {
-            if actual != U256::from(expected) {
-                return Err(Error::ChainMismatch {
-                    endpoint: "Core Space",
-                    field,
-                    expected,
-                    actual,
-                });
-            }
-        }
+        crate::endpoint::check_network(&chain, &core, &espace).await?;
         let machine = Arc::new(chain.machine());
         Ok(Self {
             core,
@@ -166,26 +123,6 @@ impl Simulator {
             transaction,
             outcome,
         })
-    }
-}
-
-impl Serialize for Outcome {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        #[derive(Serialize)]
-        struct Rejected<'a> {
-            status: &'static str,
-            #[serde(flatten)]
-            rejection: &'a Rejection,
-        }
-
-        match self {
-            Self::Rejected(rejection) => Rejected {
-                status: "rejected",
-                rejection,
-            }
-            .serialize(serializer),
-            Self::Executed(execution) => execution.serialize(serializer),
-        }
     }
 }
 

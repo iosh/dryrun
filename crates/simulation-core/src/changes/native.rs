@@ -12,7 +12,7 @@ pub(super) fn balances<A: ChainAddress>(
         .iter()
         .filter_map(|(address, account)| {
             let mut after = account.balance.after;
-            if *address == fee.payer {
+            if Some(*address) == fee.payer {
                 after += fee.amount;
             }
             if *address == fee.beneficiary {

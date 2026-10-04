@@ -42,7 +42,8 @@ pub enum CallResult {
 /// removed from the native balance changes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FeePayment<A> {
-    pub payer: A,
+    /// None when payment comes from a protocol pool, not an ordinary balance.
+    pub payer: Option<A>,
     pub amount: U256,
     pub beneficiary: A,
     pub reward: U256,

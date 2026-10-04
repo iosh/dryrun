@@ -16,5 +16,5 @@ pub use changes::{
 };
 pub use error::{CodedError, ErrorCode, ErrorObject};
 pub use limits::{LimitExceeded, Limits, ReadBudget, Resource};
-pub use status::{ExecutionStatus, Rejection, RejectionReason};
+pub use status::{ExecutionStatus, Outcome, Rejection, RejectionReason};
 pub use trace::{AccountDiff, CallFrame, CallScheme, Diff, ExecutionTrace, Log};

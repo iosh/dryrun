@@ -26,7 +26,7 @@ pub(crate) fn execute(
     env: &EvmEnv,
     tx: TxEnv,
     budget: &ReadBudget,
-) -> Result<Outcome, Error> {
+) -> Result<Outcome<Execution>, Error> {
     let block = &env.block_env;
     let caller = tx.caller;
     let gas_price = tx.effective_gas_price(u128::from(block.basefee));
@@ -62,7 +62,7 @@ pub(crate) fn execute(
         gas_price
     };
     let payment = FeePayment {
-        payer: caller,
+        payer: Some(caller),
         amount: fee.amount,
         beneficiary: block.beneficiary,
         reward: U256::from(gas_used) * U256::from(beneficiary_price),
@@ -150,7 +150,7 @@ fn account_diffs(
                         before: B256::from(value.original_value),
                         after: B256::from(after),
                     };
-                    (B256::from(*slot), diff)
+                    (B256::from(*slot).to_vec().into(), diff)
                 })
             })
             .collect();
@@ -160,8 +160,8 @@ fn account_diffs(
                 after: after.balance,
             },
             nonce: Diff {
-                before: before.nonce,
-                after: after.nonce,
+                before: U256::from(before.nonce),
+                after: U256::from(after.nonce),
             },
             code_hash: Diff {
                 before: before.code_hash,

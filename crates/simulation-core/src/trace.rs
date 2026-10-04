@@ -54,12 +54,12 @@ pub struct Log<A> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AccountDiff {
     pub balance: Diff<U256>,
-    pub nonce: Diff<u64>,
+    pub nonce: Diff<U256>,
     pub code_hash: Diff<B256>,
     /// EIP-7702 delegation target.
     pub delegation: Diff<Option<Address>>,
     /// Slots whose value changed.
-    pub storage: BTreeMap<B256, Diff<B256>>,
+    pub storage: BTreeMap<Bytes, Diff<B256>>,
 }
 
 impl AccountDiff {

@@ -8,7 +8,7 @@ use alloy::{
 };
 use revm::primitives::hardfork::SpecId;
 use serde::{Serialize, Serializer};
-use simulation_core::{ExecutionStatus, Limits, Rejection};
+use simulation_core::{ExecutionStatus, Limits, Outcome};
 use tokio::runtime::Handle;
 
 use crate::{
@@ -36,13 +36,7 @@ pub struct Simulation {
     pub block: BlockNumHash,
     /// The transaction as executed, with omitted fields filled in.
     pub transaction: TransactionRequest,
-    pub outcome: Outcome,
-}
-
-#[derive(Debug)]
-pub enum Outcome {
-    Rejected(Rejection),
-    Executed(Box<Execution>),
+    pub outcome: Outcome<Execution>,
 }
 
 #[derive(Debug, Serialize)]
@@ -52,7 +46,7 @@ pub struct Execution {
     pub gas_used: u64,
     pub fee: Fee,
     #[serde(flatten)]
-    pub status: ExecutionStatus<Address, Error>,
+    pub status: ExecutionStatus<simulation_core::ChangeSet<Address>, Error>,
 }
 
 /// The transaction fee. Native balance changes exclude it.
@@ -131,26 +125,6 @@ impl Simulator {
         })
         .await
         .map_err(Error::Runtime)?
-    }
-}
-
-impl Serialize for Outcome {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        #[derive(Serialize)]
-        struct Rejected<'a> {
-            status: &'static str,
-            #[serde(flatten)]
-            rejection: &'a Rejection,
-        }
-
-        match self {
-            Self::Rejected(rejection) => Rejected {
-                status: "rejected",
-                rejection,
-            }
-            .serialize(serializer),
-            Self::Executed(execution) => execution.serialize(serializer),
-        }
     }
 }
 

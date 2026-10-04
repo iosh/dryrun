@@ -13,4 +13,5 @@ mod transaction;
 pub use chain::ChainSpec;
 pub use db::StateError;
 pub use error::Error;
-pub use simulator::{Execution, Fee, Outcome, Simulation, SimulationRequest, Simulator};
+pub use simulation_core::Outcome;
+pub use simulator::{Execution, Fee, Simulation, SimulationRequest, Simulator};

@@ -36,7 +36,7 @@ pub(crate) struct StateSource {
     pub core: ConfluxProvider,
     pub espace: DynProvider,
     pub budget: ReadBudget,
-    network: Network,
+    pub network: Network,
     cache: Mutex<Cache>,
 }
 
