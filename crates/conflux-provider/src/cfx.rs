@@ -1,7 +1,14 @@
 use crate::{ConfluxProvider, CoreAddress, Error, types::*};
 use alloy_primitives::{B256, Bytes, U256};
+use alloy_transport::TransportError;
+use cfx_rpc_cfx_types::TransactionRequest;
+use serde::Deserialize;
 
 impl ConfluxProvider {
+    pub async fn pos_get_block_by_hash(&self, hash: B256) -> Result<Option<PosBlock>, Error> {
+        self.request("pos_getBlockByHash", (hash,)).await
+    }
+
     pub async fn cfx_get_next_nonce(
         &self,
         address: CoreAddress,
@@ -20,7 +27,7 @@ impl ConfluxProvider {
 
     pub async fn cfx_estimate_gas_and_collateral(
         &self,
-        request: EstimateGasAndCollateralRequest,
+        request: TransactionRequest,
         epoch: EpochNumber,
     ) -> Result<GasAndCollateralEstimate, Error> {
         self.request("cfx_estimateGasAndCollateral", (request, epoch))
@@ -152,18 +159,24 @@ impl ConfluxProvider {
         slot: U256,
         selector: Option<crate::BlockHashOrEpochNumber>,
     ) -> Result<Option<B256>, Error> {
-        match selector {
-            Some(selector) => {
-                self.request("cfx_getStorageAt", (address, slot, selector))
-                    .await
-            }
-            None => self.request("cfx_getStorageAt", (address, slot)).await,
+        let method = "cfx_getStorageAt";
+        let response: serde_json::Value = match selector {
+            Some(selector) => self.request(method, (address, slot, selector)).await?,
+            None => self.request(method, (address, slot)).await?,
+        };
+        // Public endpoints may encode an absent slot as empty bytes instead of null.
+        if response.as_str() == Some("0x") {
+            return Ok(None);
         }
+        Option::<B256>::deserialize(&response).map_err(|error| Error::Rpc {
+            method,
+            source: TransportError::deser_err(error, response.to_string()),
+        })
     }
 
     pub async fn cfx_call(
         &self,
-        request: CoreTransactionRequest,
+        request: TransactionRequest,
         selector: Option<crate::BlockHashOrEpochNumber>,
     ) -> Result<Bytes, Error> {
         match selector {

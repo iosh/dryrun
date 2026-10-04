@@ -1,114 +1,7 @@
-use alloy_primitives::{B256, Bytes, U256};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use alloy_primitives::{B256, U256};
+use serde::{Deserialize, Serialize};
 
 use crate::CoreAddress;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CoreTransactionType {
-    Legacy,
-    AccessList,
-    DynamicFee,
-}
-
-impl Serialize for CoreTransactionType {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let value = match self {
-            Self::Legacy => U256::ZERO,
-            Self::AccessList => U256::from(1_u8),
-            Self::DynamicFee => U256::from(2_u8),
-        };
-        value.serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for CoreTransactionType {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = U256::deserialize(deserializer)?;
-        match value {
-            value if value.is_zero() => Ok(Self::Legacy),
-            value if value == U256::from(1_u8) => Ok(Self::AccessList),
-            value if value == U256::from(2_u8) => Ok(Self::DynamicFee),
-            value => Err(serde::de::Error::custom(format!(
-                "unsupported Core transaction type {value}"
-            ))),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CoreAccessListItem {
-    pub address: CoreAddress,
-    pub storage_keys: Vec<B256>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EstimateGasAndCollateralRequest {
-    pub from: CoreAddress,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub to: Option<CoreAddress>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gas_price: Option<U256>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_fee_per_gas: Option<U256>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_priority_fee_per_gas: Option<U256>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gas: Option<U256>,
-    pub value: U256,
-    pub data: Bytes,
-    pub nonce: U256,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub storage_limit: Option<U256>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub access_list: Option<Vec<CoreAccessListItem>>,
-    #[serde(rename = "type")]
-    pub transaction_type: CoreTransactionType,
-    pub chain_id: U256,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub epoch_height: Option<U256>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CoreTransactionRequest {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub from: Option<CoreAddress>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub to: Option<CoreAddress>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gas_price: Option<U256>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub gas: Option<U256>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<U256>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<Bytes>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub nonce: Option<U256>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub storage_limit: Option<U256>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub access_list: Option<Vec<CoreAccessListItem>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_fee_per_gas: Option<U256>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_priority_fee_per_gas: Option<U256>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "type")]
-    pub transaction_type: Option<U256>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub chain_id: Option<U256>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub epoch_height: Option<U256>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -219,4 +112,20 @@ pub struct CoreRpcBlock {
     pub timestamp: U256,
     pub base_fee_per_gas: Option<U256>,
     pub pos_reference: Option<B256>,
+}
+
+/// PoS context referenced by a Core pivot.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PosBlock {
+    pub hash: B256,
+    pub height: U256,
+    pub pivot_decision: Option<PivotDecision>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PivotDecision {
+    pub block_hash: B256,
+    pub height: U256,
 }

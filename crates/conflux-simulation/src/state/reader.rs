@@ -12,9 +12,7 @@ use alloy_sol_types::{SolCall, sol};
 use cfx_parameters::internal_contract_addresses::SPONSOR_WHITELIST_CONTROL_CONTRACT_ADDRESS;
 use cfx_parameters::staking::DRIPS_PER_STORAGE_COLLATERAL_UNIT;
 use cfx_types::{Address, U256};
-use conflux_provider::{
-    BlockHashOrEpochNumber, ConfluxProvider, CoreAddress, CoreTransactionRequest, Network,
-};
+use conflux_provider::{BlockHashOrEpochNumber, ConfluxProvider, CoreAddress, Network};
 use simulation_core::{Limits, ReadBudget};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::Mutex;
@@ -423,21 +421,16 @@ impl StateSource {
         Ok(self
             .core
             .cfx_call(
-                CoreTransactionRequest {
-                    to: Some(self.core_address(SPONSOR_WHITELIST_CONTROL_CONTRACT_ADDRESS)?),
+                cfx_rpc_cfx_types::TransactionRequest {
+                    to: Some(
+                        cfx_rpc_cfx_types::RpcAddress::try_from_h160(
+                            SPONSOR_WHITELIST_CONTROL_CONTRACT_ADDRESS,
+                            self.network.into(),
+                        )
+                        .map_err(state_unavailable)?,
+                    ),
                     data: Some(data.into()),
-                    from: None,
-                    gas: None,
-                    gas_price: None,
-                    value: None,
-                    nonce: None,
-                    storage_limit: None,
-                    access_list: None,
-                    max_fee_per_gas: None,
-                    max_priority_fee_per_gas: None,
-                    transaction_type: None,
-                    chain_id: None,
-                    epoch_height: None,
+                    ..Default::default()
                 },
                 Some(self.pivot()),
             )

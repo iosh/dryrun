@@ -388,6 +388,16 @@ fn convert_bits(
     Ok(result)
 }
 
+impl From<Network> for cfx_addr::Network {
+    fn from(network: Network) -> Self {
+        match network {
+            Network::Main => Self::Main,
+            Network::Test => Self::Test,
+            Network::Id(id) => Self::Id(id),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{AddressError, CoreAddress, Network};
