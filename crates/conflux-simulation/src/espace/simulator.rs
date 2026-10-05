@@ -1,5 +1,5 @@
 use super::{execution, transaction};
-use crate::{ChainSpec, Error, anchor::Anchor, env::BlockContext, state::StateSource};
+use crate::{ChainSpec, Error, context::BlockContext, state::StateSource};
 use alloy::{
     eips::{BlockId, BlockNumHash},
     primitives::{Address, U256},
@@ -84,9 +84,10 @@ impl Simulator {
 
     pub async fn simulate(&self, request: SimulationRequest) -> Result<Simulation, Error> {
         let preparation = transaction::Preparation::new(request.transaction)?;
-        let (anchor, pivot, header) =
-            Anchor::fetch(&self.core, &self.espace, request.block).await?;
-        let context = BlockContext::new(&pivot, &header, &self.chain.params)?;
+        let context =
+            BlockContext::fetch_block(&self.core, &self.espace, request.block, &self.chain.params)
+                .await?;
+        let anchor = context.anchor;
         let source = Arc::new(
             StateSource::new(
                 anchor,
@@ -107,7 +108,7 @@ impl Simulator {
                 context.epoch_height >= self.chain.params.transition_heights.cip1559,
             )
             .await?;
-        anchor.check(&self.core).await?;
+        anchor.check_pivot(&self.core).await?;
         let runtime = Handle::current();
         let machine = Arc::clone(&self.machine);
         let result = tokio::task::spawn_blocking(move || {
@@ -116,7 +117,7 @@ impl Simulator {
         .await;
         // Every formal execution outcome passes the same final pivot check,
         // including rejection, VM failure and unavailable changes.
-        anchor.check(&self.core).await?;
+        anchor.check_pivot(&self.core).await?;
         let outcome = result.map_err(Error::Runtime)??;
         Ok(Simulation {
             block: BlockNumHash::new(anchor.epoch, anchor.pivot_hash),

@@ -1,233 +1,152 @@
+use alloy::{
+    primitives::{B256, U256},
+    providers::DynProvider,
+};
+use cfx_executor::machine::Machine;
+use cfx_types::Space;
+use conflux_provider::{ConfluxProvider, EpochNumber};
+use serde::Serialize;
+use simulation_core::{ExecutionStatus, Limits, Outcome};
 use std::sync::Arc;
-
-use simulation_core::simulation::Simulation;
 use tokio::runtime::Handle;
 
-use crate::{ConfluxSimulationBackend, state::ConfluxStateSource};
+use super::{Address, Changes, TransactionRequest, execution, transaction};
+use crate::{ChainSpec, Error, context::BlockContext, state::StateSource};
 
-use super::{
-    CoreSpaceExecutionError, CoreSpaceExecutionOutcome, CoreSpaceSimulation,
-    CoreSpaceSimulationError, CoreSpaceSimulationRequest, CoreSpaceStateAccessError,
-    CoreSpaceTransactionRejection, CoreSpaceTypedTransaction, check_storage_sponsorship,
-    complete_transaction, prepare_core_space_context, session::CoreSpaceExecutionSession,
-};
-
-pub struct CoreSpaceTransactionSimulator {
-    backend: ConfluxSimulationBackend,
-    limits: super::CoreSpaceSimulationLimits,
-    analyzers: Arc<super::CoreSpaceAnalyzerRegistry>,
+pub struct Simulator {
+    core: ConfluxProvider,
+    espace: DynProvider,
+    chain: ChainSpec,
+    machine: Arc<Machine>,
+    limits: Limits,
 }
 
-impl Clone for CoreSpaceTransactionSimulator {
-    fn clone(&self) -> Self {
-        Self {
-            backend: self.backend.clone(),
-            limits: self.limits,
-            analyzers: Arc::clone(&self.analyzers),
-        }
-    }
+#[derive(Debug, Clone)]
+pub struct SimulationRequest {
+    pub epoch: EpochNumber,
+    pub transaction: TransactionRequest,
 }
 
-impl CoreSpaceTransactionSimulator {
-    pub fn new(
-        backend: ConfluxSimulationBackend,
-        limits: super::CoreSpaceSimulationLimits,
-    ) -> Self {
-        let analyzers = super::analysis::default_registry(
-            backend.chain_spec().core_space_native_currency().clone(),
-            backend.chain_spec().espace_native_currency().clone(),
-        );
-        Self {
-            backend,
+#[derive(Debug, Serialize)]
+pub struct Simulation {
+    pub epoch: Epoch,
+    pub transaction: TransactionRequest,
+    pub approximate: bool,
+    pub limitations: &'static [&'static str],
+    pub outcome: Outcome<Execution>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Epoch {
+    #[serde(with = "alloy_serde::quantity")]
+    pub number: u64,
+    pub pivot_hash: B256,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Execution {
+    pub gas_used: U256,
+    pub gas_charged: U256,
+    pub fee: Fee,
+    #[serde(flatten)]
+    pub status: ExecutionStatus<Changes, Error>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Fee {
+    pub gas_price: U256,
+    pub base_fee: U256,
+    pub amount: U256,
+    pub payer: FeePayer,
+}
+
+/// The source of the gas fee, never inferred from sponsor configuration alone.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum FeePayer {
+    Sender {
+        address: Address,
+    },
+    /// The contract's gas sponsor pool, not its ordinary balance.
+    Sponsor {
+        contract: Address,
+    },
+}
+
+const LIMITATIONS: &[&str] = &[
+    "storageOwnershipApproximated",
+    "storageCollateralSkipped",
+    "storagePointsApproximated",
+    "storagePointsInitializationAssumed",
+    "sponsorWhitelistApproximated",
+    "contractCleanupPartial",
+];
+
+impl Simulator {
+    pub async fn new(
+        core: ConfluxProvider,
+        espace: DynProvider,
+        chain: ChainSpec,
+        limits: Limits,
+    ) -> Result<Self, Error> {
+        crate::endpoint::check_network(&chain, &core, &espace).await?;
+        let machine = Arc::new(chain.machine());
+        Ok(Self {
+            core,
+            espace,
+            chain,
+            machine,
             limits,
-            analyzers: Arc::new(analyzers),
-        }
-    }
-}
-
-impl CoreSpaceTransactionSimulator {
-    pub fn with_analyzers(mut self, analyzers: super::CoreSpaceAnalyzerRegistry) -> Self {
-        self.analyzers = Arc::new(analyzers);
-        self
-    }
-    pub fn with_analyzer(
-        mut self,
-        analyzer: impl simulation_core::analysis::Analyzer<super::CoreSpaceAnalysisDomain>,
-    ) -> Result<Self, simulation_core::analysis::RegistryError> {
-        self.analyzers = Arc::new(self.analyzers.with_analyzer(analyzer)?);
-        Ok(self)
-    }
-
-    /// Simulates one Core Space transaction inside the caller's active Tokio runtime.
-    /// Uses a fixed epoch and checks its pivot before execution and result delivery.
-    /// Separate state RPCs do not provide an atomic snapshot during a reorganization.
-    pub async fn simulate(
-        &self,
-        request: CoreSpaceSimulationRequest,
-    ) -> Result<CoreSpaceSimulation, CoreSpaceSimulationError> {
-        let simulation =
-            simulation_core::simulation::simulate(CoreSpaceBackend(self.clone()), request).await?;
-        let context = match &simulation {
-            Simulation::Rejected(result) => result.context(),
-            Simulation::Executed(result) => Some(result.context()),
-        };
-        if let Some(context) = context {
-            self.backend
-                .provider()
-                .validate_state_anchor(context.state_anchor())
-                .await
-                .map_err(super::CoreSpaceContextError::from)?;
-        }
-        Ok(simulation)
-    }
-}
-
-struct CoreSpaceBackend(CoreSpaceTransactionSimulator);
-struct PreparedCoreSpaceExecution {
-    context: crate::context::ExecutionBlockContext,
-    storage_sponsorship: Option<super::StorageSponsorship>,
-    state: ConfluxStateSource,
-}
-
-impl simulation_core::simulation::SimulationBackend for CoreSpaceBackend {
-    type Request = CoreSpaceSimulationRequest;
-    type Context = super::CoreSpaceBlockContext;
-    type Transaction = CoreSpaceTypedTransaction;
-    type TransactionRequest = super::CoreSpaceTransactionRequest;
-    type Rejection = CoreSpaceTransactionRejection;
-    type Prepared = PreparedCoreSpaceExecution;
-    type Evidence = super::session::CoreSpaceExecutionEvidence;
-    type Outcome = CoreSpaceExecutionOutcome;
-    type ChangeSet = super::CoreSpaceChangeSet;
-    type AnalysisError = super::CoreSpaceAnalysisError;
-    type Error = CoreSpaceSimulationError;
-
-    async fn prepare(
-        &self,
-        request: Self::Request,
-    ) -> Result<simulation_core::simulation::PreparationFor<Self>, Self::Error> {
-        use simulation_core::{completion::Completion, simulation::Preparation};
-        let CoreSpaceSimulationRequest { block, transaction } = request;
-        let backend = &self.0.backend;
-        super::transaction::validate_address_networks(
-            &transaction,
-            backend.core_space_address_network(),
-        )?;
-        let context = prepare_core_space_context(
-            backend.provider(),
-            block,
-            backend.chain_spec().common_params(),
-        )
-        .await?;
-        let execution_block_number = context.execution_block_context.number;
-        let execution_epoch_height = context.execution_block_context.epoch_height;
-        let rules = backend
-            .chain_spec()
-            .core_space_transaction_validation_rules(
-                execution_block_number,
-                execution_epoch_height,
-            );
-        let transaction = match complete_transaction(
-            transaction,
-            backend.provider(),
-            &context,
-            backend.chain_spec().core_space_chain_id(),
-            rules,
-        )
-        .await?
-        {
-            Completion::Ready(transaction) => transaction,
-            Completion::Rejected {
-                transaction,
-                rejection,
-            } => {
-                return Ok(Preparation::Rejected {
-                    context: Some(context.public_context),
-                    transaction,
-                    rejection,
-                });
-            }
-        };
-        let spec = backend
-            .chain_spec()
-            .common_params()
-            .spec(execution_block_number, execution_epoch_height);
-        let storage_sponsorship = if spec.cip78a || spec.cip78b {
-            Some(
-                check_storage_sponsorship(backend.provider(), context.state_anchor, &transaction)
-                    .await?,
-            )
-        } else {
-            None
-        };
-        let state = ConfluxStateSource::prepare(context.state_anchor, backend.provider().clone())
-            .await
-            .map_err(|source| {
-                CoreSpaceExecutionError::StateAccess(CoreSpaceStateAccessError::Preparation {
-                    source,
-                })
-            })?;
-        backend
-            .provider()
-            .validate_state_anchor(context.state_anchor)
-            .await
-            .map_err(super::CoreSpaceContextError::from)?;
-        Ok(Preparation::Ready {
-            context: context.public_context,
-            transaction,
-            execution: PreparedCoreSpaceExecution {
-                state,
-                context: context.execution_block_context,
-                storage_sponsorship,
-            },
         })
     }
 
-    fn execute(
-        &self,
-        transaction: &Self::Transaction,
-        prepared: Self::Prepared,
-        runtime: Handle,
-    ) -> Result<simulation_core::simulation::Execution<Self::Evidence, Self::Rejection>, Self::Error>
-    {
-        let session = CoreSpaceExecutionSession::new(&self.0.backend, prepared.state, runtime)?;
-        session.execute(
+    pub async fn simulate(&self, request: SimulationRequest) -> Result<Simulation, Error> {
+        let preparation = transaction::Preparation::new(request.transaction, self.chain.network)?;
+        let context =
+            BlockContext::fetch_epoch(&self.core, &self.espace, request.epoch, &self.chain.params)
+                .await?;
+        let anchor = context.anchor;
+        let source = Arc::new(
+            StateSource::new(
+                anchor,
+                self.core.clone(),
+                self.espace.clone(),
+                self.chain.network,
+                self.limits,
+            )
+            .await?,
+        );
+        let (transaction, tx) = preparation
+            .complete(
+                &context,
+                &source,
+                self.chain
+                    .params
+                    .chain_id(context.epoch_height, Space::Native),
+                context.epoch_height >= self.chain.params.transition_heights.cip1559,
+            )
+            .await?;
+        anchor.check_pivot(&self.core).await?;
+        let runtime = Handle::current();
+        let machine = Arc::clone(&self.machine);
+        let result = tokio::task::spawn_blocking(move || {
+            execution::execute(source, runtime, &machine, context, tx)
+        })
+        .await;
+        anchor.check_pivot(&self.core).await?;
+        let outcome = result.map_err(Error::Runtime)??;
+        Ok(Simulation {
+            epoch: Epoch {
+                number: anchor.epoch,
+                pivot_hash: anchor.pivot_hash,
+            },
             transaction,
-            prepared.context,
-            prepared.storage_sponsorship,
-            self.0.analyzers.checkpoint_filters(),
-            self.0.limits,
-        )
-    }
-
-    fn is_success(&self, evidence: &Self::Evidence) -> bool {
-        evidence.record.status() == super::CoreSpaceExecutionStatus::Success
-    }
-
-    fn analyze(
-        &self,
-        view: simulation_core::simulation::AnalysisView<
-            '_,
-            Self::Context,
-            Self::Transaction,
-            Self::Evidence,
-        >,
-    ) -> Result<Self::ChangeSet, Self::AnalysisError> {
-        let evidence = view.execution();
-        evidence.record.check_observation_limit()?;
-        evidence.record.state().start_analysis();
-        let view = super::CoreSpaceAnalysisView {
-            context: view.context(),
-            transaction: view.transaction(),
-            execution: &evidence.record,
-            espace_chain_id: self.0.backend.chain_spec().espace_chain_id(),
-        };
-        let mut changes = self.0.analyzers.analyze(view)?;
-        changes.load_metadata(evidence.record.state())?;
-        Ok(changes)
-    }
-
-    fn into_outcome(&self, evidence: Self::Evidence) -> Self::Outcome {
-        evidence.outcome
+            approximate: true,
+            limitations: LIMITATIONS,
+            outcome,
+        })
     }
 }

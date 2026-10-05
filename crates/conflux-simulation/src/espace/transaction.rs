@@ -1,5 +1,5 @@
 use crate::Error;
-use crate::{env::BlockContext, primitive::*, state::StateSource};
+use crate::{context::BlockContext, primitive::*, state::StateSource};
 use alloy::{
     consensus::TxType,
     primitives::{Address, TxKind, U256},
@@ -91,7 +91,7 @@ impl Preparation {
         if request.gas.is_none() {
             let gas = provider
                 .estimate_gas(request.clone())
-                .block(source.anchor.block())
+                .block(source.anchor.block_id())
                 .await
                 .map_err(|source| Error::EspaceProvider {
                     operation: "eth_estimateGas",

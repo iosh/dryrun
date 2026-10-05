@@ -8,7 +8,9 @@ pub enum Error {
     InvalidInput(String),
     #[error("block {0} was not found")]
     BlockNotFound(BlockId),
-    #[error("the selected epoch pivot changed during simulation")]
+    #[error("epoch {0} was not found")]
+    EpochNotFound(conflux_provider::EpochNumber),
+    #[error("the selected Conflux block context is inconsistent")]
     ContextInconsistent,
     #[error("{0}")]
     Unsupported(String),
@@ -70,7 +72,7 @@ impl CodedError for Error {
     fn code(&self) -> ErrorCode {
         match self {
             Self::InvalidInput(_) => ErrorCode::InvalidInput,
-            Self::BlockNotFound(_) => ErrorCode::ContextNotFound,
+            Self::BlockNotFound(_) | Self::EpochNotFound(_) => ErrorCode::ContextNotFound,
             Self::ContextInconsistent => ErrorCode::ContextInconsistent,
             Self::Unsupported(_) => ErrorCode::Unsupported,
             Self::CoreProvider(_) | Self::EspaceProvider { .. } => ErrorCode::ProviderRequestFailed,

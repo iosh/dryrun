@@ -1,311 +1,90 @@
-mod evidence;
-
-use std::collections::{BTreeMap, BTreeSet};
-
-use alloy_primitives::{Address, B256, U256};
-use conflux_provider::CoreAddress;
-
-use self::evidence::{CommittedPoSOperation, collect_operations};
-use super::{CoreSpaceChangeSet, CoreSpaceChangeSetBuilder};
-use crate::{
-    core_space::{
-        CoreSpaceExecutedTransaction, CoreSpacePoSRegistrationState, CoreSpaceProtocolError,
-        CoreSpaceStateAccess, CoreSpaceStateAccessError, CoreSpaceStateReader,
-    },
-    primitive::u256_from_cfx,
+use super::{Address, PosStake, ProtocolChange, contract_callers};
+use crate::{Error, address::VmAddress, primitive::*};
+use alloy::primitives::B256;
+use alloy_sol_types::{SolEvent, sol};
+use cfx_executor::{
+    internal_contract::{IndexStatus, pos_internal_entries},
+    state::State,
 };
+use cfx_parameters::internal_contract_addresses::POS_REGISTER_CONTRACT_ADDRESS;
+use cfx_types::{AddressSpaceUtil, BigEndianHash, H256};
+use conflux_provider::Network;
+use simulation_core::{ChainAddress, ExecutionTrace};
+use std::collections::BTreeSet;
 
-pub(super) fn derive_changes(
-    execution: &CoreSpaceExecutedTransaction,
-    state: &CoreSpaceStateAccess,
-) -> Result<CoreSpaceChangeSet, CoreSpaceProtocolError> {
-    let operations = collect_operations(execution)?;
-    if operations.is_empty() {
-        return Ok(CoreSpaceChangeSet::default());
-    }
+sol! {
+    event Retire(bytes32 indexed identifier, uint64 votes);
+}
 
-    let affected_accounts = operations
-        .iter()
-        .map(CommittedPoSOperation::account)
-        .collect::<BTreeSet<_>>();
-    let initial_identifiers_by_account = read_identifiers_by_account(
-        state.initial(),
-        &affected_accounts,
-        execution,
-        StatePhase::Initial,
-    )?;
-    let finalized_identifiers_by_account = read_identifiers_by_account(
-        state.finalized(),
-        &affected_accounts,
-        execution,
-        StatePhase::Finalized,
-    )?;
-
-    let mut required_identifiers = operations
-        .iter()
-        .map(CommittedPoSOperation::identifier)
-        .collect::<BTreeSet<_>>();
-    required_identifiers.extend(initial_identifiers_by_account.values().flatten().copied());
-    required_identifiers.extend(finalized_identifiers_by_account.values().flatten().copied());
-
-    let initial_state = PoSStateSnapshot::read(
-        state.initial(),
-        initial_identifiers_by_account,
-        &required_identifiers,
-        StatePhase::Initial,
-    )?;
-    let finalized_state = PoSStateSnapshot::read(
-        state.finalized(),
-        finalized_identifiers_by_account,
-        &required_identifiers,
-        StatePhase::Finalized,
-    )?;
-    initial_state.verify_account_mappings()?;
-    finalized_state.verify_account_mappings()?;
-
-    let mut replayed_state = initial_state;
-    let mut changes = CoreSpaceChangeSetBuilder::new();
-    for operation in operations {
-        match operation {
-            CommittedPoSOperation::Registration {
-                position,
-                account,
-                identifier,
-                initial_vote_count,
-                bls_public_key,
-                vrf_public_key,
-            } => {
-                replayed_state.apply_registration(account, identifier);
-                let locked_amount =
-                    replayed_state.add_registered_votes(identifier, initial_vote_count)?;
-                changes.pos_registration(
-                    position,
-                    core_address(account, execution),
-                    identifier,
-                    bls_public_key,
-                    vrf_public_key,
-                    initial_vote_count,
-                    locked_amount,
-                );
-            }
-            CommittedPoSOperation::StakeIncrease {
-                position,
-                account,
-                identifier: event_identifier,
-                added_vote_count,
-            } => {
-                let registered_identifier = replayed_state.identifier_for_account(account)?;
-                verify_event_identifier("increaseStake", event_identifier, registered_identifier)?;
-                let locked_amount =
-                    replayed_state.add_registered_votes(registered_identifier, added_vote_count)?;
-                changes.pos_stake_increase(
-                    position,
-                    core_address(account, execution),
-                    registered_identifier,
-                    added_vote_count,
-                    locked_amount,
-                );
-            }
-            CommittedPoSOperation::RetirementRequest {
-                position,
-                account,
-                identifier: event_identifier,
-                requested_vote_count,
-            } => {
-                let registered_identifier = replayed_state.identifier_for_account(account)?;
-                verify_event_identifier("retire", event_identifier, registered_identifier)?;
-                changes.pos_retirement_request(
-                    position,
-                    core_address(account, execution),
-                    registered_identifier,
-                    requested_vote_count,
-                );
-            }
-        }
-    }
-
-    if replayed_state != finalized_state {
-        return Err(inconsistent(
-            "replayed Core Space PoS state does not match finalized state",
+pub(super) fn derive(
+    trace: &ExecutionTrace<Address>,
+    before: &State,
+    after: &State,
+    network: Network,
+) -> Result<Vec<ProtocolChange>, Error> {
+    let contract = Address::from_vm(POS_REGISTER_CONTRACT_ADDRESS.with_native_space(), network);
+    // Retirement has a retained log but no local index update. Its later
+    // consensus effect cannot be described by these state differences.
+    if trace.logs.iter().any(|log| {
+        log.address == contract && log.data.topics().first() == Some(&Retire::SIGNATURE_HASH)
+    }) {
+        return Err(Error::Unsupported(
+            "PoS retirement requires consensus effects unavailable to local simulation".into(),
         ));
     }
-    Ok(changes.finish())
-}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct PoSStateSnapshot {
-    identifiers_by_account: BTreeMap<Address, Option<B256>>,
-    registrations_by_identifier: BTreeMap<B256, PoSRegistrationSnapshot>,
-    total_pos_staking: U256,
-}
-
-impl PoSStateSnapshot {
-    fn read(
-        reader: &CoreSpaceStateReader,
-        identifiers_by_account: BTreeMap<Address, Option<B256>>,
-        required_identifiers: &BTreeSet<B256>,
-        phase: StatePhase,
-    ) -> Result<Self, CoreSpaceProtocolError> {
-        let registrations_by_identifier = required_identifiers
-            .iter()
-            .map(|identifier| {
-                let registration = reader
-                    .pos_registration_for_identifier(*identifier)
-                    .map_err(|source| state_error(phase, source))?;
-                Ok((
-                    *identifier,
-                    PoSRegistrationSnapshot::from_state(registration),
-                ))
-            })
-            .collect::<Result<_, CoreSpaceProtocolError>>()?;
-        let total_pos_staking = reader
-            .total_pos_staking()
-            .map_err(|source| state_error(phase, source))?;
-        Ok(Self {
-            identifiers_by_account,
-            registrations_by_identifier,
-            total_pos_staking,
-        })
-    }
-
-    fn verify_account_mappings(&self) -> Result<(), CoreSpaceProtocolError> {
-        for (account, identifier) in &self.identifiers_by_account {
-            let Some(identifier) = identifier else {
-                continue;
-            };
-            let registration = self
-                .registrations_by_identifier
-                .get(identifier)
-                .expect("PoS state snapshot includes every account identifier");
-            if registration.account != Some(*account) {
-                return Err(inconsistent(
-                    "Core Space PoS forward and reverse account mappings disagree",
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn identifier_for_account(&self, account: Address) -> Result<B256, CoreSpaceProtocolError> {
-        let identifier = self
-            .identifiers_by_account
-            .get(&account)
-            .expect("PoS replay includes every operation account");
-        identifier.ok_or_else(|| {
-            inconsistent("Core Space PoS operation has no registered account identifier")
-        })
-    }
-
-    fn apply_registration(&mut self, account: Address, identifier: B256) {
-        let registration = self
-            .registrations_by_identifier
-            .get_mut(&identifier)
-            .expect("PoS replay includes every operation identifier");
-        registration.account = Some(account);
-        self.identifiers_by_account
-            .insert(account, Some(identifier));
-    }
-
-    fn add_registered_votes(
-        &mut self,
-        identifier: B256,
-        added_vote_count: u64,
-    ) -> Result<U256, CoreSpaceProtocolError> {
-        let registration = self
-            .registrations_by_identifier
-            .get_mut(&identifier)
-            .expect("PoS replay includes every operation identifier");
-        registration.registered_vote_count = registration
-            .registered_vote_count
-            .checked_add(added_vote_count)
-            .expect("a committed PoS increase cannot overflow its registered vote count");
-
-        let locked_amount = locked_amount_for_votes(added_vote_count);
-        self.total_pos_staking = self
-            .total_pos_staking
-            .checked_add(locked_amount)
-            .ok_or_else(|| inconsistent("Core Space total PoS staking overflowed"))?;
-        Ok(locked_amount)
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PoSRegistrationSnapshot {
-    account: Option<Address>,
-    registered_vote_count: u64,
-    unlocked_vote_count: u64,
-}
-
-impl PoSRegistrationSnapshot {
-    fn from_state(state: CoreSpacePoSRegistrationState) -> Self {
-        Self {
-            account: state
-                .account()
-                .map(|account| Address::from(account.bytes())),
-            registered_vote_count: state.registered_vote_count(),
-            unlocked_vote_count: state.unlocked_vote_count(),
+    let mut changes = Vec::new();
+    let mut identifiers = BTreeSet::new();
+    for account in contract_callers(trace, contract)? {
+        let old = read_identifier(before, contract, account)?;
+        let new = read_identifier(after, contract, account)?;
+        identifiers.extend([old, new].into_iter().filter(|id| !id.is_zero()));
+        if old != new {
+            changes.push(ProtocolChange::PosIdentifier {
+                account,
+                before: (!old.is_zero()).then_some(old),
+                after: (!new.is_zero()).then_some(new),
+            });
         }
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum StatePhase {
-    Initial,
-    Finalized,
-}
-
-impl StatePhase {
-    const fn read_operation(self) -> &'static str {
-        match self {
-            Self::Initial => "read initial Core Space PoS state",
-            Self::Finalized => "read finalized Core Space PoS state",
+    for identifier in identifiers {
+        let old = read_stake(before, contract, identifier)?;
+        let new = read_stake(after, contract, identifier)?;
+        if old != new {
+            changes.push(ProtocolChange::PosStake {
+                identifier,
+                before: old,
+                after: new,
+            });
         }
     }
+    Ok(changes)
 }
 
-fn read_identifiers_by_account(
-    reader: &CoreSpaceStateReader,
-    accounts: &BTreeSet<Address>,
-    execution: &CoreSpaceExecutedTransaction,
-    phase: StatePhase,
-) -> Result<BTreeMap<Address, Option<B256>>, CoreSpaceProtocolError> {
-    accounts
-        .iter()
-        .map(|account| {
-            let identifier = reader
-                .pos_identifier_for_account(core_address(*account, execution))
-                .map_err(|source| state_error(phase, source))?;
-            Ok((*account, identifier))
-        })
-        .collect()
+fn read_identifier(state: &State, contract: Address, account: Address) -> Result<B256, Error> {
+    let value = state.storage_at(
+        &contract.to_vm(),
+        &pos_internal_entries::identifier_entry(&account.to_vm().address),
+    )?;
+    Ok(b256_from_cfx(H256::from_uint(&value)))
 }
 
-fn verify_event_identifier(
-    operation: &'static str,
-    event_identifier: B256,
-    registered_identifier: B256,
-) -> Result<(), CoreSpaceProtocolError> {
-    if event_identifier != registered_identifier {
-        return Err(inconsistent(format!(
-            "Core Space PoS {operation} event is not backed by the account registration"
-        )));
-    }
-    Ok(())
-}
-
-fn locked_amount_for_votes(vote_count: u64) -> U256 {
-    U256::from(vote_count) * u256_from_cfx(*cfx_parameters::staking::POS_VOTE_PRICE)
-}
-
-fn core_address(address: Address, execution: &CoreSpaceExecutedTransaction) -> CoreAddress {
-    CoreAddress::from_bytes(*address.0, execution.address_network)
-        .expect("executed Core Space addresses retain a validated network")
-}
-
-fn state_error(phase: StatePhase, source: CoreSpaceStateAccessError) -> CoreSpaceProtocolError {
-    CoreSpaceProtocolError::state_access(phase.read_operation(), source)
-}
-
-fn inconsistent(details: impl Into<String>) -> CoreSpaceProtocolError {
-    CoreSpaceProtocolError::inconsistent_execution(details)
+fn read_stake(state: &State, contract: Address, identifier: B256) -> Result<PosStake, Error> {
+    let identifier = b256_to_cfx(identifier);
+    let address = state.storage_at(
+        &contract.to_vm(),
+        &pos_internal_entries::address_entry(&identifier),
+    )?;
+    let address = cfx_types::Address::from(H256::from_uint(&address));
+    let status: IndexStatus = state
+        .storage_at(
+            &contract.to_vm(),
+            &pos_internal_entries::index_entry(&identifier),
+        )?
+        .into();
+    Ok(PosStake {
+        account: (!address.is_zero()).then(|| contract.with_raw(address_from_cfx(address))),
+        registered: status.registered,
+        unlocked: status.unlocked,
+    })
 }

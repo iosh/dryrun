@@ -3,7 +3,7 @@ use super::{
     state_item::{CoreSpaceStateItem as Core, EspaceStateItem as Eth, StateItem},
     state_value_encoding::*,
 };
-use crate::{StateError, anchor::Anchor, primitive::*};
+use crate::{StateError, context::Anchor, primitive::*};
 use alloy::{
     primitives::{Address as AlloyAddress, Bytes, U256 as AlloyU256},
     providers::{DynProvider, Provider},
@@ -59,7 +59,7 @@ impl StateSource {
     }
 
     async fn load_globals(&self) -> Result<(), StateError> {
-        let epoch = self.anchor.epoch();
+        let epoch = self.anchor.epoch_number();
         let mut batch = self.core.batch();
         let interest = batch.cfx_get_interest_rate(epoch)?;
         let accumulated = batch.cfx_get_accumulate_interest_rate(epoch)?;
@@ -143,7 +143,7 @@ impl StateSource {
                         address_from_cfx(address),
                         AlloyU256::from_be_slice(slot.as_bytes()),
                     )
-                    .block_id(self.anchor.block())
+                    .block_id(self.anchor.block_id())
                     .await
                     .map_err(|source| StateError::EspaceProvider {
                         operation: "eth_getStorageAt",
@@ -179,13 +179,27 @@ impl StateSource {
             .map_err(|_| StateError::Unavailable("account nonce exceeds u64".into()))
     }
 
+    pub async fn core_nonce(&self, address: Address) -> Result<U256, StateError> {
+        let value = self
+            .read(StateItem::CoreSpace(Core::Account { address }))
+            .await?;
+        value
+            .map(|value| {
+                primitives::Account::new_from_rlp(address, &rlp::Rlp::new(&value))
+                    .map(|account| account.nonce)
+                    .map_err(state_unavailable)
+            })
+            .transpose()
+            .map(|nonce| nonce.unwrap_or_default())
+    }
+
     async fn load_espace_account(
         &self,
         address: Address,
         cache: &mut Cache,
     ) -> Result<Option<Box<[u8]>>, StateError> {
         let rpc_address = address_from_cfx(address);
-        let block = self.anchor.block();
+        let block = self.anchor.block_id();
         let (balance, nonce, code) = tokio::try_join!(
             async {
                 self.espace
@@ -257,7 +271,7 @@ impl StateSource {
         item: Core,
         cache: &mut Cache,
     ) -> Result<Option<Box<[u8]>>, StateError> {
-        let epoch = self.anchor.epoch();
+        let epoch = self.anchor.epoch_number();
         match item {
             Core::Account { address } => {
                 let rpc_address = self.core_address(address)?;
