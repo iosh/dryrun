@@ -13,7 +13,7 @@ use jsonrpsee::{
 use tracing::info;
 
 use crate::{
-    config::{AppConfig, ConfluxConfig, EthereumConfig},
+    config::{AppConfig, EthereumConfig},
     rpc,
     tasks::SimulationTaskSet,
 };
@@ -56,8 +56,31 @@ async fn build_rpc_module(
     rpc::register_evm(&mut module, ethereum, tasks.clone()).map_err(io::Error::other)?;
 
     if let Some(conflux) = &config.conflux {
-        let espace = build_espace_simulator(conflux, &http_client).await?;
-        rpc::register_espace(&mut module, espace, tasks).map_err(io::Error::other)?;
+        let core = conflux_provider::ConfluxProvider::new(RpcClient::new_http_with_client(
+            http_client.clone(),
+            conflux.core_rpc_url.clone(),
+        ));
+        let espace = RootProvider::new(RpcClient::new_http_with_client(
+            http_client.clone(),
+            conflux.espace_rpc_url.clone(),
+        ))
+        .erased();
+        let chain = conflux_simulation::ChainSpec::mainnet();
+        let espace_simulator = conflux_simulation::espace::Simulator::new(
+            core.clone(),
+            espace.clone(),
+            chain.clone(),
+            conflux.limits,
+        )
+        .await
+        .map_err(io::Error::other)?;
+        let core_simulator =
+            conflux_simulation::core_space::Simulator::new(core, espace, chain, conflux.limits)
+                .await
+                .map_err(io::Error::other)?;
+        rpc::register_espace(&mut module, espace_simulator, tasks.clone())
+            .map_err(io::Error::other)?;
+        rpc::register_core(&mut module, core_simulator, tasks).map_err(io::Error::other)?;
     }
 
     module
@@ -75,29 +98,6 @@ async fn build_ethereum_simulator(
     evm_simulation::Simulator::new(
         provider,
         evm_simulation::ChainSpec::mainnet(),
-        config.limits,
-    )
-    .await
-    .map_err(io::Error::other)
-}
-
-async fn build_espace_simulator(
-    config: &ConfluxConfig,
-    http_client: &HttpClient,
-) -> io::Result<conflux_simulation::espace::Simulator> {
-    let core = conflux_provider::ConfluxProvider::new(RpcClient::new_http_with_client(
-        http_client.clone(),
-        config.core_rpc_url.clone(),
-    ));
-    let espace = RootProvider::new(RpcClient::new_http_with_client(
-        http_client.clone(),
-        config.espace_rpc_url.clone(),
-    ))
-    .erased();
-    conflux_simulation::espace::Simulator::new(
-        core,
-        espace,
-        conflux_simulation::ChainSpec::mainnet(),
         config.limits,
     )
     .await
