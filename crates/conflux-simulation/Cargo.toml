@@ -7,7 +7,6 @@ edition = { workspace = true }
 simulation-core = { workspace = true }
 conflux-provider = { workspace = true }
 alloy = { workspace = true, features = ["consensus", "eips", "providers", "rpc-types"] }
-alloy-primitives = { workspace = true }
 alloy-serde = { workspace = true }
 alloy-sol-types = { workspace = true }
 cfx-types = { workspace = true }

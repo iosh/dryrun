@@ -1,10 +1,5 @@
 import type { EnvironmentId } from './environment.ts';
-import type {
-  AssetChange,
-  CoreProtocolChange,
-  Diagnostic,
-  RpcSimulationResponse,
-} from './rpc.ts';
+import type { RpcSimulationResponse } from './rpc.ts';
 
 export type TxTypeOption =
   | 'auto'
@@ -74,36 +69,13 @@ export interface CoreSimulationRequest {
 
 export type SimulationRequest = HexSimulationRequest | CoreSimulationRequest;
 
-export type SimulationResponse = RpcSimulationResponse;
-
-export type SimulationChange =
-  | AssetChange
-  | CoreProtocolChange;
-
-export interface SimulationChanges {
-  status: RpcSimulationResponse['changes']['status'];
-  items: readonly SimulationChange[];
-  error: Diagnostic | null;
-}
-
-export function simulationChanges(
-  response: RpcSimulationResponse,
-): SimulationChanges {
-  const changes = response.changes;
-  return {
-    status: changes.status,
-    items: changes.status === 'complete' ? changes.items : [],
-    error: changes.status === 'unavailable' ? changes.error : null,
-  };
-}
-
 export interface SimulationRecord {
   id: string;
   createdAt: string;
   environmentId: EnvironmentId;
   formValues: SimulationFormValues;
   request: SimulationRequest;
-  response: SimulationResponse;
+  response: RpcSimulationResponse;
   rawResponse: unknown;
 }
 
@@ -122,10 +94,4 @@ export interface ParsedFormResult {
   fieldIssues: Partial<Record<keyof SimulationFormValues, string>>;
   formIssues: string[];
   request?: SimulationRequest;
-}
-
-export function isCoreEnvironment(
-  environmentId: EnvironmentId,
-): environmentId is 'conflux-core-mainnet' {
-  return environmentId === 'conflux-core-mainnet';
 }

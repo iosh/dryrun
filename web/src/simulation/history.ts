@@ -1,16 +1,16 @@
-import type { RpcResultEnvelope } from './rpc.ts';
-import type {
-  SimulationRecord,
-  SimulationResponse,
-} from './types.ts';
+import { ENVIRONMENTS, type EnvironmentId } from './environment.ts';
+import { createInitialFormValues, parseSimulationForm } from './request.ts';
+import { parseRpcEnvelope, parseSimulationResponse } from './response.ts';
+import type { SimulationFormValues, SimulationRecord } from './types.ts';
 
-const HISTORY_KEY = 'dryrun.simulation-history.v5';
+const HISTORY_KEY = 'dryrun.simulation-history.v6';
 export const HISTORY_LIMIT = 30;
 
-type StoredSimulationRecord = Omit<SimulationRecord, 'response'>;
+type StoredSimulationRecord = Pick<SimulationRecord,
+  'id' | 'createdAt' | 'environmentId' | 'formValues' | 'rawResponse'>;
 
 interface StoredHistoryPayload {
-  version: 5;
+  version: 6;
   records: StoredSimulationRecord[];
 }
 
@@ -18,51 +18,64 @@ export function loadSimulationHistory(): SimulationRecord[] {
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
     if (!raw) return [];
-
-    const payload = JSON.parse(raw) as StoredHistoryPayload;
-    if (payload.version !== 5 || !Array.isArray(payload.records)) return [];
-
-    return payload.records
-      .map(restoreSimulationRecord)
-      .slice(0, HISTORY_LIMIT);
+    const payload: unknown = JSON.parse(raw);
+    if (!isObject(payload) || payload.version !== 6 || !Array.isArray(payload.records)) return [];
+    return payload.records.flatMap(restoreSimulationRecord).slice(0, HISTORY_LIMIT);
   } catch {
     return [];
   }
 }
 
-export function addSimulationHistory(
-  current: readonly SimulationRecord[],
-  record: SimulationRecord,
-) {
+export function addSimulationHistory(current: readonly SimulationRecord[], record: SimulationRecord) {
   const records = [record, ...current].slice(0, HISTORY_LIMIT);
   persistSimulationHistory(records);
   return records;
 }
 
-export function removeSimulationHistory(
-  current: readonly SimulationRecord[],
-  recordId: string,
-) {
+export function removeSimulationHistory(current: readonly SimulationRecord[], recordId: string) {
   const records = current.filter((record) => record.id !== recordId);
   persistSimulationHistory(records);
   return records;
 }
 
-function restoreSimulationRecord(
-  record: StoredSimulationRecord,
-): SimulationRecord {
-  const envelope = record.rawResponse as RpcResultEnvelope;
-  return {
-    ...record,
-    response: envelope.result as SimulationResponse,
-  };
+function restoreSimulationRecord(value: unknown): SimulationRecord[] {
+  try {
+    if (!isObject(value) || typeof value.id !== 'string' || typeof value.createdAt !== 'string' ||
+      !Number.isFinite(Date.parse(value.createdAt)) || typeof value.environmentId !== 'string' ||
+      !Object.hasOwn(ENVIRONMENTS, value.environmentId) || !isObject(value.formValues)) return [];
+    const formValues = value.formValues;
+    if (Object.keys(createInitialFormValues()).some((key) => typeof formValues[key] !== 'string') ||
+      !['auto', 'legacy', 'access-list', 'dynamic-fee'].includes(formValues.txType as string) ||
+      !['latest', 'safe', 'finalized', 'number', 'hash'].includes(formValues.contextMode as string)) return [];
+    const environmentId = value.environmentId as EnvironmentId;
+    const savedForm = formValues as unknown as SimulationFormValues;
+    // Saved form values use the same input validation and request builder as submission.
+    const parsed = parseSimulationForm(environmentId, savedForm);
+    if (!parsed.request) return [];
+    const envelope = parseRpcEnvelope(value.rawResponse);
+    if (!('result' in envelope)) return [];
+    return [{
+      id: value.id,
+      createdAt: value.createdAt,
+      environmentId,
+      formValues: savedForm,
+      request: parsed.request,
+      response: parseSimulationResponse(envelope.result, environmentId),
+      rawResponse: value.rawResponse,
+    }];
+  } catch {
+    // One incompatible or damaged record must not hide the other saved simulations.
+    return [];
+  }
 }
 
 function persistSimulationHistory(records: readonly SimulationRecord[]) {
   try {
     const payload: StoredHistoryPayload = {
-      records: records.map(toStoredSimulationRecord),
-      version: 5,
+      version: 6,
+      records: records.map(({ id, createdAt, environmentId, formValues, rawResponse }) => ({
+        id, createdAt, environmentId, formValues, rawResponse,
+      })),
     };
     localStorage.setItem(HISTORY_KEY, JSON.stringify(payload));
   } catch {
@@ -70,15 +83,6 @@ function persistSimulationHistory(records: readonly SimulationRecord[]) {
   }
 }
 
-function toStoredSimulationRecord(
-  record: SimulationRecord,
-): StoredSimulationRecord {
-  return {
-    createdAt: record.createdAt,
-    environmentId: record.environmentId,
-    formValues: record.formValues,
-    id: record.id,
-    rawResponse: record.rawResponse,
-    request: record.request,
-  };
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

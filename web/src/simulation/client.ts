@@ -5,6 +5,7 @@ import {
   type RpcErrorPayload,
   type RpcSimulationResponse,
 } from './rpc.ts';
+import { parseRpcEnvelope, parseSimulationResponse } from './response.ts';
 import type { SimulationRequest } from './types.ts';
 
 let nextRequestId = 1;
@@ -41,13 +42,13 @@ export class InvalidResponseError extends Error {
   }
 }
 
-export interface SimulationRpcResult {
+interface SimulationRpcResult {
   response: RpcSimulationResponse;
   rawResponse: unknown;
 }
 
-export function getRpcUrl() {
-  return import.meta.env.VITE_DRYRUN_RPC_URL ?? '/rpc';
+function getRpcUrl() {
+  return import.meta.env?.VITE_DRYRUN_RPC_URL ?? '/rpc';
 }
 
 export async function simulateTransaction(
@@ -80,9 +81,9 @@ export async function simulateTransaction(
     );
   }
 
-  let payload: RpcEnvelope;
+  let rawResponse: unknown;
   try {
-    payload = await response.json() as RpcEnvelope;
+    rawResponse = await response.json();
   } catch {
     throw new InvalidResponseError(
       'The simulation service returned invalid JSON.',
@@ -90,12 +91,23 @@ export async function simulateTransaction(
     );
   }
 
+  let payload: RpcEnvelope;
+  try {
+    payload = parseRpcEnvelope(rawResponse, requestId);
+  } catch (error) {
+    throw new InvalidResponseError((error as Error).message, rawResponse);
+  }
+
   if ('error' in payload) {
     throw new RpcError(payload.error, payload);
   }
 
-  return {
-    response: payload.result as RpcSimulationResponse,
-    rawResponse: payload,
-  };
+  try {
+    return {
+      response: parseSimulationResponse(payload.result, environmentId),
+      rawResponse,
+    };
+  } catch (error) {
+    throw new InvalidResponseError((error as Error).message, rawResponse);
+  }
 }

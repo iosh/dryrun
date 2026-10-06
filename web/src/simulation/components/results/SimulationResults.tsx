@@ -1,5 +1,4 @@
 import { Activity, AlertTriangle, LoaderCircle } from 'lucide-react';
-import { useMemo } from 'react';
 
 import { formatJson } from '../../../lib/formatting.ts';
 import { CopyButton } from '../../../ui/CopyButton.tsx';
@@ -13,12 +12,11 @@ import {
   ExecutionFailure,
   ExecutionSummary,
 } from './ExecutionPanels.tsx';
-import { createSimulationResultViewModel } from './resultModel.ts';
+import { CoreLimitations } from './CoreLimitations.tsx';
 import {
   RawJsonDetails,
   ResultShell,
 } from './ResultPrimitives.tsx';
-import { TransactionEffects } from './TransactionEffects.tsx';
 import { useAddressHighlight } from './useAddressHighlight.ts';
 
 export interface SimulationResultsProps {
@@ -68,11 +66,6 @@ export function SimulationResults({
 
 function SimulationResult({ record }: Readonly<{ record: SimulationRecord }>) {
   const addressHighlight = useAddressHighlight();
-  const viewModel = useMemo(
-    () => createSimulationResultViewModel(record),
-    [record],
-  );
-  const execution = viewModel.execution;
 
   return (
     <div
@@ -86,49 +79,12 @@ function SimulationResult({ record }: Readonly<{ record: SimulationRecord }>) {
         }
       }}
     >
-      <ExecutionSummary
-        anchor={viewModel.anchor}
-        changesCount={
-          viewModel.changesStatus === 'complete'
-            ? String(viewModel.changes.length)
-            : viewModel.changesStatus === 'notAnalyzed' ? 'Not analyzed' : 'Unavailable'
-        }
-        execution={execution}
-        nativeSymbol={viewModel.environment.nativeSymbol}
-        networkLabel={`${viewModel.environment.shortLabel} ${viewModel.environment.networkLabel}`}
-      />
-
-      {execution.failure ? (
-        <ExecutionFailure failure={execution.failure} />
-      ) : null}
-
-      <ExecutionDetails
-        anchor={viewModel.anchor}
-        execution={execution}
-        nativeSymbol={viewModel.environment.nativeSymbol}
-      />
-
-      <RawJsonDetails
-        label={record.response.transaction.status === 'complete' ? 'Completed transaction' : 'Partial transaction'}
-        value={record.response.transaction.fields}
-      />
-
-      {record.response.outcome.status === 'success' ? (
-        <RawJsonDetails label="Committed logs" value={record.response.outcome.logs} />
-      ) : null}
-
-      {viewModel.changesStatus === 'complete' ? <TransactionEffects
-        addressHighlight={addressHighlight}
-        viewModel={viewModel}
-      /> : null}
-
-      <ChangesList
-        addressHighlight={addressHighlight}
-        changes={viewModel.changes}
-        changesStatus={viewModel.changesStatus}
-        changesError={viewModel.changesError}
-        record={record}
-      />
+      <ExecutionSummary record={record} />
+      {'epoch' in record.response ? <CoreLimitations limitations={record.response.limitations} /> : null}
+      <ExecutionFailure outcome={record.response.outcome} />
+      <ExecutionDetails record={record} addressHighlight={addressHighlight} />
+      <RawJsonDetails label="Completed transaction" value={record.response.transaction} />
+      <ChangesList addressHighlight={addressHighlight} record={record} />
 
       <RawJsonDetails label="Raw RPC response" value={record.rawResponse} />
     </div>

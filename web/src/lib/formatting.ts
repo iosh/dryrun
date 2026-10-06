@@ -46,7 +46,7 @@ export function formatTimestampLabel(iso: string) {
   return `${days}d ago`;
 }
 
-export function formatRawAmount(rawAmount: string | bigint, decimals = 0) {
+function formatRawAmount(rawAmount: string | bigint, decimals = 0) {
   return formatDecimal(formatUnits(BigInt(rawAmount), decimals));
 }
 
@@ -71,7 +71,7 @@ export function formatNativeAmount(
   return formatAmount(rawAmount, 18, symbol);
 }
 
-export function formatDecimal(value: string) {
+function formatDecimal(value: string) {
   const [whole, fraction] = value.split('.');
   const grouped = groupNumericString(whole);
   return fraction ? `${grouped}.${fraction}` : grouped;

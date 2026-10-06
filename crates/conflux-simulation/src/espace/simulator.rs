@@ -9,7 +9,7 @@ use alloy::{
 use cfx_executor::machine::Machine;
 use cfx_types::Space;
 use conflux_provider::ConfluxProvider;
-use serde::{Serialize, Serializer};
+use serde::Serialize;
 use simulation_core::Outcome;
 use simulation_core::{ExecutionStatus, Limits};
 use std::sync::Arc;
@@ -31,7 +31,7 @@ pub struct SimulationRequest {
 
 #[derive(Debug, Serialize)]
 pub struct Simulation {
-    #[serde(serialize_with = "serialize_block")]
+    #[serde(serialize_with = "simulation_core::serialize_block")]
     pub block: BlockNumHash,
     /// The transaction as executed, with omitted fields filled in.
     pub transaction: TransactionRequest,
@@ -125,19 +125,4 @@ impl Simulator {
             outcome,
         })
     }
-}
-
-fn serialize_block<S: Serializer>(block: &BlockNumHash, serializer: S) -> Result<S::Ok, S::Error> {
-    #[derive(Serialize)]
-    struct Block {
-        #[serde(with = "alloy_serde::quantity")]
-        number: u64,
-        hash: alloy::primitives::B256,
-    }
-
-    Block {
-        number: block.number,
-        hash: block.hash,
-    }
-    .serialize(serializer)
 }

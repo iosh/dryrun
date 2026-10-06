@@ -23,10 +23,8 @@ import {
 } from '../../ui/Tooltip.tsx';
 import { getEnvironment } from '../environment.ts';
 import { HISTORY_LIMIT } from '../history.ts';
-import {
-  simulationChanges,
-  type SimulationRecord,
-} from '../types.ts';
+import { changesLabel } from '../changes.ts';
+import type { SimulationRecord } from '../types.ts';
 
 export interface SimulationHistoryProps {
   activeRecordId: string | null;
@@ -41,7 +39,7 @@ export function SimulationHistorySidebar(
   props: Readonly<SimulationHistoryProps>,
 ) {
   return (
-    <aside className="hidden min-h-0 border-r border-line bg-shell-100 lg:flex lg:flex-col">
+    <aside className="hidden min-h-0 border-r border-line bg-shell-100 xl:flex xl:flex-col">
       <HistoryHeading {...props} />
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
         <HistoryList {...props} />
@@ -186,7 +184,6 @@ function HistoryEntry({
   const environment = getEnvironment(record.environmentId);
   const transaction = record.request.transaction;
   const status = record.response.outcome.status;
-  const changes = simulationChanges(record.response);
 
   return (
     <article
@@ -225,7 +222,7 @@ function HistoryEntry({
                 'h-1.5 w-1.5 rounded-full',
                 status === 'success'
                   ? 'bg-emerald-500'
-                  : status === 'failed' || status === 'reverted'
+                  : status === 'halted' || status === 'reverted'
                     ? 'bg-red-500'
                     : 'bg-amber-500',
               )}
@@ -233,9 +230,7 @@ function HistoryEntry({
             {status}
           </span>
           <span className="truncate text-ink-400">
-            {changes.status === 'complete'
-              ? `${changes.items.length} changes`
-              : changes.status === 'notAnalyzed' ? 'Not analyzed' : 'Changes unavailable'}
+            {changesLabel(record.response.outcome)}
           </span>
         </div>
 

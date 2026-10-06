@@ -1,6 +1,13 @@
 import { useState } from 'react';
 
-import type { AddressHighlightController } from './resultTypes.ts';
+export interface AddressHighlightController {
+  activeAddress: string | null;
+  pinnedAddress: string | null;
+  clearPinnedAddress: () => void;
+  onAddressEnter: (address: string) => void;
+  onAddressLeave: () => void;
+  onAddressToggle: (address: string) => void;
+}
 
 export function useAddressHighlight(): AddressHighlightController {
   const [hoveredAddress, setHoveredAddress] = useState<string | null>(null);

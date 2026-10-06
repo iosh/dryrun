@@ -55,7 +55,7 @@ export const ENVIRONMENTS = {
     label: 'Conflux Core Space',
     shortLabel: 'Core Space',
     networkLabel: 'Mainnet',
-    method: 'dryrun_conflux_coreSpace_simulateTransaction',
+    method: 'dryrun_conflux_core_simulateTransaction',
     chainId: 1029n,
     nativeSymbol: 'CFX',
     feeUnit: 'GDrip',

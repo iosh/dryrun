@@ -21,7 +21,6 @@ import type {
   RpcAccessListItem,
   SimulationFormValues,
   SimulationRequest,
-  ContextMode,
   TxTypeOption,
 } from './types.ts';
 
@@ -46,7 +45,6 @@ interface ParseFailure {
 }
 
 type ParseResult<T> = ParseSuccess<T> | ParseFailure;
-type EffectiveTxType = Exclude<TxTypeOption, 'auto'>;
 
 interface ParsedValues {
   from?: string;
@@ -111,7 +109,7 @@ export function parseSimulationForm(
     fieldIssues,
     'contextNumber',
     values.contextMode === 'number'
-      ? parseRequiredQuantity(values.contextNumber, contextValueLabel(values.contextMode, environmentId))
+      ? parseRequiredQuantity(values.contextNumber, contextNumberLabel(environmentId))
       : values.contextMode === 'hash'
         ? parseRequiredBlockHash(values.contextNumber)
         : success(undefined),
@@ -200,7 +198,7 @@ export function validateSimulationField(
       case 'data':
         return parseData(value);
       case 'contextNumber':
-        return environmentId === 'conflux-espace-mainnet'
+        return environmentId !== 'conflux-core-mainnet'
           ? parseOptionalBlockReference(value)
           : parseOptionalQuantity(value, contextNumberLabel(environmentId));
       case 'nonce':
@@ -317,21 +315,16 @@ function validateRelationships(
   parsed: ParsedValues,
 ): string[] {
   const issues: string[] = [];
-  const effectiveTxType = resolveEffectiveTxType(values.txType, parsed);
 
   if (
-    environmentId !== 'ethereum-mainnet' &&
+    environmentId === 'conflux-core-mainnet' &&
     (values.contextMode === 'safe' || values.contextMode === 'finalized')
   ) {
-    issues.push(
-      environmentId === 'conflux-espace-mainnet'
-        ? 'Conflux eSpace supports Latest, Number, or Hash.'
-        : 'This environment only supports Latest or a specific number.',
-    );
+    issues.push('Core Space supports Latest state or a specific epoch number.');
   }
 
-  if (values.contextMode === 'hash' && environmentId !== 'conflux-espace-mainnet') {
-    issues.push('Block hash selection is only available for Conflux eSpace.');
+  if (values.contextMode === 'hash' && environmentId === 'conflux-core-mainnet') {
+    issues.push('Core Space supports Latest state or a specific epoch number.');
   }
 
   if (parsed.gasPrice && (parsed.maxFeePerGas || parsed.maxPriorityFeePerGas)) {
@@ -339,25 +332,25 @@ function validateRelationships(
   }
 
   if (
-    effectiveTxType === 'legacy' &&
+    values.txType === 'legacy' &&
     (parsed.maxFeePerGas || parsed.maxPriorityFeePerGas)
   ) {
     issues.push('Legacy transactions cannot include dynamic fee fields.');
   }
 
-  if (effectiveTxType === 'dynamic-fee' && parsed.gasPrice) {
+  if (values.txType === 'dynamic-fee' && parsed.gasPrice) {
     issues.push('Dynamic fee transactions cannot include a gas price.');
   }
 
   if (
-    effectiveTxType === 'legacy' &&
+    values.txType === 'legacy' &&
     parsed.accessList !== undefined
   ) {
     issues.push('Legacy transactions cannot include an access list.');
   }
 
   if (
-    effectiveTxType === 'access-list' &&
+    values.txType === 'access-list' &&
     (parsed.maxFeePerGas || parsed.maxPriorityFeePerGas)
   ) {
     issues.push('Access list transactions cannot include dynamic fee fields.');
@@ -370,20 +363,6 @@ function validateRelationships(
   }
 
   return issues;
-}
-
-function resolveEffectiveTxType(
-  selectedType: TxTypeOption,
-  parsed: ParsedValues,
-): EffectiveTxType {
-  if (selectedType !== 'auto') return selectedType;
-  if (parsed.maxFeePerGas || parsed.maxPriorityFeePerGas) {
-    return 'dynamic-fee';
-  }
-  if (parsed.accessList !== undefined) {
-    return 'access-list';
-  }
-  return 'legacy';
 }
 
 function parseAddress(
@@ -580,13 +559,6 @@ function contextNumberLabel(environmentId: EnvironmentId) {
   return getEnvironment(environmentId).contextKind === 'block'
     ? 'Block number'
     : 'Epoch number';
-}
-
-function contextValueLabel(
-  mode: ContextMode,
-  environmentId: EnvironmentId,
-) {
-  return mode === 'hash' ? 'Block hash' : contextNumberLabel(environmentId);
 }
 
 function readParsed<TKey extends keyof SimulationFormValues, TValue>(

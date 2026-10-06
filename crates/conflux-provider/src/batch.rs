@@ -5,7 +5,7 @@ use std::{
 };
 
 use alloy_json_rpc::{RpcRecv, RpcSend};
-use alloy_rpc_client::{BatchRequest, Waiter};
+use alloy_rpc_client::BatchRequest;
 
 use crate::{
     ConfluxProvider, CoreAccount, CoreAddress, CoreCollateralInfo, CorePoSEconomics,
@@ -33,7 +33,7 @@ pub struct CoreBatch<'a> {
 impl<'a> CoreBatch<'a> {
     pub(crate) fn new(provider: &'a ConfluxProvider) -> Self {
         Self {
-            inner: provider.client().new_batch(),
+            inner: provider.client.new_batch(),
         }
     }
 
@@ -120,46 +120,20 @@ impl<'a> CoreBatch<'a> {
         Params: RpcSend,
         Response: RpcRecv,
     {
-        let waiter = self.add_waiter(method, params)?;
-        Ok(self.decode(waiter, method, Ok))
-    }
-
-    fn add_waiter<Params, Response>(
-        &mut self,
-        method: &'static str,
-        params: Params,
-    ) -> Result<Waiter<Response>, Error>
-    where
-        Params: RpcSend,
-        Response: RpcRecv,
-    {
-        self.inner
+        let waiter = self
+            .inner
             .add_call(method, &params)
             .map_err(|error| Error::Rpc {
                 method,
                 source: error,
-            })
-    }
-
-    fn decode<Response, Output, Decode>(
-        &self,
-        waiter: Waiter<Response>,
-        method: &'static str,
-        decode: Decode,
-    ) -> BatchCall<Output>
-    where
-        Response: RpcRecv,
-        Output: Send + 'static,
-        Decode: FnOnce(Response) -> Result<Output, Error> + Send + 'static,
-    {
-        BatchCall {
+            })?;
+        Ok(BatchCall {
             inner: Box::pin(async move {
-                let response = waiter.await.map_err(|error| Error::Rpc {
+                waiter.await.map_err(|error| Error::Rpc {
                     method,
                     source: error,
-                })?;
-                decode(response)
+                })
             }),
-        }
+        })
     }
 }

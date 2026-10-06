@@ -21,10 +21,6 @@ impl ConfluxProvider {
         Self { client }
     }
 
-    pub(crate) fn client(&self) -> &RpcClient {
-        &self.client
-    }
-
     pub fn batch(&self) -> CoreBatch<'_> {
         CoreBatch::new(self)
     }

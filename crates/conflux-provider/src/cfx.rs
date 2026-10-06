@@ -136,10 +136,8 @@ impl ConfluxProvider {
         hash: B256,
         include_transactions: bool,
     ) -> Result<Option<CoreRpcBlock>, Error> {
-        let block: Option<CoreRpcBlock> = self
-            .request("cfx_getBlockByHash", (hash, include_transactions))
-            .await?;
-        Ok(block)
+        self.request("cfx_getBlockByHash", (hash, include_transactions))
+            .await
     }
 
     pub async fn cfx_get_block_by_epoch_number(
@@ -147,10 +145,8 @@ impl ConfluxProvider {
         epoch: EpochNumber,
         include_transactions: bool,
     ) -> Result<Option<CoreRpcBlock>, Error> {
-        let block: Option<CoreRpcBlock> = self
-            .request("cfx_getBlockByEpochNumber", (epoch, include_transactions))
-            .await?;
-        Ok(block)
+        self.request("cfx_getBlockByEpochNumber", (epoch, include_transactions))
+            .await
     }
 
     pub async fn cfx_get_storage_at(

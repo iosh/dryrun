@@ -4,7 +4,8 @@ import type { ReactNode } from 'react';
 import { cn } from '../../../lib/cn.ts';
 import { formatJson } from '../../../lib/formatting.ts';
 import { CopyButton } from '../../../ui/CopyButton.tsx';
-import type { ChangeTone } from '../../changeView.ts';
+
+type ChangeTone = 'amber' | 'blue' | 'green' | 'red' | 'violet';
 
 export function ResultShell({ children }: Readonly<{ children: ReactNode }>) {
   return (
@@ -22,7 +23,7 @@ export function SummaryMetric({
     <div className="min-w-0 px-4 py-4 even:border-l even:border-line sm:even:border-l-0">
       <dt className="text-[11px] font-medium text-ink-600">{label}</dt>
       <dd
-        className="mt-1 truncate text-sm font-semibold text-ink-950"
+        className="mt-1 break-all text-sm font-semibold text-ink-950"
         title={value}
       >
         {value}
@@ -63,7 +64,7 @@ export function ChangeBadge({
   return (
     <span
       className={cn(
-        'rounded px-2 py-1 text-[10px] font-semibold',
+        'max-w-full break-all rounded px-2 py-1 text-[10px] font-semibold',
         toneClassName[tone],
       )}
     >
@@ -102,5 +103,40 @@ export function RawJsonDetails({
         </pre>
       </div>
     </details>
+  );
+}
+
+export function ChangeSection({
+  title,
+  count,
+  description,
+  children,
+}: Readonly<{ title: string; count: number; description?: string; children: ReactNode }>) {
+  return (
+    <section className="overflow-hidden rounded-lg border border-line bg-white">
+      <div className="border-b border-line px-5 py-4">
+        <h3 className="text-base font-semibold">{title} <span className="ml-1 text-xs font-normal text-ink-400">{count}</span></h3>
+        {description ? <p className="mt-1 text-xs leading-5 text-ink-600">{description}</p> : null}
+      </div>
+      <div className="divide-y divide-line">{children}</div>
+    </section>
+  );
+}
+
+export function StateDifference({
+  before,
+  after,
+}: Readonly<{ before: ReactNode; after: ReactNode }>) {
+  return (
+    <dl className="mt-3 grid gap-3 rounded-md bg-shell-50 p-3 sm:grid-cols-2">
+      <div className="min-w-0">
+        <dt className="mb-1 text-[11px] text-ink-400">Before</dt>
+        <dd className="break-words text-xs leading-6 text-ink-600">{before}</dd>
+      </div>
+      <div className="min-w-0">
+        <dt className="mb-1 text-[11px] text-ink-400">After</dt>
+        <dd className="break-words text-xs leading-6 text-ink-950">{after}</dd>
+      </div>
+    </dl>
   );
 }

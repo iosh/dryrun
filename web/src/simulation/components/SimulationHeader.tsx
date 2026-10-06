@@ -44,7 +44,7 @@ export function SimulationHeader({
         </div>
 
         <div className="flex min-w-0 items-center gap-4">
-          <div className="shrink-0 lg:hidden">{mobileHistoryAction}</div>
+          <div className="shrink-0 xl:hidden">{mobileHistoryAction}</div>
           <div
             aria-label="Simulation environment"
             className="grid min-w-0 flex-1 grid-cols-3 rounded-lg border border-line bg-shell-100 p-1 md:w-117.5 md:flex-none"
@@ -75,7 +75,7 @@ export function SimulationHeader({
               );
             })}
           </div>
-          <div className="hidden min-w-20 text-right lg:block">
+          <div className="hidden min-w-20 text-right xl:block">
             <p className="text-xs font-medium text-ink-950">Mainnet</p>
             <p className="mt-1 font-mono text-[11px] text-ink-600">
               Chain {environment.chainId.toString()}

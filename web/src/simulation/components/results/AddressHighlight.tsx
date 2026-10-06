@@ -5,8 +5,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '../../../ui/Tooltip.tsx';
-import { normalizeAddress } from '../../flowView.ts';
-import type { AddressHighlightController } from './resultTypes.ts';
+import type { AddressHighlightController } from './useAddressHighlight.ts';
 
 export function AddressValue({
   address,
@@ -15,7 +14,7 @@ export function AddressValue({
   address: string;
   addressHighlight: AddressHighlightController;
 }>) {
-  const normalized = normalizeAddress(address);
+  const normalized = address.toLowerCase();
   const active = addressHighlight.activeAddress === normalized;
 
   return (
@@ -46,45 +45,5 @@ export function AddressValue({
       </Tooltip>
       <CopyButton label="Copy address" value={address} />
     </div>
-  );
-}
-
-export function AddressAliasValue({
-  address,
-  addressHighlight,
-  label,
-}: Readonly<{
-  address: string;
-  addressHighlight: AddressHighlightController;
-  label: string;
-}>) {
-  const normalized = normalizeAddress(address);
-  const active = addressHighlight.activeAddress === normalized;
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          aria-label={`Highlight ${label}: ${address}`}
-          aria-pressed={addressHighlight.pinnedAddress === normalized}
-          className={cn(
-            'min-w-10 rounded border px-2.5 py-1.5 text-xs font-semibold transition-colors',
-            active
-              ? 'border-amber-300 bg-amber-100 text-amber-900'
-              : 'border-line bg-white text-ink-600 hover:border-brand-600/30 hover:bg-brand-50 hover:text-brand-700',
-          )}
-          data-address-value=""
-          onBlur={addressHighlight.onAddressLeave}
-          onClick={() => addressHighlight.onAddressToggle(normalized)}
-          onFocus={() => addressHighlight.onAddressEnter(normalized)}
-          onMouseEnter={() => addressHighlight.onAddressEnter(normalized)}
-          onMouseLeave={addressHighlight.onAddressLeave}
-          type="button"
-        >
-          {label}
-        </button>
-      </TooltipTrigger>
-      <TooltipContent className="font-mono">{address}</TooltipContent>
-    </Tooltip>
   );
 }

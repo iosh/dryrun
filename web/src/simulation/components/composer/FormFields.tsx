@@ -156,14 +156,14 @@ export function ContextModeField({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="latest">Latest</SelectItem>
-              {environmentId === 'ethereum-mainnet' ? (
+              <SelectItem value="latest">{environmentId === 'conflux-core-mainnet' ? 'Latest state' : 'Latest'}</SelectItem>
+              {environmentId !== 'conflux-core-mainnet' ? (
                 <>
                   <SelectItem value="safe">Safe</SelectItem>
                   <SelectItem value="finalized">Finalized</SelectItem>
                 </>
               ) : null}
-              {environmentId === 'conflux-espace-mainnet' ? (
+              {environmentId !== 'conflux-core-mainnet' ? (
                 <SelectItem value="hash">Hash</SelectItem>
               ) : null}
               <SelectItem value="number">Number</SelectItem>

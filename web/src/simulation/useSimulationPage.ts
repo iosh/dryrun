@@ -123,7 +123,7 @@ function toRequestErrorState(
       detail: error.payload.message,
       kind: 'rpc',
       rawResponse: error.rawResponse,
-      title: rpcErrorTitle(error.payload.code),
+      title: rpcErrorTitle(error),
     };
   }
 
@@ -154,19 +154,25 @@ function toRequestErrorState(
   };
 }
 
-function rpcErrorTitle(code: number) {
-  switch (code) {
-    case -32602:
-      return 'Invalid request';
-    case -32603:
-      return 'Server error';
-    case -32001:
-      return 'Block not found';
-    case -32002:
-      return 'Transaction completion failed';
-    case -32004:
-      return 'Not supported';
-    default:
-      return 'RPC error';
-  }
+function rpcErrorTitle(error: RpcError) {
+  const data = error.payload.data;
+  const code = data && typeof data === 'object' && 'code' in data ? data.code : undefined;
+  const titles: Record<string, string> = {
+    'input.invalid': 'Invalid request',
+    'context.not_found': 'Block or epoch not found',
+    'context.inconsistent': 'State context changed',
+    'simulation.unsupported': 'Not supported',
+    'service.closed': 'Service unavailable',
+    'service.timeout': 'Simulation timed out',
+    'service.cancelled': 'Simulation cancelled',
+    'provider.request_failed': 'Upstream request failed',
+    'state.unavailable': 'State unavailable',
+    'limit.exceeded': 'Simulation limit exceeded',
+    'execution.failed': 'Simulation execution failed',
+    'internal.error': 'Server error',
+  };
+  if (typeof code === 'string' && Object.hasOwn(titles, code)) return titles[code];
+  if (error.payload.code === -32602) return 'Invalid request';
+  if (error.payload.code === -32601) return 'Method unavailable';
+  return 'RPC error';
 }

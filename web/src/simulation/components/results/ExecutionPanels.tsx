@@ -1,115 +1,75 @@
-import {
-  AlertTriangle,
-  CheckCircle2,
-  ChevronDown,
-  CircleSlash2,
-  Code2,
-  XCircle,
-} from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CircleSlash2, XCircle } from 'lucide-react';
 
 import { cn } from '../../../lib/cn.ts';
-import {
-  formatHexQuantity,
-  formatNativeAmount,
-} from '../../../lib/formatting.ts';
+import { formatAmount, formatHexQuantity, formatNativeAmount } from '../../../lib/formatting.ts';
 import { CopyButton } from '../../../ui/CopyButton.tsx';
-import type { Diagnostic } from '../../rpc.ts';
-import type {
-  ExecutionAnchor,
-  SimulationExecution,
-} from './resultTypes.ts';
+import { changesLabel } from '../../changes.ts';
+import { getEnvironment } from '../../environment.ts';
+import type { Outcome } from '../../rpc.ts';
+import type { SimulationRecord } from '../../types.ts';
+import { AddressValue } from './AddressHighlight.tsx';
 import { DetailItem, SummaryMetric } from './ResultPrimitives.tsx';
+import type { AddressHighlightController } from './useAddressHighlight.ts';
 
-export function ExecutionSummary({
-  anchor,
-  changesCount,
-  execution,
-  nativeSymbol,
-  networkLabel,
-}: Readonly<{
-  anchor: ExecutionAnchor | null;
-  changesCount: string;
-  execution: SimulationExecution;
-  nativeSymbol: string;
-  networkLabel: string;
-}>) {
+export function ExecutionSummary({ record }: Readonly<{ record: SimulationRecord }>) {
+  const { outcome, transaction } = record.response;
+  const environment = getEnvironment(record.environmentId);
+  const anchor = 'epoch' in record.response ? record.response.epoch : record.response.block;
+  const statusLabel = {
+    success: 'Success', reverted: 'Reverted', halted: 'Halted', rejected: 'Rejected',
+  }[outcome.status];
+  const Icon = outcome.status === 'success' ? CheckCircle2
+    : outcome.status === 'rejected' ? CircleSlash2 : XCircle;
   return (
     <section className="overflow-hidden rounded-lg border border-line bg-white">
-      <div
-        className={cn(
-          'flex flex-col gap-4 border-b px-5 py-5 sm:flex-row sm:items-center sm:justify-between',
-          execution.status === 'success'
-            ? 'border-emerald-200 bg-emerald-50'
-            : execution.status === 'rejected'
-              ? 'border-amber-200 bg-amber-50'
-              : 'border-red-200 bg-red-50',
-        )}
-      >
+      <div className={cn(
+        'flex flex-col gap-4 border-b px-5 py-5 sm:flex-row sm:items-center sm:justify-between',
+        outcome.status === 'success' ? 'border-emerald-200 bg-emerald-50'
+          : outcome.status === 'rejected' ? 'border-amber-200 bg-amber-50' : 'border-red-200 bg-red-50',
+      )}>
         <div className="flex items-center gap-3">
-          <StatusIcon status={execution.status} />
+          <Icon aria-hidden="true" className="h-6 w-6" />
           <div>
             <p className="text-xs font-medium text-ink-600">Execution</p>
-            <h2 className="mt-1 text-xl font-semibold">
-              {statusLabel(execution.status)}
-            </h2>
+            <h2 className="mt-1 text-xl font-semibold">{statusLabel}</h2>
           </div>
         </div>
         <div className="sm:text-right">
-          <p className="text-sm font-medium">{networkLabel}</p>
+          <p className="text-sm font-medium">{environment.label} {environment.networkLabel}</p>
           <p className="mt-1 font-mono text-[11px] text-ink-600">
-            {anchor ? `${anchor.label} ${formatHexQuantity(anchor.number)}` : 'State not resolved'}
+            {'epoch' in record.response ? 'Epoch' : 'Block'} {formatHexQuantity(anchor.number)}
           </p>
         </div>
       </div>
-
-      <div className="grid grid-cols-2 divide-x divide-line sm:grid-cols-4">
-        <SummaryMetric label="Changes" value={String(changesCount)} />
+      <dl className="grid grid-cols-2 divide-x divide-line sm:grid-cols-4">
+        <SummaryMetric label="Analysis" value={changesLabel(outcome)} />
         <SummaryMetric
           label="Gas used"
-          value={execution.gasUsed ? formatHexQuantity(execution.gasUsed) : '—'}
+          value={outcome.status === 'rejected' ? '—' : formatHexQuantity(outcome.gasUsed)}
         />
         <SummaryMetric
           label="Fee"
-          value={
-            execution.totalFee
-              ? formatNativeAmount(execution.totalFee, nativeSymbol)
-              : '—'
-          }
+          value={outcome.status === 'rejected' ? '—'
+            : formatNativeAmount(outcome.fee.amount, environment.nativeSymbol)}
         />
-        <SummaryMetric
-          label="Chain ID"
-          value={execution.chainId === null ? '—' : formatHexQuantity(execution.chainId)}
-        />
-      </div>
+        <SummaryMetric label="Chain ID" value={formatHexQuantity(transaction.chainId)} />
+      </dl>
     </section>
   );
 }
 
-export function ExecutionFailure({
-  failure,
-}: Readonly<{
-  failure: Diagnostic;
-}>) {
+export function ExecutionFailure({ outcome }: Readonly<{ outcome: Outcome }>) {
+  if (outcome.status === 'success') return null;
   return (
     <section className="border-l-2 border-red-500 bg-red-50 px-4 py-3 text-red-900">
       <div className="flex gap-3">
-        <AlertTriangle
-          aria-hidden="true"
-          className="mt-0.5 h-4 w-4 shrink-0"
-        />
+        <AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
         <div className="min-w-0">
-          <p className="text-sm font-semibold">{failure.message}</p>
-          <p className="mt-1 font-mono text-[11px] text-red-800">{failure.code}</p>
-          {typeof failure.data?.reason === 'string' ? (
-            <p className="mt-1 font-mono text-[11px] text-red-800">
-              {failure.data.reason}
-            </p>
-          ) : null}
-          {typeof failure.data?.panicCode === 'string' ? (
-            <p className="mt-1 font-mono text-[11px] text-red-800">
-              Solidity panic: {failure.data.panicCode}
-            </p>
-          ) : null}
+          <p className="break-words text-sm font-semibold">
+            {outcome.status === 'rejected' ? outcome.message
+              : outcome.reason ?? 'The transaction reverted without a decoded reason.'}
+          </p>
+          {outcome.status === 'rejected' ? <p className="mt-1 break-all font-mono text-[11px]">{outcome.reason}</p> : null}
         </div>
       </div>
     </section>
@@ -117,161 +77,42 @@ export function ExecutionFailure({
 }
 
 export function ExecutionDetails({
-  anchor,
-  execution,
-  nativeSymbol,
-}: Readonly<{
-  anchor: ExecutionAnchor | null;
-  execution: SimulationExecution;
-  nativeSymbol: string;
-}>) {
+  record,
+  addressHighlight,
+}: Readonly<{ record: SimulationRecord; addressHighlight: AddressHighlightController }>) {
+  const { outcome } = record.response;
+  const environment = getEnvironment(record.environmentId);
+  const anchorHash = 'epoch' in record.response ? record.response.epoch.pivotHash : record.response.block.hash;
+  const price = (value: string) => formatAmount(value, 9, environment.feeUnit);
+  const payer = outcome.status === 'rejected' ? undefined : outcome.fee.payer;
+  const payerAddress = payer?.type === 'sponsor' ? payer.contract
+    : payer?.type === 'sender' ? payer.address : record.response.transaction.from;
+
   return (
     <section className="overflow-hidden rounded-lg border border-line bg-white">
-      <div className="border-b border-line px-5 py-4">
-        <p className="text-xs font-medium text-ink-600">Execution</p>
-        <h3 className="mt-1 text-lg font-semibold">Details</h3>
-      </div>
-
+      <h3 className="border-b border-line px-5 py-4 text-base font-semibold">Execution details</h3>
       <dl className="grid sm:grid-cols-2 xl:grid-cols-3">
-        <DetailItem
-          label="Gas used"
-          value={execution.gasUsed ? formatHexQuantity(execution.gasUsed) : 'Not executed'}
-        />
-        <DetailItem
-          label="Gas limit"
-          value={execution.gasLimit === null ? 'Not completed' : formatHexQuantity(execution.gasLimit)}
-        />
-        {execution.effectiveGasPrice ? (
-          <DetailItem
-            label="Effective gas price"
-            value={formatHexQuantity(execution.effectiveGasPrice)}
-          />
-        ) : null}
-        {execution.gasFee ? (
-          <DetailItem
-            label="Gas fee"
-            value={formatNativeAmount(execution.gasFee, nativeSymbol)}
-          />
-        ) : null}
-        {execution.blobGasUsed ? (
-          <DetailItem
-            label="Blob gas used"
-            value={formatHexQuantity(execution.blobGasUsed)}
-          />
-        ) : null}
-        {execution.blobGasPrice ? (
-          <DetailItem
-            label="Blob gas price"
-            value={formatHexQuantity(execution.blobGasPrice)}
-          />
-        ) : null}
-        {execution.blobGasFee ? (
-          <DetailItem
-            label="Blob gas fee"
-            value={formatNativeAmount(execution.blobGasFee, nativeSymbol)}
-          />
-        ) : null}
-        {execution.totalFee ? (
-          <DetailItem
-            label="Total fee"
-            value={formatNativeAmount(execution.totalFee, nativeSymbol)}
-          />
-        ) : null}
-        {execution.burntGasFee !== null ? (
-          <DetailItem
-            label="Burnt gas fee"
-            value={formatNativeAmount(execution.burntGasFee, nativeSymbol)}
-          />
-        ) : null}
-        <DetailItem label="Logs" value={String(execution.logsCount)} />
-        {anchor ? <DetailItem
-          label={anchor.label}
-          value={formatHexQuantity(anchor.number)}
-        /> : null}
-        {execution.gasCoveredBySponsor !== null ? (
+        <DetailItem label={'epoch' in record.response ? 'Pivot hash' : 'Block hash'} value={anchorHash} />
+        {outcome.status !== 'rejected' ? (
           <>
-            <DetailItem
-              label="Gas sponsored"
-              value={execution.gasCoveredBySponsor ? 'Yes' : 'No'}
-            />
-            <DetailItem
-              label="Storage sponsored"
-              value={execution.storageCoveredBySponsor ? 'Yes' : 'No'}
-            />
-            <DetailItem
-              label="Storage collateralized"
-              value={execution.storageCollateralized === null ? '—' : formatHexQuantity(execution.storageCollateralized)}
-            />
+            <DetailItem label="Gas price" value={price(outcome.fee.gasPrice)} />
+            <DetailItem label="Base fee" value={price(outcome.fee.baseFee)} />
+            {outcome.gasCharged !== undefined ? <DetailItem label="Gas charged" value={formatHexQuantity(outcome.gasCharged)} /> : null}
+            {outcome.fee.blobGasPrice !== undefined ? <DetailItem label="Blob gas price" value={price(outcome.fee.blobGasPrice)} /> : null}
+            <div className="min-w-0 border-b border-line px-5 py-4 sm:col-span-2 xl:col-span-3">
+              <dt className="mb-1 text-[11px] text-ink-600">Fee payer · {payer?.type === 'sponsor' ? 'Contract sponsor pool' : 'Sender'}</dt>
+              <dd><AddressValue address={payerAddress} addressHighlight={addressHighlight} /></dd>
+            </div>
           </>
         ) : null}
       </dl>
-
-      {execution.contractAddress ? (
-        <div className="border-t border-line px-5 py-4">
-          <p className="text-xs font-medium text-ink-600">Contract address</p>
-          <p className="mt-2 break-all font-mono text-[11px] leading-5 text-ink-950">
-            {execution.contractAddress}
-          </p>
+      {'output' in outcome ? (
+        <div className="relative bg-code px-5 py-4 pr-14">
+          <p className="mb-2 text-[11px] text-code-ink">Output</p>
+          <CopyButton className="absolute right-3 top-3" label="Copy output" tone="code" value={outcome.output} />
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] leading-5 text-code-ink">{outcome.output}</pre>
         </div>
       ) : null}
-
-      {anchor ? <div className="border-t border-line px-5 py-4">
-        <p className="text-xs font-medium text-ink-600">
-          {anchor.label} hash
-        </p>
-        <div className="mt-2 flex min-w-0 items-start gap-2">
-          <p className="min-w-0 flex-1 break-all font-mono text-[11px] leading-5 text-ink-950">
-            {anchor.hash}
-          </p>
-          <CopyButton label={`Copy ${anchor.label.toLowerCase()} hash`} value={anchor.hash} />
-        </div>
-      </div> : null}
-
-      {execution.output ? <details className="group border-t border-line">
-        <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-4 px-5 text-sm font-medium [&::-webkit-details-marker]:hidden">
-          <span className="flex items-center gap-2">
-            <Code2 aria-hidden="true" className="h-4 w-4 text-ink-600" />
-            {execution.output.label}
-          </span>
-          <ChevronDown
-            aria-hidden="true"
-            className="h-4 w-4 text-ink-600 transition-transform group-open:rotate-180"
-          />
-        </summary>
-        <div className="relative border-t border-line bg-code">
-          <CopyButton
-            className="absolute right-3 top-3 z-10 bg-code text-code-ink hover:bg-white/10 hover:text-white"
-            label={`Copy ${execution.output.label.toLowerCase()}`}
-            value={execution.output.value}
-          />
-          <pre className="max-h-72 overflow-auto px-5 py-4 pr-14 font-mono text-[11px] leading-5 text-code-ink">
-            {execution.output.value}
-          </pre>
-        </div>
-      </details> : null}
     </section>
   );
-}
-
-function StatusIcon({
-  status,
-}: Readonly<{ status: SimulationExecution['status'] }>) {
-  if (status === 'success') {
-    return (
-      <CheckCircle2 aria-hidden="true" className="h-7 w-7 text-emerald-600" />
-    );
-  }
-  if (status === 'failed' || status === 'reverted') {
-    return <XCircle aria-hidden="true" className="h-7 w-7 text-red-600" />;
-  }
-  return (
-    <CircleSlash2 aria-hidden="true" className="h-7 w-7 text-amber-600" />
-  );
-}
-
-function statusLabel(status: SimulationExecution['status']) {
-  if (status === 'success') return 'Success';
-  if (status === 'reverted') return 'Reverted';
-  if (status === 'failed') return 'Failed';
-  return 'Rejected';
 }

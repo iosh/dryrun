@@ -2,6 +2,7 @@
 //! produces, the changes derived from it, execution status, limits and error codes.
 
 mod address;
+mod block;
 pub mod changes;
 mod error;
 mod limits;
@@ -10,6 +11,7 @@ mod trace;
 pub mod transaction;
 
 pub use address::ChainAddress;
+pub use block::serialize_block;
 pub use changes::{
     ApprovalChange, Asset, BalanceChange, CallResult, ChangeSet, DelegationChange, FeePayment,
     InvolvedContract, StateView, TokenMetadata, TokenReadFailure, derive_changes,

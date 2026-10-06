@@ -19,6 +19,7 @@ tokio = "1"
 tokio-util = "0.7"
 
 alloy = "2"
+alloy-eips = "2"
 alloy-json-rpc = "2"
 alloy-rpc-client = "2"
 alloy-transport = "2"
