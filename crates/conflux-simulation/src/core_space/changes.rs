@@ -133,6 +133,7 @@ pub struct GovernanceVote {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(name = "analysis", skip_all)]
 pub(crate) fn derive(
     source: Arc<StateSource>,
     runtime: Handle,

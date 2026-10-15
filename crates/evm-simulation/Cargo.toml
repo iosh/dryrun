@@ -18,3 +18,4 @@ revm = { workspace = true, features = [
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
+tracing = { workspace = true }

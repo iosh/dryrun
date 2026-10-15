@@ -7,6 +7,7 @@ use alloy::{
 use crate::Error;
 
 /// Fetches the header of the block the simulation runs on top of.
+#[tracing::instrument(name = "context", skip_all)]
 pub(crate) async fn fetch_header(provider: &DynProvider, block: BlockId) -> Result<Header, Error> {
     if matches!(
         block,

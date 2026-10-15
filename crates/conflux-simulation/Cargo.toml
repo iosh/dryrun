@@ -23,5 +23,6 @@ rlp = "0.6"
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
+tracing = { workspace = true }
 typemap = { package = "typemap-ors", version = "1.0" }
 cfx-rpc-cfx-types = { workspace = true }

@@ -1,12 +1,13 @@
 use cfx_rpc_cfx_types::{DEFAULT_CFX_GAS_CALL_REQUEST, TransactionRequest};
 use cfx_types::{Address, AddressSpaceUtil, Space, U256};
-use conflux_provider::Network;
+use conflux_provider::{ConfluxProvider, Network};
 use primitives::{
     SignedTransaction,
     transaction::{
         Action, Cip1559Transaction, Cip2930Transaction, NativeTransaction, TypedNativeTransaction,
     },
 };
+use tracing::Instrument;
 
 use crate::{Error, context::BlockContext, primitive::u256_to_cfx, state::StateSource};
 
@@ -74,6 +75,7 @@ impl Preparation {
         Ok(Self { request, sender })
     }
 
+    #[tracing::instrument(name = "completion", skip_all)]
     pub async fn complete(
         self,
         context: &BlockContext,
@@ -110,38 +112,25 @@ impl Preparation {
         if tx_type != 0 {
             request.access_list.get_or_insert_default();
         }
-        if request.nonce.is_none() {
-            request.nonce = Some(source.core_nonce(sender).await?);
-        }
-        if tx_type < 2 {
-            if request.gas_price.is_none() {
-                request.gas_price = Some(u256_to_cfx(source.core.cfx_gas_price().await?));
-            }
-        } else {
-            let tip = match request.max_priority_fee_per_gas {
-                Some(tip) => tip,
-                None => {
-                    let tip = u256_to_cfx(source.core.cfx_max_priority_fee_per_gas().await?);
-                    request.max_priority_fee_per_gas = Some(tip);
-                    tip
+        let nonce = request.nonce;
+        let (nonce, ()) = tokio::try_join!(
+            async {
+                match nonce {
+                    Some(nonce) => Ok::<_, Error>(nonce),
+                    None => Ok(source
+                        .core_nonce(sender)
+                        .instrument(tracing::info_span!("nonce"))
+                        .await?),
                 }
-            };
-            if request.max_fee_per_gas.is_none() {
-                request.max_fee_per_gas = Some(
-                    context.base_gas_price[Space::Native]
-                        .checked_add(tip)
-                        .ok_or_else(|| {
-                            Error::Unsupported(
-                                "automatic fee cap exceeds U256; specify maxFeePerGas".into(),
-                            )
-                        })?,
-                );
-            }
-        }
+            },
+            fill_fees(&mut request, tx_type, &source.core, context),
+        )?;
+        request.nonce = Some(nonce);
         if request.gas.is_none() || request.storage_limit.is_none() {
             let estimate = source
                 .core
                 .cfx_estimate_gas_and_collateral(request.clone(), source.anchor.epoch_number())
+                .instrument(tracing::info_span!("gas_estimation"))
                 .await?;
             if request.gas.is_none() {
                 let gas = u256_to_cfx(estimate.gas_limit);
@@ -159,6 +148,43 @@ impl Preparation {
         let tx = to_signed(&request, sender, tx_type)?;
         Ok((request, tx))
     }
+}
+
+/// Fills missing prices without changing explicit prices or checking VM rules.
+#[tracing::instrument(name = "fees", skip_all)]
+async fn fill_fees(
+    request: &mut TransactionRequest,
+    tx_type: u64,
+    provider: &ConfluxProvider,
+    context: &BlockContext,
+) -> Result<(), Error> {
+    if tx_type < 2 {
+        if request.gas_price.is_none() {
+            request.gas_price = Some(u256_to_cfx(provider.cfx_gas_price().await?));
+        }
+        return Ok(());
+    }
+
+    let tip = match request.max_priority_fee_per_gas {
+        Some(tip) => tip,
+        None => {
+            let tip = u256_to_cfx(provider.cfx_max_priority_fee_per_gas().await?);
+            request.max_priority_fee_per_gas = Some(tip);
+            tip
+        }
+    };
+    if request.max_fee_per_gas.is_none() {
+        request.max_fee_per_gas = Some(
+            context.base_gas_price[Space::Native]
+                .checked_add(tip)
+                .ok_or_else(|| {
+                    Error::Unsupported(
+                        "automatic fee cap exceeds U256; specify maxFeePerGas".into(),
+                    )
+                })?,
+        );
+    }
+    Ok(())
 }
 
 fn check_gas(gas: U256) -> Result<(), Error> {

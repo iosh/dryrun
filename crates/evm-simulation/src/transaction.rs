@@ -10,6 +10,8 @@ use revm::{
     context_interface::either::Either,
     primitives::hardfork::SpecId,
 };
+use std::future::IntoFuture;
+use tracing::Instrument;
 
 use crate::{Error, db::ForkDatabase};
 
@@ -34,6 +36,7 @@ impl Preparation {
     }
 
     /// Returns the completed request and its VM transaction on the fixed database.
+    #[tracing::instrument(name = "completion", skip_all)]
     pub(crate) async fn complete(
         self,
         env: &EvmEnv,
@@ -65,16 +68,29 @@ impl Preparation {
         if request.blob_versioned_hashes.is_none() {
             request.populate_blob_hashes();
         }
-        if request.nonce.is_none() {
-            request.nonce = Some(db.account(sender).await?.unwrap_or_default().nonce);
-        }
-
-        let provider = db.provider();
-        fill_fees(&mut request, tx_type, provider, env).await?;
+        let provider = db.provider().clone();
+        let nonce = request.nonce;
+        let (nonce, ()) = tokio::try_join!(
+            async {
+                match nonce {
+                    Some(nonce) => Ok::<_, Error>(nonce),
+                    None => Ok(db
+                        .account(sender)
+                        .instrument(tracing::info_span!("nonce"))
+                        .await?
+                        .unwrap_or_default()
+                        .nonce),
+                }
+            },
+            fill_fees(&mut request, tx_type, &provider, env),
+        )?;
+        request.nonce = Some(nonce);
         if request.gas.is_none() {
             let gas = provider
                 .estimate_gas(request.clone())
                 .block(db.block())
+                .into_future()
+                .instrument(tracing::info_span!("gas_estimation"))
                 .await
                 .map_err(|source| Error::Provider {
                     operation: "eth_estimateGas",
@@ -88,6 +104,7 @@ impl Preparation {
 }
 
 /// Fills missing prices without changing explicit prices or checking VM rules.
+#[tracing::instrument(name = "fees", skip_all)]
 async fn fill_fees(
     request: &mut TransactionRequest,
     tx_type: TxType,

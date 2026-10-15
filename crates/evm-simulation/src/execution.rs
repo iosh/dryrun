@@ -27,6 +27,7 @@ pub(crate) fn execute(
     tx: TxEnv,
     budget: &ReadBudget,
 ) -> Result<Outcome<Execution>, Error> {
+    let execution = tracing::info_span!("execution").entered();
     let block = &env.block_env;
     let caller = tx.caller;
     let gas_price = tx.effective_gas_price(u128::from(block.basefee));
@@ -68,6 +69,7 @@ pub(crate) fn execute(
         reward: U256::from(gas_used) * U256::from(beneficiary_price),
     };
 
+    drop(execution);
     let status = match result {
         ExecutionResult::Success { output, logs, .. } => ExecutionStatus::Success {
             output: output.into_data(),
@@ -85,6 +87,7 @@ pub(crate) fn execute(
     })))
 }
 
+#[tracing::instrument(name = "analysis", skip_all)]
 fn derive(
     db: &VmDatabase,
     env: &EvmEnv,

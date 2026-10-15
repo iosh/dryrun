@@ -96,6 +96,7 @@ impl Simulator {
         })
     }
 
+    #[tracing::instrument(name = "simulation", skip_all, fields(chain = "ethereum"))]
     pub async fn simulate(&self, request: SimulationRequest) -> Result<Simulation, Error> {
         let SimulationRequest { block, transaction } = request;
         let preparation = transaction::Preparation::new(transaction)?;
@@ -113,14 +114,19 @@ impl Simulator {
         let (transaction, tx) = preparation.complete(&env, &mut db).await?;
         let budget = Arc::clone(db.budget());
         let runtime = Handle::current();
+        let span = tracing::Span::current();
+        let queued = tracing::info_span!("blocking_queue");
 
         tokio::task::spawn_blocking(move || {
-            let db = VmDatabase::new(db, runtime);
-            let outcome = execution::execute(&db, &env, tx, &budget)?;
-            Ok(Simulation {
-                block,
-                transaction,
-                outcome,
+            span.in_scope(|| {
+                drop(queued);
+                let db = VmDatabase::new(db, runtime);
+                let outcome = execution::execute(&db, &env, tx, &budget)?;
+                Ok(Simulation {
+                    block,
+                    transaction,
+                    outcome,
+                })
             })
         })
         .await

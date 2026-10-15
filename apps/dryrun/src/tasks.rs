@@ -3,7 +3,7 @@ use std::{future::Future, num::NonZeroUsize, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::{sync::Semaphore, task::JoinError};
 use tokio_util::task::TaskTracker;
-use tracing::error;
+use tracing::{Instrument, Span, error};
 
 /// A bounded set of owned simulation attempts.
 #[derive(Debug, Clone)]
@@ -73,21 +73,29 @@ impl SimulationTaskSet {
         let permits = self.permits.clone();
         // Register before admission so close cannot miss a concurrent attempt.
         let task_token = self.tasks.token();
+        // Owned work keeps the request context, without extending the response
+        // span when the caller times out or disconnects.
+        let request_span = Span::current();
 
         tokio::time::timeout(self.response_timeout, async move {
             let permit = permits
                 .acquire_owned()
+                .instrument(tracing::info_span!("queue"))
                 .await
                 .map_err(|_| SimulationTaskError::Closed)?;
             // The attempt keeps its capacity until it finishes, even if the
             // response waiter is dropped.
-            let task = tokio::spawn(async move {
-                let _task_token = task_token;
-                let _permit = permit;
-                start_attempt().await
-            });
+            let task = tokio::spawn(
+                async move {
+                    let _task_token = task_token;
+                    let _permit = permit;
+                    start_attempt().await
+                }
+                .instrument(request_span),
+            );
             task.await.map_err(classify_join_error)
         })
+        .instrument(tracing::info_span!("response"))
         .await
         .map_err(|_| SimulationTaskError::ResponseTimedOut)?
     }

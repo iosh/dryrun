@@ -7,7 +7,17 @@ use jsonrpsee::{RpcModule, core::RegisterMethodError};
 use request::{BlockRequest, EpochRequest, Request};
 use serde::Serialize;
 use simulation_core::{CodedError, ExecutionStatus};
-use std::{fmt::Debug, future::Future, sync::Arc};
+use std::{
+    fmt::Debug,
+    future::Future,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+use tracing::Instrument;
+
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) fn register_evm(
     module: &mut RpcModule<()>,
@@ -104,6 +114,11 @@ where
     module.register_async_method(name, move |params, _, _| {
         let simulate = simulate.clone();
         let tasks = tasks.clone();
+        let span = tracing::info_span!(
+            "simulation_request",
+            method = name,
+            request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
+        );
         async move {
             let (selector, transaction) =
                 params.parse::<R>().map_err(invalid_params)?.into_parts()?;
@@ -114,6 +129,7 @@ where
                 .map(Arc::new)
                 .map_err(|error| rpc_error(&error))
         }
+        .instrument(span)
     })?;
     Ok(())
 }

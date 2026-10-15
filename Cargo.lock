@@ -2402,6 +2402,7 @@ dependencies = [
  "simulation-core",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "typemap-ors",
 ]
 
@@ -3210,6 +3211,7 @@ dependencies = [
  "simulation-core",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -39,6 +39,7 @@ pub(crate) struct StateSource {
 }
 
 impl StateSource {
+    #[tracing::instrument(name = "state_setup", skip_all)]
     pub async fn new(
         anchor: Anchor,
         core: ConfluxProvider,

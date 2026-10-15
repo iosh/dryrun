@@ -35,6 +35,7 @@ impl Anchor {
         EpochNumber::Number(self.epoch)
     }
 
+    #[tracing::instrument(name = "pivot_check", skip_all)]
     pub async fn check_pivot(self, core: &ConfluxProvider) -> Result<(), Error> {
         let pivot = core
             .cfx_get_block_by_epoch_number(self.epoch_number(), false)
@@ -59,6 +60,7 @@ pub(crate) struct BlockContext {
 }
 
 impl BlockContext {
+    #[tracing::instrument(name = "context", skip_all)]
     pub async fn fetch_epoch(
         core: &ConfluxProvider,
         espace: &DynProvider,
@@ -84,6 +86,7 @@ impl BlockContext {
         Ok(context)
     }
 
+    #[tracing::instrument(name = "context", skip_all)]
     pub async fn fetch_block(
         core: &ConfluxProvider,
         espace: &DynProvider,

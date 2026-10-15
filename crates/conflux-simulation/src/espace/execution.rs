@@ -28,6 +28,7 @@ pub(crate) fn execute(
     context: BlockContext,
     tx: SignedTransaction,
 ) -> Result<Outcome<Execution>, Error> {
+    let execution_span = tracing::info_span!("execution").entered();
     let spec = machine.spec(context.number, context.epoch_height);
     if let Err(rejection) =
         execution::verify_transaction_static(&tx, machine, &spec, context.epoch_height)
@@ -69,6 +70,7 @@ pub(crate) fn execute(
         beneficiary: address_from_cfx(context.author),
         reward: U256::ZERO,
     };
+    drop(execution_span);
     let status = match failure {
         Some(ExecutionError::VmError(cfx_vm_types::Error::Reverted)) => {
             ExecutionStatus::reverted(executed.output.into())
@@ -106,6 +108,7 @@ pub(crate) fn execute(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(name = "analysis", skip_all)]
 fn derive(
     source: Arc<StateSource>,
     runtime: Handle,

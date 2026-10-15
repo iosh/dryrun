@@ -103,6 +103,7 @@ impl Simulator {
         })
     }
 
+    #[tracing::instrument(name = "simulation", skip_all, fields(chain = "core"))]
     pub async fn simulate(&self, request: SimulationRequest) -> Result<Simulation, Error> {
         let preparation = transaction::Preparation::new(request.transaction, self.chain.network)?;
         let context =
@@ -132,8 +133,13 @@ impl Simulator {
         anchor.check_pivot(&self.core).await?;
         let runtime = Handle::current();
         let machine = Arc::clone(&self.machine);
+        let span = tracing::Span::current();
+        let queued = tracing::info_span!("blocking_queue");
         let result = tokio::task::spawn_blocking(move || {
-            execution::execute(source, runtime, &machine, context, tx)
+            span.in_scope(|| {
+                drop(queued);
+                execution::execute(source, runtime, &machine, context, tx)
+            })
         })
         .await;
         anchor.check_pivot(&self.core).await?;
