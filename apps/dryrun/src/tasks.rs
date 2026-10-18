@@ -1,4 +1,4 @@
-use std::{future::Future, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{future::Future, io, sync::Arc, time::Duration};
 
 use thiserror::Error;
 use tokio::{sync::Semaphore, task::JoinError};
@@ -37,12 +37,21 @@ pub(crate) enum SimulationTaskError {
 
 impl SimulationTaskSet {
     /// Creates a task set with a fixed concurrency limit and response deadline.
-    pub fn new(max_concurrent: NonZeroUsize, response_timeout: Duration) -> Self {
-        Self {
-            permits: Arc::new(Semaphore::new(max_concurrent.get())),
+    pub fn new(max_concurrent: usize, response_timeout: Duration) -> io::Result<Self> {
+        if !(1..=Semaphore::MAX_PERMITS).contains(&max_concurrent) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "simulation.max_concurrent must be between 1 and {}",
+                    Semaphore::MAX_PERMITS
+                ),
+            ));
+        }
+        Ok(Self {
+            permits: Arc::new(Semaphore::new(max_concurrent)),
             tasks: TaskTracker::new(),
             response_timeout,
-        }
+        })
     }
 
     /// Stops admitting attempts and wakes callers waiting for capacity.

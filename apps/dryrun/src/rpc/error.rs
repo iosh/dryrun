@@ -8,7 +8,7 @@ use crate::tasks::SimulationTaskError;
 
 /// The JSON-RPC error of a failed request. `data.code` carries the stable
 /// error code.
-pub(super) fn rpc_error<E: CodedError + Debug>(error: &E) -> ErrorObjectOwned {
+pub(super) fn rpc_error<E: CodedError + Debug>(error: E) -> ErrorObjectOwned {
     let code = error.code();
     tracing::warn!(?error, ?code, "simulation request failed");
     rpc_error_object(code, error.to_string())

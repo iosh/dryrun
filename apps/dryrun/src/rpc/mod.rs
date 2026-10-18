@@ -1,12 +1,15 @@
 mod error;
 mod request;
+mod server;
+
+pub(crate) use server::start;
 
 use crate::tasks::SimulationTaskSet;
 use error::{invalid_params, rpc_error};
-use jsonrpsee::{RpcModule, core::RegisterMethodError};
+use jsonrpsee::{RpcModule, core::RegisterMethodError, types::ErrorObjectOwned};
 use request::{BlockRequest, EpochRequest, Request};
 use serde::Serialize;
-use simulation_core::{CodedError, ExecutionStatus};
+use simulation_core::{CodedError, ExecutionStatus, Outcome};
 use std::{
     fmt::Debug,
     future::Future,
@@ -19,22 +22,20 @@ use tracing::Instrument;
 
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
-pub(crate) fn register_evm(
-    module: &mut RpcModule<()>,
+fn register_evm(
+    module: &mut RpcModule<SimulationTaskSet>,
     simulator: evm_simulation::Simulator,
-    tasks: SimulationTaskSet,
 ) -> Result<(), RegisterMethodError> {
-    register::<BlockRequest, _, _, _, _>(
+    register_simulation::<BlockRequest, _, _, _, _>(
         module,
         "dryrun_evm_simulateTransaction",
-        tasks,
         move |block, transaction| {
             let simulator = simulator.clone();
             async move {
                 let simulation = simulator
                     .simulate(evm_simulation::SimulationRequest { block, transaction })
                     .await?;
-                if let evm_simulation::Outcome::Executed(execution) = &simulation.outcome {
+                if let Outcome::Executed(execution) = &simulation.outcome {
                     log_changes_error(&execution.status);
                 }
                 Ok::<_, evm_simulation::Error>(simulation)
@@ -43,25 +44,21 @@ pub(crate) fn register_evm(
     )
 }
 
-pub(crate) fn register_espace(
-    module: &mut RpcModule<()>,
+fn register_espace(
+    module: &mut RpcModule<SimulationTaskSet>,
     simulator: conflux_simulation::espace::Simulator,
-    tasks: SimulationTaskSet,
 ) -> Result<(), RegisterMethodError> {
     let simulator = Arc::new(simulator);
-    register::<BlockRequest, _, _, _, _>(
+    register_simulation::<BlockRequest, _, _, _, _>(
         module,
         "dryrun_conflux_espace_simulateTransaction",
-        tasks,
         move |block, transaction| {
             let simulator = Arc::clone(&simulator);
             async move {
                 let simulation = simulator
                     .simulate(conflux_simulation::espace::SimulationRequest { block, transaction })
                     .await?;
-                if let conflux_simulation::espace::Outcome::Executed(execution) =
-                    &simulation.outcome
-                {
+                if let Outcome::Executed(execution) = &simulation.outcome {
                     log_changes_error(&execution.status);
                 }
                 Ok::<_, conflux_simulation::Error>(simulation)
@@ -70,16 +67,14 @@ pub(crate) fn register_espace(
     )
 }
 
-pub(crate) fn register_core(
-    module: &mut RpcModule<()>,
+fn register_core(
+    module: &mut RpcModule<SimulationTaskSet>,
     simulator: conflux_simulation::core_space::Simulator,
-    tasks: SimulationTaskSet,
 ) -> Result<(), RegisterMethodError> {
     let simulator = Arc::new(simulator);
-    register::<EpochRequest, _, _, _, _>(
+    register_simulation::<EpochRequest, _, _, _, _>(
         module,
         "dryrun_conflux_core_simulateTransaction",
-        tasks,
         move |epoch, transaction| {
             let simulator = Arc::clone(&simulator);
             async move {
@@ -89,7 +84,7 @@ pub(crate) fn register_core(
                         transaction,
                     })
                     .await?;
-                if let simulation_core::Outcome::Executed(execution) = &simulation.outcome {
+                if let Outcome::Executed(execution) = &simulation.outcome {
                     log_changes_error(&execution.status);
                 }
                 Ok::<_, conflux_simulation::Error>(simulation)
@@ -98,10 +93,9 @@ pub(crate) fn register_core(
     )
 }
 
-fn register<R, F, Fut, S, E>(
-    module: &mut RpcModule<()>,
+fn register_simulation<R, F, Fut, S, E>(
+    module: &mut RpcModule<SimulationTaskSet>,
     name: &'static str,
-    tasks: SimulationTaskSet,
     simulate: F,
 ) -> Result<(), RegisterMethodError>
 where
@@ -111,23 +105,22 @@ where
     S: Serialize + Send + Sync + 'static,
     E: CodedError + Debug + Send + 'static,
 {
-    module.register_async_method(name, move |params, _, _| {
+    module.register_async_method(name, move |params, tasks, _| {
         let simulate = simulate.clone();
-        let tasks = tasks.clone();
         let span = tracing::info_span!(
             "simulation_request",
             method = name,
             request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed),
         );
         async move {
-            let (selector, transaction) =
-                params.parse::<R>().map_err(invalid_params)?.into_parts()?;
-            tasks
+            let request = params.parse::<R>().map_err(invalid_params)?;
+            let (selector, transaction) = request.into_parts()?;
+            let result = tasks
                 .run(move || simulate(selector, transaction))
                 .await
-                .map_err(|error| rpc_error(&error))?
-                .map(Arc::new)
-                .map_err(|error| rpc_error(&error))
+                .map_err(rpc_error)?;
+            let simulation = result.map_err(rpc_error)?;
+            Ok::<_, ErrorObjectOwned>(Arc::new(simulation))
         }
         .instrument(span)
     })?;

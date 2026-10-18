@@ -14,7 +14,6 @@ use tracing::info;
 
 use crate::{
     config::{AppConfig, EthereumConfig},
-    rpc,
     tasks::SimulationTaskSet,
 };
 
@@ -22,9 +21,13 @@ const MAX_RPC_CONNECTIONS: u32 = 100;
 const MAX_RPC_BODY_SIZE_BYTES: u32 = 10 * 1024 * 1024;
 const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub async fn start(config: &AppConfig, tasks: SimulationTaskSet) -> io::Result<ServerHandle> {
-    let module = build_rpc_module(config, tasks).await?;
+pub(crate) async fn start(
+    config: &AppConfig,
+    tasks: SimulationTaskSet,
+) -> io::Result<ServerHandle> {
+    let module = build_module(config, tasks).await?;
     let server_config = JsonRpcServerConfig::builder()
+        .http_only()
         .max_connections(MAX_RPC_CONNECTIONS)
         .max_request_body_size(MAX_RPC_BODY_SIZE_BYTES)
         .max_response_body_size(MAX_RPC_BODY_SIZE_BYTES)
@@ -42,18 +45,18 @@ pub async fn start(config: &AppConfig, tasks: SimulationTaskSet) -> io::Result<S
     Ok(handle)
 }
 
-async fn build_rpc_module(
+async fn build_module(
     config: &AppConfig,
     tasks: SimulationTaskSet,
-) -> io::Result<RpcModule<()>> {
+) -> io::Result<RpcModule<SimulationTaskSet>> {
     let http_client = HttpClient::builder()
         .timeout(PROVIDER_REQUEST_TIMEOUT)
         .build()
         .map_err(io::Error::other)?;
-    let mut module = RpcModule::new(());
+    let mut module = RpcModule::new(tasks);
 
     let ethereum = build_ethereum_simulator(&config.ethereum, &http_client).await?;
-    rpc::register_evm(&mut module, ethereum, tasks.clone()).map_err(io::Error::other)?;
+    super::register_evm(&mut module, ethereum).map_err(io::Error::other)?;
 
     if let Some(conflux) = &config.conflux {
         let core = conflux_provider::ConfluxProvider::new(RpcClient::new_http_with_client(
@@ -78,9 +81,8 @@ async fn build_rpc_module(
             conflux_simulation::core_space::Simulator::new(core, espace, chain, conflux.limits)
                 .await
                 .map_err(io::Error::other)?;
-        rpc::register_espace(&mut module, espace_simulator, tasks.clone())
-            .map_err(io::Error::other)?;
-        rpc::register_core(&mut module, core_simulator, tasks).map_err(io::Error::other)?;
+        super::register_espace(&mut module, espace_simulator).map_err(io::Error::other)?;
+        super::register_core(&mut module, core_simulator).map_err(io::Error::other)?;
     }
 
     module
