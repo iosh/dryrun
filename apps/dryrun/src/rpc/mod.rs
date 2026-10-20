@@ -115,11 +115,12 @@ where
         async move {
             let request = params.parse::<R>().map_err(invalid_params)?;
             let (selector, transaction) = request.into_parts()?;
-            let result = tasks
-                .run(move || simulate(selector, transaction))
+            let simulation = tasks
+                .run(
+                    move || async move { simulate(selector, transaction).await.map_err(rpc_error) },
+                )
                 .await
-                .map_err(rpc_error)?;
-            let simulation = result.map_err(rpc_error)?;
+                .map_err(rpc_error)??;
             Ok::<_, ErrorObjectOwned>(Arc::new(simulation))
         }
         .instrument(span)

@@ -2,14 +2,12 @@ use std::{future::Future, io, sync::Arc, time::Duration};
 
 use thiserror::Error;
 use tokio::{sync::Semaphore, task::JoinError};
-use tokio_util::task::TaskTracker;
-use tracing::{Instrument, Span, error};
+use tracing::{Instrument, Span};
 
 /// A bounded set of owned simulation attempts.
 #[derive(Debug, Clone)]
 pub(crate) struct SimulationTaskSet {
     permits: Arc<Semaphore>,
-    tasks: TaskTracker,
     response_timeout: Duration,
 }
 
@@ -49,21 +47,13 @@ impl SimulationTaskSet {
         }
         Ok(Self {
             permits: Arc::new(Semaphore::new(max_concurrent)),
-            tasks: TaskTracker::new(),
             response_timeout,
         })
     }
 
     /// Stops admitting attempts and wakes callers waiting for capacity.
     pub fn close(&self) {
-        // Close admission before allowing drain to observe an empty tracker.
         self.permits.close();
-        self.tasks.close();
-    }
-
-    /// Waits for all attempts admitted before closing to finish.
-    pub async fn drain(&self) {
-        self.tasks.wait().await;
     }
 
     /// Waits for capacity, then starts and awaits an owned attempt.
@@ -80,8 +70,6 @@ impl SimulationTaskSet {
         Output: Send + 'static,
     {
         let permits = self.permits.clone();
-        // Register before admission so close cannot miss a concurrent attempt.
-        let task_token = self.tasks.token();
         // Owned work keeps the request context, without extending the response
         // span when the caller times out or disconnects.
         let request_span = Span::current();
@@ -96,7 +84,6 @@ impl SimulationTaskSet {
             // response waiter is dropped.
             let task = tokio::spawn(
                 async move {
-                    let _task_token = task_token;
                     let _permit = permit;
                     start_attempt().await
                 }
@@ -112,10 +99,8 @@ impl SimulationTaskSet {
 
 fn classify_join_error(source: JoinError) -> SimulationTaskError {
     if source.is_panic() {
-        error!(error = ?source, "admitted simulation task panicked");
         SimulationTaskError::TaskPanicked { source }
     } else {
-        error!(error = ?source, "admitted simulation task was cancelled");
         SimulationTaskError::TaskCancelled { source }
     }
 }

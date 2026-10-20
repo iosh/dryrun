@@ -3014,7 +3014,6 @@ dependencies = [
  "simulation-core",
  "thiserror 2.0.18",
  "tokio",
- "tokio-util",
  "tracing",
  "tracing-subscriber 0.3.23",
 ]
@@ -7684,7 +7683,6 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
- "futures-util",
  "pin-project-lite",
  "tokio",
 ]

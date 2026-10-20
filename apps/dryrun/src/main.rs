@@ -1,6 +1,6 @@
 use std::{error::Error, io, time::Duration};
 
-use tracing::{error, info};
+use tracing::info;
 
 mod config;
 mod logging;
@@ -10,11 +10,14 @@ mod tasks;
 
 use crate::{config::AppConfig, metrics::MetricsServer, tasks::SimulationTaskSet};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let config = AppConfig::load()?;
     logging::init(&config.tracing)?;
-    run(config).await?;
+    let runtime = tokio::runtime::Runtime::new()?;
+    let result = runtime.block_on(run(config));
+    // Process shutdown does not wait for VM work on blocking threads.
+    runtime.shutdown_background();
+    result?;
     Ok(())
 }
 
@@ -24,15 +27,7 @@ async fn run(config: AppConfig) -> io::Result<()> {
         Duration::from_secs(config.simulation.response_timeout_seconds),
     )?;
     let mut metrics_server = MetricsServer::start(&config.metrics).await?;
-    let rpc_handle = match rpc::start(&config, simulation_tasks.clone()).await {
-        Ok(handle) => handle,
-        Err(error) => {
-            if let Err(cleanup_error) = metrics_server.shutdown().await {
-                error!(error = ?cleanup_error, "metrics server cleanup failed after RPC startup failure");
-            }
-            return Err(error);
-        }
-    };
+    let rpc_handle = rpc::start(&config, simulation_tasks.clone()).await?;
 
     let run_result = tokio::select! {
         result = shutdown_signal() => result,
@@ -54,23 +49,7 @@ async fn run(config: AppConfig) -> io::Result<()> {
     let _ = rpc_handle.stop();
     simulation_tasks.close();
 
-    let (_, cleanup_result) = tokio::join!(rpc_handle.stopped(), metrics_server.shutdown());
-    simulation_tasks.drain().await;
-
-    match (run_result, cleanup_result) {
-        (Ok(()), Ok(())) => {
-            info!("shutdown complete");
-            Ok(())
-        }
-        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
-        (Err(error), Err(cleanup_error)) => {
-            error!(
-                error = ?cleanup_error,
-                "shutdown cleanup failed after the primary runtime error"
-            );
-            Err(error)
-        }
-    }
+    run_result
 }
 
 async fn shutdown_signal() -> io::Result<()> {
