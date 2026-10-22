@@ -63,15 +63,22 @@ pub struct AccountDiff {
 }
 
 impl AccountDiff {
-    /// Whether the account ran its own code before and after the execution.
-    /// Delegated accounts are not contracts.
-    pub fn is_contract(&self) -> Diff<bool> {
-        let is_contract = |code_hash: B256, delegation: Option<Address>| {
-            !code_hash.is_zero() && code_hash != KECCAK256_EMPTY && delegation.is_none()
-        };
+    /// Whether the account has code on each side, including a delegation
+    /// designation. Delegated code is executed by the state view.
+    pub(crate) fn has_code(&self) -> Diff<bool> {
+        let has_code = |hash: B256| !hash.is_zero() && hash != KECCAK256_EMPTY;
         Diff {
-            before: is_contract(self.code_hash.before, self.delegation.before),
-            after: is_contract(self.code_hash.after, self.delegation.after),
+            before: has_code(self.code_hash.before),
+            after: has_code(self.code_hash.after),
+        }
+    }
+
+    /// Whether the account has non-delegated contract code on each side.
+    pub fn is_contract(&self) -> Diff<bool> {
+        let code = self.has_code();
+        Diff {
+            before: code.before && self.delegation.before.is_none(),
+            after: code.after && self.delegation.after.is_none(),
         }
     }
 }

@@ -38,14 +38,15 @@ pub enum CallResult {
     Halt,
 }
 
-/// The transaction fee as settled by the VM. It is reported separately and
-/// removed from the native balance changes.
+/// Fee effects in ordinary balances, removed from native balance changes.
+/// Each chain accounts for its settlement rules, including account deletion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FeePayment<A> {
     /// None when payment comes from a protocol pool, not an ordinary balance.
     pub payer: Option<A>,
     pub amount: U256,
     pub beneficiary: A,
+    /// Fee income retained in the beneficiary's final balance.
     pub reward: U256,
 }
 
@@ -206,32 +207,32 @@ enum Read<T> {
 impl<A: ChainAddress, V: StateView<A>> Derivation<'_, A, V> {
     /// Calls `call` on `contract` before and after the execution.
     fn read<C: SolCall>(&self, contract: A, call: &C) -> Result<Diff<Read<C::Return>>, V::Error> {
-        let is_contract = self.is_contract(contract);
+        let has_code = self.has_code(contract);
         Ok(Diff {
-            before: read(self.before, is_contract.before, contract, call)?,
-            after: read(self.after, is_contract.after, contract, call)?,
+            before: read(self.before, has_code.before, contract, call)?,
+            after: read(self.after, has_code.after, contract, call)?,
         })
     }
 
     /// Calls `call` on `contract` after the execution, or before it if the
-    /// execution destroyed the contract.
+    /// execution removed its code.
     fn read_latest<C: SolCall>(&self, contract: A, call: &C) -> Result<Read<C::Return>, V::Error> {
-        let is_contract = self.is_contract(contract);
-        if is_contract.before && !is_contract.after {
+        let has_code = self.has_code(contract);
+        if has_code.before && !has_code.after {
             read(self.before, true, contract, call)
         } else {
-            read(self.after, is_contract.after, contract, call)
+            read(self.after, has_code.after, contract, call)
         }
     }
 
-    fn is_contract(&self, contract: A) -> Diff<bool> {
+    fn has_code(&self, contract: A) -> Diff<bool> {
         // Accounts missing from the trace kept their code.
         self.trace.accounts.get(&contract).map_or(
             Diff {
                 before: true,
                 after: true,
             },
-            |account| account.is_contract(),
+            |account| account.has_code(),
         )
     }
 
@@ -254,11 +255,11 @@ impl<A: ChainAddress, V: StateView<A>> Derivation<'_, A, V> {
 
 fn read<A: Copy, V: StateView<A>, C: SolCall>(
     view: &V,
-    is_contract: bool,
+    has_code: bool,
     contract: A,
     call: &C,
 ) -> Result<Read<C::Return>, V::Error> {
-    if !is_contract {
+    if !has_code {
         return Ok(Read::NoCode);
     }
     Ok(match view.call(contract, call.abi_encode().into())? {

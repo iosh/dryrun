@@ -1,4 +1,5 @@
 use alloy::{eips::BlockId, transports::TransportError};
+use revm::context_interface::result::EVMError;
 use simulation_core::{CodedError, ErrorCode, LimitExceeded};
 use thiserror::Error;
 use tokio::task::JoinError;
@@ -27,8 +28,8 @@ pub enum Error {
     State(StateError),
     #[error(transparent)]
     LimitExceeded(LimitExceeded),
-    #[error("execution failed: {0}")]
-    Execution(String),
+    #[error("execution failed")]
+    Execution(#[source] Box<EVMError<StateError>>),
     #[error("simulation task failed")]
     Runtime(#[source] JoinError),
 }

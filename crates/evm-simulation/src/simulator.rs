@@ -96,13 +96,18 @@ impl Simulator {
         })
     }
 
+    /// Simulates a transaction on the state after the selected block, using
+    /// that block's VM environment.
+    ///
+    /// Requires a Tokio runtime. Dropping the returned future does not stop
+    /// execution that has already started on a blocking thread.
     #[tracing::instrument(name = "simulation", skip_all, fields(chain = "ethereum"))]
     pub async fn simulate(&self, request: SimulationRequest) -> Result<Simulation, Error> {
         let SimulationRequest { block, transaction } = request;
         let preparation = transaction::Preparation::new(transaction)?;
         let header = block::fetch_header(&self.provider, block).await?;
         let block = BlockNumHash::new(header.number, header.hash);
-        let env = self.chain.evm_env(&header.inner);
+        let env = self.chain.evm_env(&header.inner)?;
         // Before EIP-161 the VM tells an existing empty account from a missing
         // one, which the provider's account reads cannot.
         if !env.cfg_env.spec.is_enabled_in(SpecId::SPURIOUS_DRAGON) {

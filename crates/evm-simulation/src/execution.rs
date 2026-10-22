@@ -45,7 +45,7 @@ pub(crate) fn execute(
         Ok(output) => output,
         Err(EVMError::Transaction(error)) => return Ok(Outcome::Rejected(rejection(error))),
         Err(EVMError::Database(error)) => return Err(error.into()),
-        Err(error) => return Err(Error::Execution(error.to_string())),
+        Err(error) => return Err(Error::Execution(Box::new(error))),
     };
     let calls = std::mem::take(&mut evm.inspector.calls);
 
@@ -62,11 +62,20 @@ pub(crate) fn execute(
     } else {
         gas_price
     };
+    // Committing a deleted beneficiary also discards its fee income.
+    let reward = if state
+        .get(&block.beneficiary)
+        .is_some_and(|account| account.is_selfdestructed())
+    {
+        U256::ZERO
+    } else {
+        U256::from(gas_used) * U256::from(beneficiary_price)
+    };
     let payment = FeePayment {
         payer: Some(caller),
         amount: fee.amount,
         beneficiary: block.beneficiary,
-        reward: U256::from(gas_used) * U256::from(beneficiary_price),
+        reward,
     };
 
     drop(execution);

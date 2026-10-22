@@ -5,6 +5,9 @@ use alloy_hardforks::{
     EthereumChainHardforks, EthereumHardforks,
     mainnet::{MAINNET_BPO1_TIMESTAMP, MAINNET_BPO2_TIMESTAMP},
 };
+use revm::primitives::hardfork::SpecId;
+
+use crate::Error;
 
 /// Everything that differs between EVM networks with Ethereum's execution rules.
 #[derive(Debug, Clone)]
@@ -27,9 +30,15 @@ impl ChainSpec {
     }
 
     /// The VM environment of a block, equal to the one it was executed in.
-    pub(crate) fn evm_env(&self, header: impl BlockHeader) -> EvmEnv {
+    pub(crate) fn evm_env(&self, header: impl BlockHeader) -> Result<EvmEnv, Error> {
+        let has_base_fee = header.base_fee_per_gas().is_some();
         let blob_params = self.blob_params(header.timestamp());
-        EvmEnv::for_eth_block(header, &self.hardforks, self.chain_id, blob_params)
+        let env = EvmEnv::for_eth_block(header, &self.hardforks, self.chain_id, blob_params);
+        // Alloy defaults a missing base fee to zero for historical headers.
+        if env.cfg_env.spec.is_enabled_in(SpecId::LONDON) && !has_base_fee {
+            return Err(Error::Unsupported("block lacks baseFeePerGas".into()));
+        }
+        Ok(env)
     }
 
     fn blob_params(&self, timestamp: u64) -> Option<BlobParams> {

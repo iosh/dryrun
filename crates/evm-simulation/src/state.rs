@@ -64,7 +64,7 @@ impl<DB: DatabaseRef<Error = StateError>> StateView<Address> for StateReader<'_,
                 ExecutionResult::Halt { .. } => CallResult::Halt,
             },
             Err(EVMError::Database(error)) => return Err(error.into()),
-            Err(error) => return Err(Error::Execution(format!("read call: {error}"))),
+            Err(error) => return Err(Error::Execution(Box::new(error))),
         };
         if let CallResult::Success(output) = &result {
             self.budget.check_read_call_output(output.len())?;
