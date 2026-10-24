@@ -15,15 +15,15 @@ mod operator;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use alloy_primitives::{Address, Bytes, U256};
-use alloy_sol_types::SolCall;
+use alloy_primitives::{Address, Bytes, LogData, U256};
+use alloy_sol_types::{SolCall, SolEvent, TopicList};
 use serde::Serialize;
 
-use crate::{ChainAddress, Diff, ExecutionTrace};
+use crate::{ChainAddress, CodedError, Diff, ExecutionTrace};
 
 /// Read-only access to the state on one side of the execution.
 pub trait StateView<A> {
-    type Error;
+    type Error: CodedError;
 
     /// Runs a read-only call and discards its writes.
     fn call(&self, contract: A, input: Bytes) -> Result<CallResult, Self::Error>;
@@ -152,8 +152,9 @@ pub struct TokenReadFailure<A> {
 /// Derives the changes of a successful execution.
 ///
 /// `before` and `after` read the state before and after the execution.
-/// Errors of the views propagate; a token that does not follow its standard
-/// is reported in [`ChangeSet::token_read_failures`] instead.
+/// Errors of the views propagate, except resource limits during optional
+/// metadata reads, which stop further metadata calls. A token that does not
+/// follow its standard is reported in [`ChangeSet::token_read_failures`] instead.
 pub fn derive_changes<A: ChainAddress, V: StateView<A>>(
     trace: &ExecutionTrace<A>,
     fee: &FeePayment<A>,
@@ -289,4 +290,13 @@ fn values<T: Clone>(read: Diff<Read<T>>, empty: T) -> Option<Diff<T>> {
 /// burns; it holds nothing worth reading.
 fn is_holder(raw: &Address) -> bool {
     !raw.is_zero()
+}
+
+/// Alloy ignores excess topics. Their exact count distinguishes ERC-20 and
+/// ERC-721 events with the same signature.
+fn decode_event<E: SolEvent>(data: &LogData) -> Option<E> {
+    if data.topics().len() != E::TopicList::COUNT {
+        return None;
+    }
+    E::decode_log_data(data).ok()
 }

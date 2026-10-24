@@ -58,10 +58,10 @@ pub(crate) fn execute(
     let fee = Fee {
         gas_price: price
             .try_into()
-            .map_err(|_| Error::Execution("gas price exceeds u128".into()))?,
+            .map_err(|_| Error::Internal("gas price exceeds u128"))?,
         base_fee: base_fee
             .try_into()
-            .map_err(|_| Error::Execution("base fee exceeds u128".into()))?,
+            .map_err(|_| Error::Internal("base fee exceeds u128"))?,
         amount: u256_from_cfx(executed.fee),
     };
     let payment = FeePayment {
@@ -97,11 +97,11 @@ pub(crate) fn execute(
         gas_used: executed
             .gas_used
             .try_into()
-            .map_err(|_| Error::Execution("gas used exceeds u64".into()))?,
+            .map_err(|_| Error::Internal("gas used exceeds u64"))?,
         gas_charged: executed
             .gas_charged
             .try_into()
-            .map_err(|_| Error::Execution("gas charged exceeds u64".into()))?,
+            .map_err(|_| Error::Internal("gas charged exceeds u64"))?,
         fee,
         status,
     })))

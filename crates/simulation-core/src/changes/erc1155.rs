@@ -3,9 +3,9 @@
 use std::collections::BTreeSet;
 
 use alloy_primitives::U256;
-use alloy_sol_types::{SolEvent, sol};
+use alloy_sol_types::sol;
 
-use super::{Asset, Derivation, StateView, is_holder, values};
+use super::{Asset, Derivation, StateView, decode_event, is_holder, values};
 use crate::ChainAddress;
 
 sol! {
@@ -33,9 +33,9 @@ pub(super) fn track<A: ChainAddress, V: StateView<A>>(
     let mut balances = BTreeSet::new();
     for log in &derivation.trace.logs {
         let token = log.address;
-        if let Ok(event) = TransferSingle::decode_log_data(&log.data) {
+        if let Some(event) = decode_event::<TransferSingle>(&log.data) {
             balances.extend([(token, event.from, event.id), (token, event.to, event.id)]);
-        } else if let Ok(event) = TransferBatch::decode_log_data(&log.data) {
+        } else if let Some(event) = decode_event::<TransferBatch>(&log.data) {
             for id in event.ids {
                 balances.extend([(token, event.from, id), (token, event.to, id)]);
             }

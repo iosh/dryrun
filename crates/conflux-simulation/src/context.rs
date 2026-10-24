@@ -164,15 +164,16 @@ impl BlockContext {
         let Some(hash) = reference else {
             return Ok(());
         };
-        let block = core.pos_get_block_by_hash(hash).await?.ok_or_else(|| {
-            crate::StateError::Unavailable("referenced PoS block is missing".into())
-        })?;
+        let block = core
+            .pos_get_block_by_hash(hash)
+            .await?
+            .ok_or_else(|| crate::StateError::unavailable("referenced PoS block is missing"))?;
         if block.hash != hash {
             return Err(Error::ContextInconsistent);
         }
-        let decision = block.pivot_decision.ok_or_else(|| {
-            crate::StateError::Unavailable("PoS pivot decision is missing".into())
-        })?;
+        let decision = block
+            .pivot_decision
+            .ok_or_else(|| crate::StateError::unavailable("PoS pivot decision is missing"))?;
         self.pos_view = Some(quantity(Some(block.height), "PoS height")?);
         self.finalized_epoch = Some(quantity(Some(decision.height), "finalized epoch")?);
         Ok(())

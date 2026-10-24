@@ -40,17 +40,20 @@ fn read_votes(
 ) -> Result<Vec<GovernanceVote>, Error> {
     let input = readVoteCall { voter: voter.raw() };
     let CallResult::Success(output) = view.call(contract, input.abi_encode().into())? else {
-        return Err(StateError::Unavailable(format!(
+        return Err(StateError::unavailable(format!(
             "protocol getter {} failed",
             readVoteCall::SIGNATURE
         ))
         .into());
     };
-    let votes = readVoteCall::abi_decode_returns_validate(&output).map_err(|_| {
-        StateError::Unavailable(format!(
-            "protocol getter {} returned invalid data",
-            readVoteCall::SIGNATURE
-        ))
+    let votes = readVoteCall::abi_decode_returns_validate(&output).map_err(|source| {
+        StateError::unavailable_with_source(
+            format!(
+                "protocol getter {} returned invalid data",
+                readVoteCall::SIGNATURE
+            ),
+            source,
+        )
     })?;
     Ok(votes
         .into_iter()

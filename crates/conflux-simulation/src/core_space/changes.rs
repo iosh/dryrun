@@ -169,14 +169,13 @@ fn contract_callers(
         return Ok(BTreeSet::new());
     }
     let callers: BTreeSet<_> = trace
-        .calls
-        .iter()
+        .committed_calls()
         .filter(|call| call.to == contract)
         .map(|call| call.from)
         .collect();
     if callers.is_empty() {
         return Err(Error::Internal(
-            "protocol storage changed without an invoking frame",
+            "protocol storage changed without a committed call",
         ));
     }
     Ok(callers)

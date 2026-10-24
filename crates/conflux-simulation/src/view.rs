@@ -86,8 +86,8 @@ impl<'a> View<'a> {
             })
             .fake_sign_rpc(sender),
         };
+        // The query transaction carries its gas budget; preserve the block environment.
         let mut env = self.env.clone();
-        env.gas_limit = *tx.gas();
         env.transaction_hash = tx.hash();
         // This copies only this view's request-local cache. Each successful
         // executor outcome, including revert/halt, is followed by restoration.

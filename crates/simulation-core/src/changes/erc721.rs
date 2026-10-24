@@ -3,9 +3,9 @@
 use std::collections::BTreeMap;
 
 use alloy_primitives::{Address, U256};
-use alloy_sol_types::{SolEvent, sol};
+use alloy_sol_types::sol;
 
-use super::{ApprovalChange, Asset, Derivation, Read, StateView};
+use super::{ApprovalChange, Asset, Derivation, Read, StateView, decode_event};
 use crate::{ChainAddress, Diff};
 
 sol! {
@@ -25,14 +25,14 @@ pub(super) fn track<A: ChainAddress, V: StateView<A>>(
     // minted) and after it (it was burned).
     let mut ids = BTreeMap::new();
     for log in &derivation.trace.logs {
-        if let Ok(event) = Transfer::decode_log_data(&log.data) {
+        if let Some(event) = decode_event::<Transfer>(&log.data) {
             let missing = ids.entry((log.address, event.tokenId)).or_insert(Diff {
                 before: false,
                 after: false,
             });
             missing.before |= event.from.is_zero();
             missing.after |= event.to.is_zero();
-        } else if let Ok(event) = Approval::decode_log_data(&log.data) {
+        } else if let Some(event) = decode_event::<Approval>(&log.data) {
             ids.entry((log.address, event.tokenId)).or_insert(Diff {
                 before: false,
                 after: false,

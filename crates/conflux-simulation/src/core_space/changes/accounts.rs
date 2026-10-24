@@ -8,6 +8,7 @@ use cfx_parameters::internal_contract_addresses::{
 use cfx_types::{AddressSpaceUtil, Space};
 use conflux_provider::Network;
 use simulation_core::ExecutionTrace;
+use std::collections::BTreeSet;
 
 pub(crate) fn derive(
     before: &State,
@@ -18,6 +19,11 @@ pub(crate) fn derive(
     let native =
         |address: cfx_types::Address| Address::from_vm(address.with_native_space(), network);
     let optional = |address: cfx_types::Address| (!address.is_zero()).then(|| native(address));
+    let staking_callers: BTreeSet<_> = trace
+        .committed_calls()
+        .filter(|call| call.to == native(STORAGE_INTEREST_STAKING_CONTRACT_ADDRESS))
+        .map(|call| call.from)
+        .collect();
     let mut changes = Vec::new();
     for (identity, diff) in &trace.accounts {
         let address = identity.to_vm();
@@ -67,12 +73,7 @@ pub(crate) fn derive(
         }
         // Staking operates on the actual caller. Frames locate the account only;
         // list values always come from the two state views.
-        if old_staking != new_staking
-            || trace.calls.iter().any(|call| {
-                call.from == *identity
-                    && call.to == native(STORAGE_INTEREST_STAKING_CONTRACT_ADDRESS)
-            })
-        {
+        if old_staking != new_staking || staking_callers.contains(identity) {
             let old = before.deposit_list(&address.address)?.0;
             let new = after.deposit_list(&address.address)?.0;
             if old != new {

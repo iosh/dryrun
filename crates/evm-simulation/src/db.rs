@@ -12,6 +12,7 @@ use alloy::{
 };
 use revm::{
     database_interface::{DBErrorMarker, DatabaseRef},
+    primitives::hardfork::SpecId,
     state::{AccountInfo, Bytecode},
 };
 use simulation_core::{CodedError, ErrorCode, LimitExceeded, Limits, ReadBudget};
@@ -24,6 +25,7 @@ use tokio::runtime::Handle;
 pub(crate) struct ForkDatabase {
     provider: DynProvider,
     block: BlockId,
+    spec: SpecId,
     budget: Arc<ReadBudget>,
     accounts: HashMap<Address, Option<AccountInfo>>,
     storage: HashMap<(Address, U256), U256>,
@@ -68,7 +70,12 @@ impl CodedError for StateError {
 }
 
 impl ForkDatabase {
-    pub(crate) fn new(provider: DynProvider, header: &Header, limits: Limits) -> Self {
+    pub(crate) fn new(
+        provider: DynProvider,
+        header: &Header,
+        spec: SpecId,
+        limits: Limits,
+    ) -> Self {
         let mut block_hashes = HashMap::new();
         if let Some(number) = header.number.checked_sub(1) {
             block_hashes.insert(number, header.parent_hash);
@@ -76,6 +83,7 @@ impl ForkDatabase {
         Self {
             provider,
             block: BlockId::hash_canonical(header.hash),
+            spec,
             budget: Arc::new(ReadBudget::new(limits)),
             accounts: HashMap::new(),
             storage: HashMap::new(),
@@ -120,7 +128,13 @@ impl ForkDatabase {
                 self.provider.get_code_at(address).block_id(self.block),
             ),
         )?;
-        let code = Bytecode::new_raw(code);
+        // Legacy contracts deployed before London may start with 0xef.
+        // Only valid EIP-7702 designations at Prague or later are delegated code.
+        let code = if self.spec.is_enabled_in(SpecId::PRAGUE) {
+            Bytecode::new_raw_checked(code.clone()).unwrap_or_else(|_| Bytecode::new_legacy(code))
+        } else {
+            Bytecode::new_legacy(code)
+        };
         let code_hash = code.hash_slow();
         let account = AccountInfo::new(balance, nonce, code_hash, code.clone());
         // Since EIP-161 the VM treats an empty account as missing. Earlier

@@ -21,18 +21,22 @@ struct RpcStorage {
 }
 
 fn unsupported(operation: &str, key: StorageKeyWithSpace<'_>) -> StorageError {
-    StateError::Unavailable(format!("RPC storage cannot {operation} {key:?}")).into()
+    StateError::unavailable(format!("RPC storage cannot {operation} {key:?}")).into()
 }
 fn unsupported_operation(operation: &str) -> StorageError {
-    StateError::Unavailable(format!("RPC storage cannot {operation}")).into()
+    StateError::unavailable(format!("RPC storage cannot {operation}")).into()
 }
 
 impl StorageStateTrait for RpcStorage {
     fn get(&self, access_key: StorageKeyWithSpace) -> StorageResult<Option<Box<[u8]>>> {
         // Before we can fetch anything from RPC, we need to understand which
         // semantic state item this raw storage key refers to.
-        let item = StateItem::from_storage_key(access_key)
-            .map_err(|error| StorageError::from(StateError::Unavailable(error.to_string())))?;
+        let item = StateItem::from_storage_key(access_key).map_err(|source| {
+            StorageError::from(StateError::unavailable_with_source(
+                "RPC storage key cannot be read",
+                source,
+            ))
+        })?;
 
         self.runtime_handle
             .block_on(self.source.read(item))

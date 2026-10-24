@@ -115,7 +115,12 @@ impl Simulator {
                 "blocks before Spurious Dragon are not supported".into(),
             ));
         }
-        let mut db = ForkDatabase::new(self.provider.clone(), &header, self.limits);
+        let mut db = ForkDatabase::new(
+            self.provider.clone(),
+            &header,
+            env.cfg_env.spec,
+            self.limits,
+        );
         let (transaction, tx) = preparation.complete(&env, &mut db).await?;
         let budget = Arc::clone(db.budget());
         let runtime = Handle::current();

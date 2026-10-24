@@ -16,9 +16,22 @@ pub struct ExecutionTrace<A> {
     pub accounts: BTreeMap<A, AccountDiff>,
 }
 
+impl<A> ExecutionTrace<A> {
+    /// Calls that succeeded and whose ancestors all succeeded.
+    pub fn committed_calls(&self) -> impl Iterator<Item = &CallFrame<A>> {
+        let mut committed = Vec::with_capacity(self.calls.len());
+        self.calls.iter().filter(move |call| {
+            let retained = call.success && call.parent.is_none_or(|parent| committed[parent]);
+            committed.push(retained);
+            retained
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallFrame<A> {
     /// Index of the calling frame in [`ExecutionTrace::calls`].
+    /// A parent is recorded before its children.
     pub parent: Option<usize>,
     pub scheme: CallScheme,
     /// `msg.sender` of the frame.

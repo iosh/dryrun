@@ -4,9 +4,9 @@
 use std::collections::BTreeSet;
 
 use alloy_primitives::U256;
-use alloy_sol_types::{SolCall, SolEvent, sol};
+use alloy_sol_types::{SolCall, sol};
 
-use super::{ApprovalChange, Asset, Derivation, StateView, is_holder, values};
+use super::{ApprovalChange, Asset, Derivation, StateView, decode_event, is_holder, values};
 use crate::ChainAddress;
 
 sol! {
@@ -32,21 +32,21 @@ pub(super) fn track<A: ChainAddress, V: StateView<A>>(
 
     for log in &trace.logs {
         let token = log.address;
-        if let Ok(event) = Transfer::decode_log_data(&log.data) {
+        if let Some(event) = decode_event::<Transfer>(&log.data) {
             tokens.insert(token);
             holders.extend([(token, event.from), (token, event.to)]);
-        } else if let Ok(event) = Approval::decode_log_data(&log.data) {
+        } else if let Some(event) = decode_event::<Approval>(&log.data) {
             tokens.insert(token);
             allowances.insert((token, event.owner, event.spender));
-        } else if let Ok(event) = Deposit::decode_log_data(&log.data) {
+        } else if let Some(event) = decode_event::<Deposit>(&log.data) {
             holders.insert((token, event.dst));
-        } else if let Ok(event) = Withdrawal::decode_log_data(&log.data) {
+        } else if let Some(event) = decode_event::<Withdrawal>(&log.data) {
             holders.insert((token, event.src));
         }
     }
     // `transferFrom` spends an allowance without a required `Approval` event.
     // Its selector is shared with ERC-721, so only known ERC-20 tokens count.
-    for call in &trace.calls {
+    for call in trace.committed_calls() {
         if tokens.contains(&call.to)
             && let Ok(transfer) = transferFromCall::abi_decode(&call.input)
         {

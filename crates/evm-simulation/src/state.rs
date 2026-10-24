@@ -44,7 +44,8 @@ impl<DB: DatabaseRef<Error = StateError>> StateView<Address> for StateReader<'_,
             .budget
             .limits()
             .read_call_gas
-            .min(self.env.cfg_env.tx_gas_limit_cap());
+            .min(self.env.cfg_env.tx_gas_limit_cap())
+            .min(self.env.block_env.gas_limit);
         let tx = TxEnv {
             caller: Address::ZERO,
             gas_limit,
@@ -58,17 +59,17 @@ impl<DB: DatabaseRef<Error = StateError>> StateView<Address> for StateReader<'_,
             .with_block(self.env.block_env.clone())
             .build_mainnet();
         let result = match evm.transact(tx) {
-            Ok(result) => match result.result {
-                ExecutionResult::Success { output, .. } => CallResult::Success(output.into_data()),
-                ExecutionResult::Revert { .. } => CallResult::Revert,
-                ExecutionResult::Halt { .. } => CallResult::Halt,
-            },
+            Ok(result) => result.result,
             Err(EVMError::Database(error)) => return Err(error.into()),
             Err(error) => return Err(Error::Execution(Box::new(error))),
         };
-        if let CallResult::Success(output) = &result {
+        if let Some(output) = result.output() {
             self.budget.check_read_call_output(output.len())?;
         }
-        Ok(result)
+        Ok(match result {
+            ExecutionResult::Success { output, .. } => CallResult::Success(output.into_data()),
+            ExecutionResult::Revert { .. } => CallResult::Revert,
+            ExecutionResult::Halt { .. } => CallResult::Halt,
+        })
     }
 }

@@ -2,9 +2,9 @@
 
 use std::collections::BTreeSet;
 
-use alloy_sol_types::{SolEvent, sol};
+use alloy_sol_types::sol;
 
-use super::{ApprovalChange, Derivation, StateView, values};
+use super::{ApprovalChange, Derivation, StateView, decode_event, values};
 use crate::ChainAddress;
 
 sol! {
@@ -21,7 +21,7 @@ pub(super) fn track<A: ChainAddress, V: StateView<A>>(
         .logs
         .iter()
         .filter_map(|log| {
-            let event = ApprovalForAll::decode_log_data(&log.data).ok()?;
+            let event = decode_event::<ApprovalForAll>(&log.data)?;
             Some((log.address, event.owner, event.operator))
         })
         .collect();

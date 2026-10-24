@@ -79,9 +79,7 @@ impl StateSource {
         let units = |v| {
             u256_to_cfx(v)
                 .checked_mul(*DRIPS_PER_STORAGE_COLLATERAL_UNIT)
-                .ok_or_else(|| {
-                    StateError::Unavailable("global storage collateral overflows U256".into())
-                })
+                .ok_or_else(|| StateError::unavailable("global storage collateral overflows U256"))
         };
         let globals = [
             (Core::InterestRate, u256_to_cfx(interest)),
@@ -153,8 +151,8 @@ impl StateSource {
                 (!value.is_zero()).then(|| encode_storage_slot(u256_to_cfx(value)))
             }
             StateItem::Espace(Eth::Code { .. }) => {
-                return Err(StateError::Unavailable(
-                    "code was not loaded with its eSpace account".into(),
+                return Err(StateError::unavailable(
+                    "code was not loaded with its eSpace account",
                 ));
             }
             StateItem::CoreSpace(item) => self.load_core(item, &mut cache).await?,
@@ -173,11 +171,12 @@ impl StateSource {
             return Ok(0);
         };
         let account: primitives::account::EthereumAccount =
-            rlp::decode(&value).map_err(state_unavailable)?;
-        account
-            .nonce
-            .try_into()
-            .map_err(|_| StateError::Unavailable("account nonce exceeds u64".into()))
+            rlp::decode(&value).map_err(|source| {
+                StateError::unavailable_with_source("eSpace account encoding is invalid", source)
+            })?;
+        account.nonce.try_into().map_err(|source| {
+            StateError::unavailable_with_source("account nonce exceeds u64", source)
+        })
     }
 
     pub async fn core_nonce(&self, address: Address) -> Result<U256, StateError> {
@@ -188,7 +187,12 @@ impl StateSource {
             .map(|value| {
                 primitives::Account::new_from_rlp(address, &rlp::Rlp::new(&value))
                     .map(|account| account.nonce)
-                    .map_err(state_unavailable)
+                    .map_err(|source| {
+                        StateError::unavailable_with_source(
+                            "Core Space account encoding is invalid",
+                            source,
+                        )
+                    })
             })
             .transpose()
             .map(|nonce| nonce.unwrap_or_default())
@@ -238,8 +242,9 @@ impl StateSource {
             None
         } else {
             Some(
-                encode_code(hash, Address::zero(), Arc::new(code.to_vec()))
-                    .map_err(state_unavailable)?,
+                encode_code(hash, Address::zero(), Arc::new(code.to_vec())).map_err(|source| {
+                    StateError::unavailable_with_source("eSpace code encoding is invalid", source)
+                })?,
             )
         };
         cache.insert(
@@ -257,7 +262,9 @@ impl StateSource {
     }
 
     fn core_address(&self, address: Address) -> Result<CoreAddress, StateError> {
-        CoreAddress::from_bytes(address.0, self.network).map_err(state_unavailable)
+        CoreAddress::from_bytes(address.0, self.network).map_err(|source| {
+            StateError::unavailable_with_source("Core Space state address is invalid", source)
+        })
     }
 
     fn pivot(&self) -> BlockHashOrEpochNumber {
@@ -292,16 +299,26 @@ impl StateSource {
                     u256_to_cfx(account.collateral_for_storage),
                     collateral,
                 )
-                .map_err(state_unavailable)?;
+                .map_err(|source| {
+                    StateError::unavailable_with_source(
+                        "Core Space account storage collateral is invalid",
+                        source,
+                    )
+                })?;
                 if uses_core_contract_encoding(address, b256_to_cfx(account.code_hash)) {
                     let sponsor = self.core.cfx_get_sponsor_info(rpc_address, epoch).await?;
                     encode_core_space_contract_account(&account, collateral, points, sponsor)
                         .map(Some)
-                        .map_err(state_unavailable)
+                        .map_err(|source| {
+                            StateError::unavailable_with_source(
+                                "Core Space contract account encoding is invalid",
+                                source,
+                            )
+                        })
                 } else {
                     if !points.is_zero() {
-                        return Err(StateError::Unavailable(
-                            "basic account has storage-point collateral".into(),
+                        return Err(StateError::unavailable(
+                            "basic account has storage-point collateral",
                         ));
                     }
                     Ok(Some(encode_core_space_basic_account(
@@ -325,7 +342,12 @@ impl StateSource {
                 // account address is a placeholder; Skip never refunds it.
                 encode_code(code_hash, address, Arc::new(code.to_vec()))
                     .map(Some)
-                    .map_err(state_unavailable)
+                    .map_err(|source| {
+                        StateError::unavailable_with_source(
+                            "Core Space code does not match its account",
+                            source,
+                        )
+                    })
             }
             Core::StorageSlot { address, slot } => {
                 let value = self
@@ -370,9 +392,7 @@ impl StateSource {
             Core::InternalContractStorage(CoreSpaceInternalStateItem::SponsorWhitelist(key)) => {
                 self.load_whitelist_entry(key, cache).await
             }
-            _ => Err(StateError::Unavailable(
-                "global state was not loaded".into(),
-            )),
+            _ => Err(StateError::unavailable("global state was not loaded")),
         }
     }
 
@@ -403,7 +423,12 @@ impl StateSource {
                 )
                 .await?;
             let all_whitelisted = isAllWhitelistedCall::abi_decode_returns_validate(&output)
-                .map_err(state_unavailable)?;
+                .map_err(|source| {
+                    StateError::unavailable_with_source(
+                        "isAllWhitelisted returned invalid data",
+                        source,
+                    )
+                })?;
             cache.insert(
                 all_whitelisted_key,
                 all_whitelisted.then(|| encode_storage_slot(U256::one())),
@@ -427,7 +452,9 @@ impl StateSource {
                     .abi_encode(),
                 )
                 .await?;
-            isWhitelistedCall::abi_decode_returns_validate(&output).map_err(state_unavailable)?
+            isWhitelistedCall::abi_decode_returns_validate(&output).map_err(|source| {
+                StateError::unavailable_with_source("isWhitelisted returned invalid data", source)
+            })?
         };
         Ok(has_entry.then(|| encode_storage_slot(U256::one())))
     }
@@ -442,7 +469,12 @@ impl StateSource {
                             SPONSOR_WHITELIST_CONTROL_CONTRACT_ADDRESS,
                             self.network.into(),
                         )
-                        .map_err(state_unavailable)?,
+                        .map_err(|source| {
+                            StateError::unavailable_with_source(
+                                "sponsor whitelist address cannot be encoded",
+                                source,
+                            )
+                        })?,
                     ),
                     data: Some(data.into()),
                     ..Default::default()
@@ -451,8 +483,4 @@ impl StateSource {
             )
             .await?)
     }
-}
-
-fn state_unavailable(error: impl std::fmt::Display) -> StateError {
-    StateError::Unavailable(error.to_string())
 }

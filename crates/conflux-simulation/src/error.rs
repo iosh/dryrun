@@ -1,5 +1,6 @@
 use alloy::{eips::BlockId, transports::TransportError};
 use simulation_core::{CodedError, ErrorCode, LimitExceeded};
+use std::error::Error as StdError;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -33,8 +34,8 @@ pub enum Error {
     State(#[from] StateError),
     #[error(transparent)]
     LimitExceeded(#[from] LimitExceeded),
-    #[error("execution failed: {0}")]
-    Execution(String),
+    #[error("execution failed")]
+    Execution(#[source] Box<cfx_statedb::Error>),
     #[error("{0}")]
     Internal(&'static str),
     #[error("simulation task failed")]
@@ -54,8 +55,31 @@ pub enum StateError {
     },
     #[error(transparent)]
     LimitExceeded(#[from] LimitExceeded),
-    #[error("state is unavailable: {0}")]
-    Unavailable(String),
+    #[error("state is unavailable: {message}")]
+    Unavailable {
+        message: String,
+        #[source]
+        source: Option<Box<dyn StdError + Send + Sync>>,
+    },
+}
+
+impl StateError {
+    pub(crate) fn unavailable(message: impl Into<String>) -> Self {
+        Self::Unavailable {
+            message: message.into(),
+            source: None,
+        }
+    }
+
+    pub(crate) fn unavailable_with_source(
+        message: impl Into<String>,
+        source: impl Into<Box<dyn StdError + Send + Sync>>,
+    ) -> Self {
+        Self::Unavailable {
+            message: message.into(),
+            source: Some(source.into()),
+        }
+    }
 }
 
 impl CodedError for StateError {
@@ -63,7 +87,7 @@ impl CodedError for StateError {
         match self {
             Self::CoreProvider(_) | Self::EspaceProvider { .. } => ErrorCode::ProviderRequestFailed,
             Self::LimitExceeded(_) => ErrorCode::LimitExceeded,
-            Self::Unavailable(_) => ErrorCode::StateUnavailable,
+            Self::Unavailable { .. } => ErrorCode::StateUnavailable,
         }
     }
 }
@@ -92,10 +116,12 @@ impl From<cfx_statedb::Error> for Error {
             cfx_statedb::Error::Storage(cfx_storage::Error::External(source)) => {
                 match source.downcast::<StateError>() {
                     Ok(error) => Self::State(*error),
-                    Err(error) => Self::Execution(error.to_string()),
+                    Err(source) => Self::Execution(Box::new(cfx_statedb::Error::Storage(
+                        cfx_storage::Error::External(source),
+                    ))),
                 }
             }
-            error => Self::Execution(error.to_string()),
+            error => Self::Execution(Box::new(error)),
         }
     }
 }
